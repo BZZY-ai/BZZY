@@ -281,7 +281,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           } finally { modalTask = false; }
           continue;
         }
-        if (text === '/pause' || text === '/cancel') { await selectedApi('POST', 'control', { action: text.slice(1) }, randomUUID()); continue; }
+        if (text === '/pause' || text === '/cancel') { await selectedApi('POST', 'control', { action: text.slice(1) }, randomUUID()); ui.event('info', { message: 'Stopping the current response…' }); continue; }
         if (text === '/pause all' || text === '/cancel all') { await api('POST', 'control', { action: text.startsWith('/pause') ? 'pause' : 'cancel' }, randomUUID()); continue; }
         if (text === '/debate' || text.startsWith('/debate ')) {
           if (!ui.onDebate) throw new Error('Use /debate from an attached interactive chat.');

@@ -102,7 +102,9 @@ export class TerminalChat {
     } else this.groupUsage = null;
     this.startedAt = job?.startedAt || job?.createdAt || snapshot.run?.startedAt || this.startedAt;
     this.finishedAt = job?.finishedAt || snapshot.run?.finishedAt || null;
-    this.state = session.executionState === 'waiting_for_input' ? 'needs your input' : this.busy ? this.streaming ? 'responding' : 'working' : session.failure && session.executionState === 'failed' ? 'failed' : 'ready';
+    this.state = session.executionState === 'waiting_for_input' ? 'needs your input' : this.busy
+      ? job?.stopAction ? 'stopping' : job?.state === 'queued' ? 'queued' : job?.state === 'launching' ? 'starting' : this.streaming ? 'responding' : 'working'
+      : session.failure && session.executionState === 'failed' ? 'failed' : 'ready';
     if (!this.busy) { this.streaming = false; this.currentTool = ''; }
     if (!this.pinned && session.goal?.objective) this.pinned = session.goal.objective;
     this.schedule();
@@ -159,6 +161,7 @@ export class TerminalChat {
     }
     else if (type === 'telegram.attachment') this.ui.refreshTelegramState?.();
     else if (type === 'usage.updated') this.tokens = data.tokens;
+    else if (type === 'model.resolved' && data.model) this.model = clean(data.model);
     else if (type === 'backend') {
       if (data.method === 'turn/started') this.streaming = false;
       const visit = backendVisit(data);

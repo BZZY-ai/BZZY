@@ -8,15 +8,9 @@ import { codexHome, subscriptionEnvironment, subscriptionStatus } from './auth.j
 import { getProvider, defaultSelection } from './providers.js';
 import { Rpc } from './rpc.js';
 import { stopProcess } from './policy.js';
+import { diagnosticError } from './diagnostic-error.js';
 
 const prompt = 'Connection test. Reply with exactly BZZY_OK. Do not use any tools.';
-function safeError(error) {
-  let message = String(error?.message || error).replace(/\bBearer\s+\S+|\b(?:sk-|eyJ)[A-Za-z0-9_.-]+/gi, '[redacted]');
-  for (const [key, value] of Object.entries(process.env)) {
-    if (/KEY|TOKEN|SECRET|PASSWORD/.test(key) && value?.length >= 6) message = message.replaceAll(value, '[redacted]');
-  }
-  return message.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').slice(0, 500);
-}
 
 async function codexProbe({ env, cwd, model, effort, live, signal, result }) {
   const args = ['app-server', '-c', 'model_provider="openai"', '-c', 'features.shell_tool=false',
@@ -135,7 +129,7 @@ export async function checkConnection(provider, { live = false, model, effort, s
     await (provider.backend === 'codex' ? codexProbe : claudeProbe)({ env, cwd, model, effort, live, signal, result });
     result.ok = true;
   } catch (error) {
-    result.error = error?.name === 'TimeoutError' ? `Timed out after ${Math.ceil(timeoutMs / 1000)}s waiting for ${result.connection ? 'a model reply' : 'backend initialization'}. Check connectivity and try bzzy doctor --live again.` : safeError(error);
+    result.error = error?.name === 'TimeoutError' ? `Timed out after ${Math.ceil(timeoutMs / 1000)}s waiting for ${result.connection ? 'a model reply' : 'backend initialization'}. Check connectivity and try bzzy doctor --live again.` : diagnosticError(error, 500);
   } finally { if (cwd) fs.rmSync(cwd, { recursive: true, force: true }); }
   return result;
 }

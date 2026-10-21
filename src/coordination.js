@@ -15,7 +15,10 @@ export class Coordinator {
     this.unlock = lockSession(this.session); initializeProject(this.session);
     this.session.executionState = 'running'; this.session.goal.status = 'active'; this.session.captureNetwork = Boolean(this.options.captureNetwork); saveSession(this.session);
     putRecord('run', this.session.id, { sessionId: this.session.id, state: 'running', runner: processIdentity(), startedAt: now() });
-    this.onInterrupt = () => { this.stopping ||= 'user_pause'; this.abort.abort(); };
+    this.onInterrupt = () => {
+      const job = listRecords('execution').find(job => job.sessionId === this.session.id && ['launching', 'running'].includes(job.state) && job.stopAction);
+      this.stopping ||= job?.stopAction === 'cancel' ? 'cancelled' : 'user_pause'; this.abort.abort();
+    };
     process.on('SIGINT', this.onInterrupt); process.on('SIGTERM', this.onInterrupt);
     this.timer = setInterval(() => {
       for (const control of listRecords('control').filter(c => c.sessionId === this.session.id && c.state === 'queued')) {

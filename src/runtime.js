@@ -7,11 +7,21 @@ import { home, privateDir, readJson, writeJson, loadSession, saveSession, findSe
 import { database, getRecord, putRecord, listRecords, removeRecord, appendEvent, events, reserveRequest, transaction, now, digest } from './database.js';
 import { processIdentity, identityAlive, reconcileSession } from './recovery.js';
 import { root, runtimeEnv } from './process.js';
-import { getProvider } from './providers.js';
+import { getProvider, providers } from './providers.js';
 import { delay } from './delegation.js';
 import { RunnerUI } from './runtime-ui.js';
 import { effectivePolicy } from './policy.js';
 import { enqueueExecution } from './execution-queue.js';
+import { requestExecutionStop, superviseExecutions, settleExecutionControls } from './runtime-processes.js';
+
+const runtimeBuild = digest(['runtime.js', 'runtime-processes.js', 'recovery.js', 'controller.js', 'models.js', 'engines/claude.js', 'engines/codex.js']
+  .map(file => fs.readFileSync(path.join(root, 'src', file), 'utf8')));
+function environmentFingerprint() {
+  const keys = ['PATH', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'CODEX_HOME', 'BZZY_CODEX_HOME', 'CLAUDE_CONFIG_DIR',
+    'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'BZZY_CLAUDE_HOME', ...Object.values(providers()).map(provider => provider.envKey).filter(Boolean)];
+  return digest(Object.fromEntries(keys.map(key => [key, key === 'PATH'
+    ? [...new Set([path.dirname(process.execPath), ...(process.env.PATH || '').split(path.delimiter)])].join(path.delimiter) : process.env[key] ?? null])));
+}
 
 export const runtimeFile = () => path.join(home(), 'runtime', 'service.json');
 export const runtimeInfo = () => readJson(runtimeFile(), null);
@@ -68,10 +78,9 @@ export async function serveRuntime() {
   if (existing && identityAlive(existing.identity)) throw new Error('A bzzy service is already running.');
   const listenerFile = path.join(home(), 'runtime', 'listener.json'), listener = readJson(listenerFile, {});
   const token = listener.token || randomUUID() + randomUUID(), identity = processIdentity();
+  const environment = environmentFingerprint();
   for (const run of listRecords('run')) if (['starting', 'running', 'waiting_for_input'].includes(run.state) && !identityAlive(run.runner)) reconcileSession(run.sessionId);
-  for (const job of listRecords('execution')) if (['launching', 'running'].includes(job.state) && !identityAlive(job.runner)) {
-    putRecord('execution', job.id, { ...job, state: 'interrupted', reason: 'Runtime restarted after an uncertain runner handoff; explicit resume required.' });
-  }
+  superviseExecutions();
   const send = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(JSON.stringify(value)); };
   let stopping = false; const streams = new Set();
   const server = http.createServer(async (request, response) => {
@@ -89,7 +98,7 @@ export async function serveRuntime() {
       if (!rootToken && (!access || access.expiresAt <= Date.now())) { send(response, 401, { error: 'Authentication required.' }); return; }
       if (access && request.method !== 'GET') { send(response, 403, { error: 'This token grants observation only.' }); return; }
       if (request.headers.origin && ![`http://127.0.0.1:${server.address().port}`, `http://localhost:${server.address().port}`].includes(request.headers.origin)) { send(response, 403, { error: 'Foreign origin denied.' }); return; }
-      if (request.method === 'GET' && pathname === '/health') { send(response, 200, { ok: true, identity, version: '0.2.0', apiVersion: 1, codexBaseline: '0.162.0' }); return; }
+      if (request.method === 'GET' && pathname === '/health') { send(response, 200, { ok: true, identity, runtimeBuild, environment, version: '0.2.0', apiVersion: 1, codexBaseline: '0.162.0' }); return; }
       if (request.method === 'GET' && pathname === '/schema') { send(response, 200, readJson(path.join(root, 'assets', 'events.schema.json'))); return; }
       if (request.method === 'GET' && pathname === '/sessions') { send(response, 200, listRecords('session').filter(s => !s.parentSessionId && (!access?.sessionId || access.sessionId === s.id))); return; }
       if (request.method === 'POST' && pathname === '/tokens') {
@@ -175,8 +184,8 @@ export async function serveRuntime() {
         const result = reserveRequest(`control:${id}`, requestId, { action: body.action, text: body.text }, db => {
           if (!['pause', 'cancel', 'steer'].includes(body.action)) throw new Error('Unknown control.');
           if (body.action === 'steer' && (session.backend !== 'codex' || ['parallel', 'debate', 'besties'].includes(session.mode) || !body.text?.trim())) throw new Error('Active steering requires an individual Codex chat and a nonempty message.');
-          const control = { id: randomUUID(), sessionId: id, action: body.action, text: body.text || '', state: 'queued', createdAt: now() };
-          const active = listRecords('execution').some(j => j.sessionId === id && ['queued', 'launching', 'running'].includes(j.state));
+          const active = listRecords('execution').find(j => j.sessionId === id && ['queued', 'launching', 'running'].includes(j.state));
+          const control = { id: randomUUID(), sessionId: id, executionId: active?.id || null, action: body.action, text: body.text || '', state: 'queued', createdAt: now() };
           if (!active) {
             if (body.action === 'steer') throw new Error('No active turn to steer. Send a new chat message.');
             const children = groupChildren(session);
@@ -187,24 +196,43 @@ export async function serveRuntime() {
           putRecord('control', control.id, control, db);
           if (body.action === 'steer') appendEvent(id, 'message.user', { text: body.text, kind: 'steering', controlId: control.id }, db);
           appendEvent(id, `control.${control.state}`, control, db); return { controlId: control.id };
-        }); send(response, 202, result); return;
+        });
+        const pending = getRecord('control', result.controlId);
+        if (['pause', 'cancel'].includes(body.action) && ['queued', 'dispatched'].includes(pending?.state)) requestExecutionStop(id, result.controlId, body.action);
+        send(response, 202, result); return;
       }
       send(response, 404, { error: 'Unknown session operation.' });
     } catch (error) { send(response, error.code === 'CONFLICT' || error.code === 'UNCERTAIN' ? 409 : 400, { error: error.message, code: error.code || 'INVALID_REQUEST' }); }
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(listener.port || 0, '127.0.0.1', resolve); });
   writeJson(listenerFile, { port: server.address().port, token });
-  writeJson(runtimeFile(), { version: 1, url: `http://127.0.0.1:${server.address().port}`, token, identity, startedAt: now() });
+  writeJson(runtimeFile(), { version: 1, url: `http://127.0.0.1:${server.address().port}`, token, identity, runtimeBuild, environment, startedAt: now() });
   const scheduler = setInterval(() => {
     if (stopping) return;
+    superviseExecutions();
     const active = listRecords('execution').filter(j => ['launching', 'running'].includes(j.state) && identityAlive(j.runner));
     if (active.length >= 8) return;
-    for (const job of listRecords('execution').filter(j => j.state === 'queued').slice(0, 8 - active.length)) {
-      putRecord('execution', job.id, { ...job, state: 'launching' });
-      const child = spawn(process.execPath, [path.join(root, 'bin/bzzy.js'), 'internal-execution', job.id], { env: runtimeEnv(), detached: true, stdio: 'ignore' });
+    for (const job of listRecords('execution').filter(j => j.state === 'queued' && !j.stopAction).slice(0, 8 - active.length)) {
+      const logPath = path.join(home(), 'runtime', `${job.id}-execution.log`);
+      putRecord('execution', job.id, { ...job, state: 'launching', launchedAt: now(), logPath });
+      const log = fs.openSync(logPath, 'a', 0o600);
+      const child = spawn(process.execPath, [path.join(root, 'bin/bzzy.js'), 'internal-execution', job.id], {
+        cwd: loadSession(job.sessionId).cwd, env: runtimeEnv(), detached: true, stdio: ['ignore', log, log],
+      });
+      fs.closeSync(log);
       child.unref();
       putRecord('execution', job.id, { ...getRecord('execution', job.id), runner: processIdentity(child.pid) });
-      child.on('error', error => putRecord('execution', job.id, { ...getRecord('execution', job.id), state: 'failed', error: error.message }));
+      child.once('error', error => {
+        putRecord('execution', job.id, { ...getRecord('execution', job.id), runnerExitedAt: now(), runnerExitCode: 1 });
+        fs.appendFileSync(logPath, error.message + '\n'); superviseExecutions();
+      });
+      child.once('exit', (code, signal) => {
+        const current = getRecord('execution', job.id);
+        if (['launching', 'running'].includes(current?.state)) {
+          putRecord('execution', job.id, { ...current, runnerExitedAt: now(), runnerExitCode: code, runnerExitSignal: signal });
+          superviseExecutions();
+        }
+      });
     }
   }, 100);
   const shutdown = () => {
@@ -225,7 +253,14 @@ export async function runtimeRequest(info, method, endpoint, body, requestId) {
 export async function ensureRuntime() {
   const existing = runtimeInfo();
   if (existing && identityAlive(existing.identity)) {
-    try { await runtimeRequest(existing, 'GET', '/health'); return existing; }
+    try {
+      const health = await runtimeRequest(existing, 'GET', '/health');
+      if (health.runtimeBuild === runtimeBuild && health.environment === environmentFingerprint()) return existing;
+      await runtimeRequest(existing, 'POST', '/shutdown', {});
+      const deadline = Date.now() + 5000;
+      while (identityAlive(existing.identity) && Date.now() < deadline) await delay(50);
+      if (identityAlive(existing.identity)) throw new Error('The previous runtime is still stopping after an update. Retry in a moment.');
+    }
     catch {
       const handoff = Date.now() + 2000;
       while (identityAlive(existing.identity) && Date.now() < handoff) await delay(50);
@@ -244,7 +279,7 @@ export async function ensureRuntime() {
     await delay(50);
   }
   const log = fs.openSync(path.join(home(), 'runtime', 'service.log'), 'a', 0o600);
-  const child = spawn(process.execPath, [path.join(root, 'bin/bzzy.js'), 'internal-service'], { env: runtimeEnv(), detached: true, stdio: ['ignore', log, log] });
+  const child = spawn(process.execPath, [path.join(root, 'bin/bzzy.js'), 'internal-service'], { cwd: home(), env: runtimeEnv(), detached: true, stdio: ['ignore', log, log] });
   fs.closeSync(log); child.unref(); let failure; child.on('error', error => { failure = error; });
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -258,7 +293,8 @@ export async function executeJob(id) {
   const acquired = transaction(db => {
     const job = getRecord('execution', id);
     if (!job || !['queued', 'launching'].includes(job.state)) return null;
-    const next = { ...job, state: 'running', runner: processIdentity(), startedAt: now() }; putRecord('execution', id, next, db); return next;
+    const next = { ...job, state: 'running', runner: processIdentity(), startedAt: now() }; putRecord('execution', id, next, db);
+    appendEvent(job.sessionId, 'execution.started', { id, provider: loadSession(job.sessionId).provider }, db); return next;
   });
   if (!acquired) return 0;
   const session = loadSession(acquired.sessionId), ui = new RunnerUI(session.id, { parentSessionId: session.parentSessionId, agent: session.agentNamespace || session.provider, peer: ['peer', 'bestie'].includes(session.role) });
@@ -270,6 +306,7 @@ export async function executeJob(id) {
     else { const { runSession } = await import('./controller.js'); code = await runSession(getProvider(session.provider), session, acquired.options, ui, acquired.prompt, { goal: acquired.goal, resumeGoal: acquired.resumeGoal }); }
   } catch (failure) { error = failure.message; appendEvent(session.id, 'error', { message: error }); }
   finally { ui.close(); }
+  settleExecutionControls(getRecord('execution', id));
   putRecord('execution', id, { ...getRecord('execution', id), state: code === 0 ? 'finished' : 'stopped', exitCode: code, error, finishedAt: now() });
   appendEvent(session.id, 'execution.finished', { id, exitCode: code, error }); return code;
 }

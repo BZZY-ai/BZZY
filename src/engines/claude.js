@@ -77,14 +77,18 @@ export class ClaudeEngine {
     this.session.backendProcess = processIdentity(child.pid); saveSession(this.session);
     const send = value => { if (!child.stdin.destroyed) child.stdin.write(`${JSON.stringify(value)}\n`); };
     const lines = readline.createInterface({ input: child.stdout });
-    let failure;
+    let failure, exitTimer, forceTimer, resultClosedByHost = false;
+    const terminate = error => {
+      failure ||= error;
+      stopProcess(child, 'SIGTERM');
+      clearTimeout(forceTimer); forceTimer = setTimeout(() => stopProcess(child, 'SIGKILL'), 1000);
+    };
     const userMessage = { type: 'user', message: { role: 'user', content: conversationPrompt(this.session, goal ? continuationPrompt(this.session.goal) : prompt) }, parent_tool_use_id: null, session_id: this.session.engineThreadId || this.session.engineSessionId || this.session.id };
     const initializeId = `bzzy-init-${nonce}`;
     const initializeTimeout = setTimeout(() => {
-      failure = new Error('Claude control initialization timed out.');
-      child.kill('SIGTERM');
+      terminate(new Error('Claude control initialization timed out.'));
     }, 30000);
-    child.stdin.on('error', error => { failure = error; });
+    child.stdin.on('error', error => terminate(error));
     child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-12000); });
     const done = new Promise((resolve, reject) => {
       child.once('error', reject);
@@ -96,7 +100,7 @@ export class ClaudeEngine {
         if (event.type === 'control_response' && event.response?.request_id === initializeId) {
           clearTimeout(initializeTimeout);
           if (event.response.subtype === 'success') send(userMessage);
-          else { failure = new Error(event.response.error || 'Claude control initialization failed.'); child.stdin.end(); }
+          else terminate(new Error(event.response.error || 'Claude control initialization failed.'));
         } else if (event.type === 'rate_limit_event') {
           recordClaudeQuota(this.session, event, this.ui);
         } else if (event.type === 'control_request') {
@@ -109,6 +113,7 @@ export class ClaudeEngine {
           this.ui.event('text', { text: delta });
         } else if (event.type === 'assistant') {
           if (event.session_id) this.session.engineThreadId = event.session_id;
+          if (event.message?.model && event.message.model !== '<synthetic>') this.session.resolvedModel = event.message.model;
           for (const block of event.message?.content || []) {
             if (block.type === 'tool_use') {
               this.progress.tool(block.id, block.name, block.input);
@@ -137,18 +142,23 @@ export class ClaudeEngine {
           for (const block of event.message?.content || []) if (block.type === 'tool_result') this.traffic.complete(block.tool_use_id, Boolean(block.is_error));
         } else if (event.type === 'system' && event.subtype === 'init') {
           this.session.engineThreadId = event.session_id;
+          if (event.model) this.session.resolvedModel = event.model;
           saveSession(this.session);
+          this.ui.event('model.resolved', { provider: this.provider.id, model: this.session.resolvedModel || this.session.model || 'provider default' });
+        } else if (event.type === 'system' && event.subtype === 'api_retry') {
+          this.ui.event('info', { message: `Claude is retrying the model request${event.attempt ? ` (attempt ${event.attempt})` : ''}. Use /pause to stop it.` });
         } else if (event.type === 'result') {
           result = event;
           if (event.session_id) this.session.engineThreadId = event.session_id;
           child.stdin.end();
+          exitTimer = setTimeout(() => { resultClosedByHost = true; terminate(); }, 1500);
         }
-      } catch (error) { failure = new Error(`Invalid Claude message: ${error.message}`); child.kill('SIGTERM'); }
+      } catch (error) { terminate(new Error(`Invalid Claude message: ${error.message}`)); }
     });
     send({ type: 'control_request', request_id: initializeId, request: { subtype: 'initialize', hooks: {} } });
     let code;
     try { code = await done; }
-    finally { clearTimeout(initializeTimeout); lines.close(); this.child = null; this.session.backendProcess = null; cleanup(); }
+    finally { clearTimeout(initializeTimeout); clearTimeout(exitTimer); clearTimeout(forceTimer); lines.close(); this.child = null; this.session.backendProcess = null; cleanup(); }
     this.ui.newline();
     this.session.turns++;
     const reportedTokens = tokens || (result?.usage?.input_tokens || 0) + (result?.usage?.cache_creation_input_tokens || 0) + (result?.usage?.cache_read_input_tokens || 0) + (result?.usage?.output_tokens || 0);
@@ -158,7 +168,7 @@ export class ClaudeEngine {
     if (!goal && this.options.tokenBudget != null && this.session.usage.tokens >= this.options.tokenBudget) await this.interrupt('token_limit');
     if (this.interrupted) { fs.rmSync(reportPath(this.session.id, nonce), { force: true }); return { interrupted: true, activity, tokens }; }
     if (failure) throw failure;
-    if (code !== 0 || !result || result.is_error || (result.subtype && result.subtype !== 'success')) {
+    if (code !== 0 && !resultClosedByHost || !result || result.is_error || (result.subtype && result.subtype !== 'success')) {
       fs.rmSync(reportPath(this.session.id, nonce), { force: true });
       throw new Error(result?.errors?.join('\n') || result?.result || stderr.trim() || `Claude exited (${code}) without a successful result.`);
     }

@@ -54,7 +54,8 @@ async function codexModels(session, signal) {
 
 async function claudeModels(session, signal) {
   const env = subscriptionEnvironment('claude', { backendHomes: session.backendHomes });
-  const child = launch('claude', ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio', '--setting-sources', ''], {
+  const child = launch('claude', ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio',
+    '--setting-sources', '', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence'], {
     cwd: session.cwd, env, stdio: ['pipe', 'pipe', 'pipe'],
   });
   const lines = readline.createInterface({ input: child.stdout }); child.stderr.resume();
@@ -138,7 +139,9 @@ export async function chooseModel(session, argument, ui, { title, description } 
       const selected = session.model || null, current = selected || session.resolvedModel;
       const models = [...result.models];
       if (current && !models.some(model => model.id === current)) models.unshift({ id: current, name: current, description: 'Current model · availability not verified by the catalog.' });
-      return { selectEffort: true, warning: result.source === 'manual' ? result.description : null, description: description || 'Selection applies to the next message in this conversation.', choices: [
+      return { selectEffort: true, warning: result.source === 'manual' ? result.description : current && !result.models.some(model => model.id === current)
+        ? 'The current model is not listed by this CLI. Choose a listed model or the provider default, or retain the custom ID if your provider supports it.' : null,
+        description: description || 'Selection applies to the next message in this conversation.', choices: [
         { value: DEFAULT, label: 'Provider default' + (provider.model ? ' · ' + provider.model : ''), description: 'Use the provider’s configured default model.', selected: !selected },
         ...models.map(model => ({ value: model.id, label: model.name && model.name !== model.id ? `${model.name} · ${model.id}` : model.id, description: model.description, selected: selected === model.id,
           efforts: model.capabilities?.supportsEffort === false ? [] : [...new Set(model.capabilities?.supportedEfforts || [])], supportsEffort: model.capabilities?.supportsEffort,

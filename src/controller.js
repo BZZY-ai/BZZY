@@ -55,7 +55,10 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     engine?.interrupt(reason).catch(error => ui.event('error', { message: error.message }));
     killTimer = setTimeout(() => engine?.close().catch(() => {}), 3000); killTimer.unref();
   };
-  const interrupt = () => stop('interrupted');
+  const interrupt = () => {
+    const job = listRecords('execution').find(job => job.sessionId === session.id && ['launching', 'running'].includes(job.state) && job.stopAction);
+    stop(job?.stopAction === 'cancel' ? 'cancelled' : job?.stopAction === 'pause' ? 'user_pause' : 'interrupted');
+  };
   const recorded = { interactive: ui.interactive, json: ui.json, newline: ui.newline.bind(ui), ask: ui.ask.bind(ui), approve: ui.approve.bind(ui),
     event(type, data = {}) { if (type === 'text') fullText += data.text || ''; if (!ui.persistsEvents) appendEvent(session.id, type, data); ui.event(type, data); } };
   process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt); ui.beforeOutput = () => pet.stop();
