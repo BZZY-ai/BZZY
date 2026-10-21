@@ -6,3 +6,9 @@ cd bzzy-cli
 ./install.sh
 bzzy
 ```
+
+Update:
+
+```bash
+bzzy --update
+```

@@ -10,6 +10,12 @@ or explicitly take input ownership without starting another model run.
 Read this reference as the installed application's behavior. User instructions,
 task contracts and authorization still determine what a particular run may do.
 
+`bzzy --update` pulls the installation checkout's tracked branch with a
+fast-forward-only Git pull and reruns `install.sh`. It works from any directory
+without provider setup. Commit or stash installation changes first. Detached
+checkouts and installations without a Git checkout or upstream cannot update.
+Start a new bzzy process after updating to use the new code.
+
 ## Providers, authentication and model selection
 
 - Codex uses the existing official Codex CLI and its subscription login/history.

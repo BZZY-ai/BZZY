@@ -9,7 +9,7 @@ const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const target = path.join(binDir, 'bzzy');
 const marker = '# bzzy-managed launcher';
 if (fs.existsSync(target) && !fs.readFileSync(target, 'utf8').includes(marker)) throw new Error(`Refusing to overwrite unrelated executable ${target}. Choose BZZY_BIN_DIR.`);
-fs.writeFileSync(target, `#!/bin/sh\n${marker}\nexport PATH=${quote(path.dirname(node))}:"$PATH"\nexec ${quote(node)} ${quote(path.join(root, 'bin', 'bzzy.js'))} "$@"\n`, { mode: 0o755 });
+fs.writeFileSync(target, `#!/bin/sh\n${marker}\nexport PATH=${quote(path.dirname(node))}:"$PATH"\nexport BZZY_LAUNCHER_BIN_DIR=${quote(binDir)}\nexec ${quote(node)} ${quote(path.join(root, 'bin', 'bzzy.js'))} "$@"\n`, { mode: 0o755 });
 fs.chmodSync(target, 0o755);
 if (updatePath === '--path') {
   const shell = path.basename(process.env.SHELL || 'bash');

@@ -37,6 +37,7 @@ import { chooseDebate, configuredDebate, applyDebateSelection } from './debate-s
 import { chooseSavedCombo } from './mode-presets.js';
 import { chatHelp } from './terminal-commands.js';
 import { whoami } from './whoami.js';
+import { updateInstallation } from './update.js';
 
 const HELP = `bzzy 0.2.0 · a persistent coding agent
 
@@ -106,6 +107,7 @@ Options:
   --agents A,B[,C]      Parallel or besties agents; optionally provider:model
   --default             Reuse this mode’s saved preset without questions or selectors
   --whoami              Print the detailed architecture, storage and integration reference
+  --update              Pull the latest source and reinstall bzzy
   --artifact FILE       Material to snapshot and debate
   --rounds N            Debate round limit (default 5, maximum 5)
   --review-only         Skip independent investigation; debate a fixed snapshot
@@ -206,6 +208,7 @@ export function parseArgs(argv) {
     else if (raw === '--debate') { options.mode = 'debate'; options.debateSetup = true; }
     else if (raw === '--default') options.useDefault = true;
     else if (raw === '--whoami') options.whoami = true;
+    else if (raw === '--update') options.update = true;
     else if (raw === '--delegate') { options.mode = 'delegate'; options.delegationSetup = true; }
     else if (raw === '--besties') { options.mode = 'besties'; options.bestiesSetup = true; }
     else if (raw === '--review-only') options.reviewOnly = true;
@@ -466,6 +469,10 @@ export async function main(argv) {
   if (options.version) { process.stdout.write('bzzy 0.2.0\n'); return 0; }
   if (options.whoami) { process.stdout.write(whoami(options.cwd)); return 0; }
   if (options.help || args[0] === 'help') { process.stdout.write(HELP); return 0; }
+  if (options.update) {
+    if (argv.length !== 1) throw new Error('Run bzzy --update by itself.');
+    return updateInstallation();
+  }
   if (!fs.statSync(options.cwd).isDirectory()) throw new Error('--cwd must name a directory.');
   options.cwd = fs.realpathSync(options.cwd);
   const ui = new UI(options);
