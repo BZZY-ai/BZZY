@@ -14,6 +14,8 @@ bzzy sessions      ↑/↓ select; Enter/a attaches, v views. Restores the saved
 /export [FILE.zip] Export the complete project, sessions, history, notes and evidence.
 --import FILE.zip  Restore a project bundle into the current directory.
 /skill_that [name] Turn the last completed goal into SKILL.md with detailed steps and references.
+/doctor            Test the current subscription login, backend connection and model reply.
+bzzy doctor        Check both installed backends; add --live to test actual replies.
 
 /models · /providers · /usage · /telegram · /pause · /cancel · /exit
 Tab / Shift+Tab switch agent chats. bzzy --help lists options; bzzy --whoami explains the full system.`;
@@ -28,6 +30,7 @@ export const chatCommands = [
   { command: '/export', description: 'Export the complete project and context as a ZIP' },
   { command: '/skill_that', description: 'Turn a completed goal into a portable AI skill' },
   { command: '/usage', description: 'Show weekly quotas and the DeepSeek balance' },
+  { command: '/doctor', description: 'Check subscription login, connection and a short model reply' },
   { command: '/telegram', description: 'Open Telegram settings and conversation relay' },
   { command: '/chat', description: 'Show the conversation' },
   { command: '/room', description: 'Show besties messages, evidence and peer reviews' },

@@ -18,6 +18,7 @@ import { chatHelp } from './terminal-commands.js';
 import { promptSessionAlias } from './session-browser.js';
 import { exportProject } from './project-bundle.js';
 import { skillThat } from './skill-that.js';
+import { checkConnections } from './connection-check.js';
 
 const groupMode = session => ['parallel', 'besties'].includes(session.mode);
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
@@ -229,6 +230,12 @@ async function watch(info, sessionId, owner, ui, options = {}) {
         if (['/detach', '/quit', '/exit'].includes(text)) { detached = true; ui.detached = true; break; }
         if (text === '/tabs') { showTabs(); continue; }
         if (text === '/help') { ui.event('info', { message: chatHelp }); continue; }
+        if (text === '/doctor') {
+          modalTask = true;
+          try { const selected = loadSession(activeId); await checkConnections(ui, { providerId: selected.provider, live: true, model: selected.model, effort: selected.selectedEffort, session: selected }); }
+          finally { modalTask = false; }
+          continue;
+        }
         if (/^\/export(?:\s|$)/.test(text)) {
           modalTask = true;
           try { await exportProject(loadSession(sessionId), text.replace(/^\/export\s*/, ''), ui); }
@@ -444,6 +451,7 @@ export async function attachSession(session, options, ui) {
       if (input == null || ['/quit', '/exit', '/detach'].includes(input)) return 0;
       if (!input) continue;
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
+      if (input === '/doctor') { await checkConnections(ui, { providerId: session.provider, live: true, model: session.model, effort: session.selectedEffort, session }); continue; }
       if ((await api('GET')).inputOwner?.owner !== owner) return 0;
       if (input === '/default') { saveSessionDefault(session.id, ui); continue; }
       if (/^\/skill_that(?:\s|$)/.test(input)) {

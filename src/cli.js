@@ -8,7 +8,8 @@ import { home, readJson, createSession, saveSession, findSession, sessions, lock
 import { chooseSavedSession, promptSessionAlias, sessionLabel } from './session-browser.js';
 import { exportProject, importProject } from './project-bundle.js';
 import { skillThat } from './skill-that.js';
-import { inherited, version, root } from './process.js';
+import { inherited, root } from './process.js';
+import { checkConnections } from './connection-check.js';
 import { UI } from './ui.js';
 import { Pet } from './mascot.js';
 import { newGoal } from './goals.js';
@@ -84,7 +85,7 @@ Usage:
   bzzy telegram setup|status|off|on|test  Pair a bot and control goal notifications
   bzzy telegram attach SESSION|detach   Mirror new messages through Telegram
   bzzy notifications [list|retry]        Inspect the delivery outbox
-  bzzy doctor                           Check installed engines and configuration
+  bzzy doctor [--live]                   Verify CLI, subscription login and connection; --live tests replies
 
 Options:
   --provider NAME       Select a provider for a new session
@@ -222,6 +223,7 @@ export function parseArgs(argv) {
     else if (raw === '--review-only') options.reviewOnly = true;
     else if (raw === '--yolo') options.yolo = true;
     else if (raw === '--json') options.json = true;
+    else if (raw === '--live') options.live = true;
     else if (raw === '--no-pet') options.pet = false;
     else if (raw === '--device') options.device = true;
     else if (raw === '--detach') options.detach = true;
@@ -274,12 +276,13 @@ export async function setup(ui, options, explicitProvider) {
   if (explicitProvider) provider = getProvider(explicitProvider);
   else {
     ui.openTerminal?.();
+    const checks = await checkConnections(ui);
     const ready = new Map(entries.map(entry => {
-      if (entry.auth === 'subscription') return [entry.id, subscriptionStatus(entry).available];
+      if (entry.auth === 'subscription') return [entry.id, checks.find(check => check.provider === entry.id)?.ok || false];
       try { apiKey(entry); return [entry.id, true]; } catch { return [entry.id, false]; }
     }));
     const status = entry => entry.auth === 'subscription'
-      ? ready.get(entry.id) ? 'Validated · existing subscription login' : 'Not signed in'
+      ? ready.get(entry.id) ? 'Validated · subscription login and backend connection' : checks.find(check => check.provider === entry.id)?.authenticated ? 'Login detected · backend check failed' : 'Not signed in'
       : ready.get(entry.id) ? 'API key configured' : 'Optional API key';
     const name = entry => entry.id === 'codex' ? 'Codex / ChatGPT' : entry.id === 'claude' ? 'Claude' : entry.name;
     ui.event('info', { message: 'Your connections\n' + entries.map(entry => `${name(entry)} · ${status(entry)}`).join('\n') });
@@ -298,6 +301,10 @@ export async function setup(ui, options, explicitProvider) {
     const selected = await chooseModel({ provider: provider.id, backend: provider.backend, cwd: options.cwd || process.cwd(),
       model: options.model || provider.model || null, selectedEffort: options.effort }, '', ui);
     if (!selected) throw new Error('Setup cancelled.');
+    if (provider.auth === 'subscription') {
+      const [check] = await checkConnections(ui, { providerId: provider.id, live: true, model: selected.model, effort: selected.effort });
+      if (!check.ok) throw new Error(`Setup connection check failed for ${provider.id}: ${check.error}. Your previous default was kept.`);
+    }
     const saved = saveDefaultSelection({ provider: provider.id, model: selected.model,
       selectedEffort: selected.effort, modelCapabilities: selected.capabilities });
     options.provider = provider.id; options.model = selected.model;
@@ -420,6 +427,7 @@ async function chat(provider, options, ui, existingSession) {
     if (!input) continue;
     try {
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
+      if (input === '/doctor') { await checkConnections(ui, { providerId: session.provider, live: true, model: session.model, effort: session.selectedEffort, session }); continue; }
       if (input === '/default') { saveCurrentDefault(session, ui); continue; }
       if (/^\/alias(?:\s|$)/.test(input)) { session = await promptSessionAlias(session.id, input.replace(/^\/alias\s*/, ''), ui); continue; }
       if (/^\/export(?:\s|$)/.test(input)) { await exportProject(session, input.replace(/^\/export\s*/, ''), ui); continue; }
@@ -558,13 +566,9 @@ export async function main(argv) {
       return 0;
     }
     if (command === 'doctor') {
-      let failed = false;
-      for (const name of ['codex', 'claude']) {
-        try { ui.event('info', { message: `${name}: ${version(name)}` }); }
-        catch (error) { failed = true; ui.event('error', { message: error.message }); }
-      }
+      const checks = await checkConnections(ui, { providerId: options.provider, live: options.live, model: options.model, effort: options.effort });
       ui.event('info', { message: `Node ${process.version}\nEnforced permissions: ${sandboxSupport() ? 'Linux bubblewrap available' : 'unavailable (strict tasks fail closed)'}\nConfiguration: ${home()}\nDefault provider: ${config().defaultProvider || 'not selected (first-run setup)'}` });
-      return failed ? 1 : 0;
+      return checks.every(check => check.ok) ? 0 : 1;
     }
     if (command === 'sessions') {
       if (ui.interactive) {

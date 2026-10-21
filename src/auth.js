@@ -22,16 +22,21 @@ export function subscriptionEnvironment(backend) {
   return env;
 }
 // Ask the official CLI about its store; bzzy never parses or copies OAuth tokens.
-export function subscriptionStatus(provider, { directory } = {}) {
+export function subscriptionStatus(provider, { directory, diagnostic = false } = {}) {
   if (provider.auth !== 'subscription') return { available: false };
+  const unavailable = reason => diagnostic ? { available: false, reason } : { available: false };
   try {
     const args = provider.backend === 'claude' ? ['auth', 'status', '--json'] : ['login', 'status'];
     const env = subscriptionEnvironment(provider.backend);
     if (directory) env[provider.backend === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] = directory;
     const result = spawnSync(backendCommand(provider.backend), args, { env, encoding: 'utf8', timeout: 10000, maxBuffer: 65536, windowsHide: true });
-    if (result.error || result.status !== 0) return { available: false };
-    if (provider.backend === 'codex') return { available: /Logged in using ChatGPT/i.test(result.stdout + result.stderr) };
+    if (result.error || result.status !== 0) return unavailable(result.error?.code === 'ETIMEDOUT'
+      ? `The ${provider.backend} login-status check timed out after 10s. Try ${provider.backend} ${args.join(' ')} directly.`
+      : `The ${provider.backend} login-status command failed${result.status != null ? ` (exit ${result.status})` : ''}. Run bzzy auth ${provider.id}.`);
+    if (provider.backend === 'codex') return /Logged in using ChatGPT/i.test(result.stdout + result.stderr)
+      ? { available: true } : unavailable('The Codex CLI does not report a ChatGPT subscription login. Run bzzy auth codex.');
     const status = JSON.parse(result.stdout);
-    return { available: status.loggedIn === true && ['claude.ai', 'oauth'].includes(status.authMethod) };
-  } catch { return { available: false }; }
+    return status.loggedIn === true && ['claude.ai', 'oauth'].includes(status.authMethod)
+      ? { available: true } : unavailable('The Claude CLI does not report a subscription login. Run bzzy auth claude.');
+  } catch { return unavailable(`Could not read the official ${provider.backend} login status. Run bzzy auth ${provider.id}.`); }
 }

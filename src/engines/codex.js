@@ -224,6 +224,7 @@ export class CodexEngine {
         this.interrupt('turn_limit').catch(error => this.operation?.reject(error));
       }
     } else if (method === 'turn/completed') {
+      if (this.operation) this.operation.seenTurn = true;
       this.activeTurns.delete(params.turn.id);
       this.session.turns++;
       if (this.session.goal && this.operation?.goal) this.session.goal.turns++;
@@ -249,7 +250,9 @@ export class CodexEngine {
     } else if (method === 'item/completed' && params.item?.type === 'agentMessage' && !this.streamedItems.has(params.item.id)) {
       this.ui.event('text', { text: params.item.text + '\n', itemId: params.item.id });
     } else if (method === 'error') {
-      this.ui.event('error', { message: params.error?.message || params.message || 'Codex backend error.' });
+      const message = params.error?.message || params.message || 'Codex backend error.';
+      this.ui.event('error', { message: message + (params.willRetry ? ' Retrying…' : '') });
+      if (!params.willRetry) this.operation?.reject(new Error(message));
     }
   }
 
