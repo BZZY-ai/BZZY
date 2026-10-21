@@ -1,6 +1,7 @@
 node_modules/
 .bzzy-runtime/
 .bzzy/
+/artifacts/
 coverage/
 *.tgz
 .env
