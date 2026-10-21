@@ -17,6 +17,6 @@ export async function changeConversationProvider(source, argument, ui, connectio
   } finally { ui.updateSession?.(source); }
   if (!selected) return null;
   const session = await changeSessionProvider(source, provider, selected, ui, connection);
-  setDefault(provider.id);
+  if (!source.mode || source.mode === 'solo') setDefault(provider.id);
   return session;
 }

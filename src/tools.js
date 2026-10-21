@@ -40,14 +40,16 @@ export function taskTools(session, { goalMode } = {}) {
   if (!['executor', 'reviewer'].includes(session.role)) tools.push(spec('assess_requirement', 'Assess a declared acceptance requirement using evidence you inspected. This is supervisor judgment; automated checks are also enforced before completion.',
     { id: str, status: { type: 'string', enum: ['supported', 'partial', 'unsupported', 'inconclusive'] }, rationale: str, evidence: strings }, ['id', 'status', 'rationale', 'evidence']));
   if (['executor', 'reviewer', 'peer'].includes(session.role)) tools.push(spec('finish_assignment', 'Return your bounded worker claim for supervisor review. This never completes the parent goal. Save full supporting evidence first.',
-    { status: { type: 'string', enum: ['complete', 'partial', 'blocked', 'inconclusive'] }, summary: str, evidence: strings, nextSteps: strings, uncertainties: strings, objections: { type: 'array', items: object }, conclusions: strings, position: str, changedBecause: str, decision: object }, ['status', 'summary', 'evidence']));
+    { status: { type: 'string', enum: ['complete', 'partial', 'blocked', 'inconclusive'] }, summary: str, evidence: strings,
+      verdict: { type: 'string', enum: ['real', 'false_positive', 'inconclusive'] }, nextSteps: strings, uncertainties: strings,
+      objections: { type: 'array', items: object }, conclusions: strings, position: str, changedBecause: str, decision: object }, ['status', 'summary', 'evidence']));
   if (session.goal && goalMode !== false && !['executor', 'reviewer'].includes(session.role)) tools.push(
     spec('get_goal', 'Read the current persistent goal and usage.'),
     spec('update_goal', 'Report full completion with evidence, or the same genuine blocker across three turns. Host acceptance checks still apply.',
       { status: { type: 'string', enum: ['complete', 'blocked'] }, evidence: strings, blocker: str }, ['status', 'evidence']),
   );
   if (session.mode === 'delegate' && goalMode !== false && !['executor', 'reviewer'].includes(session.role)) tools.push(
-    spec('delegate', 'Start a substantial bounded executor assignment. You retain strategy and final judgment. Persist a contract; wait efficiently; inspect evidence; accept, follow up or take over. Worker failures leave the parent objective unresolved.',
+    spec('delegate', 'Start the required bounded executor assignment before doing routine execution yourself, including small lookups, page retrieval and extraction. You retain strategy and final judgment. Persist a contract; wait efficiently; inspect evidence; accept, follow up or take over. Delegate goals require attempted and reviewed executor work before completion.',
       { requestId: str, objective: str, context: str, inputs: strings, evidence: { type: 'array', items: str, maxItems: 32, description: 'Recorded parent or inspected evidence IDs to share explicitly. Workers can read only these IDs and their own evidence.' }, constraints: strings, acceptanceCriteria: { type: 'array', items: { type: 'string' } }, artifacts: { type: 'array', items: object }, policy: object, limits: object,
         waitSeconds: { type: 'integer', minimum: 0, maximum: 30, description: 'Wait for the compact report within this call; default 20 seconds. Use 0 to start asynchronously.' } }, ['requestId', 'objective', 'context', 'acceptanceCriteria']),
     spec('list_assignments', 'List a bounded page of assignment IDs and compact statuses for this objective. Full reports are available through their reportArtifactId and read_artifact.', { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 20 } }),
@@ -62,9 +64,9 @@ export function taskTools(session, { goalMode } = {}) {
     spec('cancel_assignment', 'Request cancellation of one bounded assignment; retain partial results.', { id: str, reason: str }, ['id']),
   );
   if (session.bestiesSessionId) tools.push(
-    spec('peer_message', 'Send your paired bestie a bounded plan, finding, question or correction. Share recorded evidence IDs with consequential claims so the other peer can inspect them. Do not paste full logs or hidden reasoning.',
+    spec('peer_message', 'Send another bestie a bounded plan, finding, question or correction. Share recorded evidence IDs with consequential claims so the other peer can inspect them. Do not paste full logs or hidden reasoning.',
       { to: str, requestId: str, text: { type: 'string', maxLength: 4000 }, evidence: { type: 'array', items: str, maxItems: 16 } }, ['text']),
-    spec('peer_inbox', 'Read a bounded page of your paired bestie’s messages. A saved cursor prevents replaying the entire discussion; after explicitly replays from a durable cursor.',
+    spec('peer_inbox', 'Read a bounded page of another bestie’s messages. A saved cursor prevents replaying the entire discussion; after explicitly replays from a durable cursor.',
       { after: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 } }),
     spec('peer_review', 'Record your judgment on an evidence-bearing peer message after opening its evidence with read_artifact. Explain what is supported or remains disputed. This never completes either goal by itself.',
       { messageId: str, assessment: { type: 'string', enum: ['supported', 'inconclusive', 'disputed'] }, rationale: { type: 'string', maxLength: 4000 }, evidence: { type: 'array', items: str, minItems: 1, maxItems: 16 } }, ['messageId', 'assessment', 'rationale', 'evidence']),

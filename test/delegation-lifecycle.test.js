@@ -136,11 +136,31 @@ test('hours-long goals can exceed twenty assignments while telemetry remains bou
 
 test('a new objective cannot reuse an earlier supervisor acceptance for the same criterion ID', async () => {
   const session = parent(); session.contract = normalizeContract({ acceptanceCriteria: [{ id: 'proof', description: 'Verify the supplied challenge' }] }, session.goal.objective);
+  jobFor(session, { closure: 'accepted' });
   const evidence = captureEvidence(session, 'source.txt');
   assessRequirement(session, { id: 'proof', status: 'supported', rationale: 'Inspected this objective’s evidence', evidence: [evidence.id] });
   assert.equal((await assessCompletion(session)).passed, true);
   session.goal = newGoal('Assess a new challenge with the same criterion ID');
   assert.equal((await assessCompletion(session)).passed, false);
+});
+
+test('delegate completion requires current-goal executor work and brain review, including small lookups', async () => {
+  const session = parent();
+  let result = await assessCompletion(session);
+  assert.equal(result.passed, false); assert.equal(result.requirements[0].passed, true);
+  assert.equal(result.delegation.assignmentCount, 0); assert.match(result.delegation.reason, /Use delegate/);
+  jobFor(session, { goalId: randomUUID(), closure: 'accepted' });
+  result = await assessCompletion(session);
+  assert.equal(result.delegation.assignmentCount, 0, 'an earlier goal’s assignment cannot satisfy delegation');
+  const job = jobFor(session);
+  result = await assessCompletion(session);
+  assert.equal(result.passed, false); assert.equal(result.delegation.assignmentCount, 1); assert.equal(result.delegation.reviewedAssignments, 0);
+  putRecord('assignment', job.id, { ...job, closure: 'accepted' });
+  result = await assessCompletion(session);
+  assert.equal(result.passed, true); assert.equal(result.delegation.reviewedAssignments, 1);
+  putRecord('assignment', job.id, { ...job, closure: 'abandoned' });
+  result = await assessCompletion(session);
+  assert.equal(result.passed, true, 'a reviewed worker failure permits a verified brain takeover');
 });
 
 test('Claude worker tokens are recorded incrementally and enforce the assignment budget without double counting', async () => {

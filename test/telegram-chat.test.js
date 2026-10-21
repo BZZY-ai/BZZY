@@ -13,9 +13,9 @@ import { ensureRuntime, runtimeInfo, runtimeRequest, claimInput, requireOwner, e
 import { identityAlive } from '../src/recovery.js';
 import { delay } from '../src/delegation.js';
 import { linkTelegram, unlinkTelegram, telegramAttachment, telegramViewState, updateTelegramAttachment } from '../src/telegram-state.js';
-import { TelegramBridge, telegramAuthorizedMessage } from '../src/telegram-bridge.js';
+import { replyText, TelegramBridge, telegramAuthorizedMessage } from '../src/telegram-bridge.js';
 import { TelegramApi, telegramTextParts } from '../src/telegram-api.js';
-import { pairTelegram, configureTelegram } from '../src/telegram.js';
+import { pairTelegram, configureTelegram, attachTelegram, autoAttachTelegram } from '../src/telegram.js';
 
 let directory, previous, sequence;
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_ADVANCED', 'BZZY_TEST_LOG', 'BZZY_TELEGRAM_BOT_TOKEN', 'BZZY_TELEGRAM_CHAT_ID', 'DEEPSEEK_API_KEY'];
@@ -71,7 +71,7 @@ test('attachment mirrors only new terminal and assistant messages and stops forw
     appendEvent(source.id, 'text', { text: 'New assistant reply.' });
     appendEvent(source.id, 'execution.finished', { id: 'new', exitCode: 0 });
     await drain(bridge);
-    assert.match(bot.sent.map(item => item.text).join('\n'), /New terminal message.*New assistant reply/s);
+    assert.match(bot.sent.map(item => item.text).join('\n'), /🖥 TERMINAL INPUT\nNew terminal message.*New assistant reply/s);
     assert.doesNotMatch(bot.sent.map(item => item.text).join('\n'), /OLD-HISTORY|OLD-ANSWER/);
     const before = bot.sent.length;
     unlinkTelegram(attachment.id);
@@ -89,6 +89,38 @@ test('attaching mid-reply does not forward text from before the attachment', asy
     await drain(bridge); const text = bot.sent.map(item => item.text).join('\n');
     assert.match(text, /Only this new part/); assert.doesNotMatch(text, /OLD-/);
   } finally { bridge.close(); }
+});
+test('an attached chat receives the structured debate result when the run has no assistant text event', () => {
+  const source = session(); source.mode = 'debate'; source.goal = {
+    id: randomUUID(), objective: 'validate this finding', status: 'complete', reason: 'majority_consensus',
+    tokensUsed: 300, runtimeUsedSeconds: 65, turns: 1, evidence: []
+  };
+  source.summary = { usage: { complete: true, agents: [{ provider: 'codex', model: 'fixture', tokens: 300 }] } };
+  source.modeResult = { goalId: source.goal.id, kind: 'debate', outcome: 'assessed',
+    consensus: { verdict: 'real', total: 2, required: 2, counts: { real: 2 } }, conclusions: ['The finding is real.'], unresolved: [] };
+  saveSession(source);
+  appendEvent(source.id, 'message.user', { text: '/goal validate this finding', executionId: 'debate-run' });
+  appendEvent(source.id, 'text', { text: 'Final debate note.' });
+  const finished = appendEvent(source.id, 'execution.finished', { id: 'debate-run', exitCode: 0 });
+  const text = replyText(source.id, 'debate-run', finished.seq);
+  assert.match(text, /^Final debate note\./);
+  assert.match(text, /\/goal validate this finding/);
+  assert.match(text, /CONSENSUS 2\/2 · REAL/);
+  assert.match(text, /GOAL ACHIEVED · 00:01:05 · 300 tokens/);
+});
+test('enabled goal notifications prevent an attached chat from duplicating the debate summary', () => {
+  const source = session(); source.mode = 'debate'; source.goal = {
+    id: randomUUID(), objective: 'validate this finding', status: 'complete', reason: 'majority_consensus',
+    tokensUsed: 300, runtimeUsedSeconds: 65, turns: 1, evidence: []
+  };
+  source.summary = { usage: { complete: true, agents: [] } };
+  source.modeResult = { goalId: source.goal.id, kind: 'debate', outcome: 'assessed',
+    consensus: { verdict: 'real', total: 2, required: 2, counts: { real: 2 } }, conclusions: ['The finding is real.'], unresolved: [] };
+  saveSession(source);
+  const value = config(); value.notifications.telegram.enabled = true; saveConfig(value);
+  appendEvent(source.id, 'message.user', { text: '/goal validate this finding', executionId: 'debate-run' });
+  const finished = appendEvent(source.id, 'execution.finished', { id: 'debate-run', exitCode: 0 });
+  assert.equal(replyText(source.id, 'debate-run', finished.seq), '');
 });
 test('only the paired private sender is accepted and received updates are durable and deduplicated', async () => {
   const source = session(), { attachment } = attach(source), { bridge } = fixtureBridge();
@@ -153,6 +185,28 @@ test('a goal started from Telegram retains project boundaries and limits and use
     assert.equal(saved.policy.mode, 'read-only'); assert.deepEqual(saved.contract.constraints, source.contract.constraints); assert.deepEqual(saved.contract.scope, source.contract.scope);
     assert.equal(saved.contract.limits.runtimeSeconds, 30); assert.equal(saved.strictPolicy, true);
     assert.ok(events(source.id).some(event => event.type === 'goal.completed'));
+  } finally { bridge.close(); }
+});
+
+test('a new Telegram /goal stops and replaces active work in the same conversation', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'slow';
+  const source = session(); await ensureRuntime();
+  const { attachment } = attach(source), { bridge } = fixtureBridge();
+  try {
+    await bridge.initialize(bridge.binding());
+    bridge.receive([incoming('/goal Original task')], attachment); await bridge.tick();
+    const original = loadSession(source.id).goal;
+    const first = listRecords('telegram-inbox').find(item => item.text === '/goal Original task');
+    bridge.receive([incoming('/goal Replacement task')], attachment); await bridge.tick();
+    assert.equal((await finished(first.executionId)).exitCode, 130);
+    await bridge.tick();
+    const replacement = listRecords('telegram-inbox').find(item => item.text === '/goal Replacement task');
+    assert.ok(replacement.executionId);
+    assert.equal((await finished(replacement.executionId)).exitCode, 0);
+    const saved = loadSession(source.id);
+    assert.equal(saved.goal.objective, 'Replacement task'); assert.equal(saved.goal.status, 'complete');
+    assert.equal(getRecord('goal-history', original.id).supersededBy, saved.goal.id);
+    assert.equal(saved.id, source.id);
   } finally { bridge.close(); }
 });
 test('Telegram and terminal input share one native conversation, queue while busy and execute an update once', async () => {
@@ -228,6 +282,7 @@ test('bot-token pairing discovers the private chat ID without prompting for it a
   const result = await pairTelegram(ui, { apiFactory: () => bot, stopBridge: async () => {}, startBridge: async () => {} });
   assert.equal(result.chatId, '42'); assert.ok(phrase.startsWith('BZZY ')); assert.equal(asks, 0); assert.equal(polls, 1);
   assert.equal(config().notifications.telegram.chatId, '42'); assert.equal(config().notifications.telegram.enabled, false);
+  assert.equal(config().notifications.telegram.autoAttach, true);
   assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'private', 'credentials.json'))).telegramBotToken, '98765:new_fixture_token');
   assert.equal(fs.statSync(path.join(directory, 'private', 'credentials.json')).mode & 0o777, 0o600);
 });
@@ -236,6 +291,46 @@ test('notifications and chat attachment are independent switches', async () => {
   await configureTelegram('on', ui); assert.equal(config().notifications.telegram.enabled, true); assert.ok(telegramAttachment());
   await configureTelegram('off', ui); assert.equal(config().notifications.telegram.enabled, false); assert.equal(telegramAttachment().id, attachment.id);
   await configureTelegram('detach', ui, { stopBridge: async () => {} }); assert.equal(telegramViewState(source.id).attached, false); assert.equal(config().notifications.telegram.enabled, false);
+});
+test('attaching saves auto-attach and later conversations reuse the paired credentials', async () => {
+  const first = session(), second = session(); let starts = 0;
+  const context = { startBridge: async () => { starts++; } };
+  const initial = await attachTelegram(first.id, undefined, context);
+  assert.equal(config().notifications.telegram.autoAttach, true);
+  assert.equal(config().notifications.telegram.enabled, false);
+  const restored = await autoAttachTelegram(first, context);
+  assert.equal(restored.id, initial.id, 'reopening the same chat preserves its delivery cursor');
+  const next = await autoAttachTelegram(second, context);
+  assert.equal(next.sessionId, second.id); assert.equal(next.chatId, '42');
+  assert.equal(telegramAttachment().sessionId, second.id);
+  assert.equal(config().notifications.telegram.chatId, '42');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'private', 'credentials.json'))).telegramBotToken, '12345:fixture_bot_token');
+  assert.equal(starts, 3);
+  await configureTelegram('detach', { event() {} }, { stopBridge: async () => {} });
+  assert.equal(config().notifications.telegram.autoAttach, false);
+  assert.equal(await autoAttachTelegram(first, context), undefined);
+  assert.equal(starts, 3);
+  assert.equal(telegramAttachment(), null);
+});
+test('bot detach disables auto-attach, and saved preferences skip groups and missing credentials', async () => {
+  const source = session();
+  const value = config(); value.notifications.telegram.autoAttach = true; saveConfig(value);
+  let starts = 0; const context = { startBridge: async () => { starts++; } };
+  assert.equal(await autoAttachTelegram({ ...source, mode: 'parallel' }, context), undefined);
+  assert.equal(await autoAttachTelegram({ ...source, mode: 'besties' }, context), undefined);
+  const group = config(); group.notifications.telegram.chatId = '-42'; saveConfig(group);
+  assert.equal(await autoAttachTelegram(source, context), undefined);
+  const privateChat = config(); privateChat.notifications.telegram.chatId = '42'; saveConfig(privateChat);
+  fs.rmSync(path.join(directory, 'private', 'credentials.json'));
+  assert.equal(await autoAttachTelegram(source, context), undefined);
+  assert.equal(starts, 0);
+  writeJson(path.join(directory, 'private', 'credentials.json'), { telegramBotToken: '12345:fixture_bot_token' });
+  const attachment = await autoAttachTelegram(source, context);
+  const { bridge } = fixtureBridge();
+  try { bridge.binding(); await bridge.processMessage(attachment, { id: 'detach-command', text: '/detach' }); }
+  finally { bridge.close(); }
+  assert.equal(config().notifications.telegram.autoAttach, false);
+  assert.equal(await autoAttachTelegram(source, context), undefined);
 });
 test('Telegram API redirects fail safely and Unicode replies split within message limits without losing text', async () => {
   const token = '12345:private_fixture_token', api = new TelegramApi(token, { fetchImpl: async (_url, options) => { assert.equal(options.redirect, 'error'); throw new Error('Network error with ' + token); } });

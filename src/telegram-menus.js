@@ -1,6 +1,7 @@
+import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
 import { getRecord, putRecord, digest } from './database.js';
 import { loadSession } from './store.js';
-import { providers, getProvider, apiKey, setDefault, saveDefaultSelection } from './providers.js';
+import { providers, getProvider, apiKey, setDefault } from './providers.js';
 import { availableModels, normalizeModel } from './models.js';
 import { changeSessionSelection, changeSessionProvider } from './runtime-client.js';
 import { ensureRuntime, effectiveInputOwner, claimInput, releaseInput } from './runtime.js';
@@ -63,7 +64,7 @@ export class TelegramMenus {
       const current = loadSession(attachment.sessionId), provider = getProvider(selection.provider || current.provider);
       const selected = { model: selection.model, capabilities: selection.capabilities, effort: selection.effort || 'default' };
       if (provider.id === current.provider) await changeSessionSelection(current.id, selected, ui, connection);
-      else { await changeSessionProvider(current, provider, selected, ui, connection); setDefault(provider.id); }
+      else { await changeSessionProvider(current, provider, selected, ui, connection); if (!current.mode || current.mode === 'solo') setDefault(provider.id); }
       this.bridge.queueText(attachment, source, `${provider.id} · ${selected.model || 'provider default'} · effort ${selected.effort}\nConversation retained. This applies to the next message.`);
     } finally { if (!lease) releaseInput(attachment.sessionId, owner); }
   }
@@ -73,8 +74,8 @@ export class TelegramMenus {
     if (text === '/models' || text === '/model') { await this.models(attachment, item.id); return true; }
     if (text === '/effort') { this.effort(attachment, item.id, { provider: session.provider, model: session.model, capabilities: session.modelCapabilities, effort: session.selectedEffort || 'default' }); return true; }
     if (text === '/default') {
-      const selected = saveDefaultSelection(session);
-      this.bridge.queueText(attachment, item.id, `Default saved · ${selected.provider} · ${selected.model || 'provider default'} · effort ${selected.effort}.`);
+      const selected = saveSessionDefaultSelection(session);
+      this.bridge.queueText(attachment, item.id, savedDefaultMessage(selected));
       return true;
     }
     const model = /^\/models?\s+(.+)$/.exec(text);

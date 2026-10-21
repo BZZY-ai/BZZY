@@ -120,6 +120,7 @@ updates**, including updates to existing activity and traffic records.
 | `delegation.usage` | Reported `supervisorTokens`, `delegatedTokens`, known `totalTokens`, `complete` coverage and per-assignment `agents`; a partial total is not a complete cost estimate |
 | `debate.phase` | Independent investigation started/finished; shared evidence snapshot hash |
 | `debate.message` | Participant, role, phase/round, round limit and displayable assessment text |
+| `debate.opening` | Main agent's opening case after all independent assessments finish |
 | `debate.round` | Durable assessments and the main agent's response for a discussion round |
 | `debate.linked` / `debate.result` | Original-chat linkage and final decision, objections and evidence |
 | `execution.finished` | One execution ended; inspect `exitCode` and goal status |

@@ -80,7 +80,7 @@ async function work() {
       const evidence = await call('record_evidence', { path: 'source.txt', label: 'bestie-control-evidence' });
       await call('peer_message', { requestId: `fixture-proof-${collaboration.groupId || 'group'}`, text: 'I inspected the supplied challenge independently. Please verify this current evidence and its control assumptions.', evidence: [evidence.id] });
     }
-    let incoming = collaboration.latestClaims?.find(item => item.from !== collaboration.self);
+    let incoming = collaboration.latestClaims?.find(item => item.from !== collaboration.self && item.to === collaboration.self);
     for (let attempt = 0; attempt < 200 && !incoming; attempt++) {
       const inbox = await call('peer_inbox', { limit: 20 });
       incoming = inbox.items.find(item => item.evidence?.length);
@@ -90,7 +90,7 @@ async function work() {
     for (const id of incoming.evidence) await call('read_artifact', { id });
     await call('peer_review', { messageId: incoming.id, assessment: process.env.BZZY_TEST_ADVANCED === 'besties-disputed' ? 'disputed' : 'supported',
       rationale: process.env.BZZY_TEST_ADVANCED === 'besties-disputed' ? 'The supplied control does not establish the claimed conclusion.' : 'I opened the current artifact and independently checked the supplied control evidence.', evidence: incoming.evidence });
-  } else if (has('delegate')) {
+  } else if (has('delegate') && context.role !== 'chat' && !(process.env.BZZY_TEST_ADVANCED === 'delegation-recovery' && !context.previousAcceptance?.delegation)) {
     const job = await call('delegate', { requestId: 'bounded-worker', objective: 'Create result.txt from supplied evidence', context: 'Use source.txt. Return evidence and preserve the full task boundary.', acceptanceCriteria: ['result.txt exists and contains the inspected evidence'] });
     let status;
     do { await call('wait_assignment', { id: job.id, timeoutSeconds: 1 }); status = await call('assignment_status', { id: job.id }); } while (['starting', 'running'].includes(status.round.state));
@@ -100,19 +100,34 @@ async function work() {
     await call('read_artifact', { id: evidence.id });
     await call('review_assignment', { id: job.id, outcome: 'accepted', rationale: 'Inspected recorded evidence and verified the requested output.', evidence: [evidence.id] });
     await call('apply_assignment', { id: job.id });
+  } else if (process.env.BZZY_TEST_ADVANCED === 'debate-no-evidence' && has('finish_assignment') && !has('peer_status')) {
+    await call('finish_assignment', { status: 'inconclusive', verdict: 'inconclusive', summary: 'The supplied material could not be validated with the available evidence.', evidence: [],
+      objections: [], conclusions: [], position: 'Inconclusive' });
   } else if (has('finish_assignment') && !has('peer_status')) {
     const reviewer = !has('issue');
     if (!reviewer) fs.writeFileSync('result.txt', 'Implemented from ' + fs.readFileSync('source.txt', 'utf8'));
     const evidence = await call('record_evidence', { path: reviewer ? 'BZZY_SELECTED_MATERIAL.txt' : 'result.txt', label: 'worker-evidence' });
     const main = context.contract?.context?.includes('main agent responding');
+    const agreement = process.env.BZZY_TEST_ADVANCED === 'debate-agreement';
     await call('finish_assignment', { status: reviewer ? 'inconclusive' : 'complete', summary: reviewer ? 'The claim needs an account-control test.' : 'Created and inspected the requested output.', evidence: [evidence.id],
-      objections: [{ id: 'missing-control', claim: 'An independent account control is not present.', evidence: [evidence.id] }], conclusions: [], position: 'Requires additional verification',
-      ...(main ? { decision: { acceptedConclusions: [], rejectedClaims: ['The evidence conclusively establishes IDOR'], corrections: ['Classify the result as unverified'], remainingObjections: ['missing-control'], nextVerificationSteps: ['Run a separately authorized account-control test'] } } : {}) });
+      ...(context.contract?.context?.includes('Independently investigate') ? { verdict: agreement ? 'real' : 'inconclusive' } : {}),
+      objections: agreement ? [] : [{ id: 'missing-control', claim: 'An independent account control is not present.', evidence: [evidence.id] }], conclusions: agreement ? ['The supplied conclusion is supported.'] : [], position: agreement ? 'Supported' : 'Requires additional verification',
+      ...(main ? { decision: agreement
+        ? { acceptedConclusions: ['The supplied conclusion is supported.'], rejectedClaims: [], corrections: [], remainingObjections: [], nextVerificationSteps: [], objectionDispositions: [] }
+        : { acceptedConclusions: [], rejectedClaims: ['The evidence conclusively establishes IDOR'], corrections: ['Classify the result as unverified'], remainingObjections: ['missing-control'], nextVerificationSteps: ['Run a separately authorized account-control test'],
+          objectionDispositions: [{ id: 'missing-control', status: 'unresolved', rationale: 'The required independent account control is still absent.', evidence: [evidence.id] }] } } : {}) });
   } else if (has('peer_status')) {
     const peers = await call('peer_status'); log({ peers: peers.length, objective: context.contract?.objective });
     const evidence = await call('record_evidence', { path: 'source.txt', label: 'peer-evidence' });
     await call('issue', { title: 'Ownership hypothesis', status: 'inconclusive', evidence: [evidence.id] });
     await call('remember', { kind: 'observation', statement: 'The supplied file was inspected.', evidence: [evidence.id], inputs: ['source.txt'] });
+  }
+  if (process.env.BZZY_TEST_ADVANCED === 'observation-cleanup' && has('assess_requirement')) {
+    const file = '.fixture-observation.txt';
+    fs.writeFileSync(file, 'Birth date: 1971-06-28\nAs-of date: 2026-10-21\nCalculated age: 55\n');
+    const evidence = await call('record_evidence', { path: file, label: 'Recorded age calculation' });
+    await call('assess_requirement', { id: 'objective', status: 'supported', rationale: 'Verified the calculation recorded in the saved evidence.', evidence: [evidence.id] });
+    fs.rmSync(file);
   }
   if (has('checkpoint')) await call('checkpoint', { completedWork: ['Inspected the supplied material'], pendingActions: [], unresolvedQuestions: ['Live ownership behavior needs separate evidence'] });
   if (claude) {

@@ -19,6 +19,22 @@ function terminal() {
   const ui = new UI({ input, output, error: output }); ui.setSession(sessionId);
   return { ui, input, output, get written() { return written; } };
 }
+test('a disabled Continue row stays visible and cannot confirm an incomplete parallel selection', async () => {
+  const { ui } = terminal();
+  try {
+    const answer = ui.chooseOne('Parallel · Select agents', { choices: [
+      { value: 'agent:0', label: 'Agent 1 · Choose provider and model' },
+      { value: 'continue', label: 'Continue · select at least 2 agents', disabled: true, selected: true, description: 'Select at least two agents.' },
+    ] });
+    await Promise.resolve(); ui.tui.render();
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Continue.*select at least 2 agents/);
+    ui.tui.key('', { name: 'return' });
+    assert.equal(ui.tui.selection.error, 'Select at least two agents.');
+    ui.tui.key('', { name: 'up' }); ui.tui.key('', { name: 'return' });
+    assert.equal(await answer, 'agent:0');
+  } finally { ui.close(); }
+});
+
 test('full-screen chat retains streaming replies and pins the latest user message through long output', async () => {
   const term = terminal(), { ui } = term;
   try {
@@ -52,6 +68,45 @@ test('participant checklist is selectable with space and arrows and can be cance
     ui.tui.key(' ', { name: 'space' }); ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' }); ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' });
     ui.tui.key('\r', { name: 'return' }); assert.deepEqual(await choice, ['codex', 'deepseek']);
     const cancelled = ui.chooseMany('Choose', [{ value: 'a', label: 'A' }]); ui.tui.key('', { name: 'escape' }); assert.equal(await cancelled, null);
+  } finally { ui.close(); }
+});
+
+test('the editor accepts typing and submission between prompts without losing or mixing tab input', async () => {
+  const { ui } = terminal();
+  try {
+    ui.tui.key('first draft', {}); ui.tui.key('', { name: 'return' });
+    ui.tui.key('next draft', {});
+    assert.equal(await ui.ask('bzzy (running) › '), 'first draft');
+    assert.equal(ui.tui.value, 'next draft');
+    const next = ui.ask('bzzy › '); await Promise.resolve();
+    ui.tui.key('', { name: 'return' }); assert.equal(await next, 'next draft');
+    ui.setTabs(sessionId, [{ id: 'agent-a', agent: 'A' }, { id: 'agent-b', agent: 'B' }], 'agent-a');
+    ui.tui.key('for agent A', {}); ui.tui.key('', { name: 'return' });
+    ui.setTabs(sessionId, [{ id: 'agent-a', agent: 'A' }, { id: 'agent-b', agent: 'B' }], 'agent-b');
+    const other = ui.ask('bzzy (B) › '); await Promise.resolve();
+    ui.tui.key('for agent B', {}); ui.tui.key('', { name: 'return' });
+    assert.equal(await other, 'for agent B');
+    ui.setTabs(sessionId, [{ id: 'agent-a', agent: 'A' }, { id: 'agent-b', agent: 'B' }], 'agent-a');
+    assert.equal(await ui.ask('bzzy (A) › '), 'for agent A');
+  } finally { ui.close(); }
+});
+
+test('streaming reuses completed message layouts and updates only the response tail', () => {
+  const { ui } = terminal();
+  try {
+    const completed = ui.tui.add('assistant', 'Previous result '.repeat(1000), { label: 'bzzy' });
+    const stable = ui.tui.entryLayout(completed, 90);
+    ui.event('text', { itemId: 'live', text: '## Progress\n' + 'Testing 👩‍💻 é 漢字 '.repeat(20) });
+    const streaming = ui.tui.entries.at(-1);
+    for (const delta of ['more', '\n**bold', ' text**', '\n', 'e', '\u0301', ' 👩', '\u200d💻']) {
+      ui.tui.entryLayout(streaming, 90);
+      ui.event('text', { itemId: 'live', text: delta });
+      const incremental = ui.tui.entryLayout(streaming, 90);
+      const fresh = ui.tui.entryLayout({ ...streaming }, 90);
+      assert.deepEqual(incremental.lines, fresh.lines);
+      assert.strictEqual(ui.tui.entryLayout(completed, 90), stable, 'old replies are never reformatted for a new token');
+    }
+    assert.notStrictEqual(ui.tui.entryLayout(completed, 45), stable, 'resizing recalculates line wraps');
   } finally { ui.close(); }
 });
 test('weekly quotas stay in the header and Activity shows readable progress without raw tool commands', async () => {

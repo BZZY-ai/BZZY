@@ -43,12 +43,12 @@ test('ordinary chat avoids the goal audit while explicit goals retain durable co
 test('besties instructions require visible evidence exchange and mutual review only during goal work', () => {
   const session = createSession(BUILTINS.codex, directory);
   prepareTask(session, { mode: 'besties', besties: [{ provider: 'codex' }, { provider: 'claude' }] }, 'Verify the supplied challenge');
-  assert.doesNotMatch(agentInstructions(session), /TWO EQUAL COLLABORATORS/);
+  assert.doesNotMatch(agentInstructions(session), /TWO OR THREE EQUAL COLLABORATORS/);
   session.role = 'bestie'; session.bestiesSessionId = session.id;
   const instructions = agentInstructions(session, { goalMode: true });
-  assert.match(instructions, /TWO EQUAL COLLABORATORS/);
+  assert.match(instructions, /TWO OR THREE EQUAL COLLABORATORS/);
   assert.match(instructions, /Read peer_inbox/);
-  assert.match(instructions, /mutually support current evidence/);
+  assert.match(instructions, /each peer’s latest decisive evidence must be inspected and supported/);
   assert.match(instructions, /Do not expose private chain-of-thought/);
 });
 

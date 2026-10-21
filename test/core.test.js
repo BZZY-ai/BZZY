@@ -8,7 +8,9 @@ import { createSession, lockSession, readJson, sessionPath, writeJson } from '..
 import { BUILTINS, addProvider, getProvider } from '../src/providers.js';
 import { newGoal, applyReport, continuationPrompt, readReport, writeReport } from '../src/goals.js';
 import { claudeArgs, claudeEnvironment, ClaudeEngine } from '../src/engines/claude.js';
-import { codexLaunch } from '../src/engines/codex.js';
+import { codexLaunch, codexSandboxMode } from '../src/engines/codex.js';
+import { assessObjectionDispositions, formatInvestigation } from '../src/debate-format.js';
+import { investigationConsensus, investigationReadiness } from '../src/investigation.js';
 import { randomUUID } from 'node:crypto';
 
 let dir;
@@ -100,13 +102,51 @@ test('backend permission mappings are explicit and subscription launch does not 
   const yolo = codexLaunch(BUILTINS.codex, session, { yolo: true });
   assert.ok(normal.args.includes('sandbox_mode="workspace-write"'));
   assert.ok(yolo.args.includes('sandbox_mode="danger-full-access"'));
+  assert.equal(codexSandboxMode({ strictPolicy: true, policy: { mode: 'read-only', network: 'inherit' } }), 'danger-full-access');
+  assert.equal(codexSandboxMode({ strictPolicy: true, policy: { mode: 'read-only', network: 'disabled' } }), 'read-only');
   assert.ok(yolo.args.includes('approval_policy="never"'));
   assert.equal(normal.env.OPENAI_API_KEY, undefined);
-  assert.ok(claudeArgs(session, { yolo: true }).includes('--dangerously-skip-permissions'));
-  assert.ok(!claudeArgs(session, {}).includes('--dangerously-skip-permissions'));
+  assert.ok(claudeArgs(session, { yolo: true }, undefined, 1000).includes('--dangerously-skip-permissions'));
+  assert.ok(!claudeArgs(session, { yolo: true }, undefined, 0).includes('--dangerously-skip-permissions'));
+  assert.ok(!claudeArgs(session, { scopedAutonomy: true }, undefined, 0).includes('--dangerously-skip-permissions'));
+  assert.ok(!claudeArgs(session, {}, undefined, 1000).includes('--dangerously-skip-permissions'));
   process.env.ANTHROPIC_API_KEY = 'test-sentinel';
   assert.equal(claudeEnvironment().ANTHROPIC_API_KEY, undefined);
   delete process.env.ANTHROPIC_API_KEY;
+});
+
+test('debate investigation failures show their durable reason', () => {
+  assert.equal(formatInvestigation({ state: 'failed', error: 'Claude could not start\nunder this account.' }),
+    'Investigation ended: failed. Evidence remains incomplete.\nReason: Claude could not start under this account.');
+  assert.equal(formatInvestigation({ state: 'awaiting_review', report: { summary: 'Evidence was recorded.' } }), 'Evidence was recorded.');
+});
+
+test('debate opens only when independent reports contain a usable conclusion and preserved evidence', () => {
+  const good = provider => ({ participant: { provider }, state: 'awaiting_review', report: { status: 'complete', summary: 'Validated.', evidence: [`${provider}-proof`] },
+    artifacts: [{ originalId: `${provider}-proof`, id: `${provider}-import` }] });
+  assert.equal(investigationReadiness({ reports: [good('codex'), good('claude'), { participant: { provider: 'deepseek' }, state: 'timed_out', error: 'runtime_limit' }] }, 3).passed, true);
+  const stopped = investigationReadiness({ reports: [
+    { participant: { provider: 'codex' }, state: 'awaiting_review', report: { status: 'inconclusive', summary: 'No runnable evidence.', evidence: [] }, artifacts: [] },
+    { participant: { provider: 'claude' }, state: 'timed_out', error: 'runtime_limit' },
+    { participant: { provider: 'deepseek' }, state: 'awaiting_review', report: { status: 'blocked', summary: 'No target.', evidence: [] }, artifacts: [] },
+  ] }, 3);
+  assert.equal(stopped.passed, false); assert.equal(stopped.usable, 0); assert.match(stopped.reasons.join('\n'), /inconclusive|timed_out|blocked/);
+});
+
+test('resolved objections permit immediate agreement while missing dispositions remain unresolved', () => {
+  const reports = [{ report: { objections: [{ id: 'severity', claim: 'Severity should be Medium.' }] } }];
+  const resolved = assessObjectionDispositions(reports, { remainingObjections: [], objectionDispositions: [{ id: 'severity', status: 'accepted', rationale: 'Severity corrected to Medium.' }] });
+  assert.equal(resolved.complete, true); assert.deepEqual(resolved.unresolved, []);
+  const missing = assessObjectionDispositions(reports, { remainingObjections: [], objectionDispositions: [] });
+  assert.equal(missing.complete, false); assert.match(missing.unresolved[0], /no main-agent disposition/);
+});
+
+test('two evidence-backed matching verdicts form consensus when the third agent times out', () => {
+  const vote = (provider, verdict) => ({ participant: { provider }, state: 'awaiting_review', report: { status: 'complete', verdict, summary: `${verdict} finding`, evidence: [`${provider}-proof`] },
+    artifacts: [{ originalId: `${provider}-proof`, id: `${provider}-import` }] });
+  const consensus = investigationConsensus({ reports: [vote('codex', 'real'), { participant: { provider: 'claude' }, state: 'timed_out', error: 'runtime_limit' }, vote('deepseek', 'real')] }, 3);
+  assert.equal(consensus.reached, true); assert.equal(consensus.verdict, 'real'); assert.equal(consensus.required, 2); assert.equal(consensus.counts.real, 2);
+  assert.equal(consensus.votes.find(item => item.provider === 'claude').counted, false);
 });
 
 test('the DeepSeek key is passed only in the child environment, never in CLI args or model files', () => {

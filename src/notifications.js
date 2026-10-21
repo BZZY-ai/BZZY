@@ -5,6 +5,8 @@ import { home, readJson, writeJson, lockFile } from './store.js';
 import { getRecord, putRecord, listRecords, transaction } from './database.js';
 import { transports, registerTransport } from './notification-registry.js';
 import { goalEvent } from './lifecycle.js';
+import { duration } from './terminal-format.js';
+import { delegationTokenLines } from './delegation-format.js';
 export { registerTransport } from './notification-registry.js';
 export { goalEvent } from './lifecycle.js';
 
@@ -18,11 +20,44 @@ export function telegramSettings() {
     token: process.env.BZZY_TELEGRAM_BOT_TOKEN || secrets.telegramBotToken };
 }
 
+function groupedAgentLines(agents = []) {
+  const grouped = new Map();
+  for (const agent of agents) {
+    const key = `${agent.provider || agent.agent || 'agent'}\0${agent.model || ''}`, previous = grouped.get(key) || {
+      provider: agent.provider || agent.agent || 'agent', model: agent.model || '', tokens: 0, available: true, seen: false };
+    if (agent.tokens == null) previous.available = false;
+    else { previous.tokens += agent.tokens; previous.seen = true; }
+    grouped.set(key, previous);
+  }
+  return [...grouped.values()].map(agent => `${agent.provider}${agent.model ? `/${agent.model}` : ''} · ${agent.seen ? `${agent.available ? '' : '≥'}${agent.tokens.toLocaleString()} tokens` : 'usage unavailable'}`);
+}
+
+function formatDebateTelegram(event) {
+  const result = event.result || {}, consensus = result.consensus;
+  const status = event.type === 'goal.completed' ? 'GOAL ACHIEVED' : 'GOAL STALLED';
+  const lines = ['🐝 bzzy · debate', `/goal ${event.objective.slice(0, 1600)}`];
+  if (consensus?.verdict) {
+    const agreeing = consensus.counts?.[consensus.verdict] || 0;
+    lines.push(`CONSENSUS ${agreeing}/${consensus.total} · ${consensus.verdict === 'real' ? 'REAL' : 'FALSE POSITIVE'}`);
+    if (result.conclusions?.[0]) lines.push(result.conclusions[0]);
+  } else {
+    lines.push(result.outcome === 'assessed' ? 'DEBATE ASSESSED' : 'DEBATE UNRESOLVED');
+    for (const conclusion of result.conclusions || []) lines.push(conclusion);
+    for (const unresolved of result.unresolved || []) lines.push(`Unresolved · ${unresolved}`);
+  }
+  lines.push(`${status} · ${event.usage.seconds == null ? 'time unavailable' : duration(event.usage.seconds)} · ${event.usage.available === false ? 'at least ' : ''}${event.usage.tokens.toLocaleString()} tokens`,
+    ...groupedAgentLines(event.usage.agents), `Session · ${event.sessionId}`);
+  if (event.reason) lines.push(`Reason · ${event.reason.slice(0, 600)}`);
+  return lines.filter(line => line !== undefined && line !== null).join('\n').slice(0, 4000);
+}
+
 export function formatTelegram(event) {
+  if (event.mode === 'debate') return formatDebateTelegram(event);
   return [event.type === 'goal.completed' ? '🐝 bzzy — goal achieved' : '🐝 bzzy — goal stalled', '',
     event.objective.slice(0, 1600), '', `Provider: ${event.provider}${event.model ? ` / ${event.model}` : ''}`,
-    `Status: ${event.status}`, `Usage: ${event.usage.available === false ? 'at least ' : ''}${event.usage.tokens} tokens · ${event.usage.turns} turns`,
-    event.usage.seconds != null ? `Time: ${event.usage.seconds.toFixed(1)} seconds` : 'Time: unavailable',
+    `Status: ${event.status}`, ...(event.mode === 'delegate' ? delegationTokenLines(event, { ...event.usage, totalTokens: event.usage.tokens, complete: event.usage.available !== false })
+      : [`Usage: ${event.usage.available === false ? 'at least ' : ''}${event.usage.tokens} tokens · ${event.usage.turns} turns`]),
+    event.usage.seconds != null ? `Time: ${duration(event.usage.seconds)}` : 'Time: unavailable',
     event.reason ? `Reason: ${event.reason.slice(0, 600)}` : '',
     `Workspace: ${event.cwd}`, `Session: ${event.sessionId}`].filter(Boolean).join('\n').slice(0, 4000);
 }

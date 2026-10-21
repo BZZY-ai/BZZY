@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import readline from 'node:readline';
+import { savedTask, preparationHeld } from './context-state.mjs';
 
 const scenario = process.env.BZZY_TEST_SCENARIO || 'complete';
 const log = value => { if (process.env.BZZY_TEST_LOG) fs.appendFileSync(process.env.BZZY_TEST_LOG, JSON.stringify(value) + '\n'); };
@@ -32,6 +33,8 @@ const turns = (status = 'complete') => {
 for await (const line of readline.createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
   log(request);
+  if (request.method === 'initialize' && request.params?.clientInfo?.name !== 'bzzy-usage' && preparationHeld()) { log({ preparing: true, savedTask: savedTask() }); continue; }
+  if (['thread/start', 'thread/resume'].includes(request.method) && process.env.BZZY_TEST_CAPTURE_TASK) log({ savedTask: savedTask() });
   if (request.id === 900 && !request.method) {
     pendingApproval = false;
     send({ method: 'item/agentMessage/delta', params: { threadId: 'native-thread', itemId: 'approval', delta: `decision:${request.result.decision}\n` } });

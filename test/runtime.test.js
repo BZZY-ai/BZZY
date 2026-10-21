@@ -161,6 +161,27 @@ test('an idle terminal observes and completes replies started by another input c
   assert.ok(seen.some(event => event.type === 'message.user' && event.data.text === 'Started from another input channel'));
   assert.ok(seen.some(event => event.type === 'text' && /Fixture work/.test(event.data.text)));
 });
+test('input submitted as an observed execution ends returns to idle chat without being lost', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'slow';
+  const session = makeSession(), info = await ensureRuntime(), owner = randomUUID();
+  const followup = 'Explain the completed result'; let prompts = 0, closeIdle;
+  const ui = { interactive: true, cursors: new Map(), setSession() {}, updateSession() {}, event() {},
+    ask() {
+      prompts++;
+      if (prompts === 1) return new Promise(resolve => { closeIdle = () => resolve(null); ui.reader = { close: closeIdle }; });
+      if (prompts === 2) return new Promise(resolve => { ui.reader = { close: () => resolve(followup) }; });
+      throw new Error('The submitted follow-up was lost during execution cleanup.');
+    },
+  };
+  const waiting = conversationInput(session, ui);
+  for (let i = 0; i < 100 && !closeIdle; i++) await delay(10);
+  await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner });
+  await runtimeRequest(info, 'POST', `/sessions/${session.id}/execute`, { owner, prompt: 'Started from another channel', options: {}, goal: false }, randomUUID());
+  await runtimeRequest(info, 'POST', `/sessions/${session.id}/release`, { owner });
+  assert.equal(await waiting, followup);
+  assert.equal(prompts, 2);
+});
+
 test('model and provider switches retain readable history and pass only chat context to each new backend', async () => {
   process.env.BZZY_TEST_ADVANCED = 'conversation';
   const session = createSession(BUILTINS.codex, dir), info = await ensureRuntime(), owner = randomUUID(), connection = { info, owner };
@@ -261,6 +282,37 @@ test('a goal resumed on a different provider receives the chat and only its rema
   assert.match(received.prompt, /orchard-violet/); assert.match(received.prompt, /Verify the marker from our conversation/);
   assert.equal(loadSession(session.id).goal.status, 'complete'); assert.equal(loadSession(session.id).goal.tokensUsed, 82);
 });
+test('delegate completion recovers from a brain-only attempt by dispatching and reviewing the executor', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'delegation-recovery';
+  const session = makeSession({ mode: 'delegate', executor: 'deepseek' }), started = await start(session);
+  const result = await finished(started.executionId);
+  assert.equal(result.exitCode, 0, result.error);
+  const saved = loadSession(session.id), history = events(session.id, 0, 1000);
+  const assessments = history.filter(event => event.type === 'acceptance');
+  assert.equal(assessments[0].data.passed, false); assert.equal(assessments[0].data.delegation.assignmentCount, 0);
+  assert.equal(saved.acceptance.delegation.reviewedAssignments, 1); assert.equal(saved.goal.status, 'complete');
+  assert.equal(saved.goal.turns, 2);
+  assert.ok(saved.summary.usage.supervisorTokens > 0); assert.ok(saved.summary.usage.delegatedTokens > 0);
+  const summary = history.findLast(event => event.type === 'summary').data;
+  assert.match(summary.message, /BRAIN.*tokens/); assert.match(summary.message, /HANDS \/ EXECUTOR.*tokens/); assert.match(summary.message, /TOTAL.*tokens/);
+});
+
+test('delegate chat reserves executor tools for a later goal but cannot launch workers during chat', async () => {
+  const session = makeSession({ mode: 'delegate', executor: 'deepseek' }); session.goal = null; saveSession(session);
+  const info = await ensureRuntime(), owner = randomUUID();
+  await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner });
+  const chat = await runtimeRequest(info, 'POST', `/sessions/${session.id}/execute`, { owner, prompt: 'Hello', options: {}, goal: false }, randomUUID());
+  assert.equal((await finished(chat.executionId)).exitCode, 0);
+  assert.equal(listRecords('assignment').filter(job => job.parentSessionId === session.id).length, 0);
+  const fresh = loadSession(session.id), threadId = fresh.engineThreadId;
+  fresh.goal = newGoal('Create result.txt from supplied evidence'); saveSession(fresh);
+  const goal = await runtimeRequest(info, 'POST', `/sessions/${session.id}/execute`, { owner, prompt: fresh.goal.objective, options: {}, goal: true }, randomUUID());
+  assert.equal((await finished(goal.executionId)).exitCode, 0);
+  const saved = loadSession(session.id);
+  assert.equal(saved.engineThreadId, threadId); assert.equal(saved.goal.status, 'complete');
+  assert.equal(saved.summary.usage.assignmentCount, 1); assert.ok(saved.summary.usage.delegatedTokens > 0);
+});
+
 test('delegation retains a supervisor, bounded worker reports, inspected evidence and conflict-aware apply', async () => {
   const session = makeSession({ mode: 'delegate', executor: 'deepseek' });
   session.selectedEffort = 'xhigh'; session.executor.effort = 'low'; session.executor.capabilities = { supportedEfforts: ['low', 'high', 'max'] }; saveSession(session);
@@ -306,18 +358,72 @@ test('attached goal resume keeps the same long-running objective and does not tu
   assert.equal(listRecords('execution').filter(job => job.sessionId === source.id).length, 1);
   assert.ok(listRecords('execution').find(job => job.sessionId === source.id).resumeGoal);
 });
+
+for (const provider of ['codex', 'claude']) test(`${provider}: /goal replaces active work without closing the chat or overlapping runners`, { timeout: 25000 }, async () => {
+  process.env.BZZY_TEST_ADVANCED = 'slow';
+  const source = makeSession(); source.provider = provider; source.backend = BUILTINS[provider].backend;
+  source.contract.constraints = ['Preserve approved scope']; source.contract.scope.allowedTargets = ['https://scope.example']; saveSession(source);
+  const original = source.goal.id, launched = await start(source);
+  for (let i = 0; i < 150 && !loadSession(source.id).engineThreadId; i++) await delay(20);
+  const thread = loadSession(source.id).engineThreadId; assert.ok(thread);
+  let prompts = 0; const seen = [];
+  const ui = { interactive: true, cursors: new Map(), setSession() {}, updateSession() {}, event(type, data) { seen.push({ type, data }); },
+    async ask() {
+      if (!prompts++) return '/goal Inspect the replacement objective';
+      if (listRecords('execution').some(job => job.sessionId === source.id && ['queued', 'launching', 'running'].includes(job.state))) return new Promise(resolve => { ui.reader = { close: () => resolve(null) }; });
+      return '/exit';
+    },
+  };
+  await attachSession(source, { cwd: dir }, ui);
+  const saved = loadSession(source.id), archive = getRecord('goal-history', original);
+  assert.notEqual(saved.goal.id, original); assert.equal(saved.goal.objective, 'Inspect the replacement objective');
+  assert.equal(saved.goal.status, 'complete'); assert.equal(saved.engineThreadId, thread);
+  assert.equal(archive.supersededBy, saved.goal.id); assert.equal(archive.status, 'cancelled');
+  assert.equal(getRecord('execution', launched.executionId).exitCode, 130);
+  const jobs = listRecords('execution').filter(job => job.sessionId === source.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  assert.equal(jobs.length, 2); assert.ok(jobs[0].finishedAt <= jobs[1].createdAt);
+  assert.deepEqual(saved.contract.scope.allowedTargets, ['https://scope.example']); assert.ok(saved.contract.constraints.includes('Preserve approved scope'));
+  assert.ok(seen.some(event => event.type === 'info' && /Replacing the current goal/.test(event.data.message)));
+});
+
+test('/goal from a parallel agent tab replaces the whole group objective and stops the old peers', { timeout: 25000 }, async () => {
+  process.env.BZZY_TEST_ADVANCED = 'slow';
+  const source = makeSession({ mode: 'parallel', agents: 'codex,codex' }), original = source.goal.id;
+  const launched = await start(source);
+  for (let i = 0; i < 150 && !getRecord('parallel', source.id)?.peers.length; i++) await delay(20);
+  const oldPeers = getRecord('parallel', source.id).peers.map(peer => peer.sessionId);
+  let prompts = 0, finishInput;
+  const ui = { interactive: true, cursors: new Map(), setSession() {}, setTabs() {}, clearHistory() {}, event() {},
+    updateSession() {
+      const goal = loadSession(source.id).goal;
+      if (goal.objective === 'Replacement group task' && goal.status === 'complete') finishInput?.('/exit');
+    }, async ask() {
+      if (!prompts++) return '/goal Replacement group task';
+      return new Promise(resolve => { finishInput = resolve; ui.reader = { close: () => resolve(null), setPrompt() {}, prompt() {} }; });
+    },
+  };
+  await attachSession(source, { cwd: dir }, ui);
+  const saved = loadSession(source.id), group = getRecord('parallel', source.id);
+  assert.equal(saved.goal.objective, 'Replacement group task'); assert.equal(saved.goal.status, 'complete');
+  assert.equal(getRecord('goal-history', original).supersededBy, saved.goal.id);
+  assert.equal(getRecord('execution', launched.executionId).exitCode, 130);
+  assert.ok(oldPeers.every(id => loadSession(id).goal.status === 'cancelled'));
+  assert.ok(group.peers.every(peer => !oldPeers.includes(peer.sessionId) && loadSession(peer.sessionId).goal.objective === saved.goal.objective));
+});
 test('debate preserves independent assessments, fixed snapshots and unresolved disagreement', async () => {
   const session = makeSession({ mode: 'debate' }), launched = await start(session, { artifact: 'source.txt', participants: ['codex', 'claude'], rounds: 3, runtimeSeconds: 30 });
   const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 2, job.error || JSON.stringify(loadSession(session.id).goal));
   const result = getRecord('debate', session.id); assert.ok(result.transcript.length >= 2); assert.equal(result.stopReason, 'positions_stable');
   assert.deepEqual(result.unresolvedDisagreement, ['missing-control'], JSON.stringify(result.investigation)); assert.equal(result.newVerificationPerformed, null); assert.equal(result.newVerificationDuringRounds, false);
   assert.equal(result.outcome, 'unresolved'); assert.equal(loadSession(session.id).goal.status, 'awaiting_review');
-  assert.equal(result.investigation.reports.length, 2);
+  assert.equal(result.investigation.reports.length, 3, 'main and challengers all assess independently before the opening case');
   assert.ok(result.investigation.reports.every(report => report.artifacts.some(item => item.path?.startsWith('BZZY_INVESTIGATION_EVIDENCE/'))), JSON.stringify(result.investigation.reports));
   const history = (await new BzzyClient(launched.info).events(session.id, 0, 1000)).events;
   const investigationDone = history.findIndex(event => event.type === 'debate.phase' && event.data.status === 'finished');
+  const opening = history.findIndex(event => event.type === 'debate.opening');
   const firstDiscussion = history.findIndex(event => event.type === 'debate.message' && event.data.role === 'reviewer');
-  assert.ok(investigationDone >= 0 && firstDiscussion > investigationDone);
+  assert.ok(investigationDone >= 0 && opening > investigationDone && firstDiscussion > opening);
+  assert.ok(!history.some(event => event.type === 'info' && event.data.message.startsWith('/goal ')), 'phase headings do not duplicate the submitted goal');
   assert.ok(history.some(event => event.type === 'debate.message' && event.data.role === 'main agent'));
   assert.equal(fs.readFileSync(path.join(dir, 'source.txt'), 'utf8'), 'Supplied evidence');
 });
@@ -341,6 +447,31 @@ test('review-only debate skips investigations and inherits disabled networking a
     assert.deepEqual(assignment.contract.scope, session.contract.scope);
   }
   assert.equal(fs.readFileSync(path.join(dir, 'source.txt'), 'utf8'), 'Supplied evidence');
+});
+test('debate stops before an opening case when independent work yields no usable evidence', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'debate-no-evidence';
+  const session = makeSession({ mode: 'debate' }), launched = await start(session, { participants: ['codex', 'claude'], rounds: 5, runtimeSeconds: 30 });
+  const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 2, job.error);
+  const result = getRecord('debate', session.id);
+  assert.equal(result.stopReason, 'insufficient_investigation_evidence'); assert.equal(result.opening, null); assert.deepEqual(result.transcript, []);
+  assert.equal(result.investigationReadiness.usable, 0); assert.equal(result.investigationReadiness.required, 2);
+  const history = (await new BzzyClient(launched.info).events(session.id, 0, 1000)).events;
+  assert.ok(history.some(event => event.type === 'info' && /evidence phase not ready/.test(event.data.message)));
+  assert.ok(!history.some(event => ['debate.opening', 'debate.round'].includes(event.type)));
+  assert.equal(listRecords('assignment').filter(item => item.parentSessionId === session.id).length, 3, 'only the three independent investigations ran');
+});
+test('debate skips challenge rounds when independent evidence reaches a strict majority', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'debate-agreement';
+  const session = makeSession({ mode: 'debate' }), launched = await start(session, { participants: ['codex', 'claude'], rounds: 5, runtimeSeconds: 30 });
+  const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 0, job.error);
+  const result = getRecord('debate', session.id);
+  assert.equal(result.stopReason, 'majority_consensus'); assert.equal(result.transcript.length, 0); assert.equal(result.opening, null); assert.deepEqual(result.unresolvedDisagreement, []);
+  assert.equal(result.investigationConsensus.verdict, 'real'); assert.equal(result.investigationConsensus.counts.real, 3);
+  assert.equal(result.outcome, 'assessed'); assert.equal(loadSession(session.id).goal.status, 'complete');
+  const notification = listRecords('goal-event').find(event => event.sessionId === session.id && event.type === 'goal.completed');
+  assert.equal(notification.mode, 'debate'); assert.equal(notification.result.consensus.verdict, 'real');
+  assert.equal(notification.result.consensus.counts.real, 3); assert.equal(notification.reason, 'majority_consensus');
+  assert.equal(notification.usage.agents.length, 3);
 });
 test('parallel agents receive the same goal, independent sessions and attributed project ledgers', async () => {
   const session = makeSession({ mode: 'parallel' }), launched = await start(session, { agents: 'codex,claude,deepseek', concurrency: 3, runtimeSeconds: 30 });

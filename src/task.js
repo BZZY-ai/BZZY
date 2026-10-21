@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeContract, loadContract, validateContractPaths } from './contracts.js';
 import { readJson, saveSession } from './store.js';
@@ -6,12 +7,34 @@ import { childPolicy } from './policy.js';
 import { codexHome, claudeHome } from './auth.js';
 import { configuredParallel } from './parallel-setup.js';
 
+export function readContextFile(file, cwd) {
+  const resolved = path.resolve(cwd, file);
+  let fd;
+  try {
+    fd = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error('expected a regular text file');
+    if (stat.size > 1024 * 1024) throw new Error('file exceeds 1 MiB; nothing was truncated');
+    const bytes = fs.readFileSync(fd);
+    if (bytes.length > 1024 * 1024) throw new Error('file exceeds 1 MiB; nothing was truncated');
+    const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    if (!text.trim()) throw new Error('file is empty');
+    if (text.includes('\0')) throw new Error('expected UTF-8 text without NUL characters');
+    return text;
+  } catch (error) {
+    throw new Error(`Cannot load --context-file ${resolved}: ${error.message}`);
+  } finally {
+    if (fd != null) fs.closeSync(fd);
+  }
+}
+
 export function prepareTask(session, options, objective, { persist = true } = {}) {
   const project = session.projectRoot || session.cwd;
   const persistent = readJson(path.join(project, '.bzzy', 'constraints.json'), {});
   const provided = options.contract ? loadContract(path.resolve(options.contract), objective) : normalizeContract({}, objective);
   const initialContext = typeof options.initialContext === 'string' ? options.initialContext.trim() : '';
-  const context = [provided.context, initialContext && `Initial instruction supplied before this goal:\n${initialContext}`].filter(Boolean).join('\n\n');
+  const context = [provided.context, options.contextFileText,
+    initialContext && `Initial instruction supplied before this goal:\n${initialContext}`].filter(Boolean).join('\n\n');
   const contract = normalizeContract({ ...provided,
     context,
     constraints: [...new Set([...(persistent.constraints || []), ...provided.constraints])],
@@ -33,9 +56,10 @@ export function prepareTask(session, options, objective, { persist = true } = {}
   }
   if (session.mode === 'besties') {
     session.besties = options.besties || options.bestiesSelection || session.besties || (options.agents || 'codex,claude').split(',').map(value => agentChoice(value.trim()));
-    if (!Array.isArray(session.besties) || session.besties.length !== 2) throw new Error('Besties requires exactly two peer provider/model selections.');
+    if (!Array.isArray(session.besties) || (session.besties.length < 2 || session.besties.length > 3)) throw new Error('Besties requires 2 or 3 peer provider/model selections.');
     for (const peer of session.besties) agentChoice(peer.provider, peer.model);
   }
+  if (session.mode === 'debate' && options.debateAgents) session.debateAgents = options.debateAgents;
   if (session.mode === 'parallel') {
     session.parallelAgents = configuredParallel({ ...options, parallelAgents: options.parallelAgents || session.parallelAgents });
   }

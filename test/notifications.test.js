@@ -6,7 +6,7 @@ import os from 'node:os';
 import { createSession } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
 import { newGoal } from '../src/goals.js';
-import { goalEvent, NotificationHub, sendTelegram } from '../src/notifications.js';
+import { formatTelegram, goalEvent, NotificationHub, sendTelegram } from '../src/notifications.js';
 import { telegramSettings } from '../src/notifications.js';
 import { configureTelegram } from '../src/telegram.js';
 
@@ -88,6 +88,28 @@ test('Telegram sends plain text, bounds message size, and redacts tokens from fa
   } });
   assert.equal(result.messageId, 4);
   await assert.rejects(sendTelegram(event, { token: '123:secret', chatId: '1', fetchImpl: async () => { throw new Error('failed at bot123:secret/sendMessage'); } }), error => !error.message.includes('123:secret'));
+});
+test('debate Telegram completion includes the goal, consensus, elapsed time, and per-agent usage', () => {
+  session.mode = 'debate'; session.goal.status = 'complete';
+  session.goal.objective = 'is this a real vulnerability or a false positive?';
+  session.goal.reason = 'majority_consensus'; session.goal.tokensUsed = 2193661; session.goal.runtimeUsedSeconds = 263;
+  session.summary = { usage: { complete: true, totalTokens: 2193661, agents: [
+    { provider: 'codex', model: 'gpt-5.6-sol', tokens: 521671 },
+    { provider: 'claude', model: 'claude-opus-5', tokens: 996076 },
+    { provider: 'deepseek', model: 'deepseek-flash', tokens: 675914 }
+  ] } };
+  session.modeResult = { goalId: session.goal.id, kind: 'debate', outcome: 'assessed', stopReason: 'majority_consensus',
+    consensus: { verdict: 'real', required: 2, total: 3, counts: { real: 3, false_positive: 0 } },
+    conclusions: ['The finding is real.'], unresolved: [] };
+  const text = formatTelegram(goalEvent(session));
+  assert.match(text, /\/goal is this a real vulnerability or a false positive\?/);
+  assert.match(text, /CONSENSUS 3\/3 · REAL\nThe finding is real\./);
+  assert.match(text, /GOAL ACHIEVED · 00:04:23 · 2,193,661 tokens/);
+  assert.match(text, /codex\/gpt-5\.6-sol · 521,671 tokens/);
+  assert.match(text, /claude\/claude-opus-5 · 996,076 tokens/);
+  assert.match(text, /deepseek\/deepseek-flash · 675,914 tokens/);
+  assert.match(text, new RegExp(`Session · ${session.id}`));
+  assert.match(text, /Reason · majority_consensus/);
 });
 test('interactive Telegram configuration persists private credentials and on/off controls achieved and stalled deliveries', async () => {
   const messages = []; let sent = 0, prompts = 0;

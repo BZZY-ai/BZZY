@@ -44,14 +44,52 @@ export function defaultSelection(providerId) {
 }
 
 export function saveDefaultSelection(session) {
+  const selection = selectionFromSession(session);
+  const value = config(); value.defaultProvider = selection.provider; value.defaultSelection = selection; saveConfig(value);
+  return selection;
+}
+
+export function selectionFromSession(session) {
   const provider = getProvider(session.provider);
   const effort = session.selectedEffort === 'default' ? 'default' : session.selectedEffort || session.reasoningEffort || 'default';
   if (typeof effort !== 'string' || !/^(?:default|[a-z][a-z0-9_-]{0,23})$/.test(effort)) throw new Error('The current reasoning effort cannot be saved as a default.');
   const model = session.model || session.resolvedModel || provider.model || null;
   if (model != null && (typeof model !== 'string' || model.length > 200 || /[\s\x00-\x1f\x7f-\x9f]/u.test(model))) throw new Error('The current model cannot be saved as a default.');
   const selection = { provider: provider.id, model, effort, capabilities: session.modelCapabilities || null };
-  const value = config(); value.defaultProvider = provider.id; value.defaultSelection = selection; saveConfig(value);
   return selection;
+}
+
+function normalizeParallelDefault(selections) {
+  if (!Array.isArray(selections) || selections.length < 2 || selections.length > 3) throw new Error('A parallel default needs 2 or 3 agents.');
+  return selections.map(selection => selectionFromSession({ provider: selection.provider, model: selection.model,
+    selectedEffort: selection.effort, modelCapabilities: selection.capabilities }));
+}
+
+export function modeDefault(mode) {
+  if (!['parallel', 'debate', 'besties', 'delegate'].includes(mode)) throw new Error('Unknown preset mode.');
+  try {
+    const selected = normalizeParallelDefault(config()[`${mode}Default`]);
+    if (mode === 'delegate' && selected.length !== 2) return null;
+    return selected;
+  } catch { return null; }
+}
+
+export function saveModeDefault(mode, selections) {
+  if (!['parallel', 'debate', 'besties', 'delegate'].includes(mode)) throw new Error('Unknown preset mode.');
+  const agents = normalizeParallelDefault(selections);
+  if (mode === 'delegate' && agents.length !== 2) throw new Error(`${mode} needs two agents.`);
+  const value = config(); value[`${mode}Default`] = agents; saveConfig(value);
+  return { mode, agents };
+}
+
+export function parallelDefault() {
+  return modeDefault('parallel');
+}
+
+export function saveParallelDefault(selections) {
+  const parallelAgents = normalizeParallelDefault(selections);
+  const value = config(); value.parallelDefault = parallelAgents; saveConfig(value);
+  return { parallelAgents };
 }
 
 export function addProvider(id, options) {
@@ -84,11 +122,12 @@ export function apiKey(provider) {
   return key;
 }
 
-export async function ensureApiKey(provider, ui) {
+export async function ensureApiKey(provider, ui, { optional = false } = {}) {
   try { return apiKey(provider); }
   catch (error) {
     if (!ui.interactive) throw error;
-    const key = (await ui.secret(`${provider.name} API key (hidden): `))?.trim();
+    const key = (await ui.secret(`${provider.name} API key (${optional ? 'optional; Enter to skip; hidden' : 'hidden'}): `))?.trim();
+    if (!key && optional) return null;
     if (!key) throw new Error('API key setup cancelled.');
     if (/\s|[\x00-\x1f\x7f]/.test(key)) throw new Error('API keys must not contain whitespace or control characters.');
     saveKey(provider.id, key);

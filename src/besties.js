@@ -19,8 +19,8 @@ export async function runBesties(session, options, ui) {
   let group, usage = { totalTokens: 0, complete: false, agents: [] };
   try {
     const choices = session.besties;
-    if (!Array.isArray(choices) || choices.length !== 2) throw new Error('Besties needs exactly two independently selected peers.');
-    if ((options.concurrency ?? session.contract.limits.concurrency ?? 2) < 2) throw new Error('Besties needs two concurrent peers. Increase the configured concurrency limit to at least 2.');
+    if (!Array.isArray(choices) || (choices.length < 2 || choices.length > 3)) throw new Error('Besties needs 2 or 3 independently selected peers.');
+    if ((options.concurrency ?? session.contract.limits.concurrency ?? choices.length) < choices.length) throw new Error(`Besties needs ${choices.length} concurrent peers. Increase the configured concurrency limit to at least ${choices.length}.`);
     for (const selection of choices) { const provider = getProvider(selection.provider); if (provider.auth === 'api-key') apiKey(provider); }
     group = getRecord('besties', session.id);
     if (group && group.goalId !== session.goal.id) group = null;
@@ -32,7 +32,7 @@ export async function runBesties(session, options, ui) {
         const child = createSession(getProvider(selection.provider), work, selection.model);
         Object.assign(child, { mode: 'solo', role: 'bestie', parentSessionId: session.id, bestiesSessionId: session.id, parallelSessionId: session.id,
           projectRoot: session.cwd, agentNamespace: namespace, selectedEffort: selection.effort, modelCapabilities: selection.capabilities,
-          contract: { ...session.contract, context: `${session.contract.context || ''}\nYou are peer ${index + 1} in a two-peer collaboration. Divide work through peer_message, publish decisive evidence, inspect and review the other peer's claims, preserve disagreement. Neither peer supervises the other.` },
+          contract: { ...session.contract, context: `${session.contract.context || ''}\nYou are peer ${index + 1} in a ${choices.length}-peer collaboration. Divide work through peer_message, publish decisive evidence, inspect and review the other peer's claims, preserve disagreement. No peer supervises another.` },
           policy: session.policy, backendHomes: session.backendHomes, strictPolicy: true, suppressNotifications: true, goal: newGoal(session.goal.objective, session.goal.tokenBudget) });
         peers.push({ namespace, sessionId: child.id, selection }); saveSession(child);
       }
@@ -90,7 +90,7 @@ export async function runBesties(session, options, ui) {
         if (finished && assessment.supported) session.acceptance = await assessGroupCompletion(session, group.peers.map(peer => loadSession(peer.sessionId)), { mutualReviewed: true, signal: coordinator.abort.signal });
         const accepted = finished && assessment.supported && session.acceptance?.passed;
         const result = { version: 1, goalId: session.goal.id, goal: session.goal.objective, peers: group.peers, collaboration: assessment, usage,
-          acceptance: session.acceptance || null, stopReason: accepted ? 'Both peers completed their verification and mutually supported the shared evidence.' : finished && assessment.supported ? 'The original workspace still has unmet deliverables or verification checks.' : assessment.unresolved || 'One or both peers remain unresolved. No disagreement was forced into agreement.' };
+          acceptance: session.acceptance || null, stopReason: accepted ? 'All peers completed their verification and independently supported the shared evidence.' : finished && assessment.supported ? 'The original workspace still has unmet deliverables or verification checks.' : assessment.unresolved || 'One or more peers remain unresolved. No disagreement was forced into agreement.' };
         putRecord('besties-result', session.id, result);
         return await coordinator.finish(accepted ? 'complete' : 'awaiting_review', result, usage);
       }

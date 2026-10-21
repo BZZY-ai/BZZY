@@ -17,6 +17,8 @@ import { TrafficRecorder } from './traffic.js';
 import { closeOpenActivities } from './activity.js';
 import { ActivityReporter } from './live-activity.js';
 import { activeAssignmentsFor, delegationUsage } from './delegation-usage.js';
+import { duration } from './terminal-format.js';
+import { delegationTokenLines } from './delegation-format.js';
 
 export function classifyFailure(error) {
   const message = String(error.message || error);
@@ -33,11 +35,13 @@ export function usageSummary(session) {
 export function printGoalSummary(session, ui) {
   if (!session.goal || ['active', 'verifying'].includes(session.goal.status)) return;
   const usage = session.summary?.usage || usageSummary(session);
-  const seconds = session.goal.runtimeUsedSeconds || 0, elapsed = seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  const seconds = session.goal.runtimeUsedSeconds || 0, elapsed = duration(seconds);
   const result = session.goal.status === 'complete' ? 'GOAL ACHIEVED' : session.goal.status === 'cancelled' ? 'GOAL CANCELLED' : session.goal.status === 'paused' && session.goal.reason !== 'turn_limit' ? 'GOAL PAUSED' : 'GOAL STALLED';
-  const breakdown = usage.agents.length ? '\n' + usage.agents.map(a => `  ${a.agent || a.provider}${a.model ? ':' + a.model : ''}: ${a.tokens == null ? 'usage unavailable' : a.tokens.toLocaleString() + ' tokens'}${a.elapsedSeconds != null ? ' · ' + a.elapsedSeconds.toFixed(1) + 's' : ''}`).join('\n') : '';
+  const delegated = session.mode === 'delegate';
+  const breakdown = delegated ? '\n' + delegationTokenLines(session, usage).join('\n')
+    : usage.agents.length ? '\n' + usage.agents.map(a => `  ${a.agent || a.provider}${a.model ? ':' + a.model : ''}: ${a.tokens == null ? 'usage unavailable' : a.tokens.toLocaleString() + ' tokens'}${a.elapsedSeconds != null ? ' · ' + duration(a.elapsedSeconds) : ''}`).join('\n') : '';
   ui.event('summary', { status: session.goal.status, reason: session.goal.reason || null, elapsedSeconds: seconds, usage, sessionId: session.id,
-    message: `${result} · ${elapsed} · ${usage.complete ? '' : 'at least '}${usage.totalTokens.toLocaleString()} tokens${usage.complete ? '' : ' (some usage unavailable)'}${breakdown}\nSession: ${session.id}${session.goal.reason ? `\nReason: ${session.goal.reason}` : ''}` });
+    message: `${result} · ${elapsed}${delegated ? '' : ` · ${usage.complete ? '' : 'at least '}${usage.totalTokens.toLocaleString()} tokens${usage.complete ? '' : ' (some usage unavailable)'}`}${breakdown}\nSession: ${session.id}${session.goal.reason ? `\nReason: ${session.goal.reason}` : ''}` });
 }
 export async function runSession(provider, session, options, ui, prompt, { goal = false, resumeGoal = false } = {}) {
   const policy = effectivePolicy(session, options);
@@ -135,7 +139,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
         attempts++; checkpoint(session, { pendingActions: ['Repair failed acceptance criteria; inspect previousAcceptance using get_task_state.'] });
         if (attempts > (session.contract?.limits.maxRetries ?? 2)) { session.goal.status = 'awaiting_review'; session.goal.reason = 'Acceptance checks remain unsatisfied after bounded follow-ups.'; break; }
         session.goal.status = 'active'; session.executionState = 'running'; saveSession(session);
-        recorded.event('info', { message: 'Completion assessment found unmet requirements. Continuing with saved verification feedback.' });
+        recorded.event('info', { message: session.acceptance.delegation?.passed === false ? session.acceptance.delegation.reason : 'Completion assessment found unmet requirements. Continuing with saved verification feedback.' });
       } while (!stopping);
     } finally { clearTimeout(deadline); }
     if (stopping) {

@@ -27,7 +27,13 @@ bzzy --view SESSION_ID
 bzzy --attach SESSION_ID
 bzzy --resume SESSION_ID
 bzzy integration
+bzzy --whoami
 ```
+
+First-run setup checks existing Codex and Claude subscription logins and marks
+them **Validated**. It then offers a hidden DeepSeek API-key prompt; press Enter
+to skip it, or paste a key to save it privately. Choose your default provider
+from the detected connections. You can run `bzzy setup` again later.
 
 You can send one quoted instruction or piece of context before starting a durable
 goal in the same conversation:
@@ -41,8 +47,39 @@ on that same backend conversation. The durable goal objective is exactly the
 `--goal` value. The first message is also saved in the task contract as context,
 so recovery and configured Parallel or Besties workers can read it.
 
+In a terminal, a startup or resumed goal keeps the same conversation open after
+completion or a stall (including `awaiting_review`). Continue chatting, start
+another `/goal`, or use `/exit` to close it.
+Noninteractive and `--json` commands still exit when execution ends; `--detach`
+returns immediately.
+
+For a long briefing (scope, workflow, submission format and reporting rules), use
+a UTF-8 context file to start the goal immediately:
+
+```bash
+bzzy --context-file bzzy_init.txt --goal "find a new XSS" --yolo
+```
+
+The complete text is saved in `session.contract.context`, while both the contract
+and goal objectives stay exactly `find a new XSS`. The goal is persisted before
+model execution, and its first turn receives the context in developer/system
+instructions; there is no initialization chat. Pause/resume uses the saved text,
+even if the source file changes or disappears. Paths are relative to `--cwd`
+(the current directory by default). Files must be nonempty UTF-8 text, at most
+1 MiB; invalid files fail before execution and are never silently truncated.
+The selected model's context-window limit still applies. `--contract` context is
+retained before the file text. Choose either positional initialization context or
+`--context-file`; combining them is rejected. Request IDs include a digest of the
+file text so changed instructions cannot silently reuse a prior request.
+
 Read [task contracts, project memory and modes](docs/TASKS.md) and
 [the API, events and website integration guide](docs/INTEGRATION.md).
+
+For another AI or third-party integration, run `bzzy --whoami`. It prints a
+detailed text reference covering modes, defaults, goal logic, verification,
+storage trees, resolved local paths, commands, tools, usage and the public API.
+It works before setup without starting a backend or exposing credentials. The
+overview is also shipped as [WHOAMI.md](docs/WHOAMI.md).
 
 `bzzy --delegate` opens the supervisor provider picker, then its model and effort
 picker. Next, choose the executor through the same two screens. Use ←/→ on a model
@@ -61,31 +98,42 @@ shows when the supervisor is planning or reviewing and when the executor is
 running, with separate brain/hands token counts where the providers report them.
 Escape cancels setup before work starts.
 
+Delegate goals use the hands for routine execution, including small lookups and
+page extraction. Completion requires an executor assignment and brain review of
+its result. If the executor fails, the brain can review that failure and take
+over the needed step. Completed and stalled summaries show **BRAIN**, **HANDS /
+EXECUTOR**, and **TOTAL** token usage in both the terminal and Telegram. Zero
+assignments are labeled **not used**; missing telemetry is labeled **usage
+unavailable**.
+
 Delegation supports long assessments: there is no default deadline for the parent
 goal, while assignments have limits and saved follow-up history. Plans, evidence,
 decisions and model selections survive reattachment. Input during execution can
-steer the selected agent; ordinary idle chat does not replace the goal. Use `/goal resume` to continue paused
+steer the selected agent; ordinary idle chat does not replace the goal. A new `/goal <objective>` stops and replaces the current goal while retaining
+its history. You can keep typing while goal output streams and during run
+transitions. Use `/goal resume` to continue paused
 work, or `bzzy --attach SESSION_ID` from another terminal. Review and retries also
 consume tokens, so a cheaper executor does not guarantee a lower total cost.
 See [delegation contracts and limits](docs/TASKS.md#delegation).
 
-`bzzy --besties` uses the same provider → model → effort picker twice, for
-**Bestie 1** and **Bestie 2**. Choose two strong models, including two models from
-the same provider if you prefer. Chat normally, then use `/goal <objective>` for
-one durable collaborative goal. Each peer investigates in its own workspace,
-shares findings and evidence with the other, and reviews the other peer's
-decisive evidence. Both must finish their acceptance checks and support the
-current cross-reviews; unresolved disagreement remains visible. Independent
-provider/model/effort choices, messages, evidence and reviews survive reattachment.
+`bzzy --besties` opens the same agent roster as parallel mode. Select a
+provider, model and effort for each peer, then **Continue with 2 agents**, or
+configure a third to advance automatically to goal entry. The peers collaborate
+on the shared goal in isolated workspaces, exchange findings and evidence, and
+review one another’s decisive claims. Every peer must complete its acceptance
+checks, and each latest evidence-bearing claim needs a supported independent
+review. Unresolved disagreement remains visible. Choices, messages, evidence and
+reviews survive reattachment.
 Open **SHARED ROOM** or type `/room` to read the actual messages and evidence
 reviews exchanged by the peers, alongside the overview and their individual chats.
 See [besties workflow](docs/TASKS.md#besties).
 
-`bzzy --parallel 2` or `bzzy --parallel 3` opens the provider → model → effort
-picker for each independent agent. Bare `--parallel` chooses three agents.
-Each gets its own chat and workspace when you start `/goal <objective>`; use
-Tab/Shift+Tab to switch chats. The scripted `--agents A,B[,C]` form remains
-available. Parallel mode accepts two or three agents.
+`bzzy --parallel` opens an agent list. Choose each agent’s provider, model and
+effort, then select **Continue with 2 agents** at the bottom. Configuring a third
+agent advances automatically. Next, enter the shared goal; each agent starts in
+its own workspace and chat tab. The first agent’s chat opens automatically;
+use Tab/Shift+Tab or click a tab to switch. `--parallel 2` limits setup to two
+agents. The scripted `--agents A,B[,C]` form remains available.
 
 ## Install
 
@@ -266,6 +314,19 @@ conversation and default provider selected.
 Use `/default` to save the current provider, model and reasoning effort as the
 launch preset. A later plain `bzzy` opens with that exact selection. Explicit
 `--provider`, `--model` and `--effort` flags take precedence.
+Normal chat, delegate, debate, parallel and besties each have an independent
+`/default` preset. In a group session, running `/default` in any agent tab saves
+the entire current combination, including each model and effort. The next
+interactive launch of that mode asks **Use saved combo?** **Yes** goes directly
+to goal entry; **No** opens the selector. Selecting another combination does not
+replace the preset until you run `/default` again.
+Use `bzzy --parallel --default`, `bzzy --debate --default`,
+`bzzy --besties --default` or `bzzy --delegate --default` to skip confirmation
+and selection entirely. Add `--goal "objective"` to start immediately.
+Plain `bzzy --default` uses the normal chat preset. A missing preset produces a
+clear setup error. Explicit `--agents` or `--participant` selections bypass
+saved-combo questions; use them separately from `--default`.
+`/help` shows a compact guide to the four modes and their shortcuts.
 `/models` lists models from the selected provider: the installed Codex/Claude
 catalogs for subscriptions, and the provider's authenticated `/models` endpoint
 for API keys. No model prompt is sent to discover models. **↑/↓** selects a model;
@@ -283,13 +344,22 @@ override. In parallel mode, select an agent tab first to change that agent's mod
 Pause or finish an active reply before switching. If a catalog is unavailable,
 the picker still offers the current model, default and manual entry.
 
-`/debate [objective]` freezes the latest reply and opens an agent checklist:
-arrows move, Space toggles, Enter starts, Esc cancels. Selected agents investigate
-independently in isolated workspaces, then debate the shared evidence with the
-main agent for up to **five rounds**. The result returns to the original chat.
-`bzzy --debate` applies this to the next reply. With `bzzy --parallel`, plain
-messages stay ordinary chat; `/goal <objective>` starts independent agent chats
-on that same objective. Use `--review-only` to skip
+`/debate [objective]` freezes the latest reply and opens the agent roster.
+Select a main agent and one or two challengers, each with its own provider, model
+and effort. Continue after two agents or configure a third to advance
+automatically. Selected agents investigate independently in isolated workspaces,
+the main agent opens a case from those independent reports, and the challengers
+critique each revision for up to **five rounds**. The main agent must answer or
+concede each concrete objection. If fewer than two investigations produce a
+usable conclusion with recorded evidence, bzzy stops before the opening case.
+If every objection is resolved, it stops after the first challenge round. The result returns to
+the original chat. `bzzy --debate` opens this selector before goal entry.
+Phase 1 also stops immediately with a final verdict when a strict majority of
+complete, evidence-backed reports independently classify the finding the same way:
+2/2 for a two-agent debate or 2/3 for a three-agent debate. A timeout is recorded
+as an abstention and cannot veto that majority.
+`bzzy --parallel` gives each agent the whole goal to pursue independently.
+Use `--review-only` to skip
 investigation and review a fixed snapshot. See [debate details](docs/TASKS.md#debate).
 
 Codex/DeepSeek sessions use Codex's **actual native goal controller**, including
@@ -393,7 +463,10 @@ bzzy detects your private chat ID and saves it with the token; there is no manua
 chat-ID lookup. Pairing expires after three minutes and can be cancelled with Esc.
 Tokens are excluded from chat history and saved with owner-only permissions in
 `~/.bzzy/credentials.json`. The chat ID and notification preference are saved in
-`~/.bzzy/config.json`; attachment, queue and reconnect state use the private SQLite
+`~/.bzzy/config.json`; the saved `notifications.telegram.autoAttach` preference
+automatically attaches future terminal conversations after pairing or attaching
+once. `/telegram detach` (or `/detach` in the bot) disables auto-attach until you
+attach again. Attachment, queue and reconnect state use the private SQLite
 store. These credentials do not go in the project's `.bzzy/` directory.
 
 **Chat attachment mirrors only new messages.** It never sends earlier conversation

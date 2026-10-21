@@ -133,18 +133,19 @@ test('besties creates two isolated peer chats with independent effort and refuse
   assert.equal(listRecords('execution').length, before + 1, 'ordinary parent chat does not restart the two-peer goal');
 });
 
-for (const disputed of [false, true]) test(`native besties ${disputed ? 'preserves unresolved peer disagreement' : 'shares and mutually verifies evidence before completing'}`, async () => {
+for (const count of [2, 3]) for (const disputed of [false, true]) test(`native besties (${count} peers) ${disputed ? 'preserves unresolved peer disagreement' : 'shares and mutually verifies evidence before completing'}`, async () => {
   process.env.BZZY_TEST_ADVANCED = disputed ? 'besties-disputed' : 'besties';
   const session = parent(), info = await ensureRuntime(), owner = randomUUID();
+  if (count === 3) { session.besties.push({ provider: 'codex', model: null, effort: 'high' }); saveSession(session); }
   await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner });
   const launch = await runtimeRequest(info, 'POST', `/sessions/${session.id}/execute`, { owner, prompt: session.goal.objective, goal: true, options: {} }, randomUUID());
   const job = await finished(launch.executionId); assert.equal(job.exitCode, disputed ? 2 : 0, job.error || JSON.stringify(getRecord('besties-result', session.id)));
   const result = getRecord('besties-result', session.id);
-  assert.equal(result.collaboration.latestClaims.length, 2); assert.equal(result.collaboration.reviews.length, 2);
+  assert.equal(result.collaboration.latestClaims.length, count); assert.equal(result.collaboration.reviews.length, count);
   assert.equal(result.collaboration.supported, !disputed);
   assert.equal(loadSession(session.id).goal.status, disputed ? 'awaiting_review' : 'complete');
   assert.ok(result.collaboration.reviews.every(review => review.assessment === (disputed ? 'disputed' : 'supported')));
-  assert.ok(listRecords('execution').filter(execution => execution.sessionId !== session.id).length <= 4, 'stable messages do not cause runaway inference');
+  assert.ok(listRecords('execution').filter(execution => execution.sessionId !== session.id).length <= count * 2, 'stable messages do not cause runaway inference');
   const group = getRecord('besties', session.id), newOwner = randomUUID();
   await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner: newOwner, takeover: true });
   for (const peer of group.peers) assert.equal((await runtimeRequest(info, 'GET', `/sessions/${peer.sessionId}`)).inputOwner.owner, newOwner);

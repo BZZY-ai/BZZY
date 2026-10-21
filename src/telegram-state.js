@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { telegramSettings } from './notifications.js';
 import { loadSession } from './store.js';
+import { config, saveConfig } from './providers.js';
 import { digest, getRecord, putRecord, appendEvent, now, transaction } from './database.js';
+
+export function saveTelegramAutoAttach(enabled) {
+  const value = config(); value.notifications ||= {}; value.notifications.telegram ||= {};
+  if (value.notifications.telegram.autoAttach === enabled) return;
+  value.notifications.telegram.autoAttach = enabled; saveConfig(value);
+}
 
 export function telegramAttachment(settings = telegramSettings()) {
   const record = getRecord('telegram-attachment', 'current');
@@ -31,7 +38,7 @@ export function linkTelegram(sessionId, authorize) {
   });
 }
 export function unlinkTelegram(attachmentId, reason = 'user_detach') {
-  return transaction(db => {
+  const result = transaction(db => {
     const record = getRecord('telegram-attachment', 'current');
     if (!record?.enabled || attachmentId && record.id !== attachmentId) return;
     const updated = { ...record, enabled: false, status: 'detached', detachedAt: now(), reason };
@@ -39,6 +46,8 @@ export function unlinkTelegram(attachmentId, reason = 'user_detach') {
     appendEvent(record.sessionId, 'telegram.attachment', { attached: false, reason }, db);
     return updated;
   });
+  if ((result || !attachmentId) && ['user_detach', 'telegram_command'].includes(reason)) saveTelegramAutoAttach(false);
+  return result;
 }
 export function updateTelegramAttachment(id, patch) {
   return transaction(db => {
@@ -52,6 +61,7 @@ export function updateTelegramAttachment(id, patch) {
 export function telegramViewState(sessionId) {
   const settings = telegramSettings(), attachment = telegramAttachment(settings);
   return { configured: Boolean(settings.token && settings.chatId), tokenConfigured: Boolean(settings.token), chatId: settings.chatId || '',
+    autoAttach: config().notifications?.telegram?.autoAttach ?? Boolean(attachment),
     goalNotifications: settings.enabled, attached: Boolean(attachment?.sessionId === sessionId), attachedSessionId: attachment?.sessionId || null,
     status: attachment?.status || 'detached', error: attachment?.lastError || '', botUsername: attachment?.botUsername || null };
 }

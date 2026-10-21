@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { launch, root } from '../process.js';
-import { home, writeJson, saveSession } from '../store.js';
+import { home, privateDir, writeJson, saveSession } from '../store.js';
 import { continuationPrompt, readReport, reportPath } from '../goals.js';
 import { backendIsolation } from '../policy.js';
 import { taskTools } from '../tools.js';
@@ -20,7 +20,7 @@ export function claudeEnvironment() {
   return subscriptionEnvironment('claude');
 }
 
-export function claudeArgs(session, options, mcpConfig) {
+export function claudeArgs(session, options, mcpConfig, uid = process.getuid?.()) {
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--include-partial-messages', '--permission-prompt-tool', 'stdio'];
   if (session.engineThreadId) args.push('--resume', session.engineThreadId);
@@ -29,7 +29,10 @@ export function claudeArgs(session, options, mcpConfig) {
   const effort = reasoningEffort(session, options);
   if (effort) args.push('--effort', effort);
   session.reasoningEffort = effort || 'provider default';
-  if (options.yolo || options.scopedAutonomy) args.push('--dangerously-skip-permissions');
+  // Claude Code refuses --dangerously-skip-permissions under root. bzzy still
+  // handles its stdio permission requests below and, for bounded workers,
+  // enforces the task policy with bubblewrap.
+  if ((options.yolo || options.scopedAutonomy) && uid !== 0) args.push('--dangerously-skip-permissions');
   if (mcpConfig) args.push('--mcp-config', mcpConfig, '--allowedTools', ...taskTools(session, { goalMode: options.goalMode }).map(t => `mcp__bzzy_goal__${t.name}`));
   args.push('--append-system-prompt', agentInstructions(session, options));
   return args;
@@ -54,10 +57,22 @@ export class ClaudeEngine {
     let activity = false, text = '', streamed = false, result, stderr = '', tokens = 0;
     const priorTokens = this.session.usage?.tokens || 0;
     const messageUsage = new Map();
-    this.child = launch('claude', claudeArgs(this.session, this.options, configFile), {
-      env, cwd: this.session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
-      isolation: this.options.strictPolicy ? backendIsolation('claude', env, this.session.cwd, this.options.policy) : null,
-    });
+    const args = claudeArgs(this.session, this.options, configFile);
+    const promptIndex = args.indexOf('--append-system-prompt');
+    let promptFile;
+    const cleanup = () => { for (const file of [configFile, promptFile]) if (file) fs.rmSync(file, { force: true }); };
+    try {
+      if (Buffer.byteLength(args[promptIndex + 1], 'utf8') > 32 * 1024) {
+        promptFile = path.join(home(), 'runtime', `${this.session.id}-${nonce}-instructions.txt`);
+        privateDir(path.dirname(promptFile));
+        fs.writeFileSync(promptFile, args[promptIndex + 1], { mode: 0o600, flag: 'wx' });
+        args.splice(promptIndex, 2, '--append-system-prompt-file', promptFile);
+      }
+      this.child = launch('claude', args, {
+        env, cwd: this.session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
+        isolation: this.options.strictPolicy ? backendIsolation('claude', env, this.session.cwd, this.options.policy) : null,
+      });
+    } catch (error) { cleanup(); throw error; }
     const child = this.child;
     this.session.backendProcess = processIdentity(child.pid); saveSession(this.session);
     const send = value => { if (!child.stdin.destroyed) child.stdin.write(`${JSON.stringify(value)}\n`); };
@@ -133,7 +148,7 @@ export class ClaudeEngine {
     send({ type: 'control_request', request_id: initializeId, request: { subtype: 'initialize', hooks: {} } });
     let code;
     try { code = await done; }
-    finally { clearTimeout(initializeTimeout); lines.close(); this.child = null; this.session.backendProcess = null; if (configFile) fs.rmSync(configFile, { force: true }); }
+    finally { clearTimeout(initializeTimeout); lines.close(); this.child = null; this.session.backendProcess = null; cleanup(); }
     this.ui.newline();
     this.session.turns++;
     const reportedTokens = tokens || (result?.usage?.input_tokens || 0) + (result?.usage?.cache_creation_input_tokens || 0) + (result?.usage?.cache_read_input_tokens || 0) + (result?.usage?.output_tokens || 0);

@@ -4,7 +4,7 @@ import { home, readJson, writeJson } from './files.js';
 import { telegramSettings, sendTelegram } from './notifications.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { TelegramApi } from './telegram-api.js';
-import { telegramAttachment, linkTelegram, unlinkTelegram, telegramViewState } from './telegram-state.js';
+import { telegramAttachment, linkTelegram, unlinkTelegram, telegramViewState, saveTelegramAutoAttach } from './telegram-state.js';
 import { ensureTelegramBridge, stopTelegramBridge } from './telegram-bridge.js';
 import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
 
@@ -12,7 +12,8 @@ function saveTelegramConnection(token, chatId) {
   const file = path.join(home(), 'credentials.json');
   writeJson(file, { ...readJson(file, {}), telegramBotToken: token });
   const value = config(); value.notifications ||= {}; value.notifications.telegram ||= {};
-  value.notifications.telegram = { ...value.notifications.telegram, enabled: value.notifications.telegram.enabled ?? true, chatId: String(chatId) };
+  value.notifications.telegram = { ...value.notifications.telegram, enabled: value.notifications.telegram.enabled ?? true,
+    autoAttach: value.notifications.telegram.autoAttach ?? true, chatId: String(chatId) };
   saveConfig(value);
 }
 
@@ -22,8 +23,16 @@ export async function attachTelegram(sessionId, connection, { startBridge = ensu
   if (!connection) await runtimeRequest(info, 'POST', `/sessions/${sessionId}/claim`, { owner, takeover: true });
   try {
     const attachment = linkTelegram(sessionId, () => requireOwner(sessionId, owner));
+    saveTelegramAutoAttach(true);
     await startBridge(); return attachment;
   } finally { if (!connection) await runtimeRequest(info, 'POST', `/sessions/${sessionId}/release`, { owner }).catch(() => {}); }
+}
+
+export async function autoAttachTelegram(session, context = {}) {
+  const state = telegramViewState(session.id);
+  if (!state.autoAttach || !state.configured || ['parallel', 'besties'].includes(session.mode)) return;
+  if (!/^[1-9]\d*$/.test(state.chatId) || !Number.isSafeInteger(Number(state.chatId))) return;
+  return attachTelegram(session.id, context.connection, context);
 }
 
 export async function pairTelegram(ui, context = {}) {
@@ -77,7 +86,7 @@ export async function configureTelegram(command = 'setup', ui, context = {}) {
     return;
   }
   if (command === 'attach') { await attachTelegram(context.sessionId, context.connection, context); ui.event('info', { message: 'Telegram attached to this conversation. Only new messages will be mirrored.' }); return; }
-  if (command === 'detach') { const current = telegramAttachment(); if (current) unlinkTelegram(current.id); await (context.stopBridge || stopTelegramBridge)(); ui.event('info', { message: 'Telegram chat detached. Goal notification settings were kept.' }); return; }
+  if (command === 'detach') { unlinkTelegram(telegramAttachment()?.id); await (context.stopBridge || stopTelegramBridge)(); ui.event('info', { message: 'Telegram chat detached and auto-attach disabled. Goal notification settings were kept.' }); return; }
   if (!['manual', 'status', 'on', 'off', 'test'].includes(command)) throw new Error('Use /telegram [pair|attach|detach|setup|status|on|off|test]. Never put a bot token in a chat command.');
   const current = telegramSettings();
   if (command === 'on' && (!current.token || !current.chatId)) {
@@ -107,6 +116,6 @@ export async function configureTelegram(command = 'setup', ui, context = {}) {
     ui.event('info', { message: 'Telegram test message delivered.' });
   } else {
     const state = telegramViewState(context.sessionId);
-    ui.event('info', { message: `Telegram goals: ${current.enabled ? 'enabled' : 'disabled'} · token ${current.token ? 'configured' : 'missing'} · chat ${current.chatId || 'missing'}\nChat attachment: ${state.attachedSessionId || 'off'}\nUse /telegram pair for automatic chat pairing, attach/detach for chat, or on/off for goal notifications.` });
+    ui.event('info', { message: `Telegram goals: ${current.enabled ? 'enabled' : 'disabled'} · token ${current.token ? 'configured' : 'missing'} · chat ${current.chatId || 'missing'}\nChat attachment: ${state.attachedSessionId || 'off'} · auto-attach ${state.autoAttach ? 'on' : 'off'}\nUse /telegram pair for automatic chat pairing, attach/detach for chat, or on/off for goal notifications.` });
   }
 }

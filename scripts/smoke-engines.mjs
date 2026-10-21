@@ -10,6 +10,9 @@ import { backendIsolation, sandboxCommand, sandboxSupport } from '../src/policy.
 
 // All inference goes to a loopback mock with a dummy key. No paid model request.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-real-smoke-'));
+const context = 'Smoke briefing: use only the supplied loopback fixture. Preserve evidence and the exact goal.\n';
+const contextFile = path.join(dir, 'bzzy_init.txt');
+fs.writeFileSync(contextFile, context);
 let requests = 0;
 const server = http.createServer(async (request, response) => {
   let body = '';
@@ -18,6 +21,7 @@ const server = http.createServer(async (request, response) => {
   const input = JSON.parse(body);
   assert.equal(input.model, 'smoke-model');
   assert.equal(input.reasoning.effort, 'high');
+  assert.ok(JSON.stringify(input).includes(context.trim()), 'saved context must reach actual native inference requests');
   const id = `smoke-${++requests}`;
   const item = requests === 2
     ? { type: 'function_call', call_id: 'complete-goal', name: 'update_goal', arguments: '{"status":"complete"}' }
@@ -49,7 +53,7 @@ try {
   fs.writeFileSync(path.join(bzzyHome, 'config.json'), JSON.stringify({ version: 1, defaultProvider: 'smoke', providers: {
     smoke: { id: 'smoke', name: 'Local smoke', backend: 'codex', auth: 'api-key', baseUrl: `http://127.0.0.1:${server.address().port}/v1`, envKey: 'BZZY_SMOKE_KEY', model: 'smoke-model', contextWindow: 128000 },
   } }));
-  const codex = spawn(process.execPath, [path.join(root, 'bin', 'bzzy.js'), 'goal', 'Exercise real native goal continuation against the loopback fixture.', '--effort', 'high', '--json'], {
+  const codex = spawn(process.execPath, [path.join(root, 'bin', 'bzzy.js'), 'goal', 'Exercise real native goal continuation against the loopback fixture.', '--context-file', contextFile, '--effort', 'high', '--json'], {
     cwd: dir, env: runtimeEnv({ BZZY_DIRECT: '1', BZZY_HOME: bzzyHome, BZZY_CODEX_HOME: path.join(dir, 'codex'), BZZY_SMOKE_KEY: 'not-a-real-key',
       BZZY_CODEX_BIN: backendCommand('codex'), CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG: '1', RUST_LOG: 'warn' }),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -58,7 +62,7 @@ try {
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /"status":"complete"/);
   assert.equal(requests, 3);
-  console.log('PASS: real Codex app-server, custom Responses provider, high reasoning effort, two goal turns, update_goal completion.');
+  console.log('PASS: real Codex app-server, context in native inference, custom Responses provider, high reasoning effort, two goal turns, update_goal completion.');
 
   const claudeDir = path.join(dir, 'claude');
   fs.mkdirSync(claudeDir, { mode: 0o700 });
@@ -66,7 +70,8 @@ try {
       CLAUDE_CODE_OAUTH_TOKEN: undefined, ANTHROPIC_BASE_URL: undefined, CLAUDECODE: undefined,
       DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' });
   const policy = { mode: 'read-only', writablePaths: [], network: 'inherit' };
-  const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio', '--setting-sources', ''];
+  const promptFile = path.join(dir, 'claude-instructions.txt'); fs.writeFileSync(promptFile, context.repeat(4000), { mode: 0o600 });
+  const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio', '--setting-sources', '', '--append-system-prompt-file', promptFile];
   const prepared = sandboxSupport() ? sandboxCommand(backendCommand('claude'), args, backendIsolation('claude', claudeEnv, dir, policy)) : { command: backendCommand('claude'), args };
   const claude = spawn(prepared.command, prepared.args, {
     cwd: dir, stdio: ['pipe', 'pipe', 'pipe'], env: claudeEnv,
@@ -84,7 +89,7 @@ try {
   const claudeResult = await childResult(claude);
   lines.close();
   assert.ok(initialized, `${claudeResult.stdout}\n${claudeResult.stderr}`);
-  console.log(`PASS: real unmodified Claude Code streaming/control initialization${sandboxSupport() ? ' inside read-only bubblewrap' : ''}; no user prompt or inference.`);
+  console.log(`PASS: real unmodified Claude Code streaming/control initialization with a long system prompt file${sandboxSupport() ? ' inside read-only bubblewrap' : ''}; no user prompt or inference.`);
 } finally {
   server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));

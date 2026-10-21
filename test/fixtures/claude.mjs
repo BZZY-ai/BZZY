@@ -2,18 +2,24 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { spawnSync } from 'node:child_process';
+import { savedTask, preparationHeld } from './context-state.mjs';
 
 if (process.argv.includes('--version')) { console.log('2.1.305 (Claude Code fixture)'); process.exit(0); }
 if (process.argv.includes('auth') && process.argv.includes('status')) { console.log(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' })); process.exit(0); }
 const args = process.argv.slice(2);
 const scenario = process.env.BZZY_TEST_SCENARIO || 'complete';
+const promptFileIndex = args.indexOf('--append-system-prompt-file');
 if (process.env.BZZY_TEST_LOG) fs.appendFileSync(process.env.BZZY_TEST_LOG, JSON.stringify({ args,
-  apiKeyPresent: Boolean(process.env.ANTHROPIC_API_KEY), tokenPresent: Boolean(process.env.ANTHROPIC_AUTH_TOKEN) }) + '\n');
+  apiKeyPresent: Boolean(process.env.ANTHROPIC_API_KEY), tokenPresent: Boolean(process.env.ANTHROPIC_AUTH_TOKEN),
+  ...(process.env.BZZY_TEST_CAPTURE_TASK ? { savedTask: savedTask(),
+    systemPrompt: promptFileIndex < 0 ? args[args.indexOf('--append-system-prompt') + 1] : fs.readFileSync(args[promptFileIndex + 1], 'utf8'),
+    ...(promptFileIndex < 0 ? {} : { promptFileMode: fs.statSync(args[promptFileIndex + 1]).mode & 0o777 }) } : {}) }) + '\n');
 const send = value => console.log(JSON.stringify(value));
 let pending;
 for await (const line of readline.createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
   if (message.type === 'control_request' && message.request.subtype === 'initialize') {
+    if (preparationHeld()) { if (process.env.BZZY_TEST_LOG) fs.appendFileSync(process.env.BZZY_TEST_LOG, JSON.stringify({ preparing: true }) + '\n'); continue; }
     send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {} } });
   } else if (message.type === 'user') {
     send({ type: 'system', subtype: 'init', session_id: args.includes('--resume') ? args[args.indexOf('--resume') + 1] : args[args.indexOf('--session-id') + 1] });

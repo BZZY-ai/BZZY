@@ -73,7 +73,7 @@ export function contextFor(session) {
   if (session.bestiesSessionId) return JSON.stringify({ role: 'bestie', contract: session.contract, checkpoint: getRecord('checkpoint', session.id), recovery: getRecord('recovery', session.id),
     previousAcceptance: session.acceptance || null, projectRoot: session.projectRoot || session.cwd, agentNamespace: session.agentNamespace,
     relevantMemory: recall(session.projectRoot || session.cwd, session.goal?.objective || session.contract?.objective || '', 8),
-    collaboration: peerCollaborationState(session), contextBoundary: 'You and one paired peer pursue the same full goal. Read peer_inbox for new messages, share decisive evidence through peer_message, and inspect evidence before peer_review. A peer claim or agreement alone is not proof.' });
+    collaboration: peerCollaborationState(session), contextBoundary: 'You and your fellow peers pursue the same full goal. Read peer_inbox for new messages, share decisive evidence through peer_message, and inspect evidence before peer_review. A peer claim or agreement alone is not proof.' });
   // Keep live/recent assignments discoverable over long goals without replaying
   // every report and historical artifact manifest in each model prompt.
   const history = assignmentContextPage(session, { limit: 12, prioritizeOpen: true, includeMoreIds: true });

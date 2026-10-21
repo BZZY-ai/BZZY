@@ -16,6 +16,16 @@ import { ActivityReporter } from '../live-activity.js';
 
 export { codexHome } from '../auth.js';
 
+export function codexSandboxMode(options = {}) {
+  // A strict-policy worker is already inside bzzy's bubblewrap filesystem
+  // boundary. Avoid nesting Codex's command sandbox there: nested isolation can
+  // prevent every local command from starting, especially in root-run services.
+  // Keep Codex's own sandbox when it is needed to separate tool networking from
+  // the model connection.
+  if (options.yolo || options.strictPolicy && options.policy?.network !== 'disabled') return 'danger-full-access';
+  return options.policy?.mode || 'workspace-write';
+}
+
 export function codexLaunch(provider, session, options = {}) {
   // Old conversations remain resumable in the store where their thread lives.
   const legacy = path.join(home(), 'codex');
@@ -25,7 +35,7 @@ export function codexLaunch(provider, session, options = {}) {
   const env = { ...subscriptionEnvironment('codex'), ...options.networkEnv, CODEX_HOME: session.engineHome };
   const override = (key, value) => args.push('-c', `${key}=${typeof value === 'string' ? JSON.stringify(value) : value}`);
   override('approval_policy', options.yolo || options.scopedAutonomy ? 'never' : 'on-request');
-  override('sandbox_mode', options.yolo ? 'danger-full-access' : options.policy?.mode || 'workspace-write');
+  override('sandbox_mode', codexSandboxMode(options));
   if (options.policy?.network === 'disabled') override('sandbox_workspace_write.network_access', false);
   else if (options.strictPolicy) override('sandbox_workspace_write.network_access', true);
   const effort = reasoningEffort(session, options);
@@ -96,7 +106,7 @@ export class CodexEngine {
     this.rpc.on('failure', error => this.operation?.reject(error));
     await this.rpc.request('initialize', { clientInfo: { name: 'bzzy', title: 'bzzy', version: '0.2.0' }, capabilities: { experimentalApi: true } });
     this.rpc.notify('initialized');
-    const policy = { approvalPolicy: this.options.yolo || this.options.scopedAutonomy ? 'never' : 'on-request', sandbox: this.options.yolo ? 'danger-full-access' : this.options.policy?.mode || 'workspace-write' };
+    const policy = { approvalPolicy: this.options.yolo || this.options.scopedAutonomy ? 'never' : 'on-request', sandbox: codexSandboxMode(this.options) };
     const params = { cwd: this.session.cwd, ...policy,
       developerInstructions: agentInstructions(this.session, this.options) };
     const effort = reasoningEffort(this.session, this.options);
@@ -114,7 +124,10 @@ export class CodexEngine {
       if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
       saveSession(this.session);
     } else {
-      if (this.options.toolHost) params.dynamicTools = taskTools(this.session, { goalMode: this.options.goalMode }).filter(t => !['get_goal', 'update_goal'].includes(t.name)).map(t => ({ type: 'function', name: t.name, description: t.description, inputSchema: t.inputSchema }));
+      // Native threads retain their initial tool schemas on resume. Reserve the
+      // delegation tools even when the first turn is chat; ToolHost still denies
+      // using them until an explicit goal execution authorizes them.
+      if (this.options.toolHost) params.dynamicTools = taskTools(this.session, { goalMode: this.session.mode === 'delegate' ? true : this.options.goalMode }).filter(t => !['get_goal', 'update_goal'].includes(t.name)).map(t => ({ type: 'function', name: t.name, description: t.name === 'delegate' ? t.description + ' Available only during an explicit /goal; ordinary chat cannot launch assignments.' : t.description, inputSchema: t.inputSchema }));
       const result = await this.rpc.request('thread/start', params);
       this.threadId = result.thread.id;
       this.session.engineThreadId = this.threadId;

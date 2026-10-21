@@ -187,3 +187,16 @@ test('choosing another provider opens its model and effort picker and retains th
   ui.chooseOne = async (title, choices) => { await choices; return title === 'Choose provider' ? 'codex' : null; };
   assert.equal(await changeConversationProvider(next, '', ui), null); assert.equal(config().defaultProvider, 'claude');
 });
+
+test('changing a provider inside another mode preserves the normal chat preset', async () => {
+  const normal = saveDefaultSelection({ provider: 'codex', model: 'normal-chat', selectedEffort: 'high' });
+  const ui = { interactive: true, event() {}, updateSession() {}, async chooseOne(_title, choices) {
+    return Array.isArray(await choices) ? 'claude' : { value: 'sonnet', effort: 'high' };
+  } };
+  for (const mode of ['delegate', 'debate', 'besties']) {
+    const source = createSession(BUILTINS.codex, directory); source.mode = mode; saveSession(source);
+    const next = await changeConversationProvider(source, '', ui);
+    assert.equal(next.provider, 'claude'); assert.equal(config().defaultProvider, 'codex');
+    assert.deepEqual(defaultSelection(), normal);
+  }
+});

@@ -230,6 +230,7 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
     const changes = inspectWorkspace(snapshot, job.workspace);
     const patch = artifact(childSession, JSON.stringify(changes, null, 2), 'workspace-changes', 'application/json');
     const result = { assignmentId: id, round: number, state: code === 0 ? 'awaiting_review' : childSession.stopReason === 'runtime_limit' ? 'timed_out' : childSession.stopReason === 'token_limit' ? 'budget_limited' : childSession.executionState === 'cancelled' ? 'cancelled' : 'failed', stopReason: childSession.stopReason || childSession.failure?.category || null,
+      error: code === 0 ? null : childSession.failure?.message || childSession.goal?.reason || childSession.stopReason || null,
       workerClaim: report?.status || 'unknown', summary: (report?.summary || 'Worker returned without a structured assignment report.').slice(0, 8000),
       report: report || null, artifacts: [...outputs, patch].map(a => ({ id: a.id, label: a.label, size: a.size, sha256: a.sha256 })),
       missingReport: !report, changes, usage: childSession.usage ? { ...childSession.usage, elapsedSeconds: childSession.elapsedSeconds } : null, exitCode: code, finishedAt: now() };

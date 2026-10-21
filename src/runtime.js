@@ -17,7 +17,9 @@ export const runtimeFile = () => path.join(home(), 'runtime', 'service.json');
 export const runtimeInfo = () => readJson(runtimeFile(), null);
 function groupChildren(session) {
   if (!['parallel', 'besties'].includes(session?.mode)) return [];
-  const peers = getRecord(session.mode, session.id)?.peers, ids = peers && new Set(peers.map(peer => peer.sessionId));
+  const group = getRecord(session.mode, session.id);
+  if (group?.goalId && group.goalId !== session.goal?.id) return [];
+  const peers = group?.peers, ids = peers && new Set(peers.map(peer => peer.sessionId));
   return listRecords('session').filter(child => child.parentSessionId === session.id && (!ids || ids.has(child.id)));
 }
 export function effectiveInputOwner(sessionId) {
@@ -118,6 +120,7 @@ export async function serveRuntime() {
         const peerOrder = (session.mode === 'besties' ? getRecord('besties', id) : getRecord('parallel', id))?.peers || [];
         const children = ['parallel', 'besties'].includes(session.mode) ? groupChildren(session) : listRecords('session').filter(s => s.parentSessionId === id);
         if (peerOrder.length) children.sort((a, b) => peerOrder.findIndex(p => p.sessionId === a.id) - peerOrder.findIndex(p => p.sessionId === b.id));
+        else if (['parallel', 'besties'].includes(session.mode)) children.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         const questionSessions = new Set([id, ...children.map(s => s.id)]);
         send(response, 200, { session, run: getRecord('run', id), execution: jobs[0] || null,
           questions: listRecords('question').filter(q => questionSessions.has(q.sessionId) && q.state === 'pending'), inputOwner: effectiveInputOwner(id),

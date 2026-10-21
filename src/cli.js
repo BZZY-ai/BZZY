@@ -1,7 +1,8 @@
+import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { config, providers, getProvider, setDefault, addProvider, apiKey, saveKey, ensureApiKey, defaultSelection, saveDefaultSelection } from './providers.js';
+import { config, providers, getProvider, setDefault, addProvider, apiKey, saveKey, ensureApiKey, defaultSelection } from './providers.js';
 import { home, readJson, createSession, saveSession, findSession, sessions, lockSession, loadSession } from './store.js';
 import { inherited, version, root } from './process.js';
 import { UI } from './ui.js';
@@ -11,13 +12,13 @@ import { runSession } from './controller.js';
 import { CodexEngine } from './engines/codex.js';
 import { claudeEnvironment } from './engines/claude.js';
 import { NotificationHub } from './notifications.js';
-import { configureTelegram } from './telegram.js';
+import { configureTelegram, autoAttachTelegram } from './telegram.js';
 import { serveGoalTools } from './mcp.js';
 import { serveTaskBridge } from './tools.js';
 import { executeManaged, viewSession, attachSession, controlSession, changeSessionModel } from './runtime-client.js';
 import { serveRuntime, executeJob, ensureRuntime, runtimeInfo, runtimeRequest } from './runtime.js';
 import { runAssignment, agentChoice } from './delegation.js';
-import { prepareTask } from './task.js';
+import { prepareTask, readContextFile } from './task.js';
 import { reconcileSession, identityAlive } from './recovery.js';
 import { getRecord, putRecord, listRecords, digest, appendEvent, reserveRequest } from './database.js';
 import { recall, remember, invalidateMemory } from './memory.js';
@@ -29,18 +30,24 @@ import { restoreConversation, conversationInput } from './runtime-client.js';
 import { changeConversationProvider } from './conversation-settings.js';
 import { serveTelegramBridge, ensureTelegramBridge, stopTelegramBridge } from './telegram-bridge.js';
 import { chooseDelegation, applyDelegationSelection, describeDelegation } from './delegation-setup.js';
-import { chooseBesties, configuredBesties, applyBestiesSelection, describeBesties } from './besties-setup.js';
-import { chooseParallel, configuredParallel, applyParallelSelection } from './parallel-setup.js';
+import { chooseBestiesWithDefault, configuredBesties, applyBestiesSelection, describeBesties } from './besties-setup.js';
+import { chooseParallelWithDefault, chooseParallelGoal, configuredParallel, applyParallelSelection } from './parallel-setup.js';
+
+import { chooseDebate, configuredDebate, applyDebateSelection } from './debate-setup.js';
+import { chooseSavedCombo } from './mode-presets.js';
+import { chatHelp } from './terminal-commands.js';
+import { whoami } from './whoami.js';
 
 const HELP = `bzzy 0.2.0 · a persistent coding agent
 
 Usage:
   bzzy [options]                         Open the terminal chat
   bzzy "initial context" --goal "task"  Send context first, then start a durable goal
+  bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
   bzzy --delegate                       Choose brain and hands; chat normally or start /goal
   bzzy --besties                        Choose two peers; chat normally or start a shared /goal
-  bzzy --parallel [2|3]                 Choose each independent agent; chat normally or start /goal
+  bzzy --parallel [2|3]                 Select agents, enter a goal, then open their chat tabs
   bzzy --debate                         Analyze, test, then debate the next reply
   bzzy run "task" [options]              Run one task
   bzzy goal "objective" [options]        Work until the goal completes or stalls
@@ -77,6 +84,7 @@ Options:
   --model MODEL         Select a model (provider default otherwise)
   --cwd DIRECTORY       Working directory
   --goal OBJECTIVE      Start a persistent goal; quoted positional text is sent first as context
+  --context-file FILE   UTF-8 task instructions (up to 1 MiB), relative to --cwd; no initialization chat
   --token-budget N      Optional goal token budget
   --max-turns N         Optional goal turn limit; pauses rather than completes
   --runtime N           Total active runtime limit in seconds
@@ -87,14 +95,17 @@ Options:
   --follow              Keep a noninteractive view connected
   --mode MODE           solo, delegate, besties, debate or parallel
   --delegate            Choose supervisor/executor models; the brain plans, delegates and verifies
-  --besties             Choose two peers; both investigate, share evidence and review each other
-  --parallel [2|3]      Choose 2 or 3 independent agents (default 3), each with model and effort
+  --besties             2–3 agents work together on one goal and review each other’s evidence
+  --debate              2–3 agents investigate and debate one goal
+  --parallel [2|3]      Choose 2 or 3 agents, continue to goal setup, then open agent chat tabs
   --supervisor NAME     Supervisor provider, optionally provider:model
   --executor NAME       Delegation executor provider, optionally provider:model
   --supervisor-model M  Independently select the supervisor model
   --executor-model M    Independently select the executor model
   --participant NAME    Debate participant; repeat to select more agents
-  --agents A,B,C        Parallel agents, or exactly two besties; optionally provider:model
+  --agents A,B[,C]      Parallel or besties agents; optionally provider:model
+  --default             Reuse this mode’s saved preset without questions or selectors
+  --whoami              Print the detailed architecture, storage and integration reference
   --artifact FILE       Material to snapshot and debate
   --rounds N            Debate round limit (default 5, maximum 5)
   --review-only         Skip independent investigation; debate a fixed snapshot
@@ -115,7 +126,8 @@ Chat commands: /goal <objective>, /goal status|pause|resume|clear,
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
-/default saves the current provider, model and effort for later bzzy sessions.
+/default saves a separate preset for normal chat, delegate, debate, besties or parallel.
+--default skips selectors and the saved-combo question for the selected mode.
 /models: ↑/↓ chooses a model; ←/→ sets supported effort; Enter confirms.
 /provider and /model are aliases. /quit also exits.
 Delegation: choose a strong brain and a less expensive executor; describe one overall goal.
@@ -167,7 +179,7 @@ API providers must support the Responses protocol in this version.
 export function parseArgs(argv) {
   const options = { cwd: process.cwd(), pet: true, yolo: false, json: false };
   const args = [];
-  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--goal': 'goal',
+  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--goal': 'goal', '--context-file': 'contextFile',
     '--token-budget': 'tokenBudget', '--max-turns': 'maxTurns', '--effort': 'effort',
     '--base-url': 'baseUrl', '--env-key': 'envKey', '--context-window': 'contextWindow',
     '--view': 'view', '--attach': 'attach', '--atach': 'attach', '--resume': 'resume', '--mode': 'mode', '--supervisor': 'supervisor', '--executor': 'executor',
@@ -191,7 +203,9 @@ export function parseArgs(argv) {
       if (value != null && !/^[23]$/.test(value)) throw new Error('--parallel requires 2 or 3 agents.');
       if (value != null) options.parallelCount = Number(value);
     }
-    else if (raw === '--debate') options.mode = 'debate';
+    else if (raw === '--debate') { options.mode = 'debate'; options.debateSetup = true; }
+    else if (raw === '--default') options.useDefault = true;
+    else if (raw === '--whoami') options.whoami = true;
     else if (raw === '--delegate') { options.mode = 'delegate'; options.delegationSetup = true; }
     else if (raw === '--besties') { options.mode = 'besties'; options.bestiesSetup = true; }
     else if (raw === '--review-only') options.reviewOnly = true;
@@ -218,6 +232,7 @@ export function parseArgs(argv) {
   if ([options.view, options.attach, options.resume].filter(Boolean).length > 1) throw new Error('Choose --view, --attach or --resume.');
   if (options.mode && !['solo', 'delegate', 'besties', 'debate', 'parallel'].includes(options.mode)) throw new Error('Invalid execution mode.');
   if (options.yolo && options.readOnly) throw new Error('--yolo conflicts with --read-only.');
+  if (options.useDefault && (options.agents || options.participants)) throw new Error('Use either --default or explicit --agents/--participant selections.');
   if (options.rounds > 5 || options.concurrency > 8) throw new Error('Maximum 5 debate rounds and 8 concurrent workers.');
   if (options.effort && !['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.effort)) throw new Error('Invalid reasoning effort.');
   options.cwd = path.resolve(options.cwd);
@@ -235,20 +250,38 @@ async function authenticate(provider, ui, options, { reuseExisting = false } = {
     return 0;
   }
   if (reuseExisting && subscriptionStatus(provider).available) { ui.event('info', { message: `Using the existing ${provider.backend === 'codex' ? 'Codex / ChatGPT' : 'Claude Code'} subscription login.` }); return 0; }
+  if (ui.tui) { ui.tui.close(); ui.tui = null; }
   if (provider.backend === 'claude') return inherited('claude', ['auth', 'login'], claudeEnvironment());
   return inherited('codex', ['login', ...(options.device ? ['--device-auth'] : [])], subscriptionEnvironment('codex'));
 }
 
-async function setup(ui, options, explicitProvider) {
+export async function setup(ui, options, explicitProvider) {
   if (!ui.interactive && !explicitProvider) throw new Error('Choose --provider codex, claude, or deepseek; or run bzzy setup in a terminal.');
   const entries = Object.values(providers());
   let provider;
   if (explicitProvider) provider = getProvider(explicitProvider);
   else {
-    ui.event('info', { message: 'How would you like to connect?\n' + entries.map((p, i) => `  ${i + 1}. ${p.name}`).join('\n') });
-    const answer = await ui.ask('Choose a provider [1]: ');
+    ui.openTerminal?.();
+    const ready = new Map(entries.map(entry => {
+      if (entry.auth === 'subscription') return [entry.id, subscriptionStatus(entry).available];
+      try { apiKey(entry); return [entry.id, true]; } catch { return [entry.id, false]; }
+    }));
+    const status = entry => entry.auth === 'subscription'
+      ? ready.get(entry.id) ? 'Validated · existing subscription login' : 'Not signed in'
+      : ready.get(entry.id) ? 'API key configured' : 'Optional API key';
+    const name = entry => entry.id === 'codex' ? 'Codex / ChatGPT' : entry.id === 'claude' ? 'Claude' : entry.name;
+    ui.event('info', { message: 'Your connections\n' + entries.map(entry => `${name(entry)} · ${status(entry)}`).join('\n') });
+    const deepseek = entries.find(entry => entry.id === 'deepseek');
+    if (deepseek && !ready.get(deepseek.id)) {
+      ready.set(deepseek.id, Boolean(await ensureApiKey(deepseek, ui, { optional: true })));
+    }
+    const preferred = entries.find(entry => ready.get(entry.id))?.id || entries[0]?.id;
+    const answer = await ui.chooseOne('Choose your default provider', entries.map(entry => ({
+      value: entry.id, label: `${name(entry)} · ${status(entry)}`, selected: entry.id === preferred,
+      description: ready.get(entry.id) ? 'Ready to use. You can change providers later with /providers.' : 'Sign in when selected. You can configure this provider later.',
+    })));
     if (answer == null) throw new Error('Setup cancelled.');
-    provider = entries[Number(answer || '1') - 1] || getProvider(answer);
+    provider = getProvider(answer);
   }
   const code = await authenticate(provider, ui, options, { reuseExisting: true });
   if (code !== 0) throw new Error(`Authentication exited (${code}); provider was not selected.`);
@@ -276,8 +309,8 @@ function applyLaunchSelection(session, options) {
 }
 
 function saveCurrentDefault(session, ui) {
-  const selected = saveDefaultSelection(session);
-  ui.event('info', { message: `Default saved · ${selected.provider} · ${selected.model || 'provider default'} · effort ${selected.effort}. New bzzy sessions will use it.` });
+  const selected = saveSessionDefaultSelection(session);
+  ui.event('info', { message: savedDefaultMessage(selected) });
 }
 
 async function goalControl(action, id, options, ui) {
@@ -329,7 +362,15 @@ async function resume(session, options, ui, requireGoal = false) {
     ui.event('session', { session, message: `Session restored: ${session.id}. ${session.goal?.status === 'complete' ? 'Goal already complete.' : 'Open bzzy resume in a terminal to continue chatting.'}` });
     return 0;
   }
-  return executeManaged(getProvider(session.provider), session, options, ui, 'Continue the current task from the saved state; inspect durable checkpoints and recovery evidence first.', { goal: Boolean(goal), resumeGoal: Boolean(goal) });
+  return executeFromCommand(getProvider(session.provider), session, { ...options, cwd: session.cwd }, ui, 'Continue the current task from the saved state; inspect durable checkpoints and recovery evidence first.', { goal: Boolean(goal), resumeGoal: Boolean(goal) });
+}
+
+async function executeFromCommand(provider, session, options, ui, prompt, flags) {
+  const code = await executeManaged(provider, session, options, ui, prompt, flags);
+  if (flags.goal && [0, 2].includes(code) && ui.interactive && !options.detach && !ui.detached) {
+    return chat(getProvider(session.provider), { ...options, requestId: undefined }, ui, session);
+  }
+  return code;
 }
 
 async function chat(provider, options, ui, existingSession) {
@@ -339,10 +380,12 @@ async function chat(provider, options, ui, existingSession) {
   if (!existingSession && options.delegationSelection) { applyDelegationSelection(session, options.delegationSelection); saveSession(session); }
   if (!existingSession && options.bestiesSelection) { applyBestiesSelection(session, options.bestiesSelection); saveSession(session); }
   if (!existingSession && options.parallelAgents) { applyParallelSelection(session, options.parallelAgents); saveSession(session); }
+  if (!existingSession && options.debateAgents) { applyDebateSelection(session, options.debateAgents); saveSession(session); }
   if (!existingSession) { applyLaunchSelection(session, options); saveSession(session); }
   ui.setSession(session.id);
   if (existingSession) await restoreConversation(session, ui);
   ui.updateSession?.(session); pet.greet();
+  await autoAttachTelegram(session);
   ui.event('info', { message: `${provider.name}\n/goal <objective> · /providers · /models · /debate [objective] · /help`, welcome: true });
   if (options.mode === 'parallel') ui.event('info', { message: 'Parallel mode · chat normally, or use /goal <objective> for independent work by ' + (session.parallelAgents?.map(agent => agent.provider + (agent.model ? ':' + agent.model : '')).join(', ') || options.agents || 'codex,claude,deepseek'), welcome: true });
   if (options.mode === 'debate') ui.event('info', { message: 'Debate mode · get a first response, select the agents, then investigate and debate for up to five rounds.', welcome: true });
@@ -355,14 +398,14 @@ async function chat(provider, options, ui, existingSession) {
     if (input == null || input === '/quit' || input === '/exit') return 0;
     if (!input) continue;
     try {
-      if (input === '/help') { ui.event('info', { message: HELP }); continue; }
+      if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
       if (input === '/default') { saveCurrentDefault(session, ui); continue; }
       if (/^\/telegram(?:\s|$)/.test(input)) { await configureTelegram(input.replace(/^\/telegram\s*/, '') || 'panel', ui, { sessionId: session.id }); ui.refreshTelegramState?.(); continue; }
       if (input === '/debate' || input.startsWith('/debate ')) { await debateReply(input.slice(7).trim()); if (ui.detached) return 0; continue; }
       if (input === '/new') {
         const previous = session; session = createSession(provider, options.cwd, previous.model);
-        Object.assign(session, { selectedEffort: previous.selectedEffort, modelCapabilities: previous.modelCapabilities, mode: previous.mode, executor: previous.executor, besties: previous.besties, parallelAgents: previous.parallelAgents });
-        saveSession(session); ui.setSession(session.id); ui.updateSession(session); continue;
+        Object.assign(session, { selectedEffort: previous.selectedEffort, modelCapabilities: previous.modelCapabilities, mode: previous.mode, executor: previous.executor, besties: previous.besties, parallelAgents: previous.parallelAgents, debateAgents: previous.debateAgents });
+        saveSession(session); ui.setSession(session.id); ui.updateSession(session); await autoAttachTelegram(session); continue;
       }
       if (/^\/providers?(?:\s|$)/.test(input)) {
         const selected = await ui.onProvider(session.id, input.replace(/^\/providers?\s*/, ''));
@@ -372,14 +415,17 @@ async function chat(provider, options, ui, existingSession) {
       if (/^\/models?(?:\s|$)/.test(input)) { Object.assign(session, await changeSessionModel(session.id, input.replace(/^\/models?\s*/, ''), ui)); continue; }
       if (input === '/goal' || input.startsWith('/goal ')) {
         const objective = input.slice(5).trim();
-        if (!objective || ['status', 'pause', 'clear', 'resume'].includes(objective)) {
+        if (!objective || ['status', 'pause', 'cancel', 'clear', 'resume'].includes(objective)) {
           if (!session.goal) throw new Error('No goal yet. Use /goal <objective>.');
           await goalControl(objective || 'status', session.id, { ...options, provider: session.provider }, ui);
           session = findSession(session.id);
         } else {
-          if (session.goal && !['complete', 'paused', 'blocked', 'budget_limited', 'usage_limited'].includes(session.goal.status)) throw new Error('Clear the unfinished goal before replacing it.');
-          if (session.goal) putRecord('goal-history', session.goal.id, { sessionId: session.id, ...session.goal });
+          const previousGoal = session.goal;
           prepareTask(session, options, objective); session.goal = newGoal(session.contract.objective, options.tokenBudget); saveSession(session);
+          session.acceptance = null; session.summary = null; session.failure = null; session.stopReason = null;
+          if (previousGoal) putRecord('goal-history', previousGoal.id, { sessionId: session.id, ...previousGoal,
+            supersededAt: new Date().toISOString(), supersededBy: session.goal.id });
+          saveSession(session);
           await executeManaged(provider, session, options, ui, session.goal.objective, { goal: true });
         }
       } else if (input.startsWith('/')) throw new Error('Unknown command. Use /help.');
@@ -398,15 +444,11 @@ async function chat(provider, options, ui, existingSession) {
 
 async function debateConversation(source, focus, options, ui) {
   if (!source) throw new Error('No conversation selected.');
-  const choices = Object.values(providers()).map(provider => {
-    let ready = true;
-    if (provider.auth === 'api-key') { try { apiKey(provider); } catch { ready = false; } }
-    return { value: provider.id, label: provider.name + (ready ? '' : ' · API key needed'), selected: ready && provider.id !== source.provider };
-  });
-  const selected = options.participants || await ui.chooseMany('Choose agents for this debate', choices);
-  if (!selected?.length) return;
-  const debate = prepareChatDebate(source, focus, selected, options);
-  try { await executeManaged(getProvider(source.provider), debate.session, debate.options, ui, debate.session.goal.objective, { goal: true }); }
+  const agents = options.debateAgents || await chooseDebate({ ...options, provider: source.provider, model: source.model }, ui);
+  if (!agents) return;
+  const selected = agents.slice(1);
+  const debate = prepareChatDebate(source, focus, selected, { ...options, debateAgents: agents });
+  try { await executeManaged(getProvider(debate.session.provider), debate.session, debate.options, ui, debate.session.goal.objective, { goal: true }); }
   finally {
     finishChatDebate(source.id, debate.session.id);
     if (!ui.detached) await restoreConversation(loadSession(source.id), ui);
@@ -422,6 +464,7 @@ export async function main(argv) {
   if (argv[0] === 'internal-assignment') return runAssignment(argv[1], Number(argv[2]));
   const { options, args } = parseArgs(argv);
   if (options.version) { process.stdout.write('bzzy 0.2.0\n'); return 0; }
+  if (options.whoami) { process.stdout.write(whoami(options.cwd)); return 0; }
   if (options.help || args[0] === 'help') { process.stdout.write(HELP); return 0; }
   if (!fs.statSync(options.cwd).isDirectory()) throw new Error('--cwd must name a directory.');
   options.cwd = fs.realpathSync(options.cwd);
@@ -497,15 +540,21 @@ export async function main(argv) {
     if (command === 'resume') return await resume(findSession(rest[0], options.cwd), options, ui);
     if (command === 'goal' && ['status', 'pause', 'cancel', 'clear', 'resume'].includes(rest[0])) return await goalControl(rest[0], rest[1], options, ui);
     const executionCommands = ['run', 'goal', 'chat', 'delegate', 'besties', 'debate', 'parallel', 'paralel'];
-    const initialContext = options.goal
+    const positionalContext = options.goal
       ? (executionCommands.includes(command) ? rest : args).join(' ').trim()
       : '';
-    if (command && !executionCommands.includes(command) && !initialContext) throw new Error(`Unknown command ${command}. Use bzzy --help.`);
+    if (options.contextFile && positionalContext) throw new Error('Choose --context-file or positional initialization context, not both.');
+    const initialContext = positionalContext;
+    if (command && !executionCommands.includes(command) && !positionalContext) throw new Error(`Unknown command ${command}. Use bzzy --help.`);
+    if (options.contextFile && !(options.goal || ['goal', 'delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command))) throw new Error('--context-file requires --goal or a goal execution command.');
+    const contextFileText = options.contextFile ? readContextFile(options.contextFile, options.cwd) : undefined;
     applyLaunchDefault(options);
     if (['delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command)) options.mode = command === 'paralel' ? 'parallel' : command;
-    if (options.mode === 'delegate' && options.delegationSetup && ui.interactive) {
+    if (options.useDefault && (!options.mode || options.mode === 'solo') && !config().defaultProvider) throw new Error('No normal chat default saved. Choose a provider and run /default first.');
+    if (options.mode === 'delegate' && (options.delegationSetup && ui.interactive || options.useDefault)) {
       ui.openTerminal();
-      const selection = await chooseDelegation(options, ui);
+      const saved = await chooseSavedCombo('delegate', options, ui);
+      const selection = saved === false ? await chooseDelegation(options, ui) : saved && { supervisor: saved[0], executor: saved[1] };
       if (!selection) return 0;
       options.delegationSelection = selection;
       options.supervisor = selection.supervisor.provider; options.supervisorModel = selection.supervisor.model;
@@ -514,19 +563,41 @@ export async function main(argv) {
     }
     if (options.supervisor) { const brain = agentChoice(options.supervisor, options.supervisorModel); options.provider = brain.provider; options.model = brain.model || options.model; }
     if (options.mode === 'besties') {
-      if (options.bestiesSetup && ui.interactive) {
-        ui.openTerminal(); options.bestiesSelection = await chooseBesties(options, ui);
+      if ((options.bestiesSetup && ui.interactive || options.useDefault) && !options.agents) {
+        ui.openTerminal(); options.bestiesSelection = await chooseBestiesWithDefault(options, ui);
         if (!options.bestiesSelection) return 0;
       } else options.bestiesSelection = configuredBesties(options);
       options.besties = options.bestiesSelection;
       options.provider = options.besties[0].provider; options.model = options.besties[0].model;
     }
     if (options.mode === 'parallel') {
-      if (options.parallelSetup && !options.agents && ui.interactive) {
-        ui.openTerminal(); options.parallelAgents = await chooseParallel(options, ui);
+      if ((options.parallelSetup && ui.interactive || options.useDefault) && !options.agents) {
+        ui.openTerminal(); options.parallelAgents = await chooseParallelWithDefault(options, ui);
         if (!options.parallelAgents) return 0;
       } else options.parallelAgents = configuredParallel(options);
       options.provider = options.parallelAgents[0].provider; options.model = options.parallelAgents[0].model;
+      if ((options.parallelSetup || options.useDefault) && ui.interactive && !options.goal && (!command || command === 'chat')) {
+        const objective = await chooseParallelGoal(options.parallelAgents, ui);
+        if (!objective) return 0;
+        options.goal = objective;
+      }
+    }
+    if (options.mode === 'debate') {
+      if ((options.debateSetup && ui.interactive || options.useDefault) && !options.participants) {
+        ui.openTerminal(); options.debateAgents = await chooseDebate(options, ui);
+        if (!options.debateAgents) return 0;
+      } else options.debateAgents = configuredDebate(options);
+      options.provider = options.debateAgents[0].provider; options.model = options.debateAgents[0].model;
+    }
+    if (['besties', 'debate', 'delegate'].includes(options.mode) && ui.interactive && !options.goal && (!command || command === 'chat')) {
+      const selections = options.mode === 'besties' ? options.besties : options.mode === 'debate' ? options.debateAgents
+        : options.delegationSelection && [options.delegationSelection.supervisor, options.delegationSelection.executor];
+      if (selections) {
+        const objective = await chooseParallelGoal(selections, ui, { name: options.mode[0].toUpperCase() + options.mode.slice(1),
+          description: options.mode === 'besties' ? 'The agents collaborate and review one another’s evidence.' : options.mode === 'debate' ? 'The main agent answers independent challenges.' : 'The brain assigns work and reviews the executor’s evidence.' });
+        if (!objective) return 0;
+        options.goal = objective;
+      }
     }
     let provider;
     if (!config().defaultProvider && !options.provider && ui.interactive) provider = await setup(ui, options);
@@ -535,25 +606,28 @@ export async function main(argv) {
     if (options.goal || ['goal', 'run', 'delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command)) {
       const prompt = options.goal || rest.join(' ');
       if (!prompt.trim()) throw new Error(`Supply a ${command === 'run' ? 'task' : 'goal objective'}.`);
-      const taskOptions = initialContext ? { ...options, initialContext } : options;
+      // Snapshot file contents only into the contract, not queued execution options.
+      // Long instructions must not overflow the runtime API or require the source on resume.
+      const taskOptions = { ...options, initialContext: positionalContext, contextFileText };
       let session;
       const goal = Boolean(options.goal || command !== 'run' || ['parallel', 'besties', 'debate'].includes(options.mode));
-      const creationInput = { provider: provider.id, model: options.model || null, cwd: options.cwd, prompt, initialContext: initialContext || null, goal, mode: options.mode || 'solo',
+      const creationInput = { provider: provider.id, model: options.model || null, cwd: options.cwd, prompt, initialContext: positionalContext || null,
+        ...(contextFileText == null ? {} : { contextFileDigest: digest(contextFileText) }), goal, mode: options.mode || 'solo',
         contractDigest: options.contract ? digest(fs.readFileSync(path.resolve(options.contract))) : null,
         authorization: { yolo: options.yolo, readOnly: options.readOnly || false, tokenBudget: options.tokenBudget || null, runtime: options.runtimeSeconds || null, executor: options.delegationSelection?.executor || options.executor || null,
-          supervisorEffort: options.delegationSelection?.supervisor.effort || options.effort || null, executorModel: options.executorModel || null, agents: options.agents || null, parallelAgents: options.parallelAgents || null, besties: options.besties || null, participants: options.participants || null } };
+          supervisorEffort: options.delegationSelection?.supervisor.effort || options.effort || null, executorModel: options.executorModel || null, agents: options.agents || null, parallelAgents: options.parallelAgents || null, debateAgents: options.debateAgents || null, besties: options.besties || null, participants: options.participants || null } };
       if (options.requestId) {
         const reserved = reserveRequest('cli-create', options.requestId, creationInput, db => {
           const initial = { version: 1, id: randomUUID(), provider: provider.id, backend: provider.backend, cwd: options.cwd, model: options.model || provider.model || null,
             engineThreadId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), turns: 0, goal: null, executionState: 'idle' };
-          applyDelegationSelection(initial, options.delegationSelection); applyBestiesSelection(initial, options.bestiesSelection); applyParallelSelection(initial, options.parallelAgents); applyLaunchSelection(initial, options); prepareTask(initial, taskOptions, prompt, { persist: false });
+          applyDelegationSelection(initial, options.delegationSelection); applyBestiesSelection(initial, options.bestiesSelection); applyParallelSelection(initial, options.parallelAgents); applyDebateSelection(initial, options.debateAgents); applyLaunchSelection(initial, options); prepareTask(initial, taskOptions, prompt, { persist: false });
           if (goal && !initialContext) initial.goal = newGoal(initial.contract.objective, options.tokenBudget || initial.contract.limits.tokenBudget);
           putRecord('session', initial.id, initial, db); appendEvent(initial.id, 'session.created', { sessionId: initial.id }, db); return { sessionId: initial.id };
         });
         session = loadSession(reserved.sessionId);
         if (!initialContext && listRecords('execution').some(j => j.sessionId === session.id)) return await viewSession(session, options, ui);
       } else {
-        session = createSession(provider, options.cwd, options.model); applyDelegationSelection(session, options.delegationSelection); applyBestiesSelection(session, options.bestiesSelection); applyParallelSelection(session, options.parallelAgents); applyLaunchSelection(session, options); prepareTask(session, taskOptions, prompt);
+        session = createSession(provider, options.cwd, options.model); applyDelegationSelection(session, options.delegationSelection); applyBestiesSelection(session, options.bestiesSelection); applyParallelSelection(session, options.parallelAgents); applyDebateSelection(session, options.debateAgents); applyLaunchSelection(session, options); prepareTask(session, taskOptions, prompt);
         if (goal && !initialContext) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget);
       }
       saveSession(session);
@@ -568,7 +642,7 @@ export async function main(argv) {
         saveSession(session);
       }
       const executionOptions = initialContext && options.requestId ? { ...options, requestId: `${options.requestId}:goal` } : options;
-      return await executeManaged(provider, session, executionOptions, ui, prompt, { goal });
+      return await executeFromCommand(provider, session, executionOptions, ui, prompt, { goal });
     }
     return await chat(provider, options, ui);
   } finally { ui.close(); }

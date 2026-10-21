@@ -18,6 +18,7 @@ export class TerminalChat {
     this.telegramMessages = []; this.telegramFocus = 0;
     this.assignments = new Map();
     this.value = ''; this.cursor = 0; this.history = []; this.historyIndex = 0; this.drafts = new Map();
+    this.entryLayouts = new WeakMap(); this.inputQueue = [];
     this.state = 'ready'; this.model = 'default'; this.provider = ''; this.frame = 0; this.lastFrame = [];
     this.animationTime = 0; this.animationStarted = performance.now();
     this.wasRaw = Boolean(this.input.isRaw);
@@ -107,6 +108,7 @@ export class TerminalChat {
   }
 
   add(kind, text, extra = {}) {
+    this.contentRevision = (this.contentRevision || 0) + 1;
     const entry = { kind, text: clean(text), ...extra }; this.entries.push(entry);
     if (this.entries.length > 5000) this.entries.splice(0, 500);
     return entry;
@@ -243,6 +245,8 @@ export class TerminalChat {
     Object.assign(this, draft); this.schedule();
   }
   ask(question, { hidden = false } = {}) {
+    const queued = !hidden && /^bzzy\b/.test(question) ? this.inputQueue.findIndex(item => item.sessionId === (this.ui.activeTab || this.ui.sessionId)) : -1;
+    if (queued >= 0) return Promise.resolve(this.inputQueue.splice(queued, 1)[0].text);
     return new Promise(resolve => {
       this.question = clean(question); this.hidden = hidden; this.resolveInput = resolve;
       if (hidden || !/^bzzy\b/.test(this.question)) { this.promptDraft = { value: this.value, cursor: this.cursor }; this.value = ''; this.cursor = 0; }
@@ -266,6 +270,7 @@ export class TerminalChat {
         if (this.selection !== picker) return;
         picker.choices = Array.isArray(result) ? result : result.choices;
         picker.description = result.description || '';
+        picker.descriptionRows = Math.min(4, result.descriptionRows || 2);
         picker.selectEffort = Boolean(result.selectEffort);
         picker.efforts = new Map(picker.choices.map(choice => [choice.value, choice.effort || 'default']));
         picker.warning = result.warning || '';
@@ -284,6 +289,13 @@ export class TerminalChat {
     if (this.promptDraft) { Object.assign(this, this.promptDraft); this.promptDraft = null; }
     else if (answer != null) { this.value = ''; this.cursor = 0; }
     this.hidden = false; resolve(answer); this.schedule();
+  }
+  canCompose() { return Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.selection && !this.promptDraft); }
+  submitMessage() {
+    if (this.resolveInput) { this.finish(this.value); return; }
+    if (!this.value.trim()) return;
+    this.inputQueue.push({ sessionId: this.ui.activeTab || this.ui.sessionId, text: this.value }); this.history.push(this.value); this.historyIndex = this.history.length;
+    this.value = ''; this.cursor = 0; this.schedule();
   }
   completions() {
     if (!this.resolveInput || this.hidden || this.selection || this.pasting || !/^bzzy\b/.test(this.question || '')) return [];
@@ -337,7 +349,7 @@ export class TerminalChat {
     } catch { this.textSelection = null; this.clipboardNotice('Unable to copy to the clipboard'); }
   }
   async pasteClipboard() {
-    if (!this.resolveInput || this.selection || this.pastePending) return;
+    if (!this.canCompose() || this.selection || this.pastePending) return;
     const prompt = this.resolveInput; this.pastePending = true;
     try {
       const result = await (this.ui.clipboard?.readClipboard || readClipboard)();
@@ -452,6 +464,7 @@ export class TerminalChat {
       else if (key.name === 'return') {
         if (picker.single) {
           const choice = picker.choices[picker.focus];
+          if (choice.disabled) { picker.error = choice.description || 'This option is not available yet.'; this.schedule(); return; }
           this.finishSelection(picker.selectEffort ? { value: choice.value, effort: picker.efforts.get(choice.value) } : choice.value);
         } else if (picker.selected.size) this.finishSelection([...picker.selected]); else picker.error = 'Select at least one agent.';
       }
@@ -468,7 +481,7 @@ export class TerminalChat {
       return;
     }
     if (key.name === 'escape' && this.promptDraft) { this.finish(null); return; }
-    if (!this.resolveInput) return;
+    if (!this.canCompose()) return;
     if (this.panel === 'telegram' && !this.value && !this.hidden && /^bzzy\b/.test(this.question || '') && ['up', 'down', 'space', 'return'].includes(key.name)) {
       key.bzzyHandled = true;
       if (key.name === 'up' || key.name === 'down') { this.telegramFocus = (this.telegramFocus + (key.name === 'up' ? 2 : 1)) % 3; this.schedule(); }
@@ -499,7 +512,7 @@ export class TerminalChat {
       if (!this.hidden && /^bzzy\b/.test(this.question || '') && this.value.trim() === '/copy') { this.value = ''; this.cursor = 0; this.setCopyMode(true); return; }
       const panel = /^bzzy\b/.test(this.question || '') && !this.hidden && /^\/(chat|room|activity|http)$/.exec(this.value.trim())?.[1];
       if (panel) { this.value = ''; this.cursor = 0; this.setPanel(panel); return; }
-      this.finish(this.value); return;
+      this.submitMessage(); return;
     }
     if ((key.name === 'return' && (key.meta || key.shift)) || key.ctrl && key.name === 'j') { chars.splice(this.cursor++, 0, '\n'); }
     else if (key.meta && key.name === 'backspace' || key.ctrl && key.name === 'w') { const start = wordBoundary(chars, this.cursor, -1); chars.splice(start, this.cursor - start); this.cursor = start; }
@@ -534,7 +547,7 @@ export class TerminalChat {
       const focused = picker.choices[picker.focus];
       const effortDetail = picker.selectEffort ? focused?.efforts?.length ? `Effort: ${picker.efforts.get(focused.value)}${focused.defaultEffort ? ` · provider default: ${focused.defaultEffort}` : ''}. ` : focused?.supportsEffort === false ? 'This model has no effort setting. ' : '' : '';
       const details = picker.single ? effortDetail + (focused?.description || picker.description || '') : 'Every participant reviews the same fixed reply independently.';
-      const detailLines = details ? wrap(details, width - 5).slice(0, compact ? 1 : 2) : [];
+      const detailLines = details ? wrap(details, width - 5, compact ? 1 : picker.descriptionRows || 2) : [];
       const available = Math.max(1, (this.selectionHeight || 16) - lines.length - detailLines.length - 1 - (compact ? 0 : 1) - (picker.error ? 1 : 0));
       const offset = Math.max(0, Math.min(picker.focus - Math.floor(available / 2), picker.choices.length - available));
       for (let index = offset; index < Math.min(picker.choices.length, offset + available); index++) {
@@ -546,7 +559,7 @@ export class TerminalChat {
           this.contentHits.push({ type: 'effort', index, direction: 'left', row: lines.length, left: cellWidth(label) + 3, right: cellWidth(label) + 4 });
           this.contentHits.push({ type: 'effort', index, direction: 'right', row: lines.length, left: cellWidth(label + effort) - 1, right: cellWidth(label + effort) });
         }
-        put(label + effort, index === picker.focus ? palette.blue : palette.text, index === picker.focus);
+        put(label + effort, choice.disabled ? palette.dim : index === picker.focus ? palette.blue : palette.text, index === picker.focus && !choice.disabled);
       }
       if (picker.error) put('  ' + picker.error, palette.red);
       if (!compact) put('');
@@ -621,24 +634,43 @@ export class TerminalChat {
     } else {
       for (const entry of this.entries) {
         if (entry.kind === 'tool' && !this.showTools) continue;
-        if (entry.kind === 'notice') { for (const line of wrap(entry.text, width - 5)) put('  · ' + line, palette.dim); put(''); continue; }
-        if (entry.kind === 'tool') { put('  › ' + clip(entry.text, width - 5), palette.dim); continue; }
-        const tone = entry.kind === 'user' ? palette.blue : entry.kind === 'error' ? palette.red : entry.kind === 'success' ? palette.teal : palette.gold;
-        const label = entry.kind === 'user' ? 'YOU' + (entry.channel === 'telegram' ? ' · Telegram' : '') + (entry.goal ? '  /goal' : '') : entry.kind === 'assistant' ? entry.label || 'bzzy' : entry.kind === 'question' ? 'YOUR INPUT IS NEEDED' : entry.kind.toUpperCase();
-        const displayLabel = entry.kind === 'assistant' ? clip(label, width - 9) : label;
-        if (entry.kind === 'assistant') {
-          const left = cellWidth('  ' + displayLabel + '  ') + 1;
-          this.contentHits.push({ type: 'copy-response', entry, row: lines.length, left, right: left + 2 });
-        }
-        put(`  ${displayLabel}${entry.kind === 'assistant' ? '  [c]' : ''}`, tone, true);
-        for (const line of wrap(entry.text, width - 5)) {
-          const text = line.replace(/\*\*(.*?)\*\*/g, '$1').replace(/^#{1,6}\s+/, '');
-          put('  ' + text, entry.kind === 'error' ? palette.red : palette.text, /^#{1,6}\s/.test(line));
-        }
-        put('');
+        const layout = this.entryLayout(entry, width);
+        if (layout.copyLeft != null) this.contentHits.push({ type: 'copy-response', entry, row: lines.length, left: layout.copyLeft, right: layout.copyLeft + 2 });
+        for (const line of layout.lines) lines.push(line);
       }
     }
     return lines;
+  }
+
+  entryLayout(entry, width) {
+    const cached = this.entryLayouts.get(entry);
+    if (cached?.width === width && cached.text === entry.text) return cached;
+    const lines = [], put = (text, tone = palette.text, bold = false) => lines.push(color(text, tone, bold));
+    let copyLeft;
+    if (entry.kind === 'notice') { for (const line of wrap(entry.text, width - 5)) put('  · ' + line, palette.dim); put(''); }
+    else if (entry.kind === 'tool') put('  › ' + clip(entry.text, width - 5), palette.dim);
+    else {
+      const tone = entry.kind === 'user' ? palette.blue : entry.kind === 'error' ? palette.red : entry.kind === 'success' ? palette.teal : palette.gold;
+      const label = entry.kind === 'user' ? 'YOU' + (entry.channel === 'telegram' ? ' · Telegram' : '') + (entry.goal ? '  /goal' : '') : entry.kind === 'assistant' ? entry.label || 'bzzy' : entry.kind === 'question' ? 'YOUR INPUT IS NEEDED' : entry.kind.toUpperCase();
+      const displayLabel = entry.kind === 'assistant' ? clip(label, width - 9) : label;
+      if (entry.kind === 'assistant') copyLeft = cellWidth('  ' + displayLabel + '  ') + 1;
+      const append = entry.kind === 'assistant' && cached?.width === width && cached.rawLines && entry.text.startsWith(cached.text);
+      // Only the final wrapped line can change when a response receives a delta.
+      // Keep older Unicode/Markdown lines as well as completed replies cached.
+      const tail = wrap(append ? cached.rawLines.at(-1) + entry.text.slice(cached.text.length) : entry.text, width - 5);
+      const rawLines = append ? [...cached.rawLines.slice(0, -1), ...tail] : tail;
+      if (append) for (const line of cached.lines.slice(0, -2)) lines.push(line);
+      else put(`  ${displayLabel}${entry.kind === 'assistant' ? '  [c]' : ''}`, tone, true);
+      for (const line of tail) {
+        const text = line.replace(/\*\*(.*?)\*\*/g, '$1').replace(/^#{1,6}\s+/, '');
+        put('  ' + text, entry.kind === 'error' ? palette.red : palette.text, /^#{1,6}\s/.test(line));
+      }
+      put('');
+      const layout = { width, text: entry.text, lines, copyLeft, rawLines };
+      this.entryLayouts.set(entry, layout); return layout;
+    }
+    const layout = { width, text: entry.text, lines, copyLeft };
+    this.entryLayouts.set(entry, layout); return layout;
   }
 
   schedule() { if (!this.renderTimer && !this.closed && !this.copyMode && !this.outputBlocked) this.renderTimer = setTimeout(() => { this.renderTimer = null; this.render(); }, animationInterval); }
@@ -651,14 +683,15 @@ export class TerminalChat {
     const selected = this.ui.tabs?.find(tab => tab.id === this.ui.activeTab);
     const status = this.clipboardStatus && Date.now() < this.clipboardStatusUntil ? this.clipboardStatus : this.copyMode ? 'COPY MODE · live updates held' : this.busy ? spinner[this.frame % spinner.length] + ' ' + this.state : '● ' + this.state;
     const completions = this.completions();
-    const pinned = this.pinned && this.panel !== 'telegram' ? wrap(this.pinned, width - 5).slice(0, height < 22 ? 1 : 2) : [];
-    const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Delegation setup · no work started';
+    const maximumPinned = height < 22 ? 1 : 2;
+    const pinned = this.pinned && this.panel !== 'telegram' ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
+    const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
     const sessionRows = wrap(sessionLabel, width - 2).length;
     const chatRows = selected && selected.id !== this.ui.sessionId ? wrap(`Chat: ${selected.id}`, width - 2).length : 0;
     const footerRows = 5 + sessionRows + chatRows + (this.mode === 'delegate' ? 1 : 0) + (this.busy && (this.currentTool || this.currentActivity) ? 1 : 0) + (completions.length ? 1 + Math.min(height < 28 ? 3 : 6, completions.length) : 0);
     const topPadding = height >= 30 ? 1 : 0, bottomPadding = height >= 24 ? 1 : 0;
     const quotas = this.ui.accountStatusEnabled ? wrap(accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width - 4) : [];
-    const fixedHeader = 2 + quotas.length + (this.ui.tabs?.length > 1 ? 1 : 0) + (pinned.length ? 1 + pinned.length : 0);
+    const fixedHeader = 2 + quotas.length + (this.ui.tabs?.length > 1 ? 1 : 0) + (pinned.length ? 1 + Math.min(pinned.length, maximumPinned) : 0);
     const availableRows = height - footerRows - fixedHeader - topPadding - bottomPadding - (this.selection ? 7 : this.panel === 'telegram' ? 12 : 3);
     const eyeRows = this.ui.pet !== false ? Math.max(2, Math.min(height >= 36 ? 8 : height >= 30 ? 7 : 5, availableRows)) : 0;
     const eyeWidth = eyeRows ? Math.max(10, Math.min(42, Math.round(eyeRows * 5.4), Math.floor(width * 0.42))) : 0;
@@ -701,8 +734,7 @@ export class TerminalChat {
     }).join(''));
     if (this.pinned && this.panel !== 'telegram') {
       header.push(color('  YOU ASKED', palette.blue, true));
-      const pinned = wrap(this.pinned, width - 5), maximum = height < 22 ? 1 : 2;
-      for (const [index, line] of pinned.slice(0, maximum).entries()) header.push(color('  │ ' + clip(line + (index === maximum - 1 && pinned.length > maximum ? ' …' : ''), width - 5), palette.blue));
+      for (const [index, line] of pinned.slice(0, maximumPinned).entries()) header.push(color('  │ ' + clip(line + (index === maximumPinned - 1 && pinned.length > maximumPinned ? ' …' : ''), width - 5), palette.blue));
     }
     header.push(edge('─'.repeat(width)));
 
@@ -725,7 +757,7 @@ export class TerminalChat {
         bottom.push(color(`  ${index === this.completionFocus ? '›' : ' '} ${item.command.padEnd(18)}${clip(item.description, width - 25)}`, index === this.completionFocus ? palette.blue : palette.dim, index === this.completionFocus));
       }
     }
-    const prompt = /^(bzzy\b)/.test(this.question || '') ? 'Message' : clip(this.question || 'Message', width - 6);
+    const prompt = !this.resolveInput || /^(bzzy\b)/.test(this.question || '') ? 'Message' : clip(this.question || 'Message', width - 6);
     bottom.push(edge('╭─ ') + color(prompt, palette.text, true) + edge(' ' + '─'.repeat(Math.max(0, width - cellWidth(prompt) - 5)) + '╮'));
     const visibleValue = this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
     const before = this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
@@ -734,7 +766,7 @@ export class TerminalChat {
     const inputText = this.value ? clip(cropped, inputWidth, '') : clip(this.ui.sessionMode === 'VIEW' ? 'Read-only · /tabs or /detach' : this.mode === 'delegate' && !this.goal ? 'Chat, or /goal <objective> for supervised work' : 'Ask something, or /goal an objective', inputWidth);
     bottom.push(edge('│ ') + color(inputText, this.value ? palette.text : palette.dim) + ' '.repeat(Math.max(0, width - 4 - cellWidth(inputText))) + edge(' │'));
     const inputIndex = bottom.length - 1;
-    const send = this.resolveInput && !this.selection && !this.copyMode;
+    const send = this.canCompose() && !this.selection && !this.copyMode;
     if (send) bottomHits.push({ type: 'confirm', row: bottom.length, left: Math.max(2, width - 10), right: width - 1 });
     bottom.push(edge('╰' + '─'.repeat(Math.max(0, width - (send ? 12 : 2))) + (send ? color(' Send ↵ ', palette.blue) + edge('──╯') : '╯')));
     for (const line of wrap(sessionLabel, width - 2)) bottom.push(muted(' ' + line));
@@ -795,7 +827,7 @@ export class TerminalChat {
       lines[row] = line;
     }
     this.lastFrame = lines; this.lastBackgrounds = backgrounds;
-    if (this.resolveInput) {
+    if (this.canCompose()) {
       const row = header.length + bodyHeight + inputIndex + 1, column = Math.min(width - 1, 3 + cellWidth(before) - offset);
       frame += `\x1b[${Math.min(height, row)};${Math.max(1, column)}H\x1b[?25h`;
     }

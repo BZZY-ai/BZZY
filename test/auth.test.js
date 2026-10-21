@@ -3,16 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { codexHome, claudeHome, subscriptionEnvironment, subscriptionStatus } from '../src/auth.js';
 import { codexLaunch, CodexEngine } from '../src/engines/codex.js';
 import { claudeEnvironment, ClaudeEngine } from '../src/engines/claude.js';
-import { BUILTINS } from '../src/providers.js';
+import { BUILTINS, config, apiKey } from '../src/providers.js';
+import { setup } from '../src/cli.js';
 import { writeJson } from '../src/files.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const keys = ['BZZY_HOME', 'CODEX_HOME', 'BZZY_CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'BZZY_CLAUDE_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_AUTH_CALLS', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_API_KEY'];
+const keys = ['BZZY_HOME', 'CODEX_HOME', 'BZZY_CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'BZZY_CLAUDE_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_AUTH_CALLS', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY'];
 let dir, saved;
 test.beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-auth-'));
@@ -20,6 +21,7 @@ test.beforeEach(() => {
   Object.assign(process.env, { BZZY_HOME: path.join(dir, 'bzzy'), CODEX_HOME: path.join(dir, 'native-codex'), CLAUDE_CONFIG_DIR: path.join(dir, 'native-claude'),
     BZZY_CODEX_BIN: path.join(root, 'test/fixtures/auth.mjs'), BZZY_CLAUDE_BIN: path.join(root, 'test/fixtures/auth.mjs'), BZZY_TEST_AUTH_CALLS: path.join(dir, 'calls.jsonl') });
   delete process.env.BZZY_CODEX_HOME; delete process.env.BZZY_CLAUDE_HOME;
+  delete process.env.DEEPSEEK_API_KEY;
   writeJson(path.join(process.env.CODEX_HOME, 'auth.json'), { auth_mode: 'chatgpt', tokens: { access_token: 'fixture-only-never-a-real-token' } });
   writeJson(path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json'), { fixtureAuthMethod: 'claude.ai', token: 'fixture-only-never-a-real-token' });
 });
@@ -78,3 +80,69 @@ test('first-time setup reuses each existing login without launching browser auth
   const calls = fs.readFileSync(process.env.BZZY_TEST_AUTH_CALLS, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(calls.map(call => call.args), [['login', 'status'], ['auth', 'status', '--json']]);
 });
+
+test('interactive setup validates both subscriptions and allows skipping DeepSeek', async () => {
+  const seen = []; let prompts = 0, choices;
+  const ui = { interactive: true, openTerminal() {}, event(_type, data) { seen.push(data.message); },
+    async secret(prompt) { prompts++; assert.match(prompt, /DeepSeek.*optional.*Enter to skip/); return ''; },
+    async chooseOne(_title, items) { choices = items; return 'claude'; } };
+  const selected = await setup(ui, {});
+  assert.equal(selected.id, 'claude'); assert.equal(config().defaultProvider, 'claude');
+  assert.equal(prompts, 1); assert.throws(() => apiKey(BUILTINS.deepseek), /No API key/);
+  for (const provider of ['codex', 'claude']) assert.match(choices.find(choice => choice.value === provider).label, /Validated/);
+  assert.ok(choices.find(choice => choice.value === 'codex').selected);
+  assert.doesNotMatch(seen.join('\n'), /fixture-only-never-a-real-token/);
+  const calls = fs.readFileSync(process.env.BZZY_TEST_AUTH_CALLS, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(calls.every(call => call.args.includes('status')), 'detected subscriptions never launch sign-in');
+});
+
+test('interactive setup saves an optional DeepSeek key privately and reuses it on later setup', async () => {
+  let prompts = 0;
+  const ui = { interactive: true, event() {}, async secret() { prompts++; return 'fixture-deepseek-key'; },
+    async chooseOne(_title, choices) { assert.match(choices.find(choice => choice.value === 'deepseek').label, /API key configured/); return 'deepseek'; } };
+  await setup(ui, {});
+  assert.equal(config().defaultProvider, 'deepseek'); assert.equal(apiKey(BUILTINS.deepseek), 'fixture-deepseek-key');
+  assert.equal(fs.statSync(path.join(process.env.BZZY_HOME, 'credentials.json')).mode & 0o777, 0o600);
+  assert.doesNotMatch(fs.readFileSync(path.join(process.env.BZZY_HOME, 'config.json'), 'utf8'), /fixture-deepseek-key/);
+  await setup(ui, {}); assert.equal(prompts, 1);
+});
+
+test('setup never labels API logins as validated subscriptions and rejects malformed optional keys', async () => {
+  writeJson(path.join(process.env.CODEX_HOME, 'auth.json'), { auth_mode: 'apikey' });
+  const ui = { interactive: true, event() {}, async secret() { return ''; }, async chooseOne(_title, choices) {
+    assert.match(choices.find(choice => choice.value === 'codex').label, /Not signed in/);
+    assert.match(choices.find(choice => choice.value === 'claude').label, /Validated/);
+    assert.ok(choices.find(choice => choice.value === 'claude').selected); return 'claude';
+  } };
+  await setup(ui, {});
+  ui.secret = async () => 'invalid key';
+  await assert.rejects(setup(ui, {}), /whitespace/);
+  assert.throws(() => apiKey(BUILTINS.deepseek), /No API key/);
+});
+
+const ptyAvailable = process.platform === 'linux' && spawnSync('script', ['--version'], { stdio: 'ignore' }).status === 0;
+for (const key of ['', 'fixture-pty-deepseek-key']) {
+  test(`setup terminal validates subscriptions and ${key ? 'saves a hidden DeepSeek key' : 'skips DeepSeek on Enter'}`, { skip: !ptyAvailable, timeout: 15000 }, async () => {
+    const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+    const command = [process.execPath, path.join(root, 'bin/bzzy.js'), 'setup', '--no-pet'];
+    const child = spawn('script', ['-qefc', command.map(quote).join(' '), '/dev/null'], { cwd: dir, env: { ...process.env, TERM: 'xterm-256color' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    const done = new Promise((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });
+    async function until(check) {
+      for (let attempt = 0; attempt < 300; attempt++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 20)); }
+      throw new Error('Setup prompt did not appear: ' + stderr + stdout.slice(-2000));
+    }
+    try {
+      await until(() => /DeepSeek API key.*optional/.test(stdout));
+      assert.match(stdout, /Codex \/ ChatGPT.*Validated/); assert.match(stdout, /Claude.*Validated/);
+      child.stdin.write(key + '\r');
+      await until(() => stdout.includes('Choose your default provider'));
+      child.stdin.write((key ? '\x1b[B\x1b[B' : '\x1b[B') + '\r');
+      assert.equal(await done, 0, stderr);
+      assert.equal(config().defaultProvider, key ? 'deepseek' : 'claude');
+      if (key) { assert.equal(apiKey(BUILTINS.deepseek), key); assert.ok(!stdout.includes(key)); }
+      else assert.throws(() => apiKey(BUILTINS.deepseek), /No API key/);
+    } finally { if (child.exitCode == null) child.kill('SIGTERM'); await done.catch(() => {}); }
+  });
+}

@@ -8,6 +8,8 @@ import { PassThrough } from 'node:stream';
 import { describeDelegation } from '../src/delegation-setup.js';
 import { UI } from '../src/ui.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
+import { printGoalSummary } from '../src/controller.js';
+import { goalEvent, formatTelegram } from '../src/notifications.js';
 
 const project = new URL('../', import.meta.url).pathname;
 const source = file => new URL(file, new URL('../', import.meta.url)).href;
@@ -26,6 +28,35 @@ test('delegation setup explains ordinary chat and the explicit goal command', ()
   assert.match(describeDelegation(delegated), /Chat normally/);
   assert.match(describeDelegation(delegated), /\/goal <objective>/);
   assert.match(describeDelegation({ ...delegated, goal: { status: 'paused' } }), /saved goal is retained/);
+});
+
+test('completed delegation output names brain, executor and total usage, including unused and unavailable hands', () => {
+  const usage = { supervisorTokens: 1234, delegatedTokens: 5678, totalTokens: 6912, complete: true, assignmentCount: 1,
+    providers: [{ provider: 'deepseek', model: 'routine-model', available: true }], agents: [{ tokens: 5678, available: true }] };
+  const session = { ...delegated, goal: { id: 'goal', status: 'complete', objective: 'Retrieve a footer', tokensUsed: 6912, runtimeUsedSeconds: 65 }, summary: { usage } };
+  let summary;
+  const ui = { event(_type, data) { summary = data; } };
+  printGoalSummary(session, ui);
+  assert.match(summary.message, /BRAIN · codex \/ strong-model: 1,234 tokens/);
+  assert.match(summary.message, /HANDS \/ EXECUTOR · deepseek \/ routine-model: 5,678 tokens/);
+  assert.match(summary.message, /TOTAL: 6,912 tokens/);
+  const event = goalEvent(session), telegram = formatTelegram(event);
+  assert.equal(event.usage.supervisorTokens, 1234); assert.equal(event.usage.delegatedTokens, 5678); assert.equal(event.usage.assignmentCount, 1);
+  assert.match(telegram, /BRAIN.*1,234 tokens/); assert.match(telegram, /HANDS \/ EXECUTOR.*5,678 tokens/); assert.match(telegram, /TOTAL: 6,912 tokens/);
+  Object.assign(usage, { assignmentCount: 0, delegatedTokens: 0, totalTokens: 1234, providers: [], agents: [] });
+  printGoalSummary(session, ui);
+  assert.match(summary.message, /HANDS \/ EXECUTOR.*0 tokens · not used \(no assignments\)/);
+  usage.assignmentCount = null;
+  printGoalSummary(session, ui);
+  assert.match(summary.message, /HANDS \/ EXECUTOR.*usage unavailable/);
+  assert.doesNotMatch(summary.message, /not used/);
+  Object.assign(usage, { assignmentCount: 1, complete: false, agents: [{ tokens: null, available: false }] });
+  printGoalSummary(session, ui);
+  assert.match(summary.message, /HANDS \/ EXECUTOR.*usage unavailable/);
+  assert.doesNotMatch(summary.message, /not used/);
+  Object.assign(usage, { delegatedTokens: 40, totalTokens: 1274 });
+  printGoalSummary(session, ui);
+  assert.match(summary.message, /HANDS \/ EXECUTOR.*at least 40 tokens/);
 });
 
 test('delegate handoffs and attributed activity stay readable without exposing raw worker reports', () => {
@@ -182,7 +213,7 @@ test('the --delegate wizard starts an explicit goal and saves independent brain/
       return title.startsWith('Supervisor') ? { value: 'fixture-brain', effort: 'xhigh' } : { value: 'routine-model', effort: 'low' };
     };
     UI.prototype.ask = async function (question) {
-      assert.equal(question, 'bzzy › ');
+      assert.ok(['bzzy › ', 'Delegate goal › '].includes(question));
       if (entered) return '/exit';
       entered = true; return '/goal Solve this CTF using the supplied files';
     };

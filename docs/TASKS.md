@@ -53,6 +53,29 @@ agent recording and reviewing the relevant facts.
 
 ## Acceptance contract
 
+For a long task briefing, start a goal with saved instructions:
+
+```bash
+bzzy --context-file bzzy_init.txt --goal "find a new XSS" --yolo
+```
+
+`--context-file` reads a nonempty UTF-8 file of up to 1 MiB relative to `--cwd`.
+It stores the full text in `session.contract.context` and persists the selected
+goal before any model execution. Codex and DeepSeek receive it in developer
+instructions; Claude receives it in its appended system instructions. Long
+Claude instructions use a private temporary prompt file to avoid command-line
+size limits. No preliminary chat runs, and the objective remains exactly the
+`--goal` string. The selected model's context window still limits what it can
+accept; bzzy never silently shortens the supplied text.
+
+Resume reads the saved contract, including when the source file has changed or
+been removed. Existing `--contract` context precedes the file text. Positional
+initialization context and `--context-file` cannot be combined. Missing,
+unreadable, invalid or oversized files fail before execution. Request-ID
+idempotency includes the context digest and rejects changed file contents.
+The existing Codex native goals and Claude's Codex-derived continuation policy
+remain in use.
+
 For stronger completion checks, save `assessment.json`:
 
 ```json
@@ -110,6 +133,11 @@ model judgment; bzzy does not invent independent proof. Reaching a goal that
 requires a confirmed vulnerability must establish that outcome, not merely finish
 a finite scan or obtain agreement from several agents.
 
+For these free-text criteria, an intact saved evidence copy remains usable after
+its temporary source file is cleaned up. Changed source contents and corrupt
+copies still invalidate evidence. Explicit criteria, required artifacts and
+verification commands retain their checks against the current workspace.
+
 Enforced filesystem policies require Linux bubblewrap and working user
 namespaces. The process sandbox keeps the host filesystem read-only except for
 declared workspace directories and necessary backend runtime state; descendants
@@ -145,6 +173,18 @@ and when to finish. You do not create individual assignments. Suitable executor
 work includes inventorying supplied files, checking a focused hypothesis, running
 bounded tests, reproducing a candidate finding and collecting evidence. The
 supervisor retains interpretation, prioritization and final judgment.
+
+Every delegation goal requires a bounded executor assignment and supervisor
+review, including brief retrieval or extraction requests. The host rejects
+completion when no current-goal executor assignment has been reviewed. A reviewed
+executor failure permits the supervisor to take over and verify the remaining
+work. Ordinary chat still does not launch workers.
+
+Terminal summaries and Telegram goal alerts list **BRAIN**, **HANDS / EXECUTOR**,
+and **TOTAL** tokens separately. No assignments means **not used**, while missing
+worker usage means **usage unavailable** rather than zero. Goal events expose
+`usage.supervisorTokens`, `usage.delegatedTokens` and `usage.assignmentCount` for
+the same breakdown.
 
 Selections are saved with that conversation, including independent effort
 settings for worker follow-ups. Reopen it with `bzzy --attach SESSION_ID` or
@@ -212,26 +252,36 @@ bzzy --codex --debate
 
 `--artifact` accepts a workspace file or recorded artifact UUID; without it, the
 goal and source workspace are the selected material. `/debate [objective]` selects
-the latest final reply and its user request. A checkbox menu chooses participants;
+the latest final reply and its user request. An agent roster selects the main agent and one or two challengers, each with its own provider, model and effort;
 `--participant` selects them directly. The original chat, thread and permissions
 are preserved, and its next turn can read the debate decision.
 
-Debate has two phases, with `/goal <objective>` displayed during execution:
+Debate has three phases:
 
 1. **Independent investigation.** Each selected participant receives the same
    initial source snapshot and selected material in its own workspace. It can
    analyze, run permitted tests and record evidence within the original task's
    scope and permissions. Participants do not receive one another's results.
    Recorded artifacts are checked against their hashes and copied into a common
-   evidence bundle, with an index of reports and omissions.
-2. **Evidence discussion.** Everyone reviews the same frozen source and evidence
-   bundle in enforced read-only workspaces. Participants give specific objections;
-   the main agent defends, concedes or corrects its claims. Follow-up rounds answer
-   the actual prior arguments and retain assignment history. New tests and changes
-   needed during discussion are listed as separate verification work.
+   evidence bundle, with an index of reports and omissions. At least two agents
+   must return a complete or partial conclusion backed by preserved evidence;
+   otherwise debate stops here instead of manufacturing an opening case.
+   A strict majority of complete, evidence-backed `real` or `false_positive`
+   verdicts finishes the goal immediately: 2/2 with two agents or 2/3 with three.
+   Failed, timed-out and inconclusive reports remain recorded as abstentions.
+2. **Opening case.** After all independent work is finished, the main agent reads
+   the reports and checked evidence for the first time and publishes a supported
+   case that preserves contrary findings and uncertainty.
+3. **Challenge and revision.** Challengers review that exact case in enforced
+   read-only workspaces. The main agent then answers every objection, concedes it,
+   or revises the case. Each following round critiques the latest revision and
+   retains assignment history. New tests and changes needed during discussion are
+   listed as separate verification work. The main agent records an accepted,
+   resolved, rejected or unresolved disposition for every objection.
 
 The default and maximum are **five discussion rounds** (`--rounds 1` through `5`).
-Discussion stops earlier when issues resolve, positions stop changing, or an
+Discussion stops after the first challenge round when every objection is resolved
+and no verification remains. It also stops when positions stop changing or an
 explicit runtime/usage limit is reached. `--concurrency` bounds phase-one workers.
 Use `--review-only` to skip independent investigation and perform snapshot review.
 
@@ -248,18 +298,18 @@ Combined token usage and elapsed time include both phases and the main agent.
 bzzy --besties
 # Choose Bestie 1: provider → model → effort.
 # Choose Bestie 2 through the same flow, independently.
-# Chat normally, then start shared persistent work:
-# /goal Solve the supplied CTF and verify the solution against the challenge.
+# Continue with two agents or select a third to advance automatically.
+# Enter the shared goal to begin collaborative work.
 
-# Direct/scripted form; exactly two agents, including the same provider twice:
+# Direct/scripted form; two or three agents, including the same provider twice:
 bzzy besties "Assess the approved project and establish a supported finding" \
   --agents codex:MODEL_A,claude:MODEL_B --contract assessment.json
 bzzy goal "Solve the supplied challenge" --mode besties \
   --agents codex:MODEL_A,codex:MODEL_B
 ```
 
-Besties are two peers collaborating on one full, durable goal. Neither is a
-subordinate worker. Both receive the same objective, constraints and initial
+Besties are two or three peers collaborating on one full, durable goal. No peer is a
+subordinate worker. All receive the same objective, constraints and initial
 workspace snapshot, keep independently selected model and effort, and investigate
 in isolated workspaces. They can divide work, exchange hypotheses, challenge
 claims and request specific verification. `peer_message` delivers a short message
@@ -269,7 +319,7 @@ cursor. Peer messages never silently grant wider scope or permissions.
 Each peer must open the other peer's evidence with `read_artifact` before
 `peer_review` can record a supported, inconclusive or disputed judgment. Full
 evidence remains available through bounded reads; the chat history and reviews
-remain attributed. Completion requires both peers' own acceptance checks and
+remain attributed. Completion requires every peer's own acceptance checks and
 supported reviews of the latest evidence-bearing messages. Missing controls,
 stale evidence or unresolved objections leave work awaiting review. Agreement
 alone does not prove a vulnerability; the task's acceptance criteria still apply.
@@ -277,9 +327,9 @@ The group also checks required deliverables and verification commands in the
 original project directory. A peer completing work in an isolated workspace does
 not satisfy a missing deliverable in the original project automatically.
 
-The group overview and both chat tabs use the same `--view` / `--attach` session
+The group overview and all agent chat tabs use the same `--view` / `--attach` session
 workflow as parallel mode. Tab/Shift+Tab switches chats; goal state, shared
-messages and both providers' known usage remain available to integrations. There
+messages and all providers' known usage remain available to integrations. There
 is also a **SHARED ROOM** view (`/room`) containing actual peer messages and
 evidence reviews, separate from either peer's user conversation. There
 is no default overall goal deadline; explicit runtime and token limits apply to
@@ -288,7 +338,7 @@ detachment and recovery. Source changes are not automatically merged into the
 original project.
 
 Parallel mode gives each agent the same goal to pursue independently. Besties
-adds direct messages and evidence review between exactly two peers. Delegation
+adds direct messages and evidence review between two or three peers. Delegation
 keeps a supervisor responsible for bounded executor assignments and final judgment.
 
 ## Parallel independent goals and chats
@@ -297,20 +347,30 @@ keeps a supervisor responsible for bounded executor assignments and final judgme
 bzzy --parallel 2
 bzzy --parallel 3
 # Choose provider, model and effort independently for each agent.
-# Chat normally, then use /goal <objective>.
+# Continue with two agents, or configure a third to advance automatically.
+# Enter the shared goal, then switch between the agents' chat tabs.
 
 bzzy parallel "Assess the authorized surface and establish a supported finding" \
   --agents codex,claude,deepseek --contract assessment.json --capture-network
 ```
 
-`bzzy --parallel` opens ordinary chat. Use `/goal <objective>` when you want the
-configured agents to begin independent work on that objective; greetings and
-ordinary messages do not start a parallel run.
-Two or three agents are supported; bare `--parallel` opens three picker flows.
+`bzzy --parallel` opens an agent list with **Continue with 2 agents** at the
+bottom. A third agent is optional; configuring it advances automatically to goal
+setup. Enter the shared goal to start the agents and open the first agent's chat.
+Every agent has its own tab; Tab/Shift+Tab and clicks switch chats. Afterward,
+ordinary messages chat with the selected agent, and `/goal <objective>` starts
+new persistent work. Two or three agents are supported.
 `--agents A,B[,C]` selects providers/models directly and skips the wizard.
 When an explicit `--parallel 2` or `3` is combined with `--agents`, the counts
 must match. Duplicate providers are allowed; their chats and workspaces remain
 separate, and each chosen effort is retained independently.
+
+Run `/default` from any parallel agent tab or the group overview to save the
+whole combination in bzzy's config. The next interactive `--parallel` shows the
+saved providers, models and efforts and asks **Use saved combo?** Choose **Yes**
+to go directly to goal entry, or **No** to open the selector. The saved combo
+stays in place until another `/default`. Explicit `--agents` selections and
+different explicit agent counts take precedence.
 
 Each peer receives the same full goal, constraints and initial source snapshot,
 then follows its own strategy in a separate workspace. Agents know their peers
@@ -338,3 +398,22 @@ bzzy --atach GROUP_UUID      # accepted spelling alias
 
 These commands use the same machine's actual stored history and live execution.
 The local web view and public API expose the same group/child chat structure.
+
+## Mode presets and interactive input
+
+`/default` saves a separate preset for normal chat, delegation, debate, besties
+or parallel. Group presets include all selected providers, models and efforts.
+Running it from a peer chat saves that peer’s full group. The next interactive
+launch asks whether to reuse that mode’s preset; No opens the selector.
+
+Use `bzzy --parallel --default`, `bzzy --debate --default`,
+`bzzy --besties --default` or `bzzy --delegate --default` to skip confirmation
+and agent selection and proceed to goal entry. Add `--goal "objective"` to skip
+goal entry as well. `bzzy --default` uses the normal chat preset. Missing presets
+produce a setup error. `--default` cannot be combined with `--agents` or
+`--participant`; those flags choose explicit agents instead.
+
+`/help` is a short guide to the modes and shortcuts. The composer keeps drafts
+and submissions through streaming output and run transitions. A new
+`/goal <objective>` stops the current execution, archives its goal and starts the
+new objective in the same conversation. `/goal resume` retains the existing goal.

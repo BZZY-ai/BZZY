@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as backoff } from 'node:timers/promises';
 import { TelegramApi, telegramTextParts } from './telegram-api.js';
-import { telegramSettings } from './notifications.js';
+import { formatTelegram, telegramSettings } from './notifications.js';
 import { telegramAttachment, requireTelegramAttachment, updateTelegramAttachment, unlinkTelegram } from './telegram-state.js';
 import { database, digest, getRecord, putRecord, listRecords, appendEvent, events, transaction, reserveRequest, now } from './database.js';
 import { home, privateDir, readJson, writeJson, loadSession, lockFile } from './store.js';
@@ -17,6 +17,7 @@ import { normalizeContract } from './contracts.js';
 import { newGoal } from './goals.js';
 import { delay } from './delegation.js';
 import { TelegramMenus, telegramBotCommands } from './telegram-menus.js';
+import { goalEvent } from './lifecycle.js';
 
 const relayFile = () => path.join(home(), 'runtime', 'telegram.json');
 const activeStates = ['queued', 'launching', 'running'];
@@ -26,7 +27,7 @@ export function telegramAuthorizedMessage(update, attachment) {
   return Number.isSafeInteger(update?.update_id) && (typeof update.message?.text === 'string' || typeof callback?.data === 'string' && callback.data.startsWith('bzzy:')) && message?.chat?.type === 'private'
     && String(message.chat.id) === attachment.chatId && String(sender?.id) === attachment.chatId && !sender?.is_bot;
 }
-function replyText(sessionId, executionId, through, after = 0) {
+export function replyText(sessionId, executionId, through, after = 0) {
   const start = database().prepare("SELECT seq FROM events WHERE session_id=? AND type='message.user' AND json_extract(data,'$.executionId')=? ORDER BY seq DESC LIMIT 1").get(sessionId, executionId)?.seq;
   if (!start) return '';
   let text = '';
@@ -34,7 +35,13 @@ function replyText(sessionId, executionId, through, after = 0) {
     const data = JSON.parse(row.data);
     text += data.text || '';
   }
-  return text.trim();
+  text = text.trim();
+  const session = loadSession(sessionId);
+  if (session?.mode === 'debate' && session.goal && !['active', 'verifying'].includes(session.goal.status)) {
+    const event = goalEvent(session);
+    if (event && !telegramSettings().enabled) return [text, formatTelegram(event)].filter(Boolean).join('\n\n');
+  }
+  return text;
 }
 
 export class TelegramBridge {
@@ -143,17 +150,28 @@ export class TelegramBridge {
     if (text.startsWith('/') && !startGoal && !resume) { this.queueText(attachment, item.id, 'Unknown command. Use /help, or send a normal chat message.'); return true; }
     if (resume && (!session.goal || session.goal.status === 'complete')) { this.queueText(attachment, item.id, 'There is no unfinished goal to resume. Send a message or /goal <objective>.'); return true; }
     if (!identityAlive(runtimeInfo()?.identity)) return false;
-    if (listRecords('execution').some(job => job.sessionId === session.id && activeStates.includes(job.state))) return false;
+    if (listRecords('execution').some(job => job.sessionId === session.id && activeStates.includes(job.state))) {
+      if (startGoal) reserveRequest(`replace-goal:${session.id}`, requestId, { objective: startGoal[1].trim() }, db => {
+        requireTelegramAttachment(attachment.id);
+        const control = { id: randomUUID(), sessionId: session.id, action: 'cancel', text: '', state: 'queued', createdAt: now() };
+        putRecord('control', control.id, control, db); appendEvent(session.id, 'control.queued', control, db);
+        return { controlId: control.id };
+      });
+      return false;
+    }
     const input = item.prepared || { prompt: startGoal ? startGoal[1].trim() : resume ? session.goal.objective : text, options: { ...(session.contract?.limits || {}) }, goal: Boolean(startGoal || resume), resumeGoal: resume };
     if (!item.prepared) putRecord('telegram-inbox', item.id, { ...item, prepared: input });
     const result = enqueueExecution(session.id, input, requestId, {
       authorize: () => requireTelegramAttachment(attachment.id), channel: 'telegram',
       prepare: (fresh, db) => {
         if (startGoal) {
-          if (fresh.goal) putRecord('goal-history', fresh.goal.id, { sessionId: fresh.id, ...fresh.goal }, db);
+          const previousGoal = fresh.goal;
           if (!fresh.contract) prepareTask(fresh, {}, input.prompt, { persist: false });
           else fresh.contract = normalizeContract({ constraints: fresh.contract.constraints, scope: fresh.contract.scope, policy: fresh.policy || fresh.contract.policy, limits: fresh.contract.limits }, input.prompt);
-          fresh.goal = newGoal(input.prompt, fresh.contract.limits.tokenBudget); putRecord('session', fresh.id, fresh, db);
+          fresh.goal = newGoal(input.prompt, fresh.contract.limits.tokenBudget);
+          fresh.acceptance = null; fresh.summary = null; fresh.failure = null; fresh.stopReason = null;
+          if (previousGoal) putRecord('goal-history', previousGoal.id, { sessionId: fresh.id, ...previousGoal, supersededAt: now(), supersededBy: fresh.goal.id }, db);
+          putRecord('session', fresh.id, fresh, db);
         } else if (resume) {
           if (fresh.goal.tokenBudget != null && fresh.goal.tokensUsed >= fresh.goal.tokenBudget) throw new Error('The goal budget is exhausted. Increase its budget from bzzy before resuming.');
           fresh.goal.notificationEpoch = (fresh.goal.notificationEpoch || 0) + 1; fresh.goal.noActivityTurns = 0; fresh.goal.blockerStreak = 0; fresh.goal.lastBlocker = null; delete fresh.goal.reason;
@@ -167,9 +185,9 @@ export class TelegramBridge {
     let cursor = attachment.eventCursor;
     for (const event of events(attachment.sessionId, cursor, 200)) {
       if (event.type === 'message.user' && event.data.channel !== 'telegram') {
-        this.queueText(attachment, `user:${event.seq}`, `You · bzzy\n${event.data.kind === 'goal' ? '/goal ' : ''}${event.data.text}`);
+        this.queueText(attachment, `user:${event.seq}`, `🖥 TERMINAL INPUT\n${event.data.kind === 'goal' ? '/goal ' : ''}${event.data.text}`);
       } else if (event.type === 'question.answered' && event.data.channel !== 'telegram') {
-        this.queueText(attachment, `answer:${event.seq}`, `You · bzzy\n${event.data.answer}`);
+        this.queueText(attachment, `answer:${event.seq}`, `🖥 TERMINAL ANSWER\n${event.data.answer}`);
       } else if (event.type === 'execution.finished') {
         const text = replyText(attachment.sessionId, event.data.id, event.seq, attachment.attachedAfter);
         if (text) this.queueText(attachment, `execution:${event.data.id}`, text);
@@ -212,7 +230,7 @@ export class TelegramBridge {
       try {
         if (!await this.processMessage(attachment, item)) {
           if (!item.acknowledged) {
-            this.queueText(attachment, 'queued:' + item.id, identityAlive(runtimeInfo()?.identity) ? 'Your message is queued while bzzy finishes the current work. You can send /status or /pause.' : 'Your message is saved. Start bzzy or its local service on the same machine to continue.');
+            this.queueText(attachment, 'queued:' + item.id, identityAlive(runtimeInfo()?.identity) ? /^\/goal\s+/.test(item.text) ? 'Replacing the current goal. Stopping its run before starting the new objective.' : 'Your message is queued while bzzy finishes the current work. You can send /status or /pause.' : 'Your message is saved. Start bzzy or its local service on the same machine to continue.');
             putRecord('telegram-inbox', item.id, { ...getRecord('telegram-inbox', item.id), acknowledged: true });
           }
           continue;

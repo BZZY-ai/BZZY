@@ -75,6 +75,31 @@ test('acceptance checks reject missing artifacts, missing assessment, invalid sc
   assert.deepEqual(schemaErrors({ n: 1 }, { type: 'object', required: ['n'], properties: { n: { type: 'integer' } } }), []);
 });
 
+test('free-text completion accepts intact observation snapshots after cleanup while explicit criteria and artifacts remain enforced', async () => {
+  const evidence = captureEvidence(session, 'source.txt');
+  assessRequirement(session, { id: 'objective', status: 'supported', rationale: 'Inspected the recorded observation', evidence: [evidence.id] });
+  fs.rmSync(path.join(dir, 'source.txt'));
+  let result = await assessCompletion(session);
+  assert.equal(result.passed, true);
+  assert.equal(result.requirements[0].stale, false);
+  session.contract.artifacts = [{ path: 'source.txt' }];
+  result = await assessCompletion(session);
+  assert.equal(result.passed, false, 'a required deliverable cannot be replaced by a snapshot');
+  assert.equal(result.requirements[0].passed, true);
+  session.contract.artifacts = [];
+  fs.writeFileSync(path.join(dir, 'source.txt'), 'changed observation');
+  result = await assessCompletion(session);
+  assert.equal(result.passed, false, 'changed live sources still invalidate earlier evidence');
+  fs.rmSync(path.join(dir, 'source.txt'));
+  fs.writeFileSync(evidence.path, 'corrupted snapshot');
+  result = await assessCompletion(session);
+  assert.equal(result.passed, false, 'cleaned source evidence needs an intact saved copy');
+  fs.writeFileSync(evidence.path, 'original evidence');
+  session.contract.acceptanceCriteria[0].modelJudgment = false;
+  result = await assessCompletion(session);
+  assert.equal(result.passed, false, 'explicit criteria still require current source evidence');
+});
+
 test('host verification records command evidence and respects read-only isolation', async () => {
   if (!sandboxSupport()) return;
   session.contract = normalizeContract({ acceptanceCriteria: [{ id: 'task', description: 'Inspect', modelJudgment: true }], verification: [{ id: 'readonly', argv: [process.execPath, '-e', 'require("fs").writeFileSync("source.txt","bad")'], timeoutSeconds: 5 }], policy: { mode: 'read-only' } }, 'Inspect');

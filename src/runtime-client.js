@@ -1,29 +1,50 @@
+import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
 import { randomUUID } from 'node:crypto';
 import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
 import { delay } from './delegation.js';
 import { loadSession, saveSession, sessionPath, writeJson } from './store.js';
 import { prepareTask } from './task.js';
 import { newGoal } from './goals.js';
-import { getProvider, saveDefaultSelection } from './providers.js';
+import { getProvider } from './providers.js';
 import { chooseModel, assertModelIdle, assertSessionIdle } from './models.js';
-import { transaction, getRecord, putRecord, appendEvent, now } from './database.js';
-import { configureTelegram } from './telegram.js';
+import { transaction, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
+import { configureTelegram, autoAttachTelegram } from './telegram.js';
 import { conversationCursor } from './conversation.js';
 import { enqueueExecution } from './execution-queue.js';
 import { normalizeContract } from './contracts.js';
 import { budgetUsage } from './delegation-usage.js';
 import { reconcileSession } from './recovery.js';
+import { chatHelp } from './terminal-commands.js';
 
 const groupMode = session => ['parallel', 'besties'].includes(session.mode);
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
 
 function saveSessionDefault(sessionId, ui) {
-  const selected = saveDefaultSelection(loadSession(sessionId));
-  ui.event('info', { message: `Default saved · ${selected.provider} · ${selected.model || 'provider default'} · effort ${selected.effort}. New bzzy sessions will use it.` });
+  const selected = saveSessionDefaultSelection(loadSession(sessionId));
+  ui.event('info', { message: savedDefaultMessage(selected) });
   return selected;
 }
 
-function enqueueGoalTurn(sessionId, owner, options, { resume = false, objective, requestId = randomUUID() }) {
+async function enqueueGoalTurn(sessionId, owner, options, { resume = false, objective, requestId = randomUUID(), info }) {
+  if (!resume) {
+    if (!objective?.trim()) throw new Error('Use /goal <objective> to start persistent work.');
+    const api = client(info || await ensureRuntime(), sessionId, owner);
+    const busy = snapshot => {
+      if (executionActive(snapshot.execution)) return true;
+      if (!snapshot.capabilities.chatTabs) return false;
+      const children = new Set(snapshot.children.map(child => child.id));
+      return listRecords('execution').some(job => children.has(job.sessionId) && executionActive(job));
+    };
+    let snapshot = await api('GET');
+    if (busy(snapshot)) {
+      await api('POST', 'control', { action: 'cancel' }, randomUUID());
+      const deadline = Date.now() + 15000;
+      do {
+        if (Date.now() >= deadline) throw new Error('The previous run is still stopping. Send /goal again once it stops.');
+        await delay(50); snapshot = await api('GET');
+      } while (busy(snapshot));
+    }
+  }
   if (resume) {
     requireOwner(sessionId, owner);
     const recovery = reconcileSession(sessionId);
@@ -42,8 +63,7 @@ function enqueueGoalTurn(sessionId, owner, options, { resume = false, objective,
         delete fresh.goal.reason;
       } else {
         if (!objective?.trim()) throw new Error('Use /goal <objective> to start persistent work.');
-        if (fresh.goal && !['complete', 'paused', 'cancelled', 'blocked', 'budget_limited', 'usage_limited', 'awaiting_review'].includes(fresh.goal.status)) throw new Error('Pause or clear the unfinished goal before replacing it.');
-        if (fresh.goal) putRecord('goal-history', fresh.goal.id, { sessionId: fresh.id, ...fresh.goal }, db);
+        const previousGoal = fresh.goal;
         const boundary = fresh.contract, strict = fresh.strictPolicy;
         prepareTask(fresh, options, objective, { persist: false });
         if (boundary && !options.contract) {
@@ -53,6 +73,9 @@ function enqueueGoalTurn(sessionId, owner, options, { resume = false, objective,
           fresh.policy = fresh.contract.policy; fresh.strictPolicy ||= strict;
         }
         fresh.goal = newGoal(objective, options.tokenBudget || fresh.contract.limits.tokenBudget);
+        fresh.acceptance = null; fresh.summary = null; fresh.failure = null; fresh.stopReason = null;
+        if (previousGoal) putRecord('goal-history', previousGoal.id, { sessionId: fresh.id, ...previousGoal,
+          supersededAt: now(), supersededBy: fresh.goal.id }, db);
       }
       fresh.updatedAt = now(); putRecord('session', fresh.id, fresh, db);
     },
@@ -154,6 +177,7 @@ export async function changeSessionProvider(source, provider, selected, ui, conn
 }
 export async function executeManaged(provider, session, options, ui, prompt, flags = {}) {
   ui.setSession?.(session.id);
+  if (ui.interactive) await autoAttachTelegram(session);
   const { returnAfterExecution = false, ...executionFlags } = flags;
   if (process.env.BZZY_DIRECT === '1') { const { runSession } = await import('./controller.js'); return runSession(provider, session, options, ui, prompt, executionFlags); }
   const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
@@ -165,11 +189,12 @@ export async function executeManaged(provider, session, options, ui, prompt, fla
   } finally { await api('POST', 'release', {}).catch(() => {}); Object.assign(session, loadSession(session.id)); }
 }
 async function watch(info, sessionId, owner, ui, options = {}) {
-  const api = client(info, sessionId, owner); let detached = false, paused = false, ownershipLost = false, renewing = false, inputStopped = false, modalTask = false;
+  const api = client(info, sessionId, owner); let detached = false, paused = false, ownershipLost = false, renewing = false, inputStopped = false, modalTask = false, processingInput = false;
   const initial = await api('GET'); let children = initial.capabilities.chatTabs ? initial.children : [];
   const roomSessionId = initial.session.bestiesSessionId || (initial.session.mode === 'besties' ? sessionId : null);
   const roomApi = roomSessionId ? client(info, roomSessionId, owner) : null;
-  let tabs = [{ id: sessionId, agent: 'Overview' }, ...children], activeId = ui.activeTab && tabs.some(t => t.id === ui.activeTab) ? ui.activeTab : sessionId;
+  let tabs = [{ id: sessionId, agent: 'Overview' }, ...children], activeId = ui.activeTab && tabs.some(t => t.id === ui.activeTab) ? ui.activeTab
+    : ui.interactive && initial.session.mode === 'parallel' && children.length ? children[0].id : sessionId;
   const seenQuestions = new Set();
   if (children.length) ui.setTabs?.(sessionId, children, activeId);
   const showTabs = () => ui.event('info', { message: tabs.map((t, i) => `${i}. ${t.agent} · ${t.id}`).join('\n') + '\nUse /tab NUMBER or /tab NAME. Tab / Shift+Tab also switches chats.' });
@@ -193,12 +218,14 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   const inputLoop = ui.interactive ? (async () => {
     while (!inputStopped && !detached && !ui.nextSession) {
       const input = await ui.ask(`bzzy ${children.length ? '(' + (tabs.find(t => t.id === activeId)?.agent || 'Overview') + ')' : '(running)'} › `);
-      if (inputStopped) break;
+      if (inputStopped) { if (input != null) (ui.pendingChatInputs ||= []).push(input); break; }
       if (input == null) { if (!paused) detached = true; break; }
       const text = input.trim(); if (!text) continue;
+      processingInput = true;
       try {
         if (['/detach', '/quit', '/exit'].includes(text)) { detached = true; ui.detached = true; break; }
         if (text === '/tabs') { showTabs(); continue; }
+        if (text === '/help') { ui.event('info', { message: chatHelp }); continue; }
         if (text.startsWith('/tab ')) { selectTab(text.slice(5).trim()); continue; }
         if (!options.activeControl || ownershipLost) { ui.event('info', { message: 'This is a read-only view. Use --attach to send agent input.' }); continue; }
         if (text === '/default') { saveSessionDefault(activeId, ui); continue; }
@@ -261,9 +288,11 @@ async function watch(info, sessionId, owner, ui, options = {}) {
             }
             continue;
           }
-          if (executionActive(selected.execution)) throw new Error('The selected conversation is already executing.');
-          const execution = enqueueGoalTurn(activeId, owner, options, action === 'resume' ? { resume: true } : { objective: action });
-          if (!children.length) options.executionId = execution.executionId;
+          if (action === 'resume' && executionActive(selected.execution)) throw new Error('This goal is already running.');
+          const targetId = action !== 'resume' && groupMode(initial.session) ? sessionId : activeId;
+          if (action !== 'resume' && (executionActive(selected.execution) || targetId === sessionId && children.length)) ui.event('info', { message: 'Replacing the current goal. Stopping its run before starting the new objective…' });
+          const execution = await enqueueGoalTurn(targetId, owner, options, action === 'resume' ? { resume: true, info } : { objective: action, info });
+          if (!groupMode(initial.session)) options.executionId = execution.executionId;
           continue;
         }
         const snapshot = await selectedApi('GET'), question = snapshot.questions[0];
@@ -277,6 +306,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           if (!children.length) options.executionId = execution.executionId;
         }
       } catch (error) { ui.event('error', { message: error.message }); }
+      finally { processingInput = false; }
     }
   })() : null;
   const heartbeat = options.activeControl ? setInterval(async () => {
@@ -297,8 +327,11 @@ async function watch(info, sessionId, owner, ui, options = {}) {
       ui.updateSession?.(selected);
       if (snapshot.capabilities.chatTabs) {
         if (children.map(child => child.id).join() !== snapshot.children.map(child => child.id).join()) {
+          const firstAgents = !children.length && snapshot.children.length;
           children = snapshot.children; tabs = [{ id: sessionId, agent: 'Overview' }, ...children];
           ui.setTabs?.(sessionId, children, activeId); if (!ui.tui) showTabs();
+          if (!tabs.some(tab => tab.id === activeId)) { selectTab(children[0]?.id || sessionId); continue; }
+          if (firstAgents && ui.interactive && snapshot.session.mode === 'parallel' && activeId === sessionId) { selectTab(children[0].id); continue; }
         }
       }
       if (options.activeControl && !ownershipLost && snapshot.inputOwner?.owner !== owner) { ownershipLost = true; ui.event('info', { message: 'Input ownership transferred to another client. This terminal is now a viewer.' }); ui.setSession?.(sessionId, 'VIEW'); }
@@ -310,7 +343,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
       }
       const execution = options.executionId ? snapshot.execution?.id === options.executionId ? snapshot.execution : getRecord('execution', options.executionId) : snapshot.execution;
       const active = execution && ['queued', 'launching', 'running'].includes(execution.state);
-      if (options.executionId && execution && !active) { await replay(api, sessionId, ui); return execution.exitCode ?? 1; }
+      if (options.executionId && execution && !active && !processingInput) { await replay(api, sessionId, ui); return execution.exitCode ?? 1; }
       if (ownershipLost && options.executionId && !active) return 0;
       if (!options.executionId && !active && !options.follow) return 0;
       if (!ui.interactive && !options.follow && !options.executionId) return 0;
@@ -334,6 +367,7 @@ export async function conversationInput(session, ui, connection) {
   let info = connection?.info;
   const owner = connection?.owner || randomUUID();
   while (!ui.detached) {
+    if (ui.pendingChatInputs?.length) return ui.pendingChatInputs.shift();
     let waiting = true, active;
     const input = ui.ask('bzzy › ').then(answer => { waiting = false; return answer; });
     // Listen immediately, including during a cold start of the local runtime.
@@ -372,6 +406,7 @@ export async function attachSession(session, options, ui) {
     try { await api('POST', 'claim', {}); } catch { lost = true; ui.reader?.close(); } finally { renewing = false; }
   }, 10000);
   try {
+    if (ui.interactive) await autoAttachTelegram(session, { connection: { info, owner } });
     if (groupMode(session)) return await watch(info, session.id, owner, ui, { activeControl: true, follow: ui.interactive || options.follow });
     while (!lost) {
       await replay(api, session.id, ui);
@@ -385,6 +420,7 @@ export async function attachSession(session, options, ui) {
       Object.assign(session, loadSession(session.id));
       if (input == null || ['/quit', '/exit', '/detach'].includes(input)) return 0;
       if (!input) continue;
+      if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
       if ((await api('GET')).inputOwner?.owner !== owner) return 0;
       if (input === '/default') { saveSessionDefault(session.id, ui); continue; }
       if (/^\/telegram(?:\s|$)/.test(input)) {
@@ -423,7 +459,7 @@ export async function attachSession(session, options, ui) {
         }
         const resumeGoal = goalCommand && action === 'resume', newTask = goalCommand && !resumeGoal;
         if (resumeGoal || newTask) {
-          result = enqueueGoalTurn(session.id, owner, options, resumeGoal ? { resume: true } : { objective: action });
+          result = await enqueueGoalTurn(session.id, owner, options, resumeGoal ? { resume: true, info } : { objective: action, info });
         } else if (input.startsWith('/')) { ui.event('info', { message: 'Attached chat: send text, /providers, /models, /default, /telegram, /goal <objective>, /goal status|pause|resume|clear, /debate or /detach.' }); continue; }
         else result = await api('POST', 'execute', { prompt: input, options, goal: false }, randomUUID());
       } catch (error) { ui.event('error', { message: error.message }); continue; }

@@ -66,8 +66,13 @@ export async function assessCompletion(session, { signal, prerequisite = true } 
     if (assessment) {
       const stale = assessment.evidence.some(id => {
         const item = getRecord('artifact', id);
-        if (!item?.source) return false;
-        try { return fileInfo(inside(item.sourceWorkspace, item.source)).sha256 !== item.sourceSha256; } catch { return true; }
+        if (!item) return true;
+        // Recorded observations remain usable after temporary source cleanup.
+        // Explicit criteria still require current source evidence.
+        try { if (fileInfo(item.path).sha256 !== item.sha256) return true; } catch { return true; }
+        if (!item.source) return false;
+        try { return fileInfo(inside(item.sourceWorkspace, item.source, { exists: false })).sha256 !== item.sourceSha256; }
+        catch (error) { return !(c.modelJudgment && error.code === 'ENOENT'); }
       });
       return { id: c.id, description: c.description, passed: assessment.status === 'supported' && !stale, stale, assessment };
     }
@@ -75,10 +80,18 @@ export async function assessCompletion(session, { signal, prerequisite = true } 
     if (c.modelJudgment) return { id: c.id, description: c.description, passed: true, provenance: 'backend-model-judgment', evidence: artifactsFor(session.id).filter(a => a.label === 'agent-output').map(a => a.id) };
     return { id: c.id, description: c.description, passed: false, reason: 'Supervisor has not assessed this requirement with recorded evidence.' };
   });
-  const openAssignments = assignmentsFor(session).filter(a => a.closure === 'open');
-  const passed = prerequisite && !signal?.aborted && requiredArtifacts.every(a => a.passed) && checks.length === session.contract.verification.length && checks.every(c => c.passed) && requirements.every(r => r.passed) && !openAssignments.length;
+  const assignments = assignmentsFor(session), openAssignments = assignments.filter(a => a.closure === 'open');
+  const delegation = session.mode === 'delegate' && session.goal && !['executor', 'reviewer'].includes(session.role) ? {
+    required: true, assignmentCount: assignments.filter(a => a.role === 'executor').length,
+    reviewedAssignments: assignments.filter(a => a.role === 'executor' && ['accepted', 'inconclusive', 'abandoned'].includes(a.closure)).length,
+  } : null;
+  if (delegation) {
+    delegation.passed = delegation.reviewedAssignments > 0;
+    if (!delegation.passed) delegation.reason = 'Delegate mode requires a bounded executor assignment for this goal and brain review of its result. Use delegate, inspect the evidence, then review_assignment before completing.';
+  }
+  const passed = prerequisite && !signal?.aborted && requiredArtifacts.every(a => a.passed) && checks.length === session.contract.verification.length && checks.every(c => c.passed) && requirements.every(r => r.passed) && !openAssignments.length && (!delegation || delegation.passed);
   const result = { id: randomUUID(), sessionId: session.id, goalId: session.goal?.id || null, passed, level: session.contract.acceptanceCriteria.some(c => c.modelJudgment) ? 'model-judgment-with-declared-checks' : 'evidence-and-supervisor-assessment',
-    requirements, artifacts: requiredArtifacts, checks, openAssignments: openAssignments.map(a => a.id), createdAt: now() };
+    requirements, artifacts: requiredArtifacts, checks, openAssignments: openAssignments.map(a => a.id), ...(delegation ? { delegation } : {}), createdAt: now() };
   putRecord('acceptance', result.id, result); appendEvent(session.id, 'acceptance', result); return result;
 }
 

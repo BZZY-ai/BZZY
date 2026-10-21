@@ -26,14 +26,17 @@ test.afterEach(() => {
 });
 
 test('besties wizard chooses both model/effort settings independently, including the same provider twice', async () => {
+  let configured = 0;
   const titles = [], ui = { interactive: true, event() {}, async chooseOne(title, choices) {
-    titles.push(title); const view = await choices;
+    const view = await choices;
+    if (title === 'Besties · Select agents') return configured < 2 ? `agent:${configured}` : 'continue';
+    titles.push(title);
     if (title.includes('Choose provider')) return 'codex';
-    assert.equal(view.selectEffort, true);
+    assert.equal(view.selectEffort, true); configured++;
     return title.startsWith('Bestie 1') ? { value: 'fixture-brain', effort: 'xhigh' } : { value: 'fixture-light', effort: 'low' };
   } };
   const choices = await chooseBesties({ cwd: directory }, ui);
-  assert.deepEqual(titles, ['Bestie 1 · 1/2 · Choose provider', 'Bestie 1 · 1/2 · Choose model · codex', 'Bestie 2 · 2/2 · Choose provider', 'Bestie 2 · 2/2 · Choose model · codex']);
+  assert.deepEqual(titles, ['Bestie 1 · 1/3 · Choose provider', 'Bestie 1 · 1/3 · Choose model · codex', 'Bestie 2 · 2/3 · Choose provider', 'Bestie 2 · 2/3 · Choose model · codex']);
   assert.equal(choices[0].provider, 'codex'); assert.equal(choices[1].provider, 'codex');
   assert.equal(choices[0].effort, 'xhigh'); assert.equal(choices[1].effort, 'low');
   const session = createSession(BUILTINS.codex, directory); applyBestiesSelection(session, choices); saveSession(session);
@@ -46,17 +49,19 @@ test('besties wizard chooses both model/effort settings independently, including
   assert.doesNotMatch(log, /thread\/start|turn\/start/);
 });
 
-test('besties setup cancels cleanly and scripted configuration requires exactly two agents', async () => {
+test('besties setup cancels cleanly and scripted configuration supports two or three agents', async () => {
+  let configured = 0;
   const ui = { interactive: true, event() {}, async chooseOne(title, choices) {
     await choices;
+    if (title === 'Besties · Select agents') return title && (configured++ ? 'agent:1' : 'agent:0');
     if (title.startsWith('Bestie 2')) return null;
     return title.includes('Choose provider') ? 'codex' : { value: 'fixture-brain', effort: 'high' };
   } };
   assert.equal(await chooseBesties({ cwd: directory }, ui), null);
   assert.equal(sessions().length, 0);
   assert.deepEqual(configuredBesties({ agents: 'codex:model-a,codex:model-b' }).map(choice => choice.model), ['model-a', 'model-b']);
-  for (const agents of ['codex', 'codex,claude,deepseek']) assert.throws(() => configuredBesties({ agents }), /exactly two/);
-  assert.throws(() => configuredBesties({ besties: [] }), /exactly two/);
+  for (const agents of ['codex', 'codex,claude,deepseek,codex']) assert.throws(() => configuredBesties({ agents }), /2 or 3/);
+  assert.throws(() => configuredBesties({ besties: [] }), /2 or 3/);
 });
 
 test('CLI accepts the besties wizard flag and explicit scripted mode', async () => {

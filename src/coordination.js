@@ -74,6 +74,14 @@ export class Coordinator {
     this.session.goal.status = status; this.session.goal.reason = this.stopping || record.stopReason || null;
     this.session.goal.tokensUsed = usage.totalTokens; this.session.goal.runtimeUsedSeconds = (this.session.goal.runtimeUsedSeconds || 0) + (Date.now() - this.started) / 1000;
     this.session.goal.evidence = [resultArtifact.id]; this.session.executionState = status === 'cancelled' ? 'cancelled' : status === 'paused' ? 'paused' : 'idle';
+    if (this.session.mode === 'debate') {
+      const consensus = record.investigationConsensus || record.decision?.consensus || null;
+      const text = item => typeof item === 'string' ? item : item?.claim || item?.summary || item?.description || JSON.stringify(item);
+      this.session.modeResult = { goalId: this.session.goal.id, kind: 'debate', outcome: record.outcome || null, stopReason: record.stopReason || null,
+        consensus: consensus ? { verdict: consensus.verdict, required: consensus.required, total: consensus.total, counts: consensus.counts, votes: consensus.votes } : null,
+        conclusions: (record.decision?.acceptedConclusions || []).slice(0, 8).map(text),
+        unresolved: (record.unresolvedDisagreement || []).slice(0, 8).map(text) };
+    }
     this.session.summary = { usage, finishedAt: now() }; saveSession(this.session);
     putRecord('run', this.session.id, { ...getRecord('run', this.session.id), state: this.session.executionState, finishedAt: now() });
     writeProjectRecord(this.session, this.session.mode, this.session.id, { ...record, sessionId: this.session.id, artifactId: resultArtifact.id, summary: this.session.summary });
