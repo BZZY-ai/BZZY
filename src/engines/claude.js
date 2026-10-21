@@ -16,8 +16,8 @@ import { conversationPrompt, completeConversationHandoff } from '../conversation
 import { recordClaudeQuota } from '../account-status.js';
 import { ActivityReporter } from '../live-activity.js';
 
-export function claudeEnvironment() {
-  return subscriptionEnvironment('claude');
+export function claudeEnvironment(backendHomes) {
+  return subscriptionEnvironment('claude', { backendHomes });
 }
 
 export function claudeArgs(session, options, mcpConfig, uid = process.getuid?.()) {
@@ -45,9 +45,8 @@ export class ClaudeEngine {
   async run(prompt, { goal = false } = {}) {
     this.options.goalMode = goal;
     this.progress.setPrompt(goal ? this.session.goal.objective : prompt);
-    const env = { ...claudeEnvironment(), ...this.options.networkEnv };
-    if (this.session.backendHomes?.claudeConfigDir) env.CLAUDE_CONFIG_DIR = this.session.backendHomes.claudeConfigDir;
-    if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { directory: env.CLAUDE_CONFIG_DIR }).available) throw new Error('Claude subscription authentication is unavailable. Run bzzy auth claude to sign in through official Claude Code.');
+    const env = { ...claudeEnvironment(this.session.backendHomes), ...this.options.networkEnv };
+    if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { backendHomes: this.session.backendHomes }).available) throw new Error('Claude subscription authentication is unavailable. Run bzzy auth claude to sign in through official Claude Code.');
     const nonce = this.options.toolHost?.nonce || randomUUID();
     let configFile;
     if (goal || this.options.toolHost) {

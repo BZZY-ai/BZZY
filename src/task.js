@@ -4,7 +4,7 @@ import { normalizeContract, loadContract, validateContractPaths } from './contra
 import { readJson, saveSession } from './store.js';
 import { agentChoice } from './delegation.js';
 import { childPolicy } from './policy.js';
-import { codexHome, claudeHome } from './auth.js';
+import { codexHome, claudeAuthHomes } from './auth.js';
 import { configuredParallel } from './parallel-setup.js';
 
 export function readContextFile(file, cwd) {
@@ -44,8 +44,7 @@ export function prepareTask(session, options, objective, { persist = true } = {}
       ...(options.maxRetries != null ? { maxRetries: options.maxRetries } : {}), ...(options.concurrency ? { concurrency: options.concurrency } : {}) } }, objective);
   validateContractPaths(contract, session.cwd);
   session.contract = contract; session.policy = contract.policy;
-  session.backendHomes ||= { codex: codexHome(), codexApi: codexHome({ auth: 'api-key' }),
-    ...(process.env.BZZY_CLAUDE_HOME || process.env.CLAUDE_CONFIG_DIR ? { claudeConfigDir: claudeHome() } : {}) };
+  session.backendHomes ||= { codex: codexHome(), codexApi: codexHome({ auth: 'api-key' }), ...claudeAuthHomes() };
   session.strictPolicy = Boolean(options.contract || options.readOnly || persistent.policy);
   session.mode = options.mode || session.mode || 'solo'; session.projectRoot = project;
   if (session.mode === 'delegate') {

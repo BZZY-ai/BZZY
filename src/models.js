@@ -53,8 +53,7 @@ async function codexModels(session, signal) {
 }
 
 async function claudeModels(session, signal) {
-  const env = subscriptionEnvironment('claude');
-  if (session.backendHomes?.claudeConfigDir) env.CLAUDE_CONFIG_DIR = session.backendHomes.claudeConfigDir;
+  const env = subscriptionEnvironment('claude', { backendHomes: session.backendHomes });
   const child = launch('claude', ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio', '--setting-sources', ''], {
     cwd: session.cwd, env, stdio: ['pipe', 'pipe', 'pipe'],
   });

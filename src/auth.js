@@ -8,27 +8,37 @@ export function codexHome(provider) {
   return path.resolve(process.env.BZZY_CODEX_HOME || (provider?.auth === 'api-key'
     ? path.join(home(), 'codex-api') : process.env.CODEX_HOME || path.join(os.homedir(), '.codex')));
 }
-export function claudeHome() {
-  return path.resolve(process.env.BZZY_CLAUDE_HOME || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
+export function claudeHome(backendHomes) {
+  return path.resolve(subscriptionEnvironment('claude', { backendHomes }).CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
 }
-export function subscriptionEnvironment(backend) {
+export function subscriptionEnvironment(backend, { backendHomes, directory } = {}) {
   const env = runtimeEnv();
   const keys = backend === 'claude'
     ? ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDECODE']
     : ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_BASE_URL', 'OPENAI_API_BASE'];
   for (const key of keys) env[key] = undefined;
-  if (backend === 'codex') env.CODEX_HOME = codexHome();
-  else if (process.env.BZZY_CLAUDE_HOME) env.CLAUDE_CONFIG_DIR = claudeHome();
+  if (backend === 'codex') env.CODEX_HOME = directory ?? codexHome();
+  else {
+    // On macOS these values identify Keychain entries. Unset, empty, and an
+    // explicit ~/.claude are different identities; never infer or normalize one.
+    if (process.env.BZZY_CLAUDE_HOME) env.CLAUDE_CONFIG_DIR = path.resolve(process.env.BZZY_CLAUDE_HOME);
+    if (Object.hasOwn(backendHomes || {}, 'claudeConfigDir')) env.CLAUDE_CONFIG_DIR = backendHomes.claudeConfigDir ?? undefined;
+    if (Object.hasOwn(backendHomes || {}, 'claudeSecureStorageConfigDir')) env.CLAUDE_SECURESTORAGE_CONFIG_DIR = backendHomes.claudeSecureStorageConfigDir ?? undefined;
+    if (directory !== undefined) env.CLAUDE_CONFIG_DIR = directory ?? undefined;
+  }
   return env;
 }
+export function claudeAuthHomes() {
+  const env = subscriptionEnvironment('claude');
+  return { claudeConfigDir: env.CLAUDE_CONFIG_DIR ?? null, claudeSecureStorageConfigDir: env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? null };
+}
 // Ask the official CLI about its store; bzzy never parses or copies OAuth tokens.
-export function subscriptionStatus(provider, { directory, diagnostic = false } = {}) {
+export function subscriptionStatus(provider, { directory, backendHomes, diagnostic = false } = {}) {
   if (provider.auth !== 'subscription') return { available: false };
   const unavailable = reason => diagnostic ? { available: false, reason } : { available: false };
   try {
     const args = provider.backend === 'claude' ? ['auth', 'status', '--json'] : ['login', 'status'];
-    const env = subscriptionEnvironment(provider.backend);
-    if (directory) env[provider.backend === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] = directory;
+    const env = subscriptionEnvironment(provider.backend, { directory, backendHomes });
     const result = spawnSync(backendCommand(provider.backend), args, { env, encoding: 'utf8', timeout: 10000, maxBuffer: 65536, windowsHide: true });
     if (result.error || result.status !== 0) return unavailable(result.error?.code === 'ETIMEDOUT'
       ? `The ${provider.backend} login-status check timed out after 10s. Try ${provider.backend} ${args.join(' ')} directly.`

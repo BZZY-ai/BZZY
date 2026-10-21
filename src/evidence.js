@@ -76,6 +76,7 @@ export function workspaceManifest(root) {
     if (name.split(path.sep).some(p => excluded.has(p) || p === '.env' || p.startsWith('.env.'))) continue;
     const file = inside(root, name, { exists: false });
     if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue;
+    if (fs.statSync(file).size > 20 * 1024 * 1024) throw new Error(`Cannot snapshot ${JSON.stringify(name)}: file exceeds 20 MiB. Move it outside the task workspace or exclude it with .gitignore in a Git project.`);
     const info = fileInfo(file); total += info.size;
     if (total > 100 * 1024 * 1024 || Object.keys(result).length >= 10000) throw new Error('Workspace snapshot exceeds 100 MiB or 10,000 files. Select a smaller workspace.');
     result[name] = info;

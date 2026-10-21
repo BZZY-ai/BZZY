@@ -1,0 +1,28 @@
+# Copy to .github/workflows/platforms.yml to enable this workflow.
+name: macOS and Linux compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  subscription-and-chat:
+    name: Subscription auth and chat (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run check
+      - name: Verify credential identity, onboarding, doctor and chat startup
+        run: node --test test/auth.test.js test/platform-auth.test.js test/connection-check.test.js test/models.test.js test/chat-startup.test.js test/update.test.js

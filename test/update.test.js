@@ -61,6 +61,24 @@ test('updates the installation from another directory, preserves the launcher pa
     [f.checkout, f.env.BZZY_LAUNCHER_BIN_DIR, f.checkout, f.env.BZZY_LAUNCHER_BIN_DIR]);
 });
 
+test('updating a differently owned installation scopes Git trust to that command without changing global config', t => {
+  const f = fixture(t); f.publish();
+  // Only the client checkout should simulate a different owner. A real remote
+  // server doesn't inherit this Git test variable from its connecting client.
+  f.git(f.checkout, 'config', 'remote.origin.uploadpack', 'env -u GIT_TEST_ASSUME_DIFFERENT_OWNER git-upload-pack');
+  f.env.GIT_CONFIG_GLOBAL = path.join(f.temporary, 'global.gitconfig');
+  const original = '[safe]\n\tdirectory = /unrelated/project\n';
+  fs.writeFileSync(f.env.GIT_CONFIG_GLOBAL, original);
+  f.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+  const untrusted = () => spawnSync('git', ['status', '--porcelain'], { cwd: f.checkout, env: f.env, encoding: 'utf8' });
+  assert.match(untrusted().stderr, /dubious ownership/);
+  const result = f.update();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(path.join(f.checkout, 'version.txt'), 'utf8'), 'new');
+  assert.equal(fs.readFileSync(f.env.GIT_CONFIG_GLOBAL, 'utf8'), original);
+  assert.match(untrusted().stderr, /dubious ownership/, 'trust did not persist after the update');
+});
+
 for (const untracked of [false, true]) test(`preserves ${untracked ? 'untracked' : 'tracked'} local edits without pulling or installing`, t => {
   const f = fixture(t); f.publish();
   const file = path.join(f.checkout, untracked ? 'local.txt' : 'version.txt');

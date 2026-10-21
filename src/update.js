@@ -9,7 +9,10 @@ export function updateInstallation(directory = installationRoot) {
   const cwd = fs.realpathSync(directory);
   const env = { ...process.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH || ''}` };
   function git(args, failure) {
-    const result = spawnSync('git', args, { cwd, env, encoding: 'utf8', timeout: 120000 });
+    // The launcher may be shared by users (e.g. a root shell using an install
+    // owned by another user). Trust only this already-running installation for
+    // this Git invocation; never add a global safe.directory exception.
+    const result = spawnSync('git', ['-c', `safe.directory=${cwd}`, ...args], { cwd, env, encoding: 'utf8', timeout: 120000 });
     if (result.error || result.status !== 0) {
       throw new Error(`${failure}${result.error ? `: ${result.error.message}` : result.stderr.trim() ? `: ${result.stderr.trim()}` : '.'}`);
     }

@@ -9,7 +9,7 @@ import { home, privateDir, writeJson } from './files.js';
 import { loadSession, sessionPath, sessions } from './store.js';
 import { assertSessionIdle } from './models.js';
 import { config, saveConfig } from './providers.js';
-import { codexHome, claudeHome } from './auth.js';
+import { codexHome, claudeHome, claudeAuthHomes } from './auth.js';
 import { conversationCursor } from './conversation.js';
 
 const helper = fileURLToPath(new URL('./archive.py', import.meta.url));
@@ -72,7 +72,7 @@ export function collectProjectState(root, sessionId) {
 function nativeFiles(session) {
   const id = session.engineThreadId;
   if (!id) return [];
-  const directory = session.backend === 'claude' ? session.backendHomes?.claudeConfigDir || claudeHome()
+  const directory = session.backend === 'claude' ? claudeHome(session.backendHomes)
     : session.engineHome || (session.provider === 'codex' ? session.backendHomes?.codex : session.backendHomes?.codexApi) || codexHome();
   const found = [];
   const scan = (dir, matched = false) => {
@@ -245,7 +245,7 @@ export async function importProject(filename, directory, ui) {
           usedAliases.add(session.alias);
         }
         session.projectRoot = root; session.executionState = 'idle'; session.engineThreadId = null; session.engineSessionId = null; session.engineHome = null;
-        session.backendHomes = { codex: codexHome(), codexApi: codexHome({ auth: 'api-key' }), claudeConfigDir: claudeHome() };
+        session.backendHomes = { codex: codexHome(), codexApi: codexHome({ auth: 'api-key' }), ...claudeAuthHomes() };
         session.importedContext = { directory: context, nativeDirectory: path.join(context, 'native'), sourceSessionId: row.id,
           previous: session.importedContext || null, importedAt: new Date().toISOString() };
         session.conversationHandoff = { pending: true, throughSeq: 0 };

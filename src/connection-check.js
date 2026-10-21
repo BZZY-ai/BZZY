@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { backendCommand, version, assertCodexVersion, launch } from './process.js';
-import { codexHome, claudeHome, subscriptionEnvironment, subscriptionStatus } from './auth.js';
+import { codexHome, subscriptionEnvironment, subscriptionStatus } from './auth.js';
 import { getProvider, defaultSelection } from './providers.js';
 import { Rpc } from './rpc.js';
 import { stopProcess } from './policy.js';
@@ -124,13 +124,12 @@ export async function checkConnection(provider, { live = false, model, effort, s
     result.version = version(provider.backend);
     if (provider.backend === 'codex') assertCodexVersion(result.version);
     result.installed = true;
-    const directory = provider.backend === 'codex' ? session?.engineHome || session?.backendHomes?.codex || codexHome(provider)
-      : session?.backendHomes?.claudeConfigDir || claudeHome();
-    const status = subscriptionStatus(provider, { directory, diagnostic: true });
+    const authContext = provider.backend === 'codex' ? { directory: session?.engineHome || session?.backendHomes?.codex || codexHome(provider) }
+      : { backendHomes: session?.backendHomes };
+    const status = subscriptionStatus(provider, { ...authContext, diagnostic: true });
     result.authenticated = status.available;
     if (!result.authenticated) throw new Error(status.reason);
-    const env = subscriptionEnvironment(provider.backend);
-    env[provider.backend === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = directory;
+    const env = subscriptionEnvironment(provider.backend, authContext);
     cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-connection-'));
     const signal = AbortSignal.timeout(timeoutMs);
     await (provider.backend === 'codex' ? codexProbe : claudeProbe)({ env, cwd, model, effort, live, signal, result });

@@ -43,7 +43,7 @@ export function deepseekBalance(data, checkedAt = Date.now()) {
   const balance = balances.find(item => item.currency === 'USD') || balances[0];
   return balance ? { provider: 'deepseek', status: 'available', balance, balances, sufficient: data.is_available === true, checkedAt, source: 'provider-api' } : null;
 }
-function claudeStore(session = {}) { return session.backendHomes?.claudeConfigDir || claudeHome(); }
+function claudeStore(session = {}) { return claudeHome(session.backendHomes); }
 function claudeCacheKey(session) { return 'claude:' + digest(claudeStore(session)); }
 export function recordClaudeQuota(session, event, ui) {
   const quota = claudeQuota(event);

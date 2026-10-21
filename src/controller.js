@@ -63,7 +63,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     if (options.strictPolicy && !sandboxSupport()) throw Object.assign(new Error('Enforced task policies need a working Linux bubblewrap installation.'), { code: 'UNSUPPORTED_POLICY' });
     initializeProject(session);
     if (session.contract) writeProjectRecord(session, 'contracts', session.goal?.id || session.id, session.contract);
-    if (!session.startSnapshotId && !['executor', 'reviewer'].includes(session.role)) session.startSnapshotId = snapshotWorkspace(session, 'run-start').id;
+    if (goal && !session.startSnapshotId && !['executor', 'reviewer'].includes(session.role)) session.startSnapshotId = snapshotWorkspace(session, 'run-start').id;
     session.executionState = 'running'; if (goal) { session.goal.status = 'active'; session.deferTerminalNotification = true; }
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
     putRecord('run', session.id, run); saveSession(session);
