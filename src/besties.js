@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Coordinator } from './coordination.js';
 import { createSession, loadSession, saveSession, home, privateDir } from './store.js';
-import { getProvider, apiKey } from './providers.js';
+import { getProvider, apiKey, config } from './providers.js';
 import { newGoal } from './goals.js';
 import { getRecord, putRecord, listRecords, now } from './database.js';
 import { snapshotWorkspace } from './evidence.js';
@@ -13,11 +13,12 @@ import { delay } from './delegation.js';
 import { supervisorTokens } from './delegation-usage.js';
 import { assessGroupCompletion } from './verification.js';
 
-const running = state => ['queued', 'launching', 'running'].includes(state);
 export async function runBesties(session, options, ui) {
   const coordinator = new Coordinator(session, ui, options); session.acceptance = null; coordinator.start();
   let group, usage = { totalTokens: 0, complete: false, agents: [] };
   try {
+    const maxExchanges = config().bestiesMaxExchanges ?? 6;
+    if (!Number.isSafeInteger(maxExchanges) || maxExchanges < 1 || maxExchanges > 100) throw new Error('bestiesMaxExchanges must be an integer from 1 to 100.');
     const choices = session.besties;
     if (!Array.isArray(choices) || (choices.length < 2 || choices.length > 3)) throw new Error('Besties needs 2 or 3 independently selected peers.');
     if ((options.concurrency ?? session.contract.limits.concurrency ?? choices.length) < choices.length) throw new Error(`Besties needs ${choices.length} concurrent peers. Increase the configured concurrency limit to at least ${choices.length}.`);
@@ -28,7 +29,7 @@ export async function runBesties(session, options, ui) {
       const snapshot = snapshotWorkspace(session, 'besties-common-input'), peers = [];
       for (const [index, selection] of choices.entries()) {
         const namespace = `${selection.provider}-bestie-${index + 1}-${session.goal.id.slice(0, 8)}`, work = path.join(home(), 'besties', session.id, namespace);
-        privateDir(path.dirname(work)); fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false });
+        privateDir(path.dirname(work)); fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
         const child = createSession(getProvider(selection.provider), work, selection.model);
         Object.assign(child, { mode: 'solo', role: 'bestie', parentSessionId: session.id, bestiesSessionId: session.id, parallelSessionId: session.id,
           projectRoot: session.cwd, agentNamespace: namespace, selectedEffort: selection.effort, modelCapabilities: selection.capabilities,
@@ -39,10 +40,15 @@ export async function runBesties(session, options, ui) {
       group = { goalId: session.goal.id, peers, snapshotId: snapshot.id, cursors: {}, createdAt: now() }; putRecord('besties', session.id, group);
       for (const peer of peers) { const child = loadSession(peer.sessionId); child.peers = peers; saveSession(child); }
     }
-    if (options.bestiesResume) { group.resumed = {}; putRecord('besties', session.id, group); }
-    const currentJob = id => listRecords('execution').find(job => job.sessionId === id && running(job.state));
+    if (options.bestiesResume) { group.resumed = {}; group.exchanges = {}; putRecord('besties', session.id, group); }
+    const currentJob = id => listRecords('execution', { sessionId: id, states: ['queued', 'launching', 'running'], limit: 1 })[0];
     const queue = (peer, cursor, initial, resuming) => {
       const child = loadSession(peer.sessionId), recovered = reconcileSession(child.id);
+      if (!initial && !resuming && (group.exchanges?.[child.id] || 0) >= maxExchanges) {
+        coordinator.stopping = 'exchange_limit';
+        ui.event('info', { message: `Besties paused after ${maxExchanges} feedback exchanges per peer. The disagreement is retained; /goal resume starts another bounded exchange.` });
+        return false;
+      }
       if (recovered.live) return false;
       if (recovered.state === 'cleanup_required') throw new Error(recovered.reason);
       const remaining = session.goal.tokenBudget == null ? null : Math.max(0, session.goal.tokenBudget - usage.totalTokens);
@@ -55,7 +61,9 @@ export async function runBesties(session, options, ui) {
           if (remaining != null) fresh.goal.tokenBudget = remaining + (fresh.goal.tokensUsed || 0);
           Object.assign(fresh.goal, { status: 'active', noActivityTurns: 0, blockerStreak: 0, lastBlocker: null }); delete fresh.goal.reason;
           putRecord('session', fresh.id, fresh, db);
-          const saved = getRecord('besties', session.id); saved.cursors[fresh.id] = cursor; saved.started ||= {}; saved.started[fresh.id] = true; putRecord('besties', session.id, saved, db); group = saved;
+          const saved = getRecord('besties', session.id); saved.cursors[fresh.id] = cursor; saved.started ||= {}; saved.started[fresh.id] = true;
+          if (!initial && !resuming) { saved.exchanges ||= {}; saved.exchanges[fresh.id] = (saved.exchanges[fresh.id] || 0) + 1; }
+          putRecord('besties', session.id, saved, db); group = saved;
         },
       });
       ui.event('besties.turn', { sessionId: child.id, agent: peer.namespace, executionId: result.executionId, reason: initial ? 'initial work' : 'new peer evidence' }); return true;

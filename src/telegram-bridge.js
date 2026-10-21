@@ -140,7 +140,7 @@ export class TelegramBridge {
       reserveRequest(`control:${session.id}`, requestId, { action: text.slice(1), text: '' }, db => {
         requireTelegramAttachment(attachment.id);
         const control = { id: randomUUID(), sessionId: session.id, action: text.slice(1), text: '', state: 'queued', createdAt: now() };
-        if (listRecords('execution').some(job => job.sessionId === session.id && activeStates.includes(job.state))) { putRecord('control', control.id, control, db); appendEvent(session.id, 'control.queued', control, db); }
+        if (listRecords('execution', { sessionId: session.id, states: activeStates, limit: 1 }).length > 0) { putRecord('control', control.id, control, db); appendEvent(session.id, 'control.queued', control, db); }
         if (text === '/cancel') for (const pending of listRecords('telegram-inbox').filter(row => row.attachmentId === attachment.id && row.id !== item.id && row.updateId < item.updateId && row.state === 'queued')) putRecord('telegram-inbox', pending.id, { ...pending, state: 'cancelled' }, db);
         return { controlId: control.id };
       });
@@ -150,7 +150,7 @@ export class TelegramBridge {
     if (text.startsWith('/') && !startGoal && !resume) { this.queueText(attachment, item.id, 'Unknown command. Use /help, or send a normal chat message.'); return true; }
     if (resume && (!session.goal || session.goal.status === 'complete')) { this.queueText(attachment, item.id, 'There is no unfinished goal to resume. Send a message or /goal <objective>.'); return true; }
     if (!identityAlive(runtimeInfo()?.identity)) return false;
-    if (listRecords('execution').some(job => job.sessionId === session.id && activeStates.includes(job.state))) {
+    if (listRecords('execution', { sessionId: session.id, states: activeStates, limit: 1 }).length > 0) {
       if (startGoal) reserveRequest(`replace-goal:${session.id}`, requestId, { objective: startGoal[1].trim() }, db => {
         requireTelegramAttachment(attachment.id);
         const control = { id: randomUUID(), sessionId: session.id, action: 'cancel', text: '', state: 'queued', createdAt: now() };
@@ -195,7 +195,7 @@ export class TelegramBridge {
       }
       cursor = event.seq;
     }
-    for (const question of listRecords('question').filter(row => row.sessionId === attachment.sessionId && row.state === 'pending')) {
+    for (const question of listRecords('question', { sessionId: attachment.sessionId, state: 'pending' })) {
       this.queueText(attachment, 'question:' + question.id, `${question.question}\n\nReply directly to this message to answer.`, { reply_markup: { force_reply: true } }, question.id);
     }
     if (cursor !== attachment.eventCursor) updateTelegramAttachment(attachment.id, { eventCursor: cursor });
@@ -203,7 +203,7 @@ export class TelegramBridge {
   async deliver(attachment) {
     if (this.abort.signal.aborted || telegramAttachment()?.id !== attachment.id) return;
     if (Date.now() - this.lastSentAt < this.minSendIntervalMs) return;
-    const record = listRecords('telegram-delivery').filter(item => item.attachmentId === attachment.id && item.state === 'pending').sort((a, b) => a.seq - b.seq)[0];
+    const record = listRecords('telegram-delivery', { state: 'pending' }).filter(item => item.attachmentId === attachment.id).sort((a, b) => a.seq - b.seq)[0];
     if (!record || (record.retryAt || 0) > Date.now()) return;
     putRecord('telegram-delivery', record.id, { ...record, state: 'sending', attempts: record.attempts + 1 }); this.lastSentAt = Date.now();
     try {
@@ -223,7 +223,7 @@ export class TelegramBridge {
     if (this.abort.signal.aborted) return;
     const attachment = this.binding(); if (!attachment) return;
     this.syncOutbound(attachment);
-    const inbox = listRecords('telegram-inbox').filter(item => item.attachmentId === attachment.id && item.state === 'queued').sort((a, b) => a.updateId - b.updateId);
+    const inbox = listRecords('telegram-inbox', { state: 'queued' }).filter(item => item.attachmentId === attachment.id).sort((a, b) => a.updateId - b.updateId);
     // Controls and direct replies remain usable while earlier ordinary messages are queued.
     for (const item of [...inbox.filter(row => row.callbackId || row.replyTo || /^\/(?:status|help|start|pause|cancel|detach)$/.test(row.text.trim())), ...inbox.filter(row => !row.callbackId && !row.replyTo && !/^\/(?:status|help|start|pause|cancel|detach)$/.test(row.text.trim()))]) {
       if (this.abort.signal.aborted) break;
@@ -252,7 +252,7 @@ export async function serveTelegramBridge() {
   try { unlock = lockFile(path.join(home(), 'runtime', 'telegram.lock')); } catch (error) { if (error.code === 'BZZY_LOCKED') return 0; throw error; }
   const bridge = new TelegramBridge(), identity = processIdentity(); let ticking = false;
   writeJson(relayFile(), { identity, startedAt: now() });
-  for (const record of listRecords('telegram-delivery').filter(item => item.state === 'sending')) putRecord('telegram-delivery', record.id, { ...record, state: 'uncertain', error: 'Relay restarted during delivery; automatic retry could duplicate the message.' });
+  for (const record of listRecords('telegram-delivery', { state: 'sending' })) putRecord('telegram-delivery', record.id, { ...record, state: 'uncertain', error: 'Relay restarted during delivery; automatic retry could duplicate the message.' });
   const stop = () => bridge.close(); process.on('SIGTERM', stop); process.on('SIGINT', stop);
   const timer = setInterval(async () => {
     if (ticking || bridge.abort.signal.aborted) return;

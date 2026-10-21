@@ -53,6 +53,6 @@ Blocked audit:
 - Once the blocked threshold is satisfied, do not keep reporting that you are still blocked while leaving the goal active; call mcp__bzzy_goal__update_goal with status "blocked".
 - Never use status "blocked" merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.
 
-Call mcp__bzzy_goal__update_goal only after the completion or blocked audit passes, or when the user explicitly requests pausing this goal. For a requested pause, use status "paused", report the returned status, and stop goal work; never pause on your own initiative. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.
+Call mcp__bzzy_goal__update_goal only after the completion or blocked audit passes. If the user requests a pause, stop work and tell them to use /pause; the host handles pausing and cancellation. The report tool accepts only complete or blocked. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.
 
 Use mcp__bzzy_goal__get_goal to inspect current goal state. The update tool requires concrete evidence. For a blocker, supply the same concise blocker description across turns while the underlying condition remains unchanged. A report of completion must include inspected evidence covering the full objective. These tools report status to the bzzy supervisor; they do not independently verify the work.

@@ -14,6 +14,9 @@ export function sandboxSupport() {
   }
   return sandboxAvailable;
 }
+export function requireSandbox(feature = 'Enforced task policies') {
+  if (!sandboxSupport()) throw Object.assign(new Error(`${feature} require Linux bubblewrap with working user namespaces. This platform cannot enforce worker isolation; no backend was started. Solo chat and ordinary solo goals are available.`), { code: 'UNSUPPORTED_POLICY' });
+}
 export function effectivePolicy(session, options = {}) {
   const policy = normalizePolicy(options.policy || session.contract?.policy);
   if (options.readOnly) { policy.mode = 'read-only'; policy.writablePaths = []; }

@@ -22,13 +22,18 @@ export function database() {
     CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind,id));
     CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS session_events ON events(session_id,seq);
+    CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),updated_at DESC,id);
+    CREATE INDEX IF NOT EXISTS records_session_state ON records(kind,json_extract(data,'$.sessionId'),json_extract(data,'$.state'),updated_at DESC,id);
+    CREATE INDEX IF NOT EXISTS records_session ON records(kind,json_extract(data,'$.sessionId'),updated_at DESC,id);
+    CREATE INDEX IF NOT EXISTS records_parent ON records(kind,json_extract(data,'$.parentSessionId'),updated_at DESC,id);
+    CREATE INDEX IF NOT EXISTS records_cwd ON records(kind,json_extract(data,'$.cwd'),updated_at DESC,id);
     CREATE TABLE IF NOT EXISTS requests (scope TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, response TEXT, state TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(scope,id));
     INSERT OR IGNORE INTO metadata VALUES ('schema_version','1');`);
   for (const suffix of ['-wal', '-shm']) if (fs.existsSync(file + suffix)) fs.chmodSync(file + suffix, 0o600);
   return connection;
 }
-export function transaction(operation) {
-  const db = database(); db.exec('BEGIN IMMEDIATE');
+export function transaction(operation, { readOnly = false } = {}) {
+  const db = database(); db.exec(readOnly ? 'BEGIN' : 'BEGIN IMMEDIATE');
   try { const result = operation(db); db.exec('COMMIT'); return result; }
   catch (error) { db.exec('ROLLBACK'); throw error; }
 }
@@ -40,7 +45,24 @@ export function putRecord(kind, id, data, db = database()) {
   db.prepare('INSERT INTO records VALUES (?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at').run(kind, id, JSON.stringify(data), now());
   return data;
 }
-export function listRecords(kind) { return database().prepare('SELECT data FROM records WHERE kind=? ORDER BY updated_at DESC,id').all(kind).map(row => JSON.parse(row.data)); }
+export function listRecords(kind, { sessionId, sessionIds, parentSessionId, cwd, state, states, limit } = {}) {
+  const clauses = ['kind=?'], values = [kind];
+  for (const [key, value] of Object.entries({ sessionId, parentSessionId, cwd, state })) {
+    if (value !== undefined) { clauses.push(`json_extract(data,'$.${key}')=?`); values.push(value); }
+  }
+  for (const [key, entries] of [['sessionId', sessionIds], ['state', states]]) {
+    if (entries !== undefined) {
+      if (!Array.isArray(entries)) throw new Error(`Invalid ${key} filter.`);
+      clauses.push(`json_extract(data,'$.${key}') IN (SELECT value FROM json_each(?))`); values.push(JSON.stringify(entries));
+    }
+  }
+  let sql = `SELECT data FROM records WHERE ${clauses.join(' AND ')} ORDER BY updated_at DESC,id`;
+  if (limit !== undefined) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Invalid record limit.');
+    sql += ' LIMIT ?'; values.push(limit);
+  }
+  return database().prepare(sql).all(...values).map(row => JSON.parse(row.data));
+}
 export function removeRecord(kind, id) { database().prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, id); }
 export function appendEvent(sessionId, type, data = {}, db = database()) {
   const createdAt = now();

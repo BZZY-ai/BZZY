@@ -292,7 +292,7 @@ test('notifications and chat attachment are independent switches', async () => {
   await configureTelegram('off', ui); assert.equal(config().notifications.telegram.enabled, false); assert.equal(telegramAttachment().id, attachment.id);
   await configureTelegram('detach', ui, { stopBridge: async () => {} }); assert.equal(telegramViewState(source.id).attached, false); assert.equal(config().notifications.telegram.enabled, false);
 });
-test('attaching saves auto-attach and later conversations reuse the paired credentials', async () => {
+test('auto-attach preserves the paired conversation and explicit attach can move it', async () => {
   const first = session(), second = session(); let starts = 0;
   const context = { startBridge: async () => { starts++; } };
   const initial = await attachTelegram(first.id, undefined, context);
@@ -300,7 +300,10 @@ test('attaching saves auto-attach and later conversations reuse the paired crede
   assert.equal(config().notifications.telegram.enabled, false);
   const restored = await autoAttachTelegram(first, context);
   assert.equal(restored.id, initial.id, 'reopening the same chat preserves its delivery cursor');
-  const next = await autoAttachTelegram(second, context);
+  assert.equal(await autoAttachTelegram(second, context), undefined);
+  assert.equal(telegramAttachment().sessionId, first.id);
+  assert.equal(starts, 2, 'another terminal does not start or retarget the bridge');
+  const next = await attachTelegram(second.id, undefined, context);
   assert.equal(next.sessionId, second.id); assert.equal(next.chatId, '42');
   assert.equal(telegramAttachment().sessionId, second.id);
   assert.equal(config().notifications.telegram.chatId, '42');

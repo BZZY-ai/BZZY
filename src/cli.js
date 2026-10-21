@@ -360,7 +360,7 @@ async function goalControl(action, id, options, ui) {
     if (action === 'clear') { putRecord('goal-history', session.goal.id, { sessionId: session.id, ...session.goal, clearedAt: new Date().toISOString() }); session.goal = null; }
     else session.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
     saveSession(session);
-    ui.event('info', { message: `Goal ${action === 'clear' ? 'cleared' : 'paused'}.` });
+    ui.event('info', { message: `Goal ${action === 'clear' ? 'cleared' : action === 'cancel' ? 'cancelled' : 'paused'}.` });
   } finally { unlock(); }
   return 0;
 }
@@ -395,7 +395,7 @@ async function resume(session, options, ui, requireGoal = false) {
 
 async function executeFromCommand(provider, session, options, ui, prompt, flags) {
   const code = await executeManaged(provider, session, options, ui, prompt, flags);
-  if (flags.goal && [0, 2].includes(code) && ui.interactive && !options.detach && !ui.detached) {
+  if (!options.inChat && flags.goal && [0, 2].includes(code) && ui.interactive && !options.detach && !ui.detached) {
     return chat(getProvider(session.provider), { ...options, requestId: undefined }, ui, session);
   }
   return code;
@@ -449,7 +449,7 @@ async function chat(provider, options, ui, existingSession) {
         const objective = input.slice(5).trim();
         if (!objective || ['status', 'pause', 'cancel', 'clear', 'resume'].includes(objective)) {
           if (!session.goal) throw new Error('No goal yet. Use /goal <objective>.');
-          await goalControl(objective || 'status', session.id, { ...options, provider: session.provider }, ui);
+          await goalControl(objective || 'status', session.id, { ...options, provider: session.provider, inChat: true }, ui);
           session = findSession(session.id);
         } else {
           const previousGoal = session.goal;
@@ -502,7 +502,8 @@ export async function main(argv) {
     if (argv.length !== 1) throw new Error('Run bzzy --update by itself.');
     return updateInstallation();
   }
-  if (!fs.statSync(options.cwd).isDirectory()) throw new Error('--cwd must name a directory.');
+  try { if (!fs.statSync(options.cwd).isDirectory()) throw new Error('not a directory'); }
+  catch { throw new Error(`--cwd must name an existing directory: ${options.cwd}`); }
   options.cwd = fs.realpathSync(options.cwd);
   const ui = new UI(options);
   ui.accountStatusEnabled = ui.interactive;
@@ -540,7 +541,7 @@ export async function main(argv) {
     if (command === 'project') { ui.event('project', { message: JSON.stringify(projectContext(options.cwd), null, 2) }); return 0; }
     if (command === 'memory') {
       if (rest[0] === 'invalidate') invalidateMemory(rest[1], rest.slice(2).join(' '));
-      else if (rest[0] === 'add') { const session = createSession(selectedProvider(options), options.cwd, options.model); prepareTask(session, options, 'Record project knowledge'); initializeProject(session); ui.event('memory', { memory: remember(session, readJson(path.resolve(rest[1]))), message: 'Project memory recorded.' }); }
+      else if (rest[0] === 'add') { if (!rest[1]) throw new Error('Use bzzy memory add FILE.json.'); const session = createSession(selectedProvider(options), options.cwd, options.model); prepareTask(session, options, 'Record project knowledge'); initializeProject(session); ui.event('memory', { memory: remember(session, readJson(path.resolve(options.cwd, rest[1]))), message: 'Project memory recorded.' }); }
       else { const entries = recall(options.cwd, rest[0] === 'search' ? rest.slice(1).join(' ') : '', 50); ui.event('memory', { entries, message: JSON.stringify(entries, null, 2) }); }
       return 0;
     }

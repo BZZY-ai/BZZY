@@ -26,7 +26,7 @@ export async function runParallel(session, options, ui) {
       for (const [index, selection] of choices.entries()) {
         const namespace = `${selection.provider}-${index + 1}-${session.goal.id.slice(0, 8)}`;
         const work = path.join(home(), 'parallel', session.id, namespace); privateDir(path.dirname(work));
-        fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false });
+        fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
         const child = createSession(getProvider(selection.provider), work, selection.model);
         const tokenBudget = session.goal.tokenBudget == null ? undefined : Math.max(1, Math.floor(session.goal.tokenBudget / choices.length));
         Object.assign(child, { mode: 'solo', role: 'peer', parentSessionId: session.id, projectRoot: session.cwd, agentNamespace: namespace,
@@ -42,7 +42,7 @@ export async function runParallel(session, options, ui) {
     const executions = new Map();
     for (const peer of peers) {
       const child = loadSession(peer.sessionId); child.peers = peers; child.parallelSessionId = session.id; saveSession(child);
-      const existing = listRecords('execution').find(j => j.sessionId === child.id && ['queued', 'launching', 'running'].includes(j.state));
+      const existing = listRecords('execution', { sessionId: child.id, states: ['queued', 'launching', 'running'], limit: 1 })[0];
       if (existing) executions.set(child.id, existing.id);
       writeProjectRecord(child, 'status', child.id, { sessionId: child.id, provider: child.provider, goal: child.goal.objective, peers, status: child.goal.status });
       ui.event('info', { message: `${peer.namespace} · ${child.id} · same goal, independent strategy` });

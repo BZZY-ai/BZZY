@@ -15,7 +15,7 @@ import { processIdentity, identityAlive, signalProcess } from '../src/recovery.j
 import { requestExecutionStop, superviseExecutions } from '../src/runtime-processes.js';
 import { newGoal } from '../src/goals.js';
 
-const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CLAUDE_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_BOOT_FILE', 'BZZY_TEST_BACKEND_FILE', 'BZZY_TEST_LOG', 'NODE_OPTIONS', 'DEEPSEEK_API_KEY'];
+const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CLAUDE_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_BOOT_FILE', 'BZZY_TEST_BACKEND_FILE', 'BZZY_TEST_LOG', 'NODE_OPTIONS', 'DEEPSEEK_API_KEY', 'PATH'];
 let dir, work, saved;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, timeout = 10000) {
@@ -131,15 +131,18 @@ test('legacy macOS records cannot occupy runtime slots by matching an unrelated 
   assert.equal((await finished((await start('claude')).executionId)).exitCode, 0);
 });
 
-test('the runtime is reused with an unchanged environment and refreshed for a new API key', async () => {
+test('the runtime stays shared while each execution receives the caller API key and PATH', async () => {
   const first = await ensureRuntime(), same = await ensureRuntime();
   assert.equal(first.identity.pid, same.identity.pid);
-  process.env.DEEPSEEK_API_KEY = 'fixture-key-two';
-  const second = await ensureRuntime(); assert.notEqual(second.identity.pid, first.identity.pid);
+  process.env.DEEPSEEK_API_KEY = 'fixture-key-two'; process.env.PATH = '/tmp/bzzy-caller-path:' + process.env.PATH;
+  const second = await ensureRuntime(); assert.equal(second.identity.pid, first.identity.pid);
   assert.doesNotMatch(JSON.stringify(second), /fixture-key/);
   const launched = await start('deepseek'); assert.equal((await finished(launched.executionId)).exitCode, 0);
   const recorded = fs.readFileSync(process.env.BZZY_TEST_LOG, 'utf8').trim().split('\n').map(JSON.parse).find(record => record.keyHash);
   assert.equal(recorded.keyHash, createHash('sha256').update('fixture-key-two').digest('hex'));
+  assert.ok(recorded.path.includes('/tmp/bzzy-caller-path:'));
+  assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'runtime', `${launched.executionId}-environment.json`)), false);
+  assert.doesNotMatch(JSON.stringify(getRecord('execution', launched.executionId)), /fixture-key-two/);
 });
 
 test('a completed Claude reply does not hang when native shutdown ignores EOF and signals', async () => {

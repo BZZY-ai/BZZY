@@ -18,7 +18,7 @@ export function initializeProject(session) {
   const constraints = path.join(session.projectRoot || session.cwd, '.bzzy', 'constraints.json');
   if (!fs.existsSync(constraints)) writeJson(constraints, { version: 1, constraints: session.contract?.constraints || [], scope: { allowedTargets: [], excludedTargets: [], allowedActions: [], excludedActions: [], accountReferences: [], cleanupObligations: [], ...session.contract?.scope } });
   const ignore = path.join(dir, '.gitignore');
-  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'runtime/\n*.sqlite*\n', { mode: 0o600 });
+  if (!fs.existsSync(ignore) || fs.readFileSync(ignore, 'utf8') === 'runtime/\n*.sqlite*\n') fs.writeFileSync(ignore, '*\n', { mode: 0o600 });
 }
 export function writeProjectRecord(session, kind, id, record) {
   if (session.role === 'executor' || session.role === 'reviewer' || session.policy?.mode === 'read-only') return;

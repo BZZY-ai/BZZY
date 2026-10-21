@@ -1,3 +1,4 @@
+import { guardedInterval } from './interval.js';
 import { CodexEngine } from './engines/codex.js';
 import { ClaudeEngine } from './engines/claude.js';
 import { applyReport } from './goals.js';
@@ -7,7 +8,7 @@ import { Pet } from './mascot.js';
 import { ToolHost } from './tools.js';
 import { getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
 import { initializeProject, writeProjectRecord } from './project.js';
-import { effectivePolicy, sandboxSupport } from './policy.js';
+import { effectivePolicy, requireSandbox } from './policy.js';
 import { assessCompletion } from './verification.js';
 import { artifact, snapshotWorkspace, artifactsFor } from './evidence.js';
 import { checkpoint } from './memory.js';
@@ -52,18 +53,18 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   const stop = (reason = 'interrupted') => {
     if (stopping) { engine?.close().catch(() => {}); return; }
     stopping = reason; abort.abort(); ui.cancelled = true; pet.stop();
-    engine?.interrupt(reason).catch(error => ui.event('error', { message: error.message }));
+    engine?.interrupt(reason).catch(error => { try { ui.event('error', { message: error.message }); } catch { /* stop must work even when persistence fails */ } });
     killTimer = setTimeout(() => engine?.close().catch(() => {}), 3000); killTimer.unref();
   };
   const interrupt = () => {
-    const job = listRecords('execution').find(job => job.sessionId === session.id && ['launching', 'running'].includes(job.state) && job.stopAction);
+    const job = listRecords('execution', { sessionId: session.id, states: ['launching', 'running'] }).find(job => job.stopAction);
     stop(job?.stopAction === 'cancel' ? 'cancelled' : job?.stopAction === 'pause' ? 'user_pause' : 'interrupted');
   };
   const recorded = { interactive: ui.interactive, json: ui.json, newline: ui.newline.bind(ui), ask: ui.ask.bind(ui), approve: ui.approve.bind(ui),
     event(type, data = {}) { if (type === 'text') fullText += data.text || ''; if (!ui.persistsEvents) appendEvent(session.id, type, data); ui.event(type, data); } };
   process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt); ui.beforeOutput = () => pet.stop();
   try {
-    if (options.strictPolicy && !sandboxSupport()) throw Object.assign(new Error('Enforced task policies need a working Linux bubblewrap installation.'), { code: 'UNSUPPORTED_POLICY' });
+    if (options.strictPolicy || goal && session.mode === 'delegate') requireSandbox(goal && session.mode === 'delegate' ? 'Delegate workers' : 'Enforced task policies');
     initializeProject(session);
     if (session.contract) writeProjectRecord(session, 'contracts', session.goal?.id || session.id, session.contract);
     if (goal && !session.startSnapshotId && !['executor', 'reviewer'].includes(session.role)) session.startSnapshotId = snapshotWorkspace(session, 'run-start').id;
@@ -77,9 +78,9 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     const limit = options.runtimeSeconds || session.contract?.limits.runtimeSeconds;
     const remainingMs = limit == null ? null : Math.max(0, limit - (session.goal?.runtimeUsedSeconds || 0)) * 1000;
     let deadline; if (remainingMs != null) deadline = setTimeout(() => stop('runtime_limit'), remainingMs);
-    heartbeat = setInterval(() => { const record = getRecord('run', session.id); if (record) putRecord('run', session.id, { ...record, heartbeatAt: now() }); }, 2000);
+    heartbeat = guardedInterval(() => { const record = getRecord('run', session.id); if (record) putRecord('run', session.id, { ...record, heartbeatAt: now() }); }, 2000, { label: 'Run heartbeat', onError: (_error, failures) => { if (failures >= 3) stop('persistence_failure'); } });
     let lastUsageKey, lastUsageAt = 0;
-    controls = setInterval(async () => {
+    controls = guardedInterval(async () => {
       if (processing) return; processing = true;
       try {
         const cancellation = session.assignmentId && getRecord('assignment-control', session.assignmentId);
@@ -94,7 +95,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
           }
           if (session.goal.tokenBudget != null && usage.totalTokens >= session.goal.tokenBudget) stop('token_limit');
         } else if (!goal && options.tokenBudget != null && (session.usage?.tokens || 0) >= options.tokenBudget) stop('token_limit');
-        for (const control of listRecords('control').filter(c => c.sessionId === session.id && c.state === 'queued')) {
+        for (const control of listRecords('control', { sessionId: session.id, state: 'queued' })) {
           putRecord('control', control.id, { ...control, state: 'dispatched' });
           try {
             let result;
@@ -106,7 +107,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
           } catch (error) { putRecord('control', control.id, { ...control, state: 'failed', error: error.message }); recorded.event('control.failed', { id: control.id, action: control.action, message: error.message }); }
         }
       } finally { processing = false; }
-    }, 100);
+    }, 100, { label: 'Run controls', onError: (_error, failures) => { if (failures >= 3) stop('persistence_failure'); } });
     let attempts = 0;
     try {
       do {
@@ -151,7 +152,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     } else session.executionState = 'idle';
     return stopping ? ['interrupted', 'user_pause', 'cancelled'].includes(stopping) ? 130 : 2 : goal && session.goal.status !== 'complete' ? 2 : 0;
   } catch (error) {
-    const failure = classifyFailure(error); session.failure = failure; session.executionState = stopping ? 'paused' : 'failed';
+    const failure = classifyFailure(error); session.failure = failure; session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping ? 'paused' : 'failed';
     const budgetLimited = ['runtime_limit', 'token_limit'].includes(stopping);
     if (goal && !['complete', 'cancelled'].includes(session.goal.status)) {
       session.goal.status = stopping === 'cancelled' ? 'cancelled' : stopping ? budgetLimited ? 'budget_limited' : 'paused' : failure.category === 'rate_limit' ? 'usage_limited' : 'blocked';
@@ -162,12 +163,14 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   } finally {
     clearInterval(heartbeat); clearInterval(controls); clearTimeout(killTimer); pet.stop(); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); ui.beforeOutput = null;
     try {
-      await engine?.close(); await host?.close(); await traffic?.close();
+      const cleanups = await Promise.allSettled([engine?.close(), host?.close(), traffic?.close()]);
+      for (const cleanup of cleanups) if (cleanup.status === 'rejected') recorded.event('error', { message: `Cleanup failed: ${cleanup.reason.message}` });
       const activeAssignments = activeAssignmentsFor(session);
       for (const job of activeAssignments) cancelAssignment(session.id, job.id, stopping || 'Parent execution ended before assignment review.');
       await Promise.all(activeAssignments.map(job => waitAssignment(session.id, job.id, 5)));
     }
     finally {
+      try {
       if (fullText) artifact(session, fullText, 'agent-output');
       const elapsed = (Date.now() - started) / 1000;
       session.elapsedSeconds = (session.elapsedSeconds || 0) + elapsed; session.stopReason = stopping || null;
@@ -184,7 +187,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
         printGoalSummary(session, recorded);
         try { await new NotificationHub({ ui: recorded }).publish(session); } catch (error) { recorded.event('error', { message: `Goal notification failed: ${error.message}` }); }
       }
-      unlock();
+      } finally { unlock(); }
     }
   }
 }

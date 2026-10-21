@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { home, privateDir, readJson, writeJson } from './files.js';
 import { getRecord, putRecord, listRecords, appendEvent, transaction } from './database.js';
+import { processIdentity, identityAlive } from './process-identity.js';
 import { goalEvent } from './lifecycle.js';
 import { destinationSnapshot } from './notification-registry.js';
 export { home, privateDir, readJson, writeJson } from './files.js';
@@ -25,6 +26,11 @@ export function saveSession(session) {
     const previous = getRecord('session', session.id);
     // A running agent may save an older snapshot after the user renames its chat.
     if (previous && Object.hasOwn(previous, 'alias')) session.alias = previous.alias;
+    if (['running', 'verifying', 'waiting_for_input'].includes(session.executionState)) {
+      const pending = listRecords('question', { sessionId: session.id, state: 'pending', limit: 1 }).length > 0;
+      if (pending) session.executionState = 'waiting_for_input';
+      else if (session.executionState === 'waiting_for_input') session.executionState = previous?.executionState === 'waiting_for_input' ? 'running' : previous?.executionState || 'running';
+    }
     putRecord('session', session.id, session, db);
     const before = previous?.goal;
     if (session.goal?.status !== before?.status || session.executionState !== previous?.executionState || !previous) {
@@ -63,7 +69,7 @@ export function sessions(cwd) {
     const id = file.slice(0, -5);
     if (!getRecord('session', id)) putRecord('session', id, readJson(path.join(dir, file)));
   }
-  return listRecords('session').filter(s => !cwd || s.cwd === cwd).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return listRecords('session').filter(s => !cwd || s.cwd === cwd).sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
 }
 
 export function setSessionAlias(id, value, authorize) {
@@ -98,32 +104,52 @@ export function lockSession(session) {
   return lockFile(`${sessionPath(session.id)}.lock`, 'This session is already running in another bzzy process.');
 }
 
+export function lockOwner(file) {
+  try {
+    const text = fs.readFileSync(file, 'utf8');
+    try { return JSON.parse(text).identity; } catch { return { pid: Number(text.split(':')[0]), start: 'platform-unverified' }; }
+  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
 export function lockFile(file, busyMessage = 'This resource is already in use.') {
   privateDir(path.dirname(file));
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const fd = fs.openSync(file, 'wx', 0o600);
-      const owner = `${process.pid}:${randomUUID()}`;
-      fs.writeFileSync(fd, owner);
-      fs.closeSync(fd);
-      return () => {
-        try { if (fs.readFileSync(file, 'utf8') === owner) fs.unlinkSync(file); }
-        catch (error) { if (error.code !== 'ENOENT') throw error; }
-      };
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const owner = fs.readFileSync(file, 'utf8');
-      const pid = Number(owner.split(':')[0]);
-      if (!Number.isSafeInteger(pid) || pid < 1) throw new Error('Invalid session lock. Inspect it before removing it.');
-      try { process.kill(pid, 0); }
-      catch (err) {
-        if (err.code === 'ESRCH') { fs.rmSync(file, { force: true }); continue; }
-        throw err;
+  const identity = processIdentity();
+  if (!identity) throw new Error(`Cannot establish process identity for lock: ${file}`);
+  const owner = JSON.stringify({ identity, nonce: randomUUID() });
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  // Publish a complete lock atomically: contenders never observe an empty new lock.
+  fs.writeFileSync(temporary, owner, { mode: 0o600, flag: 'wx' });
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fs.linkSync(temporary, file);
+        return () => {
+          try { if (fs.readFileSync(file, 'utf8') === owner) fs.unlinkSync(file); }
+          catch (error) { if (error.code !== 'ENOENT') throw error; }
+        };
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        let stat, contents;
+        try { stat = fs.statSync(file); contents = fs.readFileSync(file, 'utf8'); }
+        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        let identity;
+        try { identity = JSON.parse(contents).identity; } catch { identity = { pid: Number(contents.split(':')[0]), start: 'platform-unverified' }; }
+        let alive = identityAlive(identity);
+        if (!alive && Number.isSafeInteger(identity?.pid) && identity.pid > 0) {
+          // EPERM means a live process belonging to another user, not a stale lock.
+          try { process.kill(identity.pid, 0); }
+          catch (error) { if (error.code === 'EPERM') alive = true; }
+        }
+        const malformed = !Number.isSafeInteger(identity?.pid) || identity.pid < 1 || !identity.start;
+        if (!alive && (!malformed || Date.now() - stat.mtimeMs > 5000)) {
+          try {
+            const latest = fs.statSync(file);
+            if (latest.ino === stat.ino && latest.dev === stat.dev && fs.readFileSync(file, 'utf8') === contents) fs.unlinkSync(file);
+          } catch (error) { if (error.code !== 'ENOENT') throw error; }
+          continue;
+        }
+        throw Object.assign(new Error(`${busyMessage} Lock: ${file}`), { code: 'BZZY_LOCKED' });
       }
-      const busy = new Error(busyMessage);
-      busy.code = 'BZZY_LOCKED';
-      throw busy;
     }
-  }
-  throw new Error('Could not acquire session lock.');
+    throw new Error(`Could not acquire lock: ${file}`);
+  } finally { fs.rmSync(temporary, { force: true }); }
 }

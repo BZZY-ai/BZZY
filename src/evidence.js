@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { home, privateDir, writeJson } from './files.js';
+import { home, privateDir, writeJson, readJson } from './files.js';
 import { digest, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
 
 export function inside(root, relative, { exists = true } = {}) {
@@ -28,7 +28,7 @@ export function artifact(session, text, label = 'report', mediaType = 'text/plai
   const file = path.join(dir, `${id}.txt`);
   fs.writeFileSync(file, text, { mode: 0o600, flag: 'wx' });
   const result = { id, sessionId: session.id, projectRoot: session.projectRoot || session.cwd, label, path: file, mediaType, ...fileInfo(file), createdAt: now(), provenance: 'host-recorded' };
-  if (!['executor', 'reviewer'].includes(session.role) && session.policy?.mode !== 'read-only') {
+  if (label !== 'agent-output' && !label.startsWith('http-response:') && !['executor', 'reviewer'].includes(session.role) && session.policy?.mode !== 'read-only') {
     const namespace = session.agentNamespace ? path.join('agents', session.agentNamespace) : '';
     const projectPath = path.join(session.projectRoot || session.cwd, '.bzzy', namespace, 'evidence', `${id}.txt`);
     privateDir(path.dirname(projectPath)); fs.writeFileSync(projectPath, text, { mode: 0o600, flag: 'wx' }); result.projectPath = projectPath;
@@ -52,7 +52,23 @@ export function readArtifact(id, offset = 0, limit = 8192) {
   return { ...item, content: bytes.subarray(offset, offset + limit).toString('utf8'), nextOffset: Math.min(bytes.length, offset + limit), truncated: offset + limit < bytes.length };
 }
 const excluded = new Set(['.git', 'node_modules', '.bzzy', '.bzzy-runtime', 'codex', 'codex-0.162.0', 'claude-code', '.venv', '__pycache__']);
-export function workspaceManifest(root) {
+function snapshotLimits() {
+  const settings = readJson(path.join(home(), 'config.json'), {}).snapshotLimits || {};
+  const limits = { maxFileMiB: 20, maxTotalMiB: 100, maxFiles: 10000, ...settings };
+  for (const [key, maximum] of [['maxFileMiB', 512], ['maxTotalMiB', 16384], ['maxFiles', 1000000]]) {
+    if (!Number.isSafeInteger(limits[key]) || limits[key] < 1 || limits[key] > maximum) throw new Error(`snapshotLimits.${key} must be an integer from 1 to ${maximum}.`);
+  }
+  return limits;
+}
+function snapshotInfo(file) {
+  const fd = fs.openSync(file, 'r'), hash = createHash('sha256'), buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    let size = 0, count;
+    while ((count = fs.readSync(fd, buffer, 0, buffer.length, null))) { hash.update(buffer.subarray(0, count)); size += count; }
+    return { size, sha256: hash.digest('hex') };
+  } finally { fs.closeSync(fd); }
+}
+export function workspaceManifest(root, limits = snapshotLimits()) {
   const resolved = path.resolve(root), privateIsInsideWorkspace = home().startsWith(resolved + path.sep);
   if (resolved === home()) throw new Error('The private bzzy state directory cannot be used as a project workspace.');
   let names;
@@ -69,37 +85,41 @@ export function workspaceManifest(root) {
       }
     }; walk(root);
   }
-  const result = {}; let total = 0;
+  const result = {}; let total = 0, count = 0;
   for (const name of [...new Set(names)].sort()) {
     const absolute = path.resolve(root, name);
     if (privateIsInsideWorkspace && (absolute === home() || absolute.startsWith(home() + path.sep))) continue;
     if (name.split(path.sep).some(p => excluded.has(p) || p === '.env' || p.startsWith('.env.'))) continue;
     const file = inside(root, name, { exists: false });
     if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue;
-    if (fs.statSync(file).size > 20 * 1024 * 1024) throw new Error(`Cannot snapshot ${JSON.stringify(name)}: file exceeds 20 MiB. Move it outside the task workspace or exclude it with .gitignore in a Git project.`);
-    const info = fileInfo(file); total += info.size;
-    if (total > 100 * 1024 * 1024 || Object.keys(result).length >= 10000) throw new Error('Workspace snapshot exceeds 100 MiB or 10,000 files. Select a smaller workspace.');
+    if (fs.statSync(file).size > limits.maxFileMiB * 1024 * 1024) throw new Error(`Cannot snapshot ${JSON.stringify(name)}: file exceeds ${limits.maxFileMiB} MiB. Configure snapshotLimits, move it outside the task workspace or exclude it with .gitignore in a Git project.`);
+    const info = snapshotInfo(file); total += info.size;
+    if (info.size > limits.maxFileMiB * 1024 * 1024 || total > limits.maxTotalMiB * 1024 * 1024 || count++ >= limits.maxFiles) throw new Error(`Workspace snapshot exceeds ${limits.maxTotalMiB} MiB or ${limits.maxFiles.toLocaleString('en-US')} files. Configure snapshotLimits or select a smaller workspace.`);
     result[name] = info;
   }
   return result;
 }
 export function snapshotWorkspace(session, label = 'snapshot') {
-  const manifest = workspaceManifest(session.cwd), id = randomUUID();
+  const limits = snapshotLimits(), manifest = workspaceManifest(session.cwd, limits), id = randomUUID();
   const directory = path.join(home(), 'snapshots', id); privateDir(directory);
-  for (const relative of Object.keys(manifest)) {
-    const target = path.join(directory, relative); privateDir(path.dirname(target));
-    const content = fs.readFileSync(inside(session.cwd, relative));
-    if (digest(content) !== manifest[relative].sha256) throw new Error(`Workspace changed while snapshotting: ${relative}`);
-    fs.writeFileSync(target, content, { mode: fs.statSync(path.join(session.cwd, relative)).mode & 0o777 });
+  try {
+    for (const relative of Object.keys(manifest)) {
+      const target = path.join(directory, relative); privateDir(path.dirname(target));
+      fs.copyFileSync(inside(session.cwd, relative), target, fs.constants.COPYFILE_FICLONE);
+      if (snapshotInfo(target).sha256 !== manifest[relative].sha256) throw new Error(`Workspace changed while snapshotting: ${relative}`);
+    }
+    // Dependencies are explicitly outside the source snapshot; available read-only to tools.
+    if (fs.existsSync(path.join(session.cwd, 'node_modules'))) fs.symlinkSync(path.join(session.cwd, 'node_modules'), path.join(directory, 'node_modules'));
+  } catch (error) {
+    fs.rmSync(directory, { recursive: true, force: true });
+    throw error;
   }
-  // Dependencies are explicitly outside the source snapshot; available read-only to tools.
-  if (fs.existsSync(path.join(session.cwd, 'node_modules'))) fs.symlinkSync(path.join(session.cwd, 'node_modules'), path.join(directory, 'node_modules'));
-  const record = { id, sessionId: session.id, label, source: session.cwd, directory, manifest, manifestHash: digest(manifest), createdAt: now() };
+  const record = { id, sessionId: session.id, label, source: session.cwd, directory, manifest, limits, manifestHash: digest(manifest), createdAt: now() };
   writeJson(path.join(home(), 'snapshots', `${id}.json`), record); putRecord('snapshot', id, record);
   appendEvent(session.id, 'snapshot', { id, label, manifestHash: record.manifestHash }); return record;
 }
 export function inspectWorkspace(snapshot, cwd) {
-  const current = workspaceManifest(cwd), changes = [];
+  const current = workspaceManifest(cwd, snapshot.limits), changes = [];
   for (const file of new Set([...Object.keys(snapshot.manifest), ...Object.keys(current)])) {
     if (snapshot.manifest[file]?.sha256 !== current[file]?.sha256) changes.push({ path: file, before: snapshot.manifest[file] || null, after: current[file] || null });
   }

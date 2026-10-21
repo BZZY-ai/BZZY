@@ -12,9 +12,13 @@ export class Rpc extends EventEmitter {
     this.stderr = '';
     this.lines = readline.createInterface({ input: child.stdout });
     this.lines.on('line', line => {
-      try { this.message(JSON.parse(line), onRequest); }
-      catch (error) { this.fail(new Error(`Invalid backend message: ${error.message}`)); }
+      let message;
+      try { message = JSON.parse(line); }
+      catch { this.emit('diagnostic', { message: 'Ignored a non-JSON backend stdout line.' }); return; }
+      try { this.message(message, onRequest); }
+      catch (error) { this.fail(new Error(`Backend message handler failed: ${error.message}`, { cause: error })); }
     });
+    child.stderr.setEncoding('utf8');
     child.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk.toString()).slice(-12000); });
     child.stdin.on('error', error => this.fail(error));
     child.once('error', error => this.fail(error));

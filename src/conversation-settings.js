@@ -1,4 +1,4 @@
-import { chooseProvider, setDefault } from './providers.js';
+import { chooseProvider } from './providers.js';
 import { assertModelIdle, chooseModel } from './models.js';
 import { changeSessionModel, changeSessionProvider } from './runtime-client.js';
 
@@ -17,6 +17,5 @@ export async function changeConversationProvider(source, argument, ui, connectio
   } finally { ui.updateSession?.(source); }
   if (!selected) return null;
   const session = await changeSessionProvider(source, provider, selected, ui, connection);
-  if (!source.mode || source.mode === 'solo') setDefault(provider.id);
   return session;
 }

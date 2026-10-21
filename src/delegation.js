@@ -167,7 +167,7 @@ export function applyAssignment(parent, id) {
     appendEvent(parent.id, 'assignment.applying', { id, path: change.path, before: change.before, after: change.after });
     application.paths[change.path] = { state: 'planned' }; putRecord('assignment-apply', id, application);
     if (change.after) {
-      privateDir(path.dirname(target)); const content = fs.readFileSync(inside(job.workspace, change.path));
+      fs.mkdirSync(path.dirname(target), { recursive: true }); const content = fs.readFileSync(inside(job.workspace, change.path));
       if (digest(content) !== change.after.sha256) throw new Error('Worker content changed during patch application.');
       const temporary = `${target}.bzzy-${randomUUID()}.tmp`;
       try { fs.writeFileSync(temporary, content, { mode: patch.modes[change.path], flag: 'wx' }); fs.renameSync(temporary, target); }
@@ -205,7 +205,7 @@ export async function runAssignment(id, number) {
       job.snapshotId = snapshot.id;
       // A worker edits its own copy; review snapshots remain fixed.
       const work = path.join(home(), 'workers', id); privateDir(path.dirname(work));
-      fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false });
+      fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
       job.workspace = work; putRecord('assignment', id, job);
     }
     const provider = getProvider(job.selection.provider);

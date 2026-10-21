@@ -83,10 +83,10 @@ export class ToolHost {
     this.connections = new Set();
     this.server = net.createServer(socket => {
       this.connections.add(socket); socket.on('close', () => this.connections.delete(socket)); socket.on('error', () => {});
-      let buffer = '';
+      socket.setEncoding('utf8'); let buffer = '';
       socket.on('data', chunk => {
-        buffer += chunk.toString();
-        if (buffer.length > 256 * 1024) { socket.destroy(); return; }
+        buffer += chunk;
+        if (Buffer.byteLength(buffer) > 256 * 1024) { socket.destroy(); return; }
         const index = buffer.indexOf('\n'); if (index < 0) return;
         let request;
         try { request = JSON.parse(buffer.slice(0, index)); }
@@ -206,9 +206,9 @@ function assignmentWaitSeconds(value = 20) {
 }
 export function bridgeRequest(socketPath, token, request) {
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath); let buffer = '';
+    const socket = net.createConnection(socketPath); socket.setEncoding('utf8'); let buffer = '';
     socket.once('error', reject); socket.once('connect', () => socket.write(JSON.stringify({ token, ...request }) + '\n'));
-    socket.on('data', chunk => { buffer += chunk; if (buffer.length > 2 * 1024 * 1024) { socket.destroy(); reject(new Error('Tool response exceeds 2 MiB. Read bounded artifacts.')); } });
+    socket.on('data', chunk => { buffer += chunk; if (Buffer.byteLength(buffer) > 2 * 1024 * 1024) { socket.destroy(); reject(new Error('Tool response exceeds 2 MiB. Read bounded artifacts.')); } });
     socket.once('end', () => { try { const result = JSON.parse(buffer); result.error ? reject(new Error(result.error)) : resolve(result.result); } catch (error) { reject(error); } });
   });
 }

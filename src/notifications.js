@@ -52,6 +52,7 @@ function formatDebateTelegram(event) {
 }
 
 export function formatTelegram(event) {
+  if (event.type === 'goal.waiting_for_input') return `🐝 bzzy — needs your input\n\n${event.objective.slice(0, 1000)}\n\n${event.question.text.slice(0, 1600)}\n\nAttach: bzzy --attach ${event.sessionId}\nApprovals expire without granting permission. Reply in the attached terminal or an attached Telegram chat.`;
   if (event.mode === 'debate') return formatDebateTelegram(event);
   return [event.type === 'goal.completed' ? '🐝 bzzy — goal achieved' : '🐝 bzzy — goal stalled', '',
     event.objective.slice(0, 1600), '', `Provider: ${event.provider}${event.model ? ` / ${event.model}` : ''}`,
@@ -86,8 +87,8 @@ registerTransport('telegram', {
 export class NotificationHub {
   constructor({ registry = transports, ui } = {}) { this.registry = registry; this.ui = ui; }
 
-  async publish(session) {
-    const event = goalEvent(session);
+  async publish(session, options) {
+    const event = goalEvent(session, options);
     if (!event) return null;
     const key = `${event.sessionId}-${event.goalId}-${event.epoch}-${event.type}`;
     const file = path.join(home(), 'notifications', `${key}.json`);

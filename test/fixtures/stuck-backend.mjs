@@ -39,5 +39,5 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     send({ id: event.id, result: { turn: { id: 'turn' } } }); notify('turn/started', { turn: { id: 'turn' } }); reply();
   } else if (event.type === 'control_request') send({ type: 'control_response', response: { request_id: event.request_id, subtype: 'success', response: {} } });
   else if (event.type === 'user') reply();
-  if (process.env.BZZY_PROVIDER_API_KEY && event.method === 'turn/start') fs.appendFileSync(process.env.BZZY_TEST_LOG, JSON.stringify({ keyHash: createHash('sha256').update(process.env.BZZY_PROVIDER_API_KEY).digest('hex') }) + '\n');
+  if (process.env.BZZY_PROVIDER_API_KEY && event.method === 'turn/start') fs.appendFileSync(process.env.BZZY_TEST_LOG, JSON.stringify({ keyHash: createHash('sha256').update(process.env.BZZY_PROVIDER_API_KEY).digest('hex'), path: process.env.PATH }) + '\n');
 }

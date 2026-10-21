@@ -46,7 +46,7 @@ export function applyReport(session, report, activity, tokens) {
     goal.blockerStreak = blocker === goal.lastBlocker ? goal.blockerStreak + 1 : 1;
     goal.lastBlocker = blocker;
     goal.evidence = report.evidence;
-    if (goal.blockerStreak >= 3) goal.status = 'blocked';
+    if (goal.blockerStreak >= 3) { goal.status = 'blocked'; goal.reason = report.blocker; }
   } else {
     goal.blockerStreak = 0;
     goal.lastBlocker = null;

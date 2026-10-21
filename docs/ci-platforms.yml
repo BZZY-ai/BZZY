@@ -25,4 +25,4 @@ jobs:
           node-version: 24
       - run: npm run check
       - name: Verify credential identity, onboarding, doctor and chat startup
-        run: node --test test/auth.test.js test/platform-auth.test.js test/connection-check.test.js test/models.test.js test/chat-startup.test.js test/runtime-processes.test.js test/update.test.js
+        run: node --test test/auth.test.js test/platform-auth.test.js test/connection-check.test.js test/models.test.js test/chat-startup.test.js test/runtime-processes.test.js test/review-regressions.test.js test/update.test.js

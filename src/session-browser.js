@@ -1,7 +1,7 @@
 import { findSession, loadSession, sessions, setSessionAlias } from './store.js';
 
 export function sessionLabel(session) {
-  return `${session.alias || 'Unnamed'} · ${session.id.slice(0, 8)} · ${session.provider} · ${session.goal?.status || session.executionState || 'chat'}`;
+  return `${session.alias || 'Unnamed'} · ${session.id.slice(0, 8)} · ${session.provider} · ${session.executionState === 'waiting_for_input' ? 'waiting for input' : session.goal?.status || session.executionState || 'chat'}`;
 }
 
 export async function chooseSavedSession(ui) {

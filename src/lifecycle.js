@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
-export function goalEvent(session) {
+export function goalEvent(session, { question } = {}) {
   const goal = session.goal;
   if (!goal) return null;
   const completed = goal.status === 'complete';
   const stalled = ['blocked', 'usage_limited', 'budget_limited', 'awaiting_review'].includes(goal.status) || (goal.status === 'paused' && goal.reason === 'turn_limit');
-  if (!completed && !stalled) return null;
+  if (!completed && !stalled && !question) return null;
   const usage = session.summary?.usage || session.delegationUsage;
-  return { version: 1, id: randomUUID(), type: completed ? 'goal.completed' : 'goal.stalled', occurredAt: new Date().toISOString(),
-    sessionId: session.id, goalId: goal.id, epoch: goal.notificationEpoch || 0, provider: session.provider, model: session.model, mode: session.mode || 'solo',
+  return { version: 1, id: randomUUID(), type: question ? 'goal.waiting_for_input' : completed ? 'goal.completed' : 'goal.stalled', occurredAt: new Date().toISOString(),
+    ...(question ? { question: { id: question.id, text: question.question, kind: question.kind } } : {}),
+    sessionId: session.id, goalId: goal.id, epoch: question ? `${goal.notificationEpoch || 0}-${question.id}` : goal.notificationEpoch || 0, provider: session.provider, model: session.model, mode: session.mode || 'solo',
     ...(session.mode === 'delegate' ? { executor: { provider: session.executor?.provider, model: session.executor?.model || null } } : {}),
     ...(session.modeResult?.goalId === goal.id ? { result: session.modeResult } : {}),
     cwd: session.cwd, objective: goal.objective, status: goal.status, reason: goal.reason || null, evidence: goal.evidence || [],

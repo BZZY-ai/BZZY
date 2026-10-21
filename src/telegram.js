@@ -31,6 +31,7 @@ export async function attachTelegram(sessionId, connection, { startBridge = ensu
 export async function autoAttachTelegram(session, context = {}) {
   const state = telegramViewState(session.id);
   if (!state.autoAttach || !state.configured || ['parallel', 'besties'].includes(session.mode)) return;
+  if (state.attachedSessionId && state.attachedSessionId !== session.id) return;
   if (!/^[1-9]\d*$/.test(state.chatId) || !Number.isSafeInteger(Number(state.chatId))) return;
   return attachTelegram(session.id, context.connection, context);
 }

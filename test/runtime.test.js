@@ -509,10 +509,15 @@ test('parallel agents receive the same goal, independent sessions and attributed
 });
 
 test('runtime restart preserves its address, observer tokens and the existing live runner', async () => {
-  process.env.BZZY_TEST_ADVANCED = 'slow';
+  process.env.BZZY_TEST_ADVANCED = 'question';
   const session = makeSession(), launched = await start(session), client = new BzzyClient(launched.info);
   const observerToken = await client.observerToken(session.id);
-  for (let i = 0; i < 100 && getRecord('execution', launched.executionId)?.state !== 'running'; i++) await delay(20);
+  let question;
+  for (let i = 0; i < 200 && !question; i++) {
+    question = listRecords('question', { sessionId: session.id, state: 'pending' })[0];
+    if (!question) await delay(30);
+  }
+  assert.ok(question, 'the runner waits for explicit input throughout the restart');
   assert.equal(getRecord('execution', launched.executionId).state, 'running');
   const runner = getRecord('execution', launched.executionId).runner;
   await runtimeRequest(launched.info, 'POST', '/shutdown', {});
@@ -520,6 +525,7 @@ test('runtime restart preserves its address, observer tokens and the existing li
   assert.ok(identityAlive(runner));
   const observer = new BzzyClient({ url: restarted.url, token: observerToken.token });
   assert.equal((await observer.session(session.id)).execution.id, launched.executionId);
+  await runtimeRequest(restarted, 'POST', `/sessions/${session.id}/answer`, { owner: launched.owner, questionId: question.id, answer: 'approved-account-A' }, randomUUID());
   assert.equal((await finished(launched.executionId)).exitCode, 0);
   const logs = fs.readFileSync(path.join(dir, 'backend.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.equal(logs.filter(item => item.started).length, 1);

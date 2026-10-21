@@ -82,7 +82,11 @@ for (const [provider, direct, expectedStatus = 'complete', resume = false] of [
       assert.equal(continued.engineThreadId, initial.engineThreadId);
       assert.equal(continued.goal.id, initial.goal.id);
       assert.equal(continued.goal.status, expectedStatus);
-      if (expectedStatus === 'awaiting_review') fs.writeFileSync(path.join(directory, 'required-but-missing.txt'), 'Required output now exists.');
+      if (expectedStatus === 'awaiting_review') {
+        fs.writeFileSync(path.join(directory, 'required-but-missing.txt'), 'Required output now exists.');
+        child.stdin.write('/goal resume\r');
+        await until(() => sessions()[0]?.goal?.id === initial.goal.id && sessions()[0]?.goal?.status === 'complete' && idle(), 'in-chat goal resume');
+      }
       child.stdin.write('/goal Verify a second task\r');
       await until(() => sessions()[0]?.goal?.id !== initial.goal.id && sessions()[0]?.goal?.status === 'complete' && idle(), 'second goal execution');
       child.stdin.write('/exit\r');

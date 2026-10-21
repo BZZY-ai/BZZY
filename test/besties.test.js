@@ -150,3 +150,18 @@ for (const count of [2, 3]) for (const disputed of [false, true]) test(`native b
   await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner: newOwner, takeover: true });
   for (const peer of group.peers) assert.equal((await runtimeRequest(info, 'GET', `/sessions/${peer.sessionId}`)).inputOwner.owner, newOwner);
 });
+
+test('besties stops unseen-feedback ping-pong at the per-peer exchange cap', async () => {
+  const session = parent(), children = peers(session);
+  const group = getRecord('besties', session.id); group.started = {}; group.exchanges = {};
+  for (const child of children) {
+    child.goal = newGoal(session.goal.objective); child.goal.status = 'complete'; saveSession(child);
+    group.started[child.id] = true; group.exchanges[child.id] = 6;
+  }
+  putRecord('besties', session.id, group);
+  for (const child of children) sendPeerMessage(child, { text: 'Unresolved feedback requires another exchange.' });
+  assert.equal(await runBesties(session, {}, { event() {} }), 130);
+  assert.equal(session.goal.status, 'paused'); assert.equal(session.goal.reason, 'exchange_limit');
+  assert.equal(listRecords('execution', { sessionIds: children.map(child => child.id) }).length, 0, 'the limit must stop before another backend is queued');
+  assert.deepEqual(getRecord('besties', session.id).exchanges, group.exchanges);
+});

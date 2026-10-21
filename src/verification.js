@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { artifact, captureEvidence, inside, fileInfo, artifactsFor } from './evidence.js';
+import { artifact, captureEvidence, inside, fileInfo, artifactsFor, inspectWorkspace, workspaceManifest } from './evidence.js';
 import { schemaErrors } from './contracts.js';
 import { putRecord, getRecord, listRecords, appendEvent, now } from './database.js';
 import { spawnBounded, stopProcess } from './policy.js';
@@ -24,7 +24,15 @@ export async function runCheck(session, check, { signal } = {}) {
   const child = spawnBounded(check.argv[0], check.argv.slice(1), { cwd: session.cwd, policy: session.policy || session.contract.policy });
   op.state = 'dispatched'; op.pid = child.pid; putRecord('operation', op.id, op);
   let stdout = '', stderr = '', truncated = false, timedOut = false;
-  const add = (previous, chunk) => { const combined = previous + chunk.toString(); if (combined.length > 1024 * 1024) truncated = true; return combined.slice(-1024 * 1024); };
+  child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+  const add = (previous, chunk) => {
+    const combined = previous + chunk;
+    if (Buffer.byteLength(combined) <= 1024 * 1024) return combined;
+    truncated = true;
+    const bytes = Buffer.from(combined); let start = bytes.length - 1024 * 1024;
+    while ((bytes[start] & 0xc0) === 0x80) start++;
+    return bytes.subarray(start).toString('utf8');
+  };
   child.stdout.on('data', chunk => { stdout = add(stdout, chunk); }); child.stderr.on('data', chunk => { stderr = add(stderr, chunk); });
   let force;
   const stop = () => { stopProcess(child); force = setTimeout(() => stopProcess(child, 'SIGKILL'), 2000); };
@@ -98,6 +106,19 @@ export async function assessCompletion(session, { signal, prerequisite = true } 
 // A group must also deliver the contract in the user's original workspace.
 // Child success alone establishes neither those paths nor those final checks.
 export async function assessGroupCompletion(session, children, { mutualReviewed = true, signal } = {}) {
+  const group = getRecord(session.mode, session.id), snapshot = group?.snapshotId && getRecord('snapshot', group.snapshotId);
+  const project = snapshot ? workspaceManifest(session.cwd, snapshot.limits) : {};
+  const workspaces = children.map(child => {
+    const changes = snapshot ? inspectWorkspace(snapshot, child.cwd) : [];
+    const unapplied = changes.filter(change => {
+      try {
+        inside(session.cwd, change.path, { exists: false });
+        return (project[change.path]?.sha256 || null) !== (change.after?.sha256 || null);
+      } catch { return true; }
+    });
+    return { sessionId: child.id, agent: child.agentNamespace || child.provider, directory: child.cwd, changes, unapplied: unapplied.map(change => change.path) };
+  });
+  const integrated = workspaces.every(workspace => !workspace.unapplied.length);
   const aggregate = artifact(session, JSON.stringify({ goalId: session.goal?.id, mutualReviewed,
     children: children.map(child => ({ sessionId: child.id, goalId: child.goal?.id, provider: child.provider, model: child.model,
       status: child.goal?.status, acceptance: child.acceptance || null })) }, null, 2), 'group-acceptance-evidence', 'application/json');
@@ -113,8 +134,10 @@ export async function assessGroupCompletion(session, children, { mutualReviewed 
     assessRequirement(session, { id: criterion.id, status: supported ? 'supported' : 'inconclusive', evidence: [aggregate.id],
       rationale: supported ? 'Every current peer passed this requirement; the aggregate links their recorded judgments and evidence.' : 'The current peers do not all support this requirement with current accepted evidence.' }, 'group-assessment');
   }
-  const prerequisite = mutualReviewed && children.length > 0 && children.every(child => child.goal?.status === 'complete' && child.acceptance?.passed);
+  const prerequisite = integrated && mutualReviewed && children.length > 0 && children.every(child => child.goal?.status === 'complete' && child.acceptance?.passed);
   const result = await assessCompletion(session, { signal, prerequisite });
   result.aggregateEvidenceId = aggregate.id; result.childSessions = children.map(child => child.id); result.mutualReviewed = mutualReviewed;
+  result.workspaces = workspaces; result.integrated = integrated;
+  if (!integrated) result.reason = 'Peer changes remain in private workspaces. Review and integrate the selected result before completing the project goal.';
   putRecord('acceptance', result.id, result); return result;
 }

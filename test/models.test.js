@@ -183,9 +183,9 @@ test('choosing another provider opens its model and effort picker and retains th
   assert.equal(next.id, source.id); assert.equal(next.provider, 'claude'); assert.equal(next.model, 'sonnet'); assert.equal(next.selectedEffort, 'high');
   assert.equal(next.engineThreadId, null); assert.notEqual(next.engineSessionId, source.id);
   assert.deepEqual(next.contract.constraints, source.contract.constraints); assert.equal(loadSession(source.id).provider, 'claude');
-  assert.equal(config().defaultProvider, 'claude');
+  assert.equal(config().defaultProvider, null);
   ui.chooseOne = async (title, choices) => { await choices; return title === 'Choose provider' ? 'codex' : null; };
-  assert.equal(await changeConversationProvider(next, '', ui), null); assert.equal(config().defaultProvider, 'claude');
+  assert.equal(await changeConversationProvider(next, '', ui), null); assert.equal(config().defaultProvider, null);
 });
 
 test('changing a provider inside another mode preserves the normal chat preset', async () => {

@@ -22,6 +22,7 @@ async function archive(operation, spec) {
   return new Promise((resolve, reject) => {
     const child = spawn('python3', [helper, operation], { stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', error = '';
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => { output += chunk; });
     child.stderr.on('data', chunk => { error = (error + chunk).slice(-4000); });
     child.once('error', cause => reject(new Error(cause.code === 'ENOENT' ? 'Project ZIP export/import requires python3.' : cause.message)));
@@ -63,10 +64,10 @@ export function collectProjectState(root, sessionId) {
       }
     }
     const records = rows.filter((_row, index) => included.has(index));
-    const events = db.prepare('SELECT seq,session_id AS sessionId,type,data,created_at AS createdAt FROM events ORDER BY seq').all()
-      .filter(event => selected.has(event.sessionId)).map(event => ({ ...event, data: withoutTokens(JSON.parse(event.data)) }));
+    const events = db.prepare('SELECT seq,session_id AS sessionId,type,data,created_at AS createdAt FROM events WHERE session_id IN (SELECT value FROM json_each(?)) ORDER BY seq')
+      .all(JSON.stringify([...selected])).map(event => ({ ...event, data: withoutTokens(JSON.parse(event.data)) }));
     return { records, events };
-  });
+  }, { readOnly: true });
 }
 
 function nativeFiles(session) {

@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { root } from './process.js';
-import { listRecords, getRecord, putRecord, appendEvent, now } from './database.js';
+import { listRecords, getRecord, putRecord, appendEvent, now, transaction } from './database.js';
 import { loadSession, saveSession } from './store.js';
 import { processIdentity, identityAlive, signalProcess } from './recovery.js';
 import { closeOpenActivities } from './activity.js';
 import { diagnosticError } from './diagnostic-error.js';
+import { removeExecutionEnvironment } from './execution-environment.js';
 
 const active = job => ['queued', 'launching', 'running'].includes(job.state);
 function descendant(sessionId, rootId) {
@@ -33,7 +34,7 @@ function verifiedRunner(job) {
   return result.status === 0 && result.stdout.includes(path.join(root, 'bin', 'bzzy.js')) && result.stdout.includes(`internal-execution ${job.id}`) ? current : null;
 }
 export function requestExecutionStop(sessionId, controlId, action) {
-  for (const job of listRecords('execution').filter(job => active(job) && descendant(job.sessionId, sessionId))) {
+  for (const job of listRecords('execution', { states: ['queued', 'launching', 'running'] }).filter(job => descendant(job.sessionId, sessionId))) {
     const runner = verifiedRunner(job);
     const backend = backendIdentity(loadSession(job.sessionId), runner);
     const stopping = { ...job, runner: runner || job.runner, stopAction: action, stopControlId: controlId, stopRequestedAt: job.stopRequestedAt || now(),
@@ -55,8 +56,7 @@ function logDetail(job) {
   finally { if (fd != null) fs.closeSync(fd); }
 }
 export function settleExecutionControls(job) {
-  for (const control of listRecords('control').filter(control => control.sessionId === job.sessionId && ['queued', 'dispatched'].includes(control.state)
-    && ['pause', 'cancel'].includes(control.action) && (!control.executionId || control.executionId === job.id))) {
+  for (const control of listRecords('control', { sessionId: job.sessionId, states: ['queued', 'dispatched'] }).filter(control => ['pause', 'cancel'].includes(control.action) && (!control.executionId || control.executionId === job.id))) {
     putRecord('control', control.id, { ...control, state: 'observed', result: { executionEnded: true, executionId: job.id } });
     appendEvent(job.sessionId, 'control.observed', { id: control.id, action: control.action, executionEnded: true });
   }
@@ -64,6 +64,7 @@ export function settleExecutionControls(job) {
 function finish(job, { stopped = false, forced = false, error } = {}) {
   const current = getRecord('execution', job.id);
   if (!current || !active(current)) return;
+  removeExecutionEnvironment(job.id);
   settleExecutionControls(current);
   const session = loadSession(job.sessionId), exitCode = stopped ? 130 : 1;
   if (session) {
@@ -75,28 +76,29 @@ function finish(job, { stopped = false, forced = false, error } = {}) {
       session.goal.status = stopped ? job.stopAction === 'cancel' ? 'cancelled' : 'paused' : 'blocked';
       session.goal.reason = session.stopReason || error;
     }
-    for (const question of listRecords('question').filter(item => item.sessionId === session.id && item.state === 'pending')) putRecord('question', question.id, { ...question, state: 'expired', reason: 'Execution stopped.' });
+    for (const question of listRecords('question', { sessionId: session.id, state: 'pending' })) putRecord('question', question.id, { ...question, state: 'expired', reason: 'Execution stopped.' });
     for (const operation of listRecords('operation').filter(item => item.sessionId === session.id && ['planned', 'dispatched'].includes(item.state))) putRecord('operation', operation.id, { ...operation, state: 'uncertain', recoveryAt: now() });
     saveSession(session); closeOpenActivities(session);
   }
   putRecord('run', job.sessionId, { ...getRecord('run', job.sessionId), state: session?.executionState || 'failed', finishedAt: now() });
-  putRecord('execution', job.id, { ...current, state: 'stopped', exitCode, error: error || null, forced, finishedAt: now() });
   if (error) appendEvent(job.sessionId, 'error', { message: error });
   if (stopped) {
     const control = getRecord('control', job.stopControlId);
     if (control) putRecord('control', control.id, { ...control, state: 'observed', result: { stopped: true, forced } });
     appendEvent(job.sessionId, 'info', { message: job.stopAction === 'cancel' ? 'Current execution cancelled.' : 'Current response stopped. You can send another message.' });
   }
-  appendEvent(job.sessionId, 'execution.finished', { id: job.id, exitCode, error: error || null, forced });
+  transaction(db => {
+    putRecord('execution', job.id, { ...current, state: 'stopped', exitCode, error: error || null, forced, finishedAt: now() }, db);
+    appendEvent(job.sessionId, 'execution.finished', { id: job.id, exitCode, error: error || null, forced }, db);
+  });
 }
 
 export function superviseExecutions() {
-  for (const stored of listRecords('execution').filter(active)) {
+  for (const stored of listRecords('execution', { states: ['queued', 'launching', 'running'] })) {
     let job = getRecord('execution', stored.id);
     if (!job || !active(job)) continue;
     if (!job.stopAction) {
-      const control = listRecords('control').find(control => control.sessionId === job.sessionId && ['queued', 'dispatched'].includes(control.state)
-        && ['pause', 'cancel'].includes(control.action) && (control.executionId ? control.executionId === job.id : control.createdAt >= job.createdAt));
+      const control = listRecords('control', { sessionId: job.sessionId, states: ['queued', 'dispatched'] }).find(control => ['pause', 'cancel'].includes(control.action) && (control.executionId ? control.executionId === job.id : control.createdAt >= job.createdAt));
       if (control) { requestExecutionStop(job.sessionId, control.id, control.action); job = getRecord('execution', job.id); }
     }
     if (job.state === 'queued' && !job.stopAction) continue;
@@ -109,6 +111,10 @@ export function superviseExecutions() {
       job = { ...job, runner }; putRecord('execution', job.id, job);
     }
     const runnerAlive = identityAlive(job.runner);
+    if (runnerAlive && !job.stopAction) {
+      if (job.runnerMissingAt) putRecord('execution', job.id, { ...job, runnerMissingAt: null });
+      continue;
+    }
     const backend = job.stopBackend || backendIdentity(loadSession(job.sessionId), job.runner);
     if (job.stopAction) {
       if (Date.now() >= job.stopDeadline) {
@@ -121,6 +127,12 @@ export function superviseExecutions() {
     if (runnerAlive) continue;
     // Launch reservations briefly lack a PID while spawn hands it back.
     if (!job.runner && !job.runnerExitedAt && Date.now() - Date.parse(job.launchedAt || job.createdAt) < 5000) continue;
+    // A scheduler tick can observe death before Node dispatches the child exit
+    // callback. Give it a bounded opportunity to save the actual exit status.
+    if (job.runner && !job.runnerExitedAt) {
+      if (!job.runnerMissingAt) { putRecord('execution', job.id, { ...job, runnerMissingAt: Date.now() }); continue; }
+      if (Date.now() - job.runnerMissingAt < 250) continue;
+    }
     if (backend) { signalProcess(backend, 'SIGKILL', { group: true }); if (identityAlive(backend)) continue; }
     const detail = logDetail(job);
     finish(job, { error: `The execution runner exited before reporting completion${job.runnerExitSignal ? ` (${job.runnerExitSignal})` : job.runnerExitCode != null ? ` (exit ${job.runnerExitCode})` : ''}.${detail ? ` ${detail}` : ''}${job.logPath ? ` Log: ${job.logPath}` : ''}` });

@@ -18,7 +18,13 @@ test('the preserved goal policy remains based on Codex 0.162.0', () => {
   }
   const original = fs.readFileSync(path.join(ref, 'codex-rs/ext/goal/templates/goals/continuation.md'), 'utf8');
   const adapted = fs.readFileSync(path.join(root, 'assets/goal-continuation.md'), 'utf8');
-  assert.ok(adapted.startsWith(original.replaceAll('update_goal', 'mcp__bzzy_goal__update_goal')));
+  // Preserve the upstream audit while adapting its pause instruction to bzzy's
+  // report-only tool schema; the host, rather than that tool, owns pausing.
+  const expected = original.replaceAll('update_goal', 'mcp__bzzy_goal__update_goal').replace(
+    'Call mcp__bzzy_goal__update_goal only after the completion or blocked audit passes, or when the user explicitly requests pausing this goal. For a requested pause, use status "paused", report the returned status, and stop goal work; never pause on your own initiative.',
+    'Call mcp__bzzy_goal__update_goal only after the completion or blocked audit passes. If the user requests a pause, stop work and tell them to use /pause; the host handles pausing and cancellation. The report tool accepts only complete or blocked.',
+  );
+  assert.ok(adapted.startsWith(expected));
 });
 
 test('compatible newer Codex releases are accepted without changing the goal reference', () => {

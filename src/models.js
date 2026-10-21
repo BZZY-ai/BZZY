@@ -23,7 +23,7 @@ export function assertModelIdle(session) {
 }
 
 export function assertSessionIdle(session) {
-  const running = listRecords('execution').some(job => job.sessionId === session.id && ['queued', 'launching', 'running'].includes(job.state));
+  const running = listRecords('execution', { sessionId: session.id, states: ['queued', 'launching', 'running'], limit: 1 }).length > 0;
   const run = getRecord('run', session.id);
   if (running || ['running', 'waiting_for_input', 'verifying'].includes(session.executionState) && identityAlive(run?.runner)) {
     throw new Error('The current reply is still running. Wait for it to finish or use /pause.');
