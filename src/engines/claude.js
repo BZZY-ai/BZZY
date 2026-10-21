@@ -26,6 +26,7 @@ export function claudeArgs(session, options, mcpConfig, uid = process.getuid?.()
   if (session.engineThreadId) args.push('--resume', session.engineThreadId);
   else args.push('--session-id', session.engineSessionId || session.id);
   if (session.model) args.push('--model', session.model);
+  if (options.documentOnly) args.push('--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--setting-sources', '');
   const effort = reasoningEffort(session, options);
   if (effort) args.push('--effort', effort);
   session.reasoningEffort = effort || 'provider default';
@@ -169,6 +170,7 @@ export class ClaudeEngine {
   }
 
   async handleControl(event) {
+    if (this.options.documentOnly) return { behavior: 'deny', message: 'Documentation drafting has no tool access.' };
     const request = event.request;
     if (request.subtype !== 'can_use_tool') throw new Error(`Unsupported Claude control request: ${request.subtype}`);
     if (request.tool_name === 'AskUserQuestion') {

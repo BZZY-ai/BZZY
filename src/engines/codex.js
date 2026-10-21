@@ -34,6 +34,10 @@ export function codexLaunch(provider, session, options = {}) {
   const args = ['app-server', '--listen', 'stdio://', '--enable', 'goals'];
   const env = { ...subscriptionEnvironment('codex'), ...options.networkEnv, CODEX_HOME: session.engineHome };
   const override = (key, value) => args.push('-c', `${key}=${typeof value === 'string' ? JSON.stringify(value) : value}`);
+  if (options.documentOnly) {
+    override('features.shell_tool', false); override('features.multi_agent', false);
+    args.push('-c', 'mcp_servers={}');
+  }
   override('approval_policy', options.yolo || options.scopedAutonomy ? 'never' : 'on-request');
   override('sandbox_mode', codexSandboxMode(options));
   if (options.policy?.network === 'disabled') override('sandbox_workspace_write.network_access', false);
@@ -255,6 +259,10 @@ export class CodexEngine {
   }
 
   async request(method, params) {
+    if (this.options.documentOnly) {
+      if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) return { decision: 'decline' };
+      throw new Error('Documentation drafting has no tool access.');
+    }
     if (method === 'item/tool/call' && this.options.toolHost) {
       try { return { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(await this.options.toolHost.call(params.tool, params.arguments)) }] }; }
       catch (error) { return { success: false, contentItems: [{ type: 'inputText', text: error.message }] }; }

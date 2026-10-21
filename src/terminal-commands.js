@@ -7,6 +7,13 @@ export const chatHelp = `Modes
 /goal <objective>  Start a goal, replacing the current one.
 /default           Save this mode’s agents, models and efforts separately.
 --default          Skip selection and reuse the saved preset, e.g. bzzy --parallel --default.
+/alias [name]      Name this session; omit the name to open a prompt.
+--alias NAME       Name a new session, e.g. bzzy --alias trabajo_01.
+bzzy sessions      ↑/↓ select; Enter/a attaches, v views. Restores the saved working directory.
+--attach NAME      Open a saved session by alias or ID; --view NAME observes it.
+/export [FILE.zip] Export the complete project, sessions, history, notes and evidence.
+--import FILE.zip  Restore a project bundle into the current directory.
+/skill_that [name] Turn the last completed goal into SKILL.md with detailed steps and references.
 
 /models · /providers · /usage · /telegram · /pause · /cancel · /exit
 Tab / Shift+Tab switch agent chats. bzzy --help lists options; bzzy --whoami explains the full system.`;
@@ -17,6 +24,9 @@ export const chatCommands = [
   { command: '/models', description: 'Choose a model and reasoning effort' },
   { command: '/providers', description: 'Choose Codex, Claude or DeepSeek' },
   { command: '/default', description: 'Save this mode’s provider, models, efforts and full agent combo' },
+  { command: '/alias', description: 'Name this session and keep its working directory' },
+  { command: '/export', description: 'Export the complete project and context as a ZIP' },
+  { command: '/skill_that', description: 'Turn a completed goal into a portable AI skill' },
   { command: '/usage', description: 'Show weekly quotas and the DeepSeek balance' },
   { command: '/telegram', description: 'Open Telegram settings and conversation relay' },
   { command: '/chat', description: 'Show the conversation' },
@@ -46,6 +56,6 @@ const telegramCommands = [
 
 export function commandSuggestions(value) {
   if (/^\/telegram\s+[a-z]*$/.test(value)) return telegramCommands.filter(item => item.command.startsWith(value));
-  if (!/^\/[a-z]*$/.test(value)) return [];
+  if (!/^\/[a-z_]*$/.test(value)) return [];
   return chatCommands.filter(item => item.command.startsWith(value));
 }

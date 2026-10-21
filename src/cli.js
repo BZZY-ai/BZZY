@@ -2,8 +2,12 @@ import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defa
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { config, providers, getProvider, setDefault, addProvider, apiKey, saveKey, ensureApiKey, defaultSelection } from './providers.js';
-import { home, readJson, createSession, saveSession, findSession, sessions, lockSession, loadSession } from './store.js';
+import { config, providers, getProvider, setDefault, addProvider, apiKey, saveKey, ensureApiKey, defaultSelection, chooseProvider, saveDefaultSelection } from './providers.js';
+import { chooseModel } from './models.js';
+import { home, readJson, createSession, saveSession, findSession, sessions, lockSession, loadSession, normalizeSessionAlias, setSessionAlias } from './store.js';
+import { chooseSavedSession, promptSessionAlias, sessionLabel } from './session-browser.js';
+import { exportProject, importProject } from './project-bundle.js';
+import { skillThat } from './skill-that.js';
 import { inherited, version, root } from './process.js';
 import { UI } from './ui.js';
 import { Pet } from './mascot.js';
@@ -69,7 +73,9 @@ Usage:
   bzzy traffic [session]                Watch recorded outbound HTTP requests
   bzzy integration                      Explain API, live events and client integration
   bzzy service token SESSION            Create a session-scoped observer token
-  bzzy sessions                         List saved sessions
+  bzzy sessions                         Browse saved sessions; Enter attaches, v opens a view
+  bzzy export [FILE.zip]                Export this directory and all saved project context
+  bzzy --import FILE.zip               Restore a project and its sessions into this directory
   bzzy setup                            Choose a backend and authenticate
   bzzy auth [codex|claude|deepseek|name]  Log in or save an API key
   bzzy providers                        List providers
@@ -84,6 +90,8 @@ Options:
   --provider NAME       Select a provider for a new session
   --model MODEL         Select a model (provider default otherwise)
   --cwd DIRECTORY       Working directory
+  --alias NAME          Name a session; restore it later with --attach NAME or --resume NAME
+  --import FILE.zip     Restore a complete project bundle into --cwd (current directory by default)
   --goal OBJECTIVE      Start a persistent goal; quoted positional text is sent first as context
   --context-file FILE   UTF-8 task instructions (up to 1 MiB), relative to --cwd; no initialization chat
   --token-budget N      Optional goal token budget
@@ -124,7 +132,7 @@ Options:
   -v, --version         Show version
 
 Chat commands: /goal <objective>, /goal status|pause|resume|clear,
-/new, /providers [name], /models [name|default], /default, /usage, /help, /exit
+/new, /alias [name], /export [FILE.zip], /skill_that [name], /providers [name], /models [name|default], /default, /usage, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
@@ -181,7 +189,7 @@ API providers must support the Responses protocol in this version.
 export function parseArgs(argv) {
   const options = { cwd: process.cwd(), pet: true, yolo: false, json: false };
   const args = [];
-  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--goal': 'goal', '--context-file': 'contextFile',
+  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile',
     '--token-budget': 'tokenBudget', '--max-turns': 'maxTurns', '--effort': 'effort',
     '--base-url': 'baseUrl', '--env-key': 'envKey', '--context-window': 'contextWindow',
     '--view': 'view', '--attach': 'attach', '--atach': 'attach', '--resume': 'resume', '--mode': 'mode', '--supervisor': 'supervisor', '--executor': 'executor',
@@ -238,6 +246,7 @@ export function parseArgs(argv) {
   if (options.useDefault && (options.agents || options.participants)) throw new Error('Use either --default or explicit --agents/--participant selections.');
   if (options.rounds > 5 || options.concurrency > 8) throw new Error('Maximum 5 debate rounds and 8 concurrent workers.');
   if (options.effort && !['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.effort)) throw new Error('Invalid reasoning effort.');
+  if (options.alias != null) options.alias = normalizeSessionAlias(options.alias);
   options.cwd = path.resolve(options.cwd);
   return { options, args };
 }
@@ -279,16 +288,23 @@ export async function setup(ui, options, explicitProvider) {
       ready.set(deepseek.id, Boolean(await ensureApiKey(deepseek, ui, { optional: true })));
     }
     const preferred = entries.find(entry => ready.get(entry.id))?.id || entries[0]?.id;
-    const answer = await ui.chooseOne('Choose your default provider', entries.map(entry => ({
-      value: entry.id, label: `${name(entry)} · ${status(entry)}`, selected: entry.id === preferred,
-      description: ready.get(entry.id) ? 'Ready to use. You can change providers later with /providers.' : 'Sign in when selected. You can configure this provider later.',
-    })));
-    if (answer == null) throw new Error('Setup cancelled.');
-    provider = getProvider(answer);
+    provider = await chooseProvider(preferred, '', ui);
+    if (!provider) throw new Error('Setup cancelled.');
   }
   const code = await authenticate(provider, ui, options, { reuseExisting: true });
   if (code !== 0) throw new Error(`Authentication exited (${code}); provider was not selected.`);
-  setDefault(provider.id);
+  if (ui.interactive) {
+    ui.openTerminal?.();
+    const selected = await chooseModel({ provider: provider.id, backend: provider.backend, cwd: options.cwd || process.cwd(),
+      model: options.model || provider.model || null, selectedEffort: options.effort }, '', ui);
+    if (!selected) throw new Error('Setup cancelled.');
+    const saved = saveDefaultSelection({ provider: provider.id, model: selected.model,
+      selectedEffort: selected.effort, modelCapabilities: selected.capabilities });
+    options.provider = provider.id; options.model = selected.model;
+    options.effort = saved.effort === 'default' ? undefined : saved.effort;
+    options.launchDefault = saved;
+    ui.event('info', { message: 'Default saved. Use /providers to change provider, model and effort, and /default to save a new default.' });
+  } else setDefault(provider.id);
   return provider;
 }
 
@@ -343,6 +359,8 @@ async function goalControl(action, id, options, ui) {
 }
 
 async function resume(session, options, ui, requireGoal = false) {
+  if (options.alias != null) Object.assign(session, setSessionAlias(session.id, options.alias));
+  options = { ...options, cwd: session.cwd };
   if (options.provider && options.provider !== session.provider) throw new Error('A session keeps its provider. Start a new session to switch backends.');
   if (requireGoal && !session.goal) throw new Error('This session has no goal.');
   if (requireGoal && session.goal.status === 'complete') throw new Error('This goal is already complete. Start a new goal to request more work.');
@@ -379,7 +397,7 @@ async function executeFromCommand(provider, session, options, ui, prompt, flags)
 async function chat(provider, options, ui, existingSession) {
   if (!ui.interactive) throw new Error('Use bzzy run "task" or bzzy goal "objective" when stdin is not a terminal.');
   const pet = new Pet(ui, options.pet);
-  let session = existingSession || createSession(provider, options.cwd, options.model);
+  let session = existingSession || createSession(provider, options.cwd, options.model, options.alias);
   if (!existingSession && options.delegationSelection) { applyDelegationSelection(session, options.delegationSelection); saveSession(session); }
   if (!existingSession && options.bestiesSelection) { applyBestiesSelection(session, options.bestiesSelection); saveSession(session); }
   if (!existingSession && options.parallelAgents) { applyParallelSelection(session, options.parallelAgents); saveSession(session); }
@@ -403,6 +421,9 @@ async function chat(provider, options, ui, existingSession) {
     try {
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
       if (input === '/default') { saveCurrentDefault(session, ui); continue; }
+      if (/^\/alias(?:\s|$)/.test(input)) { session = await promptSessionAlias(session.id, input.replace(/^\/alias\s*/, ''), ui); continue; }
+      if (/^\/export(?:\s|$)/.test(input)) { await exportProject(session, input.replace(/^\/export\s*/, ''), ui); continue; }
+      if (/^\/skill_that(?:\s|$)/.test(input)) { await skillThat(session, input.replace(/^\/skill_that\s*/, ''), ui); continue; }
       if (/^\/telegram(?:\s|$)/.test(input)) { await configureTelegram(input.replace(/^\/telegram\s*/, '') || 'panel', ui, { sessionId: session.id }); ui.refreshTelegramState?.(); continue; }
       if (input === '/debate' || input.startsWith('/debate ')) { await debateReply(input.slice(7).trim()); if (ui.detached) return 0; continue; }
       if (input === '/new') {
@@ -482,12 +503,17 @@ export async function main(argv) {
   ui.onProvider = (id, argument, connection) => changeConversationProvider(loadSession(id), argument, ui, connection);
   try {
     const [command, ...rest] = args;
+    if (options.importFile) { await importProject(options.importFile, options.cwd, ui); return 0; }
+    if (command === 'export') { await exportProject(options.cwd, rest[0], ui); return 0; }
     if (command === 'integration') {
       const file = path.join(root, 'docs', 'INTEGRATION.md');
       ui.event('info', { message: fs.readFileSync(file, 'utf8') }); return 0;
     }
-    if (options.view) return await viewSession(findSession(options.view), options, ui);
-    if (options.attach) return await attachSession(findSession(options.attach), options, ui);
+    if (options.view || options.attach) {
+      let session = findSession(options.view || options.attach);
+      if (options.alias != null) session = setSessionAlias(session.id, options.alias);
+      return options.view ? await viewSession(session, options, ui) : await attachSession(session, options, ui);
+    }
     if (options.resume) return await resume(findSession(options.resume), options, ui);
     if (command === 'activity' || command === 'traffic') {
       const { watchRegistry } = await import('./runtime-client.js');
@@ -541,7 +567,12 @@ export async function main(argv) {
       return failed ? 1 : 0;
     }
     if (command === 'sessions') {
-      for (const session of sessions()) ui.event('session', { session, message: `${session.id.slice(0, 8)} · ${session.provider} · ${session.goal?.status || 'chat'} · ${session.cwd}` });
+      if (ui.interactive) {
+        const selected = await chooseSavedSession(ui);
+        if (!selected) return 0;
+        return selected.action === 'view' ? await viewSession(selected.session, options, ui) : await attachSession(selected.session, options, ui);
+      }
+      for (const session of sessions()) ui.event('session', { session, message: `${sessionLabel(session)} · ${session.cwd}` });
       return 0;
     }
     if (command === 'resume') return await resume(findSession(rest[0], options.cwd), options, ui);
@@ -618,7 +649,7 @@ export async function main(argv) {
       const taskOptions = { ...options, initialContext: positionalContext, contextFileText };
       let session;
       const goal = Boolean(options.goal || command !== 'run' || ['parallel', 'besties', 'debate'].includes(options.mode));
-      const creationInput = { provider: provider.id, model: options.model || null, cwd: options.cwd, prompt, initialContext: positionalContext || null,
+      const creationInput = { provider: provider.id, model: options.model || null, cwd: options.cwd, alias: options.alias || null, prompt, initialContext: positionalContext || null,
         ...(contextFileText == null ? {} : { contextFileDigest: digest(contextFileText) }), goal, mode: options.mode || 'solo',
         contractDigest: options.contract ? digest(fs.readFileSync(path.resolve(options.contract))) : null,
         authorization: { yolo: options.yolo, readOnly: options.readOnly || false, tokenBudget: options.tokenBudget || null, runtime: options.runtimeSeconds || null, executor: options.delegationSelection?.executor || options.executor || null,
@@ -626,6 +657,7 @@ export async function main(argv) {
       if (options.requestId) {
         const reserved = reserveRequest('cli-create', options.requestId, creationInput, db => {
           const initial = { version: 1, id: randomUUID(), provider: provider.id, backend: provider.backend, cwd: options.cwd, model: options.model || provider.model || null,
+            ...(options.alias == null ? {} : { alias: options.alias }),
             engineThreadId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), turns: 0, goal: null, executionState: 'idle' };
           applyDelegationSelection(initial, options.delegationSelection); applyBestiesSelection(initial, options.bestiesSelection); applyParallelSelection(initial, options.parallelAgents); applyDebateSelection(initial, options.debateAgents); applyLaunchSelection(initial, options); prepareTask(initial, taskOptions, prompt, { persist: false });
           if (goal && !initialContext) initial.goal = newGoal(initial.contract.objective, options.tokenBudget || initial.contract.limits.tokenBudget);
@@ -634,7 +666,7 @@ export async function main(argv) {
         session = loadSession(reserved.sessionId);
         if (!initialContext && listRecords('execution').some(j => j.sessionId === session.id)) return await viewSession(session, options, ui);
       } else {
-        session = createSession(provider, options.cwd, options.model); applyDelegationSelection(session, options.delegationSelection); applyBestiesSelection(session, options.bestiesSelection); applyParallelSelection(session, options.parallelAgents); applyDebateSelection(session, options.debateAgents); applyLaunchSelection(session, options); prepareTask(session, taskOptions, prompt);
+        session = createSession(provider, options.cwd, options.model, options.alias); applyDelegationSelection(session, options.delegationSelection); applyBestiesSelection(session, options.bestiesSelection); applyParallelSelection(session, options.parallelAgents); applyDebateSelection(session, options.debateAgents); applyLaunchSelection(session, options); prepareTask(session, taskOptions, prompt);
         if (goal && !initialContext) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget);
       }
       saveSession(session);

@@ -85,6 +85,7 @@ export class TerminalChat {
     this.model = session.resolvedModel || session.model || 'default';
     this.effort = session.selectedEffort === 'default' ? 'effort default' : session.selectedEffort || session.reasoningEffort || '';
     this.cwd = session.projectRoot || session.cwd || this.cwd;
+    this.alias = session.alias || '';
     this.goal = session.goal;
     this.mode = session.mode; this.executor = session.executor;
     this.bestiesGroupId = session.bestiesSessionId || (session.mode === 'besties' ? session.id || this.ui.sessionId : null);
@@ -272,6 +273,8 @@ export class TerminalChat {
         picker.description = result.description || '';
         picker.descriptionRows = Math.min(4, result.descriptionRows || 2);
         picker.selectEffort = Boolean(result.selectEffort);
+        picker.shortcuts = result.shortcuts;
+        picker.hint = result.hint;
         picker.efforts = new Map(picker.choices.map(choice => [choice.value, choice.effort || 'default']));
         picker.warning = result.warning || '';
         picker.focus = Math.max(0, picker.choices.findIndex(choice => choice.selected)); picker.loading = false; this.schedule();
@@ -452,6 +455,10 @@ export class TerminalChat {
       const picker = this.selection;
       if (key.name === 'escape' || key.ctrl && key.name === 'c') this.finishSelection(null);
       else if (picker.loading || !picker.choices.length) return;
+      else if (!key.ctrl && !key.meta && picker.shortcuts?.[key.name]) {
+        const choice = picker.choices[picker.focus];
+        if (!choice.disabled) this.finishSelection({ value: choice.value, action: picker.shortcuts[key.name] });
+      }
       else if (key.name === 'up' || key.name === 'down') picker.focus = (picker.focus + (key.name === 'up' ? picker.choices.length - 1 : 1)) % picker.choices.length;
       else if (picker.selectEffort && (key.name === 'left' || key.name === 'right')) {
         const choice = picker.choices[picker.focus];
@@ -540,7 +547,7 @@ export class TerminalChat {
       const picker = this.selection, compact = (this.selectionHeight || 16) < 12;
       if (!compact) put('');
       put('  ' + picker.title + (picker.choices.length ? ` · ${picker.focus + 1}/${picker.choices.length}` : ''), palette.gold, true);
-      put(picker.single ? picker.selectEffort ? '  ↑/↓ model · ←/→ effort · Enter confirms · Esc cancels' : '  ↑/↓ chooses · Enter confirms · Esc cancels' : '  Space selects · ↑/↓ moves · Enter starts · Esc cancels', palette.dim);
+      put(picker.hint ? '  ' + picker.hint : picker.single ? picker.selectEffort ? '  ↑/↓ model · ←/→ effort · Enter confirms · Esc cancels' : '  ↑/↓ chooses · Enter confirms · Esc cancels' : '  Space selects · ↑/↓ moves · Enter starts · Esc cancels', palette.dim);
       if (picker.loading) put('  ' + spinner[this.frame % spinner.length] + ' Loading available models…', palette.teal);
       const warning = picker.warning ? wrap(picker.warning, width - 5).slice(0, compact ? 1 : 2) : [];
       for (const line of warning) put('  ' + line, palette.red);
@@ -702,7 +709,8 @@ export class TerminalChat {
     const brand = accent('bzzy') + muted('  /  ') + color(provider + ' · ' + clip(this.model, modelWidth), palette.text, true) + muted(' · ') + color(effortLabel, palette.teal, true);
     const context = this.mode === 'delegate' && this.executor ? `Hands: ${this.executor.provider} · ${this.executor.model || 'default'} · ${this.executor.effort || 'default'}`
       : this.mode === 'besties' || this.bestiesGroupId ? 'Besties · shared evidence, messages and peer reviews' : 'Type / for commands';
-    const text = [brand, muted(clip(this.cwd || 'Your project, your agent.', textWidth)), muted(clip(context, textWidth))];
+    const directory = this.cwd || 'Your project, your agent.';
+    const text = [brand, muted(clip(this.alias ? `${this.alias} · ${directory}` : directory, textWidth)), muted(clip(context, textWidth))];
     const header = [];
     this.eyeRegion = null;
     if (eyeRows) {

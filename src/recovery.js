@@ -78,6 +78,7 @@ export function contextFor(session) {
   // every report and historical artifact manifest in each model prompt.
   const history = assignmentContextPage(session, { limit: 12, prioritizeOpen: true, includeMoreIds: true });
   return JSON.stringify({ role: session.role || 'supervisor', mode: session.mode || 'solo', executor: session.executor || null, besties: session.besties || null, contract: session.contract, checkpoint: getRecord('checkpoint', session.id), recovery: getRecord('recovery', session.id),
+    importedContext: session.importedContext || null,
     relevantMemory: recall(session.projectRoot || session.cwd, session.goal?.objective || session.contract?.objective || '', 8),
     projectContext: projectContext(session.projectRoot || session.cwd), peers: session.peers || [], agentNamespace: session.agentNamespace || null,
     previousAcceptance: session.acceptance || null, pendingInput: session.pendingInput || [],

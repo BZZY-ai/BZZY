@@ -15,6 +15,9 @@ import { normalizeContract } from './contracts.js';
 import { budgetUsage } from './delegation-usage.js';
 import { reconcileSession } from './recovery.js';
 import { chatHelp } from './terminal-commands.js';
+import { promptSessionAlias } from './session-browser.js';
+import { exportProject } from './project-bundle.js';
+import { skillThat } from './skill-that.js';
 
 const groupMode = session => ['parallel', 'besties'].includes(session.mode);
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
@@ -226,9 +229,27 @@ async function watch(info, sessionId, owner, ui, options = {}) {
         if (['/detach', '/quit', '/exit'].includes(text)) { detached = true; ui.detached = true; break; }
         if (text === '/tabs') { showTabs(); continue; }
         if (text === '/help') { ui.event('info', { message: chatHelp }); continue; }
+        if (/^\/export(?:\s|$)/.test(text)) {
+          modalTask = true;
+          try { await exportProject(loadSession(sessionId), text.replace(/^\/export\s*/, ''), ui); }
+          finally { modalTask = false; }
+          continue;
+        }
         if (text.startsWith('/tab ')) { selectTab(text.slice(5).trim()); continue; }
         if (!options.activeControl || ownershipLost) { ui.event('info', { message: 'This is a read-only view. Use --attach to send agent input.' }); continue; }
         if (text === '/default') { saveSessionDefault(activeId, ui); continue; }
+        if (/^\/skill_that(?:\s|$)/.test(text)) {
+          modalTask = true;
+          try { await skillThat(loadSession(sessionId), text.replace(/^\/skill_that\s*/, ''), ui); }
+          finally { modalTask = false; }
+          continue;
+        }
+        if (/^\/alias(?:\s|$)/.test(text)) {
+          modalTask = true;
+          try { await promptSessionAlias(sessionId, text.replace(/^\/alias\s*/, ''), ui, () => requireOwner(sessionId, owner)); }
+          finally { modalTask = false; }
+          continue;
+        }
         if (/^\/telegram(?:\s|$)/.test(text)) {
           modalTask = true;
           try { await configureTelegram(text.replace(/^\/telegram\s*/, '') || 'panel', ui, { sessionId: activeId, connection: { info, owner } }); ui.refreshTelegramState?.(); }
@@ -354,6 +375,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   } finally { inputStopped = true; if (inputLoop) ui.reader?.close(); await inputLoop; clearInterval(heartbeat); process.removeListener('SIGINT', interrupt); ui.input?.removeListener('keypress', keypress); ui.onSelectTab = previousSelectTab; }
 }
 export async function viewSession(session, options, ui) {
+  options = { ...options, cwd: session.cwd };
   const info = await ensureRuntime(); ui.setSession?.(session.id, 'VIEW');
   ui.event('info', { message: `Read-only session view. Attach to chat: bzzy --attach ${session.id}` });
   return watch(info, session.id, randomUUID(), ui, { follow: options.follow || ui.interactive, activeControl: false });
@@ -398,6 +420,7 @@ export async function conversationInput(session, ui, connection) {
   return null;
 }
 export async function attachSession(session, options, ui) {
+  options = { ...options, cwd: session.cwd };
   const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
   await api('POST', 'claim', { takeover: true }); ui.setSession?.(session.id, 'CONTROL');
   let renewing = false, lost = false, redirect;
@@ -423,6 +446,21 @@ export async function attachSession(session, options, ui) {
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
       if ((await api('GET')).inputOwner?.owner !== owner) return 0;
       if (input === '/default') { saveSessionDefault(session.id, ui); continue; }
+      if (/^\/skill_that(?:\s|$)/.test(input)) {
+        try { await skillThat(session, input.replace(/^\/skill_that\s*/, ''), ui); }
+        catch (error) { ui.event('error', { message: error.message }); }
+        continue;
+      }
+      if (/^\/export(?:\s|$)/.test(input)) {
+        try { await exportProject(session, input.replace(/^\/export\s*/, ''), ui); }
+        catch (error) { ui.event('error', { message: error.message }); }
+        continue;
+      }
+      if (/^\/alias(?:\s|$)/.test(input)) {
+        try { Object.assign(session, await promptSessionAlias(session.id, input.replace(/^\/alias\s*/, ''), ui, () => requireOwner(session.id, owner))); }
+        catch (error) { ui.event('error', { message: error.message }); }
+        continue;
+      }
       if (/^\/telegram(?:\s|$)/.test(input)) {
         try { await configureTelegram(input.replace(/^\/telegram\s*/, '') || 'panel', ui, { sessionId: session.id, connection: { info, owner } }); ui.refreshTelegramState?.(); }
         catch (error) { ui.event('error', { message: error.message }); }
@@ -460,7 +498,7 @@ export async function attachSession(session, options, ui) {
         const resumeGoal = goalCommand && action === 'resume', newTask = goalCommand && !resumeGoal;
         if (resumeGoal || newTask) {
           result = await enqueueGoalTurn(session.id, owner, options, resumeGoal ? { resume: true, info } : { objective: action, info });
-        } else if (input.startsWith('/')) { ui.event('info', { message: 'Attached chat: send text, /providers, /models, /default, /telegram, /goal <objective>, /goal status|pause|resume|clear, /debate or /detach.' }); continue; }
+        } else if (input.startsWith('/')) { ui.event('info', { message: 'Attached chat: send text, /alias, /export, /skill_that, /providers, /models, /default, /telegram, /goal <objective>, /goal status|pause|resume|clear, /debate or /detach.' }); continue; }
         else result = await api('POST', 'execute', { prompt: input, options, goal: false }, randomUUID());
       } catch (error) { ui.event('error', { message: error.message }); continue; }
       await watch(info, session.id, owner, ui, { executionId: result.executionId, activeControl: true });
