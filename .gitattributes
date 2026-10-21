@@ -1,0 +1,2 @@
+# Preserve vendored upstream snapshots byte-for-byte, including their whitespace.
+references/** -whitespace

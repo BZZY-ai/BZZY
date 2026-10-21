@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bzzy:events:v1",
+  "title": "bzzy public event envelope v1",
+  "type": "object",
+  "required": ["version", "id", "seq", "sessionId", "type", "data", "createdAt"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "description": "Stable event identity; use to deduplicate deliveries." },
+    "seq": { "type": "integer", "minimum": 1, "description": "Durable monotonically increasing SQLite cursor. Gaps are expected." },
+    "sessionId": { "type": "string", "format": "uuid" },
+    "type": { "type": "string", "description": "Public types include goal.completed, goal.stalled, lifecycle, summary, usage.updated, delegation.usage, besties.usage, parallel.usage, peer.message, peer.review, activity, network.capture, network.request, network.response, network.error, artifact, checkpoint, question, question.answered, input.owner and execution.finished. Ignore unknown types for forward compatibility." },
+    "data": { "type": "object" },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

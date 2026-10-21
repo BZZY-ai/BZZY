@@ -1,0 +1,412 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { PassThrough } from 'node:stream';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { UI } from '../src/ui.js';
+import { clean, cellWidth, wrap } from '../src/terminal-format.js';
+import { eyeMotion } from '../src/mascot.js';
+import { RunnerUI } from '../src/runtime-ui.js';
+import { events } from '../src/database.js';
+import { commandSuggestions } from '../src/terminal-commands.js';
+
+const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+function terminal() {
+  const input = new PassThrough(); input.isTTY = true; input.isRaw = false; input.setRawMode = value => { input.isRaw = value; };
+  const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 32, columns: 100 });
+  let written = ''; output.on('data', chunk => { written += chunk; });
+  const ui = new UI({ input, output, error: output }); ui.setSession(sessionId);
+  return { ui, input, output, get written() { return written; } };
+}
+test('full-screen chat retains streaming replies and pins the latest user message through long output', async () => {
+  const term = terminal(), { ui } = term;
+  try {
+    ui.updateSession({ id: sessionId, provider: 'codex', model: 'chosen-model', cwd: '/project', executionState: 'running', usage: { tokens: 1234, available: true } });
+    ui.updateSession({ id: sessionId, provider: 'codex', model: 'chosen-model', cwd: '/project', executionState: 'running', usage: { tokens: 1000, available: true }, summary: { usage: { totalTokens: 900 } } });
+    assert.equal(ui.tui.tokens, 1234, 'an older polling snapshot must not erase newer streaming usage');
+    const answer = ui.ask('bzzy › '); await Promise.resolve();
+    ui.event('message.user', { text: 'Validate this ownership finding' });
+    for (let index = 0; index < 70; index++) ui.event('text', { text: `Evidence line ${index}.\n`, itemId: 'reply' });
+    ui.tui.render();
+    assert.equal(ui.tui.pinned, 'Validate this ownership finding');
+    assert.match(ui.tui.entries.find(entry => entry.kind === 'assistant').text, /Evidence line 69/);
+    const frame = ui.tui.lastFrame.map(clean).join('\n');
+    assert.match(frame, /YOU ASKED\n.*Validate this ownership finding/);
+    assert.match(frame, /Evidence line 69/); assert.match(frame, /1,234 tokens/); assert.match(frame, new RegExp(sessionId));
+    assert.ok(term.written.includes('\x1b[1;')); assert.ok(term.written.includes('\x1b[?1049h'));
+    ui.tui.key('n', { name: 'n' }); ui.event('text', { text: 'Still visible.', itemId: 'reply' }); ui.tui.render();
+    assert.equal(ui.tui.value, 'n'); assert.match(ui.tui.entries.at(-1).text, /Still visible/);
+    Object.assign(term.output, { columns: 80, rows: 24 }); ui.tui.render();
+    const smaller = ui.tui.lastFrame.map(clean).join('\n');
+    assert.match(smaller, /Validate this ownership finding/); assert.match(smaller, /Still visible/);
+    assert.match(smaller, new RegExp(sessionId)); assert.match(smaller, /1,234 tokens/);
+    ui.tui.key('\r', { name: 'return' }); assert.equal(await answer, 'n');
+  } finally { ui.close(); }
+  assert.equal(term.input.isRaw, false); assert.ok(term.written.includes('\x1b[?1049l'));
+});
+test('participant checklist is selectable with space and arrows and can be cancelled', async () => {
+  const { ui } = terminal();
+  try {
+    const choice = ui.chooseMany('Choose debate agents', [{ value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude', selected: true }, { value: 'deepseek', label: 'DeepSeek' }]);
+    ui.tui.key(' ', { name: 'space' }); ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' }); ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' });
+    ui.tui.key('\r', { name: 'return' }); assert.deepEqual(await choice, ['codex', 'deepseek']);
+    const cancelled = ui.chooseMany('Choose', [{ value: 'a', label: 'A' }]); ui.tui.key('', { name: 'escape' }); assert.equal(await cancelled, null);
+  } finally { ui.close(); }
+});
+test('weekly quotas stay in the header and Activity shows readable progress without raw tool commands', async () => {
+  const { ui, output } = terminal();
+  try {
+    ui.updateSession({ id: sessionId, provider: 'codex', model: 'fixture-brain', selectedEffort: 'high', executionState: 'idle' });
+    ui.accountStatusEnabled = true;
+    ui.accountStatus = {
+      codex: { status: 'available', weekly: { remainingPercent: 75 }, checkedAt: Date.now() },
+      claude: { status: 'available', weekly: { remainingPercent: 65 }, checkedAt: Date.now() },
+      deepseek: { status: 'available', balance: { currency: 'USD', amount: 12.34 }, checkedAt: Date.now() },
+    };
+    ui.event('message.user', { text: 'Visit paypal.com and extract the footer' });
+    ui.event('tool', { name: 'shell', detail: 'curl -sSL https://paypal.com/' });
+    ui.event('activity', { id: 'footer', summary: 'Checking the footer on paypal.com', details: 'I’m opening paypal.com to locate its footer and extract its text.' });
+    ui.tui.setPanel('activity');
+    for (const [columns, rows] of [[100, 32], [80, 24]]) {
+      Object.assign(output, { columns, rows }); ui.tui.render();
+      const frame = ui.tui.lastFrame.map(clean).join('\n');
+      assert.match(frame, /Codex 7d: 75% left.*Claude 7d: 65% left.*DeepSeek: \$12.34/);
+      assert.match(frame, /Checking the footer/); assert.match(frame, /opening paypal.com/);
+      assert.doesNotMatch(frame, /curl -sSL/); assert.match(frame, /╭─ Message/); assert.match(frame, new RegExp(sessionId));
+      assert.equal(ui.tui.activities.length, 1);
+    }
+  } finally { ui.close(); }
+});
+test('Telegram controls stay visible while its message log scrolls, mask tokens and work by keyboard and mouse', async () => {
+  const { ui, output } = terminal();
+  try {
+    ui.accountStatusEnabled = true;
+    ui.telegramState = { configured: true, tokenConfigured: true, chatId: '42', goalNotifications: true, attached: true, attachedSessionId: sessionId, status: 'connected' };
+    ui.refreshTelegramState = () => {};
+    ui.tui.setPanel('telegram');
+    for (let index = 0; index < 30; index++) ui.event('telegram.message', { id: String(index), direction: 'incoming', status: 'received', text: 'Chat message ' + index });
+    for (const [columns, rows] of [[100, 32], [80, 24]]) {
+      Object.assign(output, { columns, rows }); ui.tui.render();
+      const frame = ui.tui.lastFrame.map(clean).join('\n');
+      assert.match(frame, /\[x\] Goal notifications/); assert.match(frame, /\[x\] Attach Telegram/);
+      assert.match(frame, /saved · hidden/); assert.match(frame, /Message/); assert.match(frame, new RegExp(sessionId));
+      assert.ok(ui.tui.scrollbar.maximum > 0);
+      ui.tui.scroll = 15; ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /\[x\] Goal notifications/);
+    }
+    let answer = ui.ask('bzzy › '); await Promise.resolve();
+    ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' }); assert.equal(await answer, '/telegram detach');
+    answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.render();
+    const setup = ui.tui.hitTargets.find(hit => hit.command === '/telegram pair'); assert.ok(setup);
+    ui.tui.mouse(0, setup.left + 2, setup.row); assert.equal(await answer, '/telegram pair');
+  } finally { ui.close(); }
+});
+test('agent tabs preserve drafts and retain separate activity and HTTP panels', async () => {
+  const { ui } = terminal();
+  try {
+    ui.setTabs(sessionId, [{ id: 'child-codex', agent: 'codex-1' }, { id: 'child-claude', agent: 'claude-2' }], 'child-codex');
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.key('draft', {});
+    ui.setTabs(sessionId, [{ id: 'child-codex', agent: 'codex-1' }, { id: 'child-claude', agent: 'claude-2' }], 'child-claude'); assert.equal(ui.tui.value, '');
+    ui.setTabs(sessionId, [{ id: 'child-codex', agent: 'codex-1' }], 'child-codex'); assert.equal(ui.tui.value, 'draft');
+    ui.event('activity', { id: 'activity', summary: 'Testing approved controls', details: 'Comparing independent evidence.' });
+    ui.tui.key('', { name: 'g', ctrl: true }); ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Testing approved controls/);
+    ui.event('network.response', { method: 'GET', url: 'https://scope.example/profile', status: 200 });
+    ui.tui.key('', { name: 'g', ctrl: true }); ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /scope.example/);
+    ui.reader.close(); await answer;
+  } finally { ui.close(); }
+});
+test('overview peer replies keep native identity and copy complete interleaved responses without joining distinct turns', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-peer-stream-')), previous = process.env.BZZY_HOME;
+  process.env.BZZY_HOME = directory;
+  const { ui } = terminal(), copied = [];
+  ui.clipboard = { async copyText(text) { copied.push(text); return { copied: true, method: 'native' }; } };
+  try {
+    const first = new RunnerUI('peer-session-a', { parentSessionId: sessionId, agent: 'codex-1', peer: true });
+    const second = new RunnerUI('peer-session-b', { parentSessionId: sessionId, agent: 'codex-2', peer: true });
+    first.event('backend', { method: 'turn/started', params: { turn: { id: 'native-turn-a' } } });
+    second.event('backend', { method: 'turn/started', params: { turn: { id: 'native-turn-a' } } });
+    first.event('text', { text: '**First peer** ', itemId: 'native-answer' });
+    second.event('text', { text: '**Second peer** ', itemId: 'native-answer' });
+    first.event('text', { text: 'complete answer.', itemId: 'native-answer' });
+    second.event('text', { text: 'independent answer.', itemId: 'native-answer' });
+    first.newline(); first.event('backend', { method: 'turn/started', params: { turn: { id: 'native-turn-b' } } });
+    first.event('text', { text: 'A distinct later reply.', itemId: 'native-answer' });
+    const forwarded = events(sessionId).filter(event => event.type === 'peer.text');
+    assert.equal(forwarded.length, 5);
+    assert.equal(forwarded[0].data.childSessionId, 'peer-session-a');
+    assert.equal(forwarded[0].data.itemId, 'native-answer'); assert.equal(forwarded[0].data.turnId, 'native-turn-a');
+    for (const event of forwarded) ui.event(event.type, event.data);
+    const answers = ui.tui.entries.filter(entry => entry.kind === 'assistant');
+    assert.equal(answers.length, 3);
+    assert.deepEqual(answers.map(entry => entry.text), ['**First peer** complete answer.', '**Second peer** independent answer.', 'A distinct later reply.']);
+    ui.tui.render(); ui.tui.scroll = ui.tui.scrollbar.maximum; ui.tui.render();
+    const icon = ui.tui.hitTargets.find(hit => hit.type === 'copy-response' && hit.entry.peerSessionId === 'peer-session-a'); assert.ok(icon);
+    ui.tui.mouse(0, icon.left, icon.row); await ui.tui.clipboardTask;
+    assert.deepEqual(copied, ['**First peer** complete answer.']);
+    assert.equal(ui.tui.entries.length, 3, 'copying does not create a chat message');
+  } finally {
+    ui.close(); if (previous == null) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('peer backends without native IDs get stable chunks and distinct tool/turn boundaries', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-peer-fallback-')), previous = process.env.BZZY_HOME;
+  process.env.BZZY_HOME = directory;
+  const { ui } = terminal();
+  try {
+    const peer = new RunnerUI('claude-peer', { parentSessionId: sessionId, agent: 'claude-1', peer: true });
+    peer.event('text', { text: 'Inspecting ' }); peer.event('text', { text: 'the supplied files.' });
+    peer.event('tool', { name: 'Read' });
+    peer.event('text', { text: 'Recorded ' }); peer.event('text', { text: 'the evidence.' });
+    peer.newline(); peer.event('text', { text: 'A separate follow-up.' });
+    const forwarded = events(sessionId).filter(event => event.type === 'peer.text');
+    assert.equal(forwarded[0].data.itemId, forwarded[1].data.itemId);
+    assert.notEqual(forwarded[1].data.itemId, forwarded[2].data.itemId);
+    assert.equal(forwarded[2].data.turnId, forwarded[3].data.turnId);
+    assert.notEqual(forwarded[3].data.turnId, forwarded[4].data.turnId);
+    for (const event of forwarded) ui.event(event.type, event.data);
+    assert.deepEqual(ui.tui.entries.map(entry => entry.text), ['Inspecting the supplied files.', 'Recorded the evidence.', 'A separate follow-up.']);
+  } finally {
+    ui.close(); if (previous == null) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('besties has a shared room for deduplicated messages and evidence reviews while retaining both peer chats', async () => {
+  const { ui, output } = terminal(), copied = [];
+  const first = { id: 'bestie-one', agent: 'codex-bestie-1-12345678' }, second = { id: 'bestie-two', agent: 'codex-bestie-2-12345678' };
+  ui.clipboard = { async copyText(text) { copied.push(text); return { copied: true, method: 'native' }; } };
+  try {
+    ui.setTabs(sessionId, [first, second]);
+    ui.updateSession({ id: sessionId, mode: 'besties', provider: 'codex', model: 'strong-model', executionState: 'running' });
+    ui.event('peer.message', { id: 'message-one', seq: 10, groupId: sessionId, from: first.id, to: second.id, text: 'The local parser accepts this candidate. Please inspect my recorded evidence.', evidence: ['evidence-1111'], createdAt: '2026-10-21T10:00:00.000Z' });
+    ui.event('peer.sent', { id: 'message-one', seq: 11, groupId: sessionId, from: first.id, to: second.id, text: 'The local parser accepts this candidate. Please inspect my recorded evidence.', evidence: ['evidence-1111'], createdAt: '2026-10-21T10:00:00.000Z' });
+    ui.event('peer.review', { id: 'review-one', seq: 12, groupId: sessionId, reviewer: second.id, peerSessionId: first.id, messageId: 'message-one', assessment: 'disputed', rationale: 'The independent control is still missing. This does not establish the claimed boundary failure.', evidence: ['evidence-1111'], createdAt: '2026-10-21T10:01:00.000Z' });
+    assert.equal(ui.tui.sharedRoom.length, 2, 'sent and received copies of a message are one room entry');
+    const input = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.value = 'preserved draft'; ui.tui.cursor = 15;
+    ui.tui.render(); const room = ui.tui.hitTargets.find(hit => hit.type === 'panel' && hit.panel === 'room'); assert.ok(room);
+    ui.tui.mouse(0, room.left + 2, room.row); assert.equal(ui.tui.panel, 'room'); assert.equal(ui.tui.value, 'preserved draft');
+    for (const [columns, rows] of [[100, 32], [80, 24]]) {
+      Object.assign(output, { columns, rows }); ui.tui.render();
+      const frame = ui.tui.lastFrame.map(clean).join('\n');
+      assert.match(frame, /SHARED ROOM/); assert.match(frame, /Overview.*codex · 1.*codex · 2/);
+      assert.match(frame, /independent control is still missing/); assert.match(frame, /peer judgment/);
+      assert.doesNotMatch(frame, /Brain|Hands|Ctrl\+G switch/); assert.match(frame, /╭─ Message/);
+    }
+    Object.assign(output, { columns: 100, rows: 32 }); ui.tui.render(); ui.tui.scroll = ui.tui.scrollbar.maximum; ui.tui.render();
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /codex · 1 → codex · 2/);
+    const icon = ui.tui.hitTargets.find(hit => hit.type === 'copy-response'); assert.ok(icon);
+    ui.tui.mouse(0, icon.left + 1, icon.row); await ui.tui.clipboardTask;
+    assert.deepEqual(copied, ['The local parser accepts this candidate. Please inspect my recorded evidence.']);
+    ui.tui.setPanel('chat'); ui.tui.key('', { name: 'g', ctrl: true }); assert.equal(ui.tui.panel, 'room');
+    ui.tui.setPanel('chat'); ui.tui.value = '/room'; ui.tui.cursor = 5; ui.tui.key('\r', { name: 'return' });
+    assert.equal(ui.tui.panel, 'room'); assert.ok(ui.tui.resolveInput, '/room changes the view without sending a model prompt');
+    ui.reader.close(); await input;
+    ui.updateSession({ id: first.id, mode: 'solo', bestiesSessionId: sessionId, peers: [{ sessionId: first.id, namespace: first.agent }, { sessionId: second.id, namespace: second.agent }], provider: 'codex', executionState: 'idle' });
+    assert.ok(ui.tui.panels().includes('room'), 'an attached child conversation retains its group room');
+    assert.equal(ui.tui.peerLabel(second.id), 'codex · 2');
+  } finally { ui.close(); }
+});
+test('besties and parallel live usage reuse the fixed counter with honest partial and unknown totals', () => {
+  const { ui } = terminal();
+  try {
+    for (const mode of ['besties', 'parallel']) {
+      ui.updateSession({ id: sessionId, mode, provider: 'codex', executionState: 'running' });
+      ui.event(mode + '.usage', { totalTokens: 40, complete: false, agents: [{ tokens: 40, available: true }, { tokens: null, available: false }] }); ui.tui.render();
+      assert.match(ui.tui.lastFrame.map(clean).join('\n'), /≥40 tokens/);
+      ui.event(mode + '.usage', { totalTokens: 90, complete: true, agents: [{ tokens: 40, available: true }, { tokens: 50, available: true }] }); ui.tui.render();
+      assert.match(ui.tui.lastFrame.map(clean).join('\n'), /90 tokens/); assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /≥90/);
+      ui.event(mode + '.usage', { totalTokens: 0, complete: false, agents: [{ tokens: null, available: false }, { tokens: null, available: false }] }); ui.tui.render();
+      assert.match(ui.tui.lastFrame.map(clean).join('\n'), /tokens —/); assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /0 tokens/);
+      ui.updateSession({ id: sessionId, mode, provider: 'codex', executionState: 'running', usage: { tokens: 0, available: true } }); ui.tui.render();
+      assert.match(ui.tui.lastFrame.map(clean).join('\n'), /tokens —/, 'a generic snapshot must not turn unavailable peer usage into reported zero');
+      ui.updateSession({ id: sessionId, mode, provider: 'codex', executionState: 'idle', summary: { usage: { totalTokens: 130, complete: true, agents: [{ tokens: 80, available: true }, { tokens: 50, available: true }] } } }); ui.tui.render();
+      assert.match(ui.tui.lastFrame.map(clean).join('\n'), /130 tokens/);
+    }
+  } finally { ui.close(); }
+});
+test('a model picker loads asynchronously, scrolls to the focused model and cancels without losing drafts', async () => {
+  const { ui, output } = terminal();
+  try {
+    Object.assign(output, { columns: 80, rows: 24 });
+    ui.tui.value = 'unsent draft'; ui.tui.cursor = 12;
+    let load;
+    const options = new Promise(resolve => { load = resolve; });
+    const chosen = ui.chooseOne('Choose model · codex', options);
+    ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Loading available models/);
+    load({ choices: Array.from({ length: 30 }, (_, index) => ({ value: `model-${index}`, label: `Model ${index}`, selected: index === 20 })) });
+    await Promise.resolve(); ui.tui.render();
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Choose model/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Model 20/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), new RegExp(sessionId));
+    ui.tui.key('', { name: 'down' }); ui.tui.key('\r', { name: 'return' });
+    assert.equal(await chosen, 'model-21'); assert.equal(ui.tui.value, 'unsent draft');
+    const cancelled = ui.chooseOne('Choose provider', new Promise(() => {}));
+    ui.tui.key('', { name: 'escape' }); assert.equal(await cancelled, null);
+    assert.equal(ui.tui.value, 'unsent draft');
+  } finally { ui.close(); }
+});
+test('slash suggestions filter, complete without switching agent tabs, and keep local view commands out of agent input', async () => {
+  const { ui, input, output } = terminal();
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve();
+    let tabSwitches = 0;
+    input.on('keypress', (_text, key) => { if (key.name === 'tab' && !key.bzzyHandled) tabSwitches++; });
+    input.write('/'); ui.tui.render();
+    const frame = ui.tui.lastFrame.map(clean).join('\n');
+    assert.ok(frame.includes('/models'));
+    for (const command of ['/debate', '/models', '/providers', '/default', '/telegram']) assert.ok(commandSuggestions('/').some(item => item.command === command));
+    const eyeRows = ui.tui.lastFrame.flatMap((line, index) => /[\u2800-\u28ff]/u.test(clean(line)) ? [index] : []);
+    assert.ok(eyeRows.length >= 5, 'the header has enough terminal pixels for the larger eyes');
+    assert.ok(eyeRows.every(index => index < ui.tui.eyeRegion.top + ui.tui.eyeRegion.rows), 'the mascot stays in the header');
+    assert.doesNotMatch(frame, /F[123]/);
+    ui.tui.key('mod', {}); input.write('\t');
+    assert.equal(ui.tui.value, '/models '); assert.equal(tabSwitches, 0);
+    ui.tui.key('', { name: 'u', ctrl: true }); input.write('/http\r');
+    assert.equal(ui.tui.panel, 'http'); assert.ok(ui.tui.resolveInput, 'a local panel command leaves the chat prompt open');
+    input.write('/te'); ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.completions().length, 0);
+    input.write('l'); assert.equal(ui.tui.completions()[0].command, '/telegram');
+    Object.assign(output, { columns: 80, rows: 24 }); ui.event('message.user', { text: 'Keep this question pinned' }); ui.tui.render();
+    const smaller = ui.tui.lastFrame.map(clean).join('\n'); assert.match(smaller, /Keep this question pinned/); assert.match(smaller, new RegExp(sessionId));
+    ui.tui.key('', { name: 'u', ctrl: true }); input.write('/telegram of\r'); assert.equal(await answer, '/telegram off');
+  } finally { ui.close(); }
+});
+test('Left and Right adjust only the focused model effort and confirmation returns both settings', async () => {
+  const { ui } = terminal();
+  try {
+    const options = { selectEffort: true, choices: [
+      { value: 'brain', label: 'Brain', efforts: ['medium', 'high', 'xhigh'], effort: 'high', selected: true },
+      { value: 'light', label: 'Light', efforts: ['low'] }, { value: 'fixed', label: 'Fixed', supportsEffort: false },
+    ] };
+    const chosen = ui.chooseOne('Choose model · codex', options); await Promise.resolve();
+    ui.tui.key('', { name: 'right' }); assert.equal(ui.tui.selection.efforts.get('brain'), 'xhigh');
+    ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'right' }); assert.equal(ui.tui.selection.efforts.get('light'), 'low');
+    ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'right' }); assert.equal(ui.tui.selection.efforts.get('fixed'), 'default');
+    ui.tui.key('', { name: 'up' }); ui.tui.key('', { name: 'up' }); ui.tui.render();
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /‹ xhigh ›/);
+    ui.tui.key('\r', { name: 'return' }); assert.deepEqual(await chosen, { value: 'brain', effort: 'xhigh' });
+    const cancelled = ui.chooseOne('Choose model', options); await Promise.resolve(); ui.tui.key('', { name: 'left' }); ui.tui.key('', { name: 'escape' });
+    assert.equal(await cancelled, null); assert.equal(options.choices[0].effort, 'high', 'cancelling does not mutate saved choices');
+  } finally { ui.close(); }
+});
+test('mouse reports click views, scroll and drag the right scrollbar without becoming message text', async () => {
+  const term = terminal(), { ui, input } = term;
+  const mouse = (button, x, y, released = false) => input.write(`\x1b[<${button};${x};${y}${released ? 'm' : 'M'}`);
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); input.write('unsent draft');
+    for (let index = 0; index < 50; index++) ui.event('network.response', { method: 'GET', url: `https://approved.example/request-${index}`, status: 200 });
+    ui.tui.render();
+    const http = ui.tui.hitTargets.find(hit => hit.type === 'panel' && hit.panel === 'http'); mouse(0, http.left + 2, http.row);
+    ui.tui.render(); assert.equal(ui.tui.panel, 'http'); assert.equal(ui.tui.value, 'unsent draft');
+    const bar = ui.tui.scrollbar; assert.ok(bar.maximum > 0);
+    mouse(64, 30, bar.top + 2); ui.tui.render(); assert.ok(ui.tui.scroll > 0);
+    const thumb = ui.tui.scrollbar; mouse(0, thumb.column, thumb.thumbTop); mouse(32, thumb.column, thumb.top); mouse(0, thumb.column, thumb.top, true);
+    ui.tui.render(); assert.equal(ui.tui.scroll, bar.maximum); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /request-0/);
+    assert.equal(ui.tui.scrollDrag, null); assert.equal(ui.tui.value, 'unsent draft');
+    ui.setTabs(sessionId, [{ id: 'codex-child', agent: 'codex-1' }]); let selected;
+    ui.onSelectTab = id => { selected = id; }; ui.tui.render();
+    const tab = ui.tui.hitTargets.find(hit => hit.type === 'tab' && hit.id === 'codex-child'); mouse(0, tab.left + 1, tab.row); assert.equal(selected, 'codex-child');
+    ui.reader.close(); await answer;
+    const chosen = ui.chooseOne('Choose provider', [{ value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude' }]); await Promise.resolve(); ui.tui.render();
+    const row = ui.tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 1); mouse(0, row.left + 1, row.row); ui.tui.render();
+    const confirm = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); mouse(0, confirm.left + 1, confirm.row); assert.equal(await chosen, 'claude');
+    const secret = ui.secret('Telegram bot token (hidden): '); await Promise.resolve(); input.write('123:fixture');
+    // SGR packets may arrive split across reads; their coordinates must stay out of secrets.
+    input.write('\x1b[<64;'); input.write('30;10M'); ui.tui.render();
+    assert.equal(ui.tui.value, '123:fixture'); assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /123:fixture/);
+    input.write('\r'); assert.equal(await secret, '123:fixture'); assert.ok(!ui.tui.history.includes('123:fixture'));
+    const cancelledSecret = ui.secret('Telegram bot token (hidden): '); await Promise.resolve(); input.write('123:discarded');
+    input.write('\x1b'); await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(await cancelledSecret, null); ui.tui.render();
+    assert.equal(ui.tui.value, 'unsent draft'); assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /123:discarded/);
+  } finally { ui.close(); }
+  assert.ok(term.written.includes('\x1b[?1006h')); assert.ok(term.written.includes('\x1b[?1006l'));
+});
+test('terminal text handles wide characters and strips injected terminal controls', () => {
+  assert.equal(cellWidth('你🐝a'), 5); assert.deepEqual(wrap('你🐝a', 4), ['你🐝', 'a']);
+  assert.equal(clean('\x1b[2Jhello\x1b]0;bad\x07'), 'hello');
+});
+test('eye animation paints only changed mascot cells, respects spacing and stops queuing frames under backpressure', async () => {
+  const term = terminal(), { ui, output } = term;
+  try {
+    clearTimeout(ui.tui.timer); clearTimeout(ui.tui.renderTimer); ui.tui.renderTimer = null;
+    const answer = ui.ask('bzzy › '); await Promise.resolve();
+    ui.event('message.user', { text: 'Keep this prompt visible while the mascot moves' });
+    ui.event('text', { text: 'The chat text must stay still.' }); ui.tui.render();
+    const before = [...ui.tui.lastFrame], region = ui.tui.eyeRegion, written = term.written.length;
+    assert.ok(region.columns >= 30 && region.rows >= 6);
+    assert.ok(region.suffixes.every(suffix => suffix.startsWith('      ')), 'text is separated from the mascot by a six-column gutter');
+    assert.equal(clean(before[0]), '', 'a spacious terminal has padding above the eyes');
+    ui.tui.animationTime = 2.2; ui.tui.paintEyes();
+    assert.deepEqual(ui.tui.lastFrame.slice(region.top + region.rows - 1), before.slice(region.top + region.rows - 1));
+    const painted = term.written.slice(written); assert.ok(painted.length > 0); assert.doesNotMatch(painted, /The chat text|YOU ASKED/);
+    for (const cursor of painted.matchAll(/\x1b\[(\d+);(\d+)H/g)) {
+      assert.ok(Number(cursor[1]) >= region.top && Number(cursor[1]) < region.top + region.rows);
+      assert.ok(Number(cursor[2]) >= region.left && Number(cursor[2]) < region.left + region.columns);
+    }
+    const pausedAt = term.written.length; ui.tui.outputBlocked = true; ui.tui.animationTime = 3.2; ui.tui.paintEyes();
+    assert.equal(term.written.length, pausedAt); output.emit('drain'); assert.equal(ui.tui.outputBlocked, false);
+    assert.notDeepEqual(eyeMotion(1), eyeMotion(1 + 1 / 60)); assert.ok(eyeMotion(6.75).open < 0.2);
+    ui.reader.close(); await answer;
+  } finally { ui.close(); }
+});
+test('copy mode gives selection to the terminal, freezes rendering, and resumes queued live text without losing drafts', async () => {
+  const term = terminal(), { ui, input } = term;
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); input.write('keep this draft');
+    ui.event('text', { text: 'Select this reply with your terminal.' }); ui.tui.render();
+    assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'copy'), false);
+    input.write('\x13');
+    assert.equal(ui.tui.copyMode, true); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /COPY MODE/);
+    assert.ok(term.written.includes('\x1b[?1000l'));
+    const frozenAt = term.written.length;
+    ui.event('text', { text: 'A reply arrived during selection.' }); ui.tui.animationTime = 4.1; ui.tui.paintEyes(); ui.tui.render();
+    input.write('ignored while selecting'); assert.equal(term.written.length, frozenAt); assert.equal(ui.tui.value, 'keep this draft');
+    ui.tui.key('', { name: 'escape' }); ui.tui.render();
+    assert.equal(ui.tui.copyMode, false); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /A reply arrived during selection/);
+    input.write('\x13'); assert.equal(ui.tui.copyMode, true); input.write('\x13'); assert.equal(ui.tui.copyMode, false);
+    ui.reader.close(); await answer;
+  } finally { ui.close(); }
+});
+test('Mac Option+Delete and Ctrl+W delete words, with Unicode and word navigation at the cursor', async () => {
+  const { ui, input } = terminal();
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); input.write('alpha beta');
+    input.write('\x1b\x7f'); assert.equal(ui.tui.value, 'alpha ');
+    input.write('naïve 世界'); input.write('\x17'); assert.equal(ui.tui.value, 'alpha naïve ');
+    input.write('\x17'); assert.equal(ui.tui.value, 'alpha ');
+    input.write('beta gamma'); ui.tui.key('', { name: 'left', meta: true }); assert.equal(ui.tui.cursor, 'alpha beta '.length);
+    input.write('\x1b[3;3~'); assert.equal(ui.tui.value, 'alpha beta ');
+    ui.tui.key('', { name: 'home' }); input.write('\x1b[3;3~'); assert.equal(ui.tui.value, ' beta ');
+    ui.tui.key('\r', { name: 'return' }); assert.equal(await answer, ' beta ');
+  } finally { ui.close(); }
+});
+test('multiline tool descriptions stay out of the composer and the header always shows the selected effort', async () => {
+  const { ui, output } = terminal();
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.key('my unsent message', {});
+    ui.updateSession({ provider: 'codex', model: 'gpt-5.6-sol', selectedEffort: 'high', executionState: 'running' });
+    ui.event('message.user', { text: 'Visit the supplied website and inspect its footer' });
+    ui.event('tool', { name: 'shell', detail: 'curl example\npython\nprint("a long tool invocation")\n'.repeat(30) });
+    for (const rows of [32, 24, 18]) {
+      Object.assign(output, { columns: 80, rows }); ui.tui.render();
+      for (const line of ui.tui.lastFrame) assert.doesNotMatch(clean(line), /[\r\n]/);
+      const frame = ui.tui.lastFrame.map(clean).join('\n'); assert.match(frame, /my unsent message/); assert.match(frame, new RegExp(sessionId));
+      if (rows >= 24) assert.ok(ui.tui.lastFrame.slice(0, 9).some(line => /effort high/.test(clean(line))));
+    }
+    ui.reader.close(); await answer;
+  } finally { ui.close(); }
+});
+test('HTTP view restores legacy WebFetch metadata and merges live request/result updates into one row', async () => {
+  const { ui } = terminal();
+  try {
+    ui.event('backend', { method: 'tool.started', params: { id: 'visit', name: 'WebFetch', input: { url: 'https://www.paypal.com/?token=private-value' } } });
+    ui.tui.setPanel('http'); ui.tui.render(); const history = ui.tui.lastFrame.map(clean).join('\n');
+    assert.match(history, /paypal\.com/); assert.match(history, /Backend-reported visit/); assert.doesNotMatch(history, /private-value/);
+    const url = ui.tui.traffic[0].url;
+    ui.event('network.backend', { id: 'real-visit', backendCallId: 'visit', url, provenance: 'backend-reported', backendState: 'completed' });
+    assert.equal(ui.tui.traffic.length, 1); assert.equal(ui.tui.traffic[0].backendState, 'completed');
+    ui.event('network.request', { id: 'observed', url: 'https://approved.example', method: 'GET' });
+    ui.event('network.response', { id: 'observed', url: 'https://approved.example', method: 'GET', status: 200 });
+    assert.equal(ui.tui.traffic.length, 2); assert.equal(ui.tui.traffic[1].status, 200);
+  } finally { ui.close(); }
+});

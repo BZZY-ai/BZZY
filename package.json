@@ -1,0 +1,25 @@
+{
+  "name": "bzzy-cli",
+  "version": "0.2.0",
+  "description": "A persistent coding agent with Codex goals, subscription backends, and API providers.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/m4ke-a-wish/bzzy-cli.git"
+  },
+  "homepage": "https://github.com/m4ke-a-wish/bzzy-cli#readme",
+  "bugs": {
+    "url": "https://github.com/m4ke-a-wish/bzzy-cli/issues"
+  },
+  "engines": { "node": ">=24" },
+  "bin": { "bzzy": "bin/bzzy.js" },
+  "exports": { ".": "./src/api-client.js" },
+  "files": ["bin", "src", "assets", "docs", "references", "README.md", "NOTICE", "LICENSE"],
+  "scripts": {
+    "start": "node bin/bzzy.js",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.mjs",
+    "smoke": "node scripts/smoke-engines.mjs"
+  }
+}

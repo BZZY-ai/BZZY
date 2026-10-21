@@ -1,0 +1,17 @@
+{
+  "version": "0.162.0",
+  "tag": "rust-v0.162.0",
+  "commit": "c1382380de69521303b416720a52f42d51af6248",
+  "upstream": "https://github.com/openai/codex",
+  "license": "Apache-2.0",
+  "sha256": {
+    "agent-instructions.md": "e1bdd4f8f0df4b20f4a0ffc8a861ce819df45325d8cecdfb92e80379cf8d142e",
+    "codex-rs/ext/goal/src/accounting.rs": "841ac76999cfb0c050afdc22e35750f7b11d13b385dfc0bba97898914d58360f",
+    "codex-rs/ext/goal/src/extension.rs": "47fe789555dc082a7b9f1b9d67e2f084bde9fcce34aad1d61257a71c03a67055",
+    "codex-rs/ext/goal/src/runtime.rs": "e5db4c95e5e1c6d5196998817c7c8507aa3f3ac52a4435ccbc6d13781742a902",
+    "codex-rs/ext/goal/src/spec.rs": "db48400d291ecb642b0d1189c73eea81a412f4b13bc9f7d917dc0dbd3f7828ea",
+    "codex-rs/ext/goal/templates/goals/budget_limit.md": "ebac90ff1fc825baf3003875ea8a1e3de495f4a93bbf8fdd066b594595d358aa",
+    "codex-rs/ext/goal/templates/goals/continuation.md": "764b9c26b36013a21b687d74597e303be9bbf13776c359ec1fb185dbc0e7eac7",
+    "codex-rs/state/goals_migrations/0001_thread_goals.sql": "b3aac485fec27eaefbdd3e68651bdf6d640908fb10226f3562cc5ffe92ca3d1f"
+  }
+}

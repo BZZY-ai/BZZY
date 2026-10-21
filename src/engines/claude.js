@@ -1,0 +1,184 @@
+import path from 'node:path';
+import readline from 'node:readline';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import { launch, root } from '../process.js';
+import { home, writeJson, saveSession } from '../store.js';
+import { continuationPrompt, readReport, reportPath } from '../goals.js';
+import { backendIsolation } from '../policy.js';
+import { taskTools } from '../tools.js';
+import { agentInstructions, reasoningEffort } from '../instructions.js';
+import { stopProcess } from '../policy.js';
+import { processIdentity } from '../recovery.js';
+import { subscriptionEnvironment, subscriptionStatus } from '../auth.js';
+import { BackendTraffic } from '../backend-traffic.js';
+import { conversationPrompt, completeConversationHandoff } from '../conversation.js';
+import { recordClaudeQuota } from '../account-status.js';
+import { ActivityReporter } from '../live-activity.js';
+
+export function claudeEnvironment() {
+  return subscriptionEnvironment('claude');
+}
+
+export function claudeArgs(session, options, mcpConfig) {
+  const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    '--include-partial-messages', '--permission-prompt-tool', 'stdio'];
+  if (session.engineThreadId) args.push('--resume', session.engineThreadId);
+  else args.push('--session-id', session.engineSessionId || session.id);
+  if (session.model) args.push('--model', session.model);
+  const effort = reasoningEffort(session, options);
+  if (effort) args.push('--effort', effort);
+  session.reasoningEffort = effort || 'provider default';
+  if (options.yolo || options.scopedAutonomy) args.push('--dangerously-skip-permissions');
+  if (mcpConfig) args.push('--mcp-config', mcpConfig, '--allowedTools', ...taskTools(session, { goalMode: options.goalMode }).map(t => `mcp__bzzy_goal__${t.name}`));
+  args.push('--append-system-prompt', agentInstructions(session, options));
+  return args;
+}
+
+export class ClaudeEngine {
+  constructor(provider, session, options, ui) { Object.assign(this, { provider, session, options, ui }); this.interrupted = false; this.traffic = new BackendTraffic(session, ui); this.progress = options.activityReporter || new ActivityReporter(session, ui); }
+
+  async run(prompt, { goal = false } = {}) {
+    this.options.goalMode = goal;
+    this.progress.setPrompt(goal ? this.session.goal.objective : prompt);
+    const env = { ...claudeEnvironment(), ...this.options.networkEnv };
+    if (this.session.backendHomes?.claudeConfigDir) env.CLAUDE_CONFIG_DIR = this.session.backendHomes.claudeConfigDir;
+    if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { directory: env.CLAUDE_CONFIG_DIR }).available) throw new Error('Claude subscription authentication is unavailable. Run bzzy auth claude to sign in through official Claude Code.');
+    const nonce = this.options.toolHost?.nonce || randomUUID();
+    let configFile;
+    if (goal || this.options.toolHost) {
+      configFile = path.join(home(), 'runtime', `${this.session.id}-mcp.json`);
+      writeJson(configFile, { mcpServers: { bzzy_goal: { type: 'stdio', command: process.execPath,
+        args: this.options.toolHost ? [path.join(root, 'bin', 'bzzy.js'), 'internal-tools', this.options.toolHost.socket, this.options.toolHost.token] : [path.join(root, 'bin', 'bzzy.js'), 'internal-mcp', this.session.id, nonce], env: { BZZY_HOME: home() } } } });
+    }
+    let activity = false, text = '', streamed = false, result, stderr = '', tokens = 0;
+    const priorTokens = this.session.usage?.tokens || 0;
+    const messageUsage = new Map();
+    this.child = launch('claude', claudeArgs(this.session, this.options, configFile), {
+      env, cwd: this.session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
+      isolation: this.options.strictPolicy ? backendIsolation('claude', env, this.session.cwd, this.options.policy) : null,
+    });
+    const child = this.child;
+    this.session.backendProcess = processIdentity(child.pid); saveSession(this.session);
+    const send = value => { if (!child.stdin.destroyed) child.stdin.write(`${JSON.stringify(value)}\n`); };
+    const lines = readline.createInterface({ input: child.stdout });
+    let failure;
+    const userMessage = { type: 'user', message: { role: 'user', content: conversationPrompt(this.session, goal ? continuationPrompt(this.session.goal) : prompt) }, parent_tool_use_id: null, session_id: this.session.engineThreadId || this.session.engineSessionId || this.session.id };
+    const initializeId = `bzzy-init-${nonce}`;
+    const initializeTimeout = setTimeout(() => {
+      failure = new Error('Claude control initialization timed out.');
+      child.kill('SIGTERM');
+    }, 30000);
+    child.stdin.on('error', error => { failure = error; });
+    child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-12000); });
+    const done = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', code => resolve(code));
+    });
+    lines.on('line', line => {
+      try {
+        const event = JSON.parse(line);
+        if (event.type === 'control_response' && event.response?.request_id === initializeId) {
+          clearTimeout(initializeTimeout);
+          if (event.response.subtype === 'success') send(userMessage);
+          else { failure = new Error(event.response.error || 'Claude control initialization failed.'); child.stdin.end(); }
+        } else if (event.type === 'rate_limit_event') {
+          recordClaudeQuota(this.session, event, this.ui);
+        } else if (event.type === 'control_request') {
+          this.handleControl(event).then(response => send({ type: 'control_response', response: { subtype: 'success', request_id: event.request_id, response } }))
+            .catch(error => { failure = error; send({ type: 'control_response', response: { subtype: 'error', request_id: event.request_id, error: error.message } }); });
+        } else if (event.type === 'stream_event' && !event.parent_tool_use_id && event.event?.delta?.type === 'text_delta') {
+          streamed = true;
+          const delta = event.event.delta.text;
+          text += delta;
+          this.ui.event('text', { text: delta });
+        } else if (event.type === 'assistant') {
+          if (event.session_id) this.session.engineThreadId = event.session_id;
+          for (const block of event.message?.content || []) {
+            if (block.type === 'tool_use') {
+              this.progress.tool(block.id, block.name, block.input);
+              this.traffic.tool(block.id, block.name, block.input);
+              this.ui.event('backend', { method: 'tool.started', params: { id: block.id, name: block.name, input: block.input } });
+              if (!block.name.startsWith('mcp__bzzy_goal__')) activity = true;
+              this.ui.event('tool', { name: block.name, detail: block.input?.command || block.input?.file_path || block.input?.url });
+            } else if (block.type === 'text' && !streamed && !event.parent_tool_use_id) {
+              text += block.text;
+              this.ui.event('text', { text: block.text });
+            }
+          }
+          if (event.message?.id) {
+            const usage = event.message.usage || {};
+            const current = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.output_tokens || 0);
+            const previous = messageUsage.get(event.message.id) || 0;
+            tokens += Math.max(0, current - previous);
+            messageUsage.set(event.message.id, Math.max(previous, current));
+            this.session.usage = { ...(this.session.usage || {}), tokens: priorTokens + tokens, available: true, source: 'backend-reported' };
+            saveSession(this.session);
+            this.ui.event('usage.updated', { provider: this.session.provider, model: this.session.model, tokens: priorTokens + tokens, available: true, source: 'backend-reported',
+              detail: usage });
+            if (!goal && this.options.tokenBudget != null && priorTokens + tokens >= this.options.tokenBudget) this.interrupt('token_limit').catch(() => {});
+          }
+        } else if (event.type === 'user') {
+          for (const block of event.message?.content || []) if (block.type === 'tool_result') this.traffic.complete(block.tool_use_id, Boolean(block.is_error));
+        } else if (event.type === 'system' && event.subtype === 'init') {
+          this.session.engineThreadId = event.session_id;
+          saveSession(this.session);
+        } else if (event.type === 'result') {
+          result = event;
+          if (event.session_id) this.session.engineThreadId = event.session_id;
+          child.stdin.end();
+        }
+      } catch (error) { failure = new Error(`Invalid Claude message: ${error.message}`); child.kill('SIGTERM'); }
+    });
+    send({ type: 'control_request', request_id: initializeId, request: { subtype: 'initialize', hooks: {} } });
+    let code;
+    try { code = await done; }
+    finally { clearTimeout(initializeTimeout); lines.close(); this.child = null; this.session.backendProcess = null; if (configFile) fs.rmSync(configFile, { force: true }); }
+    this.ui.newline();
+    this.session.turns++;
+    const reportedTokens = tokens || (result?.usage?.input_tokens || 0) + (result?.usage?.cache_creation_input_tokens || 0) + (result?.usage?.cache_read_input_tokens || 0) + (result?.usage?.output_tokens || 0);
+    this.session.usage = { tokens: priorTokens + reportedTokens, available: Boolean(result?.usage || tokens), source: 'backend-reported',
+      estimatedConversationCostUsd: result?.total_cost_usd ?? null, modelUsage: result?.modelUsage || null };
+    saveSession(this.session);
+    if (!goal && this.options.tokenBudget != null && this.session.usage.tokens >= this.options.tokenBudget) await this.interrupt('token_limit');
+    if (this.interrupted) { fs.rmSync(reportPath(this.session.id, nonce), { force: true }); return { interrupted: true, activity, tokens }; }
+    if (failure) throw failure;
+    if (code !== 0 || !result || result.is_error || (result.subtype && result.subtype !== 'success')) {
+      fs.rmSync(reportPath(this.session.id, nonce), { force: true });
+      throw new Error(result?.errors?.join('\n') || result?.result || stderr.trim() || `Claude exited (${code}) without a successful result.`);
+    }
+    if (!text && result.result) this.ui.event('text', { text: result.result + '\n' });
+    if (!tokens) tokens = (result.usage?.input_tokens || 0) + (result.usage?.cache_creation_input_tokens || 0) + (result.usage?.cache_read_input_tokens || 0) + (result.usage?.output_tokens || 0);
+    completeConversationHandoff(this.session);
+    return { activity, tokens, report: goal ? readReport(this.session.id, nonce) : null };
+  }
+
+  async handleControl(event) {
+    const request = event.request;
+    if (request.subtype !== 'can_use_tool') throw new Error(`Unsupported Claude control request: ${request.subtype}`);
+    if (request.tool_name === 'AskUserQuestion') {
+      if (!this.ui.interactive) return { behavior: 'deny', message: 'User input is required, but no interactive terminal is available.' };
+      const answers = {};
+      for (const question of request.input.questions || []) {
+        const choices = question.options?.map(option => option.label).join(' / ');
+        const answer = await this.ui.ask(`${question.question}${choices ? ` (${choices})` : ''}: `);
+        if (!answer) return { behavior: 'deny', message: 'The user did not supply an answer.' };
+        answers[question.question] = answer;
+      }
+      return { behavior: 'allow', updatedInput: { ...request.input, answers } };
+    }
+    const approved = this.options.yolo || this.options.scopedAutonomy || await this.ui.approve(`${request.tool_name}: ${JSON.stringify(request.input)}`);
+    return approved ? { behavior: 'allow', updatedInput: request.input } : { behavior: 'deny', message: 'The user did not approve this action.' };
+  }
+
+  async interrupt(reason = 'interrupted') {
+    this.interrupted = true;
+    this.stopReason = reason;
+    if (!this.child || this.child.exitCode != null) return;
+    stopProcess(this.child, 'SIGINT');
+    this.killTimer = setTimeout(() => stopProcess(this.child, 'SIGKILL'), 3000);
+    this.killTimer.unref();
+  }
+
+  async close() { clearTimeout(this.killTimer); if (this.child) { this.child.stdin.end(); stopProcess(this.child, 'SIGKILL'); } }
+}
