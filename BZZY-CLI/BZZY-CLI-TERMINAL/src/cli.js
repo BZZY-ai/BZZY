@@ -366,6 +366,7 @@ async function chat(provider, options, ui, existingSession) {
     if (input == null || input === '/quit' || input === '/exit') return 0;
     if (!input) continue;
     if (await ui.settingsCommand(input)) continue;
+    options = ui.executionOptions(options, session);
     try {
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
       if (input === '/sessions') { const selected = await chooseSavedSession(ui); if (selected) return await attachSession(selected.session, options, ui); continue; }
@@ -484,7 +485,7 @@ export async function main(argv) {
   }
   const ui = new UI({ ...options, hostMetrics: true, updateHandoff });
   ui.accountStatusEnabled = ui.interactive;
-  ui.onDebate = (id, focus) => debateConversation(loadSession(id), focus, options, ui);
+  ui.onDebate = (id, focus) => debateConversation(loadSession(id), focus, ui.executionOptions(options, { id }), ui);
   ui.onProvider = (id, argument, connection) => changeConversationProvider(loadSession(id), argument, ui, connection);
   ui.onSessions = () => queueSessionBrowser(ui);
   const launch = async () => {

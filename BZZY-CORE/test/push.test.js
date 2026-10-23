@@ -200,10 +200,11 @@ test('a rotating bounded scan cannot starve a goal behind more than one thousand
 
 test('minimal alerts contain the requested alias/objective, bound their size and omit credential-like text', async () => {
   const { goalAlert } = await import('../src/push/worker.js');
-  assert.deepEqual(goalAlert({ type: 'goal.completed', objective: 'Tell me Elon Musk age' }, { alias: 'Research' }), { title: 'Goal achieved · Research', body: 'Tell me Elon Musk age' });
+  assert.deepEqual(goalAlert({ type: 'goal.completed', objective: 'Tell me Elon Musk age', replyPreview: 'The final answer.' }, { alias: 'Research' }), { title: 'Goal achieved - Research', body: 'The final answer.' });
   const alert = goalAlert({ type: 'goal.stalled', objective: 'Use API_KEY=private-value' }, { alias: 'My token' });
   assert.equal(alert.title, 'Goal stalled'); assert.equal(alert.body, 'Open BZZY for details.');
-  assert.equal(goalAlert({ type: 'goal.completed', objective: 'a'.repeat(500) }, {}).body.length, 140);
+  const preview = goalAlert({ type: 'goal.completed', replyPreview: 'a'.repeat(500) }, {}).body;
+  assert.equal(preview.length, 180); assert.ok(preview.endsWith('...'));
 });
 
 test('new-version push alerts route to Settings only for the full own-phone grant and honor its notification toggle', async () => {

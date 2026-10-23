@@ -4,20 +4,19 @@ import { home } from '../engine/files.js';
 import { database, getRecord, putRecord, listRecords, digest, now } from '../engine/database.js';
 import { loadRelayIdentity } from '../relay/identity.js';
 import { authorizedPushRegistration } from './registration.js';
-import { assertShareText, sharedSecrets } from '../engine/share-bundle-policy.js';
+import { sharedSecrets } from '../engine/share-bundle-policy.js';
+import { notificationPreview } from '../engine/notification-preview.js';
 import { APNsClient, loadAPNsConfiguration } from './apns.js';
 
 const types = new Set(['goal.completed', 'goal.stalled', 'goal.waiting_for_input', 'system.update_available']);
 export function goalAlert(event, session, secrets = []) {
-  const safe = (value, maximum) => {
-    if (typeof value !== 'string') return '';
-    try { assertShareText(value, secrets); } catch { return ''; }
-    if (/password|secret|token|credential|api[_ -]?key|authorization|cookie/i.test(value)) return '';
-    return [...value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()].slice(0, maximum).join('');
-  };
+  const safe = (value, maximum = 180) => notificationPreview(value, maximum, secrets);
   const state = event.type === 'goal.completed' ? 'Goal achieved' : event.type === 'goal.waiting_for_input' ? 'Input needed' : 'Goal stalled';
   const alias = safe(session?.alias, 48);
-  return { title: alias ? `${state} · ${alias}` : state, body: safe(event.objective, 140) || 'Open BZZY for details.' };
+  if (event.type === 'goal.waiting_for_input') return { title: alias ? `${state} - ${alias}` : state, body: 'Open BZZY to review the request.' };
+  const preview = event.replyPreview || (event.type === 'goal.stalled' ? event.reason : null);
+  return { title: alias ? `${state} - ${alias}` : state,
+    body: safe(preview) || (Object.hasOwn(event, 'replyPreview') ? '' : safe(event.objective)) || 'Open BZZY for details.' };
 }
 
 // Reuses durable goal outbox records written by the existing engine. This worker

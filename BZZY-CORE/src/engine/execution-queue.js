@@ -4,6 +4,7 @@ import { loadSession } from './store.js';
 import { identityAlive } from './recovery.js';
 import { effectivePolicy } from './policy.js';
 import { captureEnvironment, saveExecutionEnvironment, removeExecutionEnvironment } from './execution-environment.js';
+import { terminalYolo } from './terminal-permissions.js';
 
 // All input channels use the same atomic queue and one-execution-per-session rule.
 export function enqueueExecution(sessionId, input, requestId, { authorize, prepare, channel } = {}) {
@@ -20,6 +21,8 @@ export function enqueueExecution(sessionId, input, requestId, { authorize, prepa
     if (typeof input.prompt !== 'string') throw new Error('Execution needs a prompt.');
     prepare?.(session, db);
     effectivePolicy(session, input.options || {});
+    const options = { ...input.options, yolo: terminalYolo(sessionId) ?? input.options?.yolo ?? false };
+    effectivePolicy(session, options);
     if (input.goal && !session.goal) throw new Error('This session has no goal contract. Create its goal through the CLI first.');
     if ((input.goal || input.resumeGoal) && session.goal?.importedHistorical) {
       delete session.goal.importedHistorical;
@@ -28,7 +31,7 @@ export function enqueueExecution(sessionId, input, requestId, { authorize, prepa
       session.acceptance = null;
       putRecord('session', session.id, session, db);
     }
-    const job = { id: randomUUID(), sessionId, prompt: input.prompt, options: input.options || {}, goal: Boolean(input.goal), resumeGoal: Boolean(input.resumeGoal), state: 'queued', createdAt: now(), ...(channel ? { channel } : {}) };
+    const job = { id: randomUUID(), sessionId, prompt: input.prompt, options, goal: Boolean(input.goal), resumeGoal: Boolean(input.resumeGoal), state: 'queued', createdAt: now(), ...(channel ? { channel } : {}) };
     environmentId = job.id; saveExecutionEnvironment(job.id, environment);
     putRecord('execution', job.id, job, db);
     appendEvent(sessionId, 'message.user', { text: input.prompt, kind: input.goal ? 'goal' : 'chat', executionId: job.id, ...(channel ? { channel } : {}) }, db);

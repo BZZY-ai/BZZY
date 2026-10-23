@@ -341,6 +341,12 @@ import Foundation
                   result["provider"].string != nil, result["model"] == .null || result["model"].string != nil,
                   result["effort"].string != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
             try CoreApplicationProtocol.opaque(resource)
+        case "permissions.set":
+            try result.record(["state", "yolo", "approvedQuestionId"], required: ["state", "yolo"])
+            guard result["state"].string == "accepted", result["yolo"].bool == params["enabled"]?.bool else { throw CoreApplicationError("INVALID_RESPONSE") }
+            if let question = params["questionId"]?.string {
+                guard result["approvedQuestionId"].string == question else { throw CoreApplicationError("INVALID_RESPONSE") }
+            } else if result.object?["approvedQuestionId"] != nil { throw CoreApplicationError("INVALID_RESPONSE") }
         case "execution.execute", "task.submit", "question.answer", "control.request":
             let fields: Set<String> = op == "task.submit" ? ["state", "taskId"] : ["state", "sessionId", "executionId", "answered", "controlId"]
             try result.record(fields, required: ["state"])

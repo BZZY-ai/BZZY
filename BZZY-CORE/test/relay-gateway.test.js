@@ -432,6 +432,27 @@ test('remote turns use principal-bound ownership and durable idempotency on the 
   assert.doesNotMatch(JSON.stringify(f.relayAudit), /PRIVATE_GATEWAY_TASK_FIXTURE/);
 });
 
+test('only the full own phone can change terminal YOLO and accept its exact pending approval idempotently', async t => {
+  const f = await fixture(t), terminal = f.createSession(), owner = 'ios-permission-client';
+  const paired = await f.pair(terminal.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });
+  const friend = await f.pair(terminal.id, controls);
+  assert.equal((await f.rpc(friend, 'session.get')).result.capabilities.yoloControl, false);
+  assert.equal((await f.rpc(friend, 'permissions.set', { owner, enabled: true })).error.code, 'FORBIDDEN');
+  assert.equal((await f.rpc(paired, 'session.get')).result.capabilities.yoloControl, true);
+  await f.rpc(paired, 'input.claim', { owner });
+  const questionId = randomUUID();
+  putRecord('question', questionId, { id: questionId, sessionId: terminal.id, kind: 'approval', question: 'Fixture action', state: 'pending', expiresAt: Date.now() + 60000 });
+  const id = randomUUID(), params = { owner, enabled: true, questionId };
+  const accepted = await f.rpc(paired, 'permissions.set', params, { id });
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  assert.deepEqual(accepted.result, { state: 'accepted', yolo: true, approvedQuestionId: questionId });
+  assert.equal(getRecord('question', questionId).answer, 'yes');
+  assert.deepEqual((await f.rpc(paired, 'permissions.set', params, { id })).result, accepted.result);
+  assert.equal((await f.rpc(paired, 'session.get')).result.capabilities.yolo, true);
+  assert.equal((await f.rpc(paired, 'permissions.set', { owner, enabled: false })).result.yolo, false);
+  assert.equal(listRecords('execution').length, 0, 'permission controls never submit model work');
+});
+
 test('full-phone voice chat executes the default Core assistant through encrypted Relay and recovers the spoken reply', async t => {
   const f = await fixture(t), seed = f.createSession();
   new CoreWorkspaces().configure({ path: f.workspace }, { requestId: randomUUID(), expectedRevision: 0 });

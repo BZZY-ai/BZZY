@@ -12,6 +12,7 @@ import { shareTerminal, importTerminal, forgetPrivateImportInput } from './share
 import { skillThat } from './skill-that.js';
 import { checkConnections } from './connection-check.js';
 import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider, executionRecord } from '@bzzy/core/engine/session-operations.js';
+import { initializeLaunchYolo } from './permission-controls.js';
 
 const groupMode = session => ['parallel', 'besties'].includes(session.mode);
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
@@ -76,18 +77,22 @@ export async function changeSessionProvider(source, provider, selected, ui, conn
     (sessionId, owner, selection, authorization) => setSessionProvider(sessionId, owner, source.provider, provider.id, selection, authorization));
 }
 export async function executeManaged(provider, session, options, ui, prompt, flags = {}) {
+  options = ui.executionOptions?.(options, session) || options;
   ui.setSession?.(session.id);
   const { returnAfterExecution = false, ...executionFlags } = flags;
   if (process.env.BZZY_DIRECT === '1') { const { runSession } = await import('./controller.js'); return runSession(provider, session, options, ui, prompt, executionFlags); }
   const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
   await api('POST', 'claim', { takeover: true });
   try {
+    initializeLaunchYolo(ui, session.id, owner);
     const result = await api('POST', 'execute', { prompt, options, ...executionFlags }, options.requestId || randomUUID());
     if (options.detach) { ui.event('info', { message: `Running independently.\nView: bzzy --view ${session.id}\nAttach: bzzy --attach ${session.id}` }); return 0; }
     return await watch(info, session.id, owner, ui, groupMode(session) && ui.interactive && !returnAfterExecution ? { activeControl: true, follow: true } : { executionId: result.executionId, activeControl: true });
   } finally { await api('POST', 'release', {}).catch(() => {}); Object.assign(session, loadSession(session.id)); }
 }
 async function watch(info, sessionId, owner, ui, options = {}) {
+  const previousPermissions = ui.permissionConnection, previousApproval = ui.onAnswerApproval;
+  if (options.activeControl) ui.permissionConnection = { info, owner, sessionId };
   const api = client(info, sessionId, owner); let detached = false, paused = false, ownershipLost = false, renewing = false, inputStopped = false, modalTask = false, processingInput = false;
   const initial = await api('GET'); let children = initial.capabilities.chatTabs ? initial.children : [];
   const roomSessionId = initial.session.bestiesSessionId || (initial.session.mode === 'besties' ? sessionId : null);
@@ -95,6 +100,10 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   let tabs = [{ id: sessionId, agent: 'Overview' }, ...children], activeId = ui.activeTab && tabs.some(t => t.id === ui.activeTab) ? ui.activeTab
     : ui.interactive && initial.session.mode === 'parallel' && children.length ? children[0].id : sessionId;
   const seenQuestions = new Set();
+  ui.onAnswerApproval = async (question, answer) => {
+    if (!options.activeControl || ownershipLost || detached) throw new Error('Attach with control before answering.');
+    await api('POST', 'answer', { questionId: question.id, answer }, randomUUID());
+  };
   if (options.restoreInitial) {
     const selected = activeId === sessionId ? initial : await client(info, activeId, owner)('GET');
     ui.openTerminal?.();
@@ -148,7 +157,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           finally { modalTask = false; }
           continue;
         }
-        if (text === '/update' || /^\/(?:settings|skills|session-action)(?:\s|$)/.test(text)) {
+        if (text === '/update' || text === '/yolo' || /^\/(?:settings|skills|session-action)(?:\s|$)/.test(text)) {
           modalTask = true;
           try { await ui.settingsCommand(text); } finally { modalTask = false; }
           continue;
@@ -248,7 +257,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           if (action === 'resume' && executionActive(selected.execution)) throw new Error('This goal is already running.');
           const targetId = action !== 'resume' && groupMode(initial.session) ? sessionId : activeId;
           if (action !== 'resume' && (executionActive(selected.execution) || targetId === sessionId && children.length)) ui.event('info', { message: 'Replacing the current goal. Stopping its run before starting the new objective…' });
-          const execution = await enqueueGoalTurn(targetId, owner, options, action === 'resume' ? { resume: true, info } : { objective: action, info });
+          const execution = await enqueueGoalTurn(targetId, owner, ui.executionOptions?.(options, { id: targetId }) || options, action === 'resume' ? { resume: true, info } : { objective: action, info });
           if (!groupMode(initial.session)) options.executionId = execution.executionId;
           continue;
         }
@@ -260,7 +269,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           if (snapshot.capabilities.activeSteering) await selectedApi('POST', 'control', { action: 'steer', text }, randomUUID());
           else ui.event('info', { message: 'This backend cannot accept text mid-turn. Use /pause, then send the next message.' });
         } else {
-          const execution = await selectedApi('POST', 'execute', { prompt: text, options: {}, goal: false }, randomUUID());
+          const execution = await selectedApi('POST', 'execute', { prompt: text, options: ui.executionOptions?.({}, { id: activeId }) || {}, goal: false }, randomUUID());
           if (!children.length) options.executionId = execution.executionId;
         }
       } catch (error) { ui.event('error', { message: error.message }); }
@@ -295,7 +304,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
       if (options.activeControl && !ownershipLost && snapshot.inputOwner?.owner !== owner) { ownershipLost = true; ui.event('info', { message: 'Input ownership transferred to another client. This terminal is now a viewer.' }); ui.setSession?.(sessionId, 'VIEW'); }
       if (options.activeControl && !ownershipLost) for (const question of selected.questions) {
         if (seenQuestions.has(question.id)) continue; seenQuestions.add(question.id);
-        if (inputLoop) { ui.event('info', { message: `${question.sessionId !== sessionId ? `[${question.sessionId.slice(0, 8)}] ` : ''}${question.question}` }); continue; }
+        if (inputLoop) { if (question.kind !== 'approval') ui.event('info', { message: `${question.sessionId !== sessionId ? `[${question.sessionId.slice(0, 8)}] ` : ''}${question.question}` }); continue; }
         const answer = ui.interactive ? await ui.ask(`${question.question} `) : '';
         if (!detached && !ownershipLost && answer != null) await api('POST', 'answer', { questionId: question.id, answer }, randomUUID()).catch(error => ui.event('error', { message: error.message }));
       }
@@ -309,7 +318,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
     }
     if (detached) ui.detached = true;
     return 0;
-  } finally { inputStopped = true; if (inputLoop) ui.reader?.close(); await inputLoop; clearInterval(heartbeat); process.removeListener('SIGINT', interrupt); ui.input?.removeListener('keypress', keypress); ui.onSelectTab = previousSelectTab; }
+  } finally { inputStopped = true; if (inputLoop) ui.reader?.close(); await inputLoop; clearInterval(heartbeat); process.removeListener('SIGINT', interrupt); ui.input?.removeListener('keypress', keypress); ui.onSelectTab = previousSelectTab; ui.permissionConnection = previousPermissions; ui.onAnswerApproval = previousApproval; }
 }
 export async function viewSession(session, options, ui) {
   options = { ...options, cwd: session.cwd };
@@ -379,6 +388,7 @@ export async function attachSession(session, options, ui) {
     ui.event('info', { message: 'Updated. Another client owns input; this terminal reopened as a viewer.' });
     return viewSession(session, { ...options, follow: true }, ui);
   }
+  const previousPermissions = ui.permissionConnection; ui.permissionConnection = { info, owner, sessionId: session.id };
   let renewing = false, lost = false, redirect;
   const heartbeat = setInterval(async () => {
     if (renewing || lost || ui.coreLifecycleInterrupted) return; renewing = true;
@@ -404,6 +414,8 @@ export async function attachSession(session, options, ui) {
       if (input == null || ['/quit', '/exit', '/detach'].includes(input)) return 0;
       if (!input) continue;
       if (await ui.settingsCommand?.(input)) continue;
+      initializeLaunchYolo(ui, session.id, owner);
+      options = ui.executionOptions?.(options, session) || options;
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
       if (input === '/sessions') {
         try { const selected = await chooseSavedSession(ui); if (selected) { redirect = selected.session; break; } }
@@ -475,7 +487,7 @@ export async function attachSession(session, options, ui) {
       } catch (error) { ui.event('error', { message: error.message }); continue; }
       await watch(info, session.id, owner, ui, { executionId: result.executionId, activeControl: true });
     }
-  } finally { clearInterval(heartbeat); await api('POST', 'release', {}).catch(() => {}); }
+  } finally { ui.permissionConnection = previousPermissions; clearInterval(heartbeat); await api('POST', 'release', {}).catch(() => {}); }
   return redirect ? attachSession(redirect, options, ui) : 0;
 }
 export async function controlSession(session, action, options = {}) {

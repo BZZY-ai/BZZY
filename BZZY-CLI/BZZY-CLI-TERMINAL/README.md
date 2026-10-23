@@ -80,6 +80,20 @@ rails. Right-click anywhere on an agent reply for **Copy response**, including
 replies in the shared room; no Copy button occupies the conversation. Hovering
 a reply and pressing F10 opens its menu too. Copy uses the complete reply’s
 readable body, including content outside the viewport. Labels and borders remain readable without color.
+The composer shows **YOLO OFF** in gray and **YOLO ON** in pink. Click it or use
+`/yolo` to change this terminal's Core-owned permission mode. Enabling it while
+an approval is pending atomically accepts that exact request; subsequent native
+approval requests in the current run use the enabled mode. The full native
+launch/sandbox mode applies to the next execution. Pause active work before
+turning it off; an already launched backend cannot have its native permissions
+retroactively tightened. Read-only and isolated Agent boundaries remain enforced.
+Pending approvals use expandable action cards and green **✔ Approve once** / red
+**✕ Deny** controls; Alt+Y/Alt+N answer the visible request without sending chat.
+Core rechecks the owner, exact pending question and expiry. Drafts remain intact.
+Alongside YOLO, a blue **Pursuing goal...** badge animates with rotating dots;
+verified achievement turns green and stalled outcomes turn red. Paused/cancelled
+goals keep their own labels. Status comes from Core lifecycle state, never reply text.
+
 Settings keeps its four main entries in compact cards. Open **Settings > BZZY
 Core > Terminal agent setups**, or `/settings modes`, to save each mode’s models,
 efforts and agent count. Debate, Parallel and Besties support two or three agents;

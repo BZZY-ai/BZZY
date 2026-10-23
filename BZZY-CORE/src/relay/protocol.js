@@ -26,9 +26,10 @@ const fields = Object.freeze({
   'input.claim': ['owner', 'takeover'], 'input.release': ['owner'],
   'execution.execute': ['owner', 'prompt', 'goal', 'resumeGoal'],
   'question.answer': ['owner', 'questionId', 'answer'],
+  'permissions.set': ['owner', 'enabled', 'questionId'],
   'control.request': ['owner', 'action', 'text'], 'command.status': ['requestId'],
 });
-export const COMMANDS = new Set(['voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
+export const COMMANDS = new Set(['voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
   'agents.create', 'agents.update', 'agents.archive', 'agents.open', 'agents.import', 'agents.import.cancel']);
 export const OPERATIONS = Object.freeze(Object.keys(fields));
 
@@ -55,6 +56,7 @@ export function permissionFor(request) {
   if (request.op === 'input.release') return 'claim';
   if (['execution.execute', 'task.submit'].includes(request.op)) return 'execute';
   if (request.op === 'question.answer') return 'answer';
+  if (request.op === 'permissions.set') return 'execute';
   if (request.op === 'control.request') {
     if (!['pause', 'cancel', 'steer'].includes(request.params.action)) fail('INVALID_REQUEST', 'Unknown control action.');
     return request.params.action;

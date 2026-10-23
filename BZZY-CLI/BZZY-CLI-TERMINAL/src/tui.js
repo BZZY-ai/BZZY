@@ -14,6 +14,7 @@ import { hostMetricsLabel } from './host-metrics.js';
 import { choicePopup, visibleChoices } from './choice-popup.js';
 import { fillSurface, replaceCells, sliceCells } from './terminal-surface.js';
 import { settingsLayout } from './settings-layout.js';
+import { goalIndicator } from './goal-indicator.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -51,7 +52,7 @@ export class TerminalChat {
       const instant = performance.now(), previous = this.frame;
       this.animationTime = (instant - this.animationStarted) / 1000; this.frame = Math.floor(this.animationTime * 10);
       if (!this.copyMode && !this.outputBlocked) {
-        if (previous !== this.frame && (this.busy || this.selection?.loading)) this.schedule();
+        if (previous !== this.frame && (this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated)) this.schedule();
         if (!this.renderTimer && this.ui.pet !== false) this.paintEyes();
       }
       const interval = this.ui.pet === false ? 100 : animationInterval;
@@ -102,6 +103,12 @@ export class TerminalChat {
     this.cwd = session.projectRoot || session.cwd || this.cwd;
     this.alias = session.alias || '';
     this.goal = session.goal;
+    this.executionPolicy = session.contract?.policy || session.policy;
+    if (snapshot.questions) {
+      this.pendingApproval = snapshot.questions.find(question => question.kind === 'approval' && (!question.state || question.state === 'pending'));
+      if (this.pendingApproval && !this.entries.some(entry => entry.kind === 'approval' && entry.questionId === this.pendingApproval.id))
+        this.add('approval', this.pendingApproval.question, { questionId: this.pendingApproval.id });
+    }
     this.mode = session.mode; this.executor = session.executor;
     this.bestiesGroupId = session.bestiesSessionId || (session.mode === 'besties' ? session.id || this.ui.sessionId : null);
     this.peers = session.peers || [];
@@ -144,12 +151,25 @@ export class TerminalChat {
       else this.add('assistant', data.text, { label, peerSessionId, itemId: data.itemId, turnId: data.turnId });
       this.streaming = true;
     } else if (type === 'message.user') {
+      if (data.kind === 'goal') this.goal = { status: 'active', objective: clean(data.text) };
       this.pinned = (data.kind === 'goal' ? '/goal ' : '') + clean(data.text); this.add('user', data.text, { goal: data.kind === 'goal', channel: data.channel }); this.streaming = false; this.scroll = 0;
       if (this.mode === 'delegate') this.delegationPhase = 'Supervisor planning';
     } else if (['peer.message', 'peer.sent', 'peer.review'].includes(type)) {
       this.recordRoomEvent(type, data);
-    } else if (type === 'question') this.add('question', data.question);
-    else if (type === 'question.answered') this.add('user', data.answer);
+    } else if (type === 'question') {
+      if (data.kind === 'approval') {
+        this.pendingApproval = data;
+        if (!this.entries.some(entry => entry.kind === 'approval' && entry.questionId === data.id)) this.add('approval', data.question, { questionId: data.id });
+      }
+      else this.add('question', data.question);
+    }
+    else if (type === 'question.answered') {
+      const approval = this.entries.findLast(entry => entry.kind === 'approval' && entry.questionId === data.id);
+      if (approval) { approval.decision = /^y(es)?$/i.test(data.answer) ? 'approved' : 'denied'; this.entryLayouts.delete(approval); }
+      else this.add('user', data.answer);
+      if (this.pendingApproval?.id === data.id) this.pendingApproval = null;
+    }
+    else if (type === 'question.expired') { if (this.pendingApproval?.id === data.id) this.pendingApproval = null; }
     else if (type === 'tool') {
       this.currentTool = `${data.name}${data.detail ? ' · ' + clean(data.detail).slice(0, 250) : ''}`;
       this.add('tool', this.currentTool); this.streaming = false;
@@ -180,7 +200,10 @@ export class TerminalChat {
         else if (visit.completed) previous.backendState = 'completed';
       }
     }
-    else if (type === 'summary') { this.add(data.status === 'complete' ? 'success' : 'notice', data.message); this.busy = false; if (['besties', 'parallel'].includes(this.mode) && data.usage) this.acceptGroupUsage(data.usage); }
+    else if (type === 'summary') {
+      if (this.goal && data.status) this.goal = { ...this.goal, status: data.status, reason: data.reason || null };
+      this.add(data.status === 'complete' ? 'success' : 'notice', data.message); this.busy = false; if (['besties', 'parallel'].includes(this.mode) && data.usage) this.acceptGroupUsage(data.usage);
+    }
     else if (type === 'error' || type === 'control.failed') { this.add('error', data.message); this.notice(data.message, true); }
     else if (type === 'worker.progress') {
       if (data.type === 'error') this.add('error', `${this.mode === 'delegate' ? 'Hands' : 'Agent'} · ${data.agent || data.workerSessionId?.slice(0, 8) || 'worker'}: ${data.message}`);
@@ -249,7 +272,7 @@ export class TerminalChat {
     if (message) this.add('notice', message);
   }
 
-  clear() { this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.schedule(); }
+  clear() { this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.schedule(); }
   selectTab(previous, next) {
     if (previous === next) return;
     this.textSelection = null;
@@ -513,6 +536,13 @@ export class TerminalChat {
     const hit = this.hitTargets?.findLast(target => y === target.row && x >= target.left && x <= target.right);
     if (this.selection && !hit) { if (['dropdown', 'context'].includes(this.selection.presentation) && !(this.popupRegion && x >= this.popupRegion.left && x <= this.popupRegion.right && y >= this.popupRegion.top && y <= this.popupRegion.bottom)) this.finishSelection(null); return; }
     if (hit) this.feedback(hit);
+    if (hit?.type === 'yolo') { this.permissionTask = this.ui.toggleYolo(); return; }
+    if (hit?.type === 'approval') { this.approvalTask = this.ui.answerApproval(hit.answer); return; }
+    if (hit?.type === 'approval-details') {
+      const entry = this.entries.find(item => item.kind === 'approval' && item.questionId === hit.id);
+      if (entry) { entry.expanded = !entry.expanded; this.entryLayouts.delete(entry); this.contentRevision++; this.schedule(); }
+      return;
+    }
     if (hit?.type === 'alias-save') { const value = this.aliasEdit?.value.trim(); this.aliasEdit = null; if (value) this.localCommand('/alias ' + value); this.schedule(); return; }
     if (hit?.type === 'alias-cancel') { this.aliasEdit = null; this.schedule(); return; }
     if (this.aliasEdit && hit?.type !== 'alias') { this.aliasEdit = null; this.schedule(); }
@@ -563,6 +593,9 @@ export class TerminalChat {
     }
   }
   key(text, key) {
+    if (key.meta && ['y', 'n'].includes(key.name) && this.pendingApproval && !this.hidden && !this.promptDraft && !this.selection) {
+      key.bzzyHandled = true; this.approvalTask = this.ui.answerApproval(key.name === 'y' ? 'yes' : 'no'); return;
+    }
     // readline emits an SGR mouse report as a CSI prefix followed by ordinary characters.
     // Consume the entire report before any character can enter the message or secret input.
     if (key.sequence === '\x1b[<') { this.mouseReport = ''; key.bzzyHandled = true; return; }
@@ -807,6 +840,7 @@ export class TerminalChat {
         const layout = this.entryLayout(entry, width);
         if (entry.kind === 'assistant') for (let offset = 0; offset < layout.lines.length - 1; offset++)
           this.contentHits.push({ type: 'response', entry, row: lines.length + offset, left: 3, right: width - 2 });
+        if (entry.kind === 'approval') this.contentHits.push({ type: 'approval-details', id: entry.questionId, row: lines.length, left: 3, right: width - 2 });
         for (const line of layout.lines) lines.push(line);
       }
     }
@@ -819,7 +853,15 @@ export class TerminalChat {
     const { color } = this.theme;
     const lines = [], put = (text, tone = palette.text, bold = false) => lines.push(color(text, tone, bold));
     const replyLine = line => color('  ▎ ', palette.agent) + fillSurface(line, width - 6, this.theme, palette.agentSurface, palette.text);
-    if (entry.kind === 'user') {
+    if (entry.kind === 'approval') {
+      const tone = entry.decision === 'approved' ? palette.goalSuccess : entry.decision === 'denied' ? palette.danger : palette.warning;
+      put('  ' + (entry.decision === 'approved' ? '✔ Approved once' : entry.decision === 'denied' ? '✕ Denied' : '◇ Permission requested') + '  ' + (entry.expanded ? '▴ Hide details' : '▾ Show details'), tone, true);
+      const command = clean(entry.text).replace(/\s*Allow once\? \[y\/N\]\s*$/, '');
+      const rows = entry.expanded ? wrap(command, width - 8) : wrapProse(clip(command, Math.max(20, (width - 8) * 2)), width - 8);
+      for (const line of rows) lines.push(color('  │ ', tone) + fillSurface(line, width - 6, this.theme, palette.surface, palette.text));
+      put('');
+    }
+    else if (entry.kind === 'user') {
       const label = 'YOU' + (entry.goal ? ' · /goal' : ''), text = clean(entry.text);
       const maximum = Math.max(12, Math.floor((width - 5) * (width >= 70 ? 0.78 : 1)));
       const body = wrapProse(text, maximum - 4), size = Math.max(cellWidth(label) + 6, ...body.map(line => cellWidth(line) + 4));
@@ -1248,6 +1290,27 @@ export class TerminalChat {
       else bottom.push(color('  ' + text, palette.accent));
     }
     const bottomHits = [];
+    if (this.panel === 'chat' && !this.promptDraft || this.panel === 'room' && !this.promptDraft) {
+      const enabled = this.ui.yoloEnabled?.() || false, label = this.ui.permissionSubmitting ? ' YOLO … ' : enabled ? ' YOLO ON ' : ' YOLO OFF ';
+      const left = width - cellWidth(label) - 1, indicator = goalIndicator(this.goal, this.frame);
+      let line = '  ';
+      if (indicator) {
+        const text = ' ' + clip(indicator.label, Math.max(1, left - 5)) + ' ';
+        line += fillSurface(text, cellWidth(text), this.theme, indicator.tone, palette.background, true);
+      }
+      line += ' '.repeat(Math.max(0, left - cellWidth(line)));
+      line += fillSurface(label, cellWidth(label), this.theme, enabled ? palette.yolo : palette.surface, enabled ? palette.background : palette.muted, true);
+      bottomHits.push({ type: 'yolo', row: bottom.length, left: left + 1, right: left + cellWidth(label) }); bottom.push(line);
+      if (this.pendingApproval && (!this.pendingApproval.expiresAt || this.pendingApproval.expiresAt > Date.now())) {
+        const disabled = this.ui.sessionMode === 'VIEW' || !this.ui.onAnswerApproval || this.approvalSubmitting;
+        let approvalLine = '  '; let column = 3;
+        for (const [text, answer, tone] of [[' ✔ Approve once ', 'yes', palette.goalSuccess], [' ✕ Deny ', 'no', palette.danger]]) {
+          approvalLine += fillSurface(text, cellWidth(text), this.theme, disabled ? palette.surface : tone, disabled ? palette.muted : palette.background, true) + ' ';
+          if (!disabled) bottomHits.push({ type: 'approval', answer, row: bottom.length, left: column, right: column + cellWidth(text) - 1 }); column += cellWidth(text) + 1;
+        }
+        bottom.push(approvalLine);
+      }
+    }
     if (this.busy && (this.currentTool || this.currentActivity)) bottom.push(muted('  ' + clip(this.currentTool || this.currentActivity, width - 3)));
     if (completions.length) {
       const maximum = height < 28 ? 3 : 6, offset = Math.max(0, Math.min(this.completionFocus - Math.floor(maximum / 2), completions.length - maximum));

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { goalReplyPreview } from './notification-preview.js';
 
 export function goalEvent(session, { question } = {}) {
   const goal = session.goal;
@@ -13,7 +14,7 @@ export function goalEvent(session, { question } = {}) {
     sessionId: session.id, goalId: goal.id, epoch: question ? `${goal.notificationEpoch || 0}-${question.id}` : goal.notificationEpoch || 0, provider: session.provider, model: session.model, mode: session.mode || 'solo',
     ...(session.mode === 'delegate' ? { executor: { provider: session.executor?.provider, model: session.executor?.model || null } } : {}),
     ...(session.modeResult?.goalId === goal.id ? { result: session.modeResult } : {}),
-    cwd: session.cwd, objective: goal.objective, status: goal.status, reason: goal.reason || null, evidence: goal.evidence || [],
+    cwd: session.cwd, objective: goal.objective, replyPreview: question ? '' : goalReplyPreview(session), status: goal.status, reason: goal.reason || null, evidence: goal.evidence || [],
     usage: { tokens: goal.tokensUsed || 0, seconds: goal.runtimeUsedSeconds ?? goal.timeUsedSeconds ?? null, turns: goal.turns || 0,
       available: session.summary?.usage?.complete ?? goal.tokensUsed != null, agents: session.summary?.usage?.agents || [],
       ...(session.mode === 'delegate' ? { supervisorTokens: usage?.supervisorTokens ?? goal.nativeTokensUsed ?? goal.supervisorTokensUsed ?? null,

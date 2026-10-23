@@ -41,7 +41,8 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
     let tail = selected ? ' ✓' : '';
     if (picker.selectEffort && choice.efforts?.length) tail = ` ‹ ${picker.efforts.get(choice.value)} ›`;
     const label = ` ${focused ? '›' : ' '} ${clip(choice.label, inner - cellWidth(tail) - 5)}`;
-    put(label + ' '.repeat(Math.max(0, inner - cellWidth(label + tail) - 1)) + tail + ' ', choice.disabled ? palette.muted : focused ? palette.accent : palette.text, focused, focused ? palette.selection : palette.surface);
+    const tone = picker.kind === 'approval' && palette[choice.tone];
+    put(label + ' '.repeat(Math.max(0, inner - cellWidth(label + tail) - 1)) + tail + ' ', choice.disabled ? palette.muted : tone && focused ? palette.background : tone || (focused ? palette.accent : palette.text), focused, focused ? tone || palette.selection : palette.surface);
     hits.push({ type: 'choice', index, row: lines.length - 1, left: 1, right: size - 2, disabled: choice.disabled });
     if (tail.startsWith(' ‹')) {
       hits.push({ type: 'effort', index, direction: 'left', row: lines.length - 1, left: size - cellWidth(tail) - 1, right: size - cellWidth(tail) + 1 },

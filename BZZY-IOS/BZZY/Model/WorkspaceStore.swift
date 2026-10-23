@@ -250,7 +250,7 @@ final class WorkspaceStore {
 
     func applyLiveEvents(_ data: [Data]) {
         guard let session = liveSession else { return }
-        var seen = Set<String>(), projected: [LocalMessage] = [], activity: [LiveActivity] = []
+        var seen = Set<String>(), approvalIDs = Set<String>(), projected: [LocalMessage] = [], activity: [LiveActivity] = []
         for bytes in data {
             guard let event = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                   event["sessionId"] as? String == session.id,
@@ -260,6 +260,7 @@ final class WorkspaceStore {
             let date = (event["createdAt"] as? String).flatMap(Self.eventDate) ?? Date(timeIntervalSince1970: 0)
             // Sequence is durable and unique within this explicitly scoped conversation.
             let uuid = UUID(uuidString: String(format: "20000000-0000-4000-8000-%012llx", UInt64(seq) & 0xffffffffffff))!
+            if type == "question", payload["kind"] as? String == "approval", let questionID = payload["id"] as? String { approvalIDs.insert(questionID) }
             if type == "message.user", let text = payload["text"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .user, createdAt: date))
             } else if type == "text", let text = payload["text"] as? String {
@@ -268,7 +269,7 @@ final class WorkspaceStore {
                 } else { projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date)) }
             } else if type == "question", payload["kind"] as? String == "input", let text = payload["question"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))
-            } else if type == "question.answered", let text = payload["answer"] as? String {
+            } else if type == "question.answered", !approvalIDs.contains(payload["id"] as? String ?? ""), let text = payload["answer"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .user, createdAt: date))
             } else if type == "debate.result", let text = payload["message"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))

@@ -148,6 +148,33 @@ struct ConversationCanvas: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
+            if isLive, relay.coreSessionID == conversationID {
+                HStack {
+                    if let status = store.liveSession?.goalStatus {
+                        GoalPhasePill(status: status)
+                    }
+                    Spacer(minLength: 6)
+                    Button {
+                        let pending = store.liveSession?.questions.first(where: { $0.kind == "approval" })
+                        Task { await relay.setCoreYolo(!relay.coreYoloEnabled, questionID: pending?.id, sessionID: conversationID) }
+                        BZZYTheme.haptic()
+                    } label: {
+                        Text(relay.coreYoloEnabled ? "YOLO ON" : "YOLO OFF").bzzyFont(11, weight: .bold, design: .monospaced)
+                            .padding(.horizontal, 13).frame(minHeight: 38)
+                            .foregroundStyle(relay.coreYoloEnabled ? BZZYTheme.background : BZZYTheme.secondary)
+                            .background(relay.coreYoloEnabled ? BZZYTheme.yolo : BZZYTheme.elevated, in: Capsule())
+                    }.buttonStyle(BZZYPressStyle())
+                        .disabled(!relay.coreActionsAvailable || !relay.coreYoloControl || relay.coreBusy || relay.coreCommandUncertain)
+                        .accessibilityLabel(relay.coreYoloEnabled ? "Disable YOLO" : "Enable YOLO")
+                        .accessibilityIdentifier("chat-yolo")
+                }
+                if let session = store.liveSession, session.id == conversationID {
+                    ScrollView {
+                        VStack(spacing: 8) { ForEach(session.questions) { question in LiveQuestionView(question: question, sessionID: conversationID) } }
+                    }.scrollIndicators(.hidden).frame(maxHeight: session.questions.isEmpty ? 0 : 260)
+                }
+                if let error = relay.coreError { Text(error).bzzyFont(11).foregroundStyle(BZZYTheme.danger) }
+            }
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("Message", text: $draft, axis: .vertical)
                     .bzzyFont(14).lineLimit(1...5).textFieldStyle(.plain)
@@ -223,6 +250,22 @@ struct ConversationCanvas: View {
         if let voiceDraft { draft = voiceDraft.text(with: voice.transcript) }
         recordingTask?.cancel(); recordingTask = nil
         voice.cancel(); voiceDraft = nil
+    }
+}
+
+private struct GoalPhasePill: View {
+    let status: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var active: Bool { ["active", "verifying"].contains(status) }
+    private var stalled: Bool { ["blocked", "budget_limited", "usage_limited", "awaiting_review"].contains(status) }
+    private var tone: Color { status == "complete" ? BZZYTheme.success : stalled ? BZZYTheme.danger : active ? BZZYTheme.accent : BZZYTheme.secondary }
+    var body: some View {
+        HStack(spacing: 7) {
+            if active && !reduceMotion { ProgressView().controlSize(.mini).tint(tone) }
+            else { Image(systemName: status == "complete" ? "checkmark.circle.fill" : stalled ? "xmark.circle.fill" : "circle.dotted") }
+            Text(status == "complete" ? "Goal achieved" : stalled ? "Goal stalled" : active ? status == "verifying" ? "Verifying goal..." : "Pursuing goal..." : "Goal \(status)").lineLimit(1)
+        }.bzzyFont(11, weight: .semibold).foregroundStyle(tone).padding(.horizontal, 10).padding(.vertical, 8)
+            .background(tone.opacity(0.13), in: Capsule()).accessibilityIdentifier("chat-goal-status")
     }
 }
 

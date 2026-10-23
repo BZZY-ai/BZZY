@@ -99,7 +99,19 @@ struct ChatChecks {
         release.begin(); release.audioStarted(); release.release()
         require(release.consume("failed recognition", busy: false, failed: true, allowed: true) == nil, "Failed recognition needs an explicit retry")
         require(SpeechLanguage.resolve("es-ES") == .spanish && SpeechLanguage.resolve("en-US") == .english, "Listening and speaking preferences resolve independently")
-        print("PASS: rich message examples, nested styles, tables, escapes, code, malformed/untrusted markup rejection, demo isolation, smooth gaze")
+        let live = WorkspaceStore(), sessionID = UUID().uuidString.lowercased(), approvalID = UUID().uuidString.lowercased()
+        live.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: ["session": ["id": sessionID], "questions": [], "capabilities": [:]] as [String: Any]))
+        func event(_ seq: Int, _ type: String, _ data: [String: Any]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["id": "\(sessionID):\(seq)", "sessionId": sessionID, "seq": seq, "type": type, "data": data])
+        }
+        live.applyLiveEvents([
+            try event(1, "question", ["id": approvalID, "kind": "approval", "question": "Fixture command"]),
+            try event(2, "question.answered", ["id": approvalID, "answer": "yes"]),
+            try event(3, "message.user", ["text": "Real user message"])
+        ])
+        require(live.liveMessages.map(\.text) == ["Real user message"], "Approval choices stay in activity, without fake yes/no chat messages")
+        require(live.liveActivity.count == 2, "Original approval events remain in the activity projection")
+        print("PASS: rich message examples, nested styles, tables, escapes, code, malformed/untrusted markup rejection, demo isolation, smooth gaze, approval projection")
     }
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) { precondition(condition(), message) }
 }

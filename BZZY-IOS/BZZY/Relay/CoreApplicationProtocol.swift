@@ -111,7 +111,7 @@ public struct CoreEventBatch: Sendable {
 enum CoreApplicationProtocol {
     static let payloadBytes = 28 * 1024
     static let promptBytes = 16 * 1024
-    static let commands: Set<String> = ["voice.send", "voice.cancel", "updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
+    static let commands: Set<String> = ["voice.send", "voice.cancel", "updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "permissions.set", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
     static let fields: [String: Set<String>] = [
         "updates.status": [], "updates.check": [], "updates.configure": ["monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"], "updates.install": ["target"],
         "host.metrics": [],
@@ -127,6 +127,7 @@ enum CoreApplicationProtocol {
         "events.list": ["after", "limit"], "events.subscribe": ["consumerId"], "events.ack": ["subscriptionId", "seq"],
         "events.unsubscribe": ["subscriptionId"], "input.claim": ["owner", "takeover"], "input.release": ["owner"],
         "execution.execute": ["owner", "prompt", "goal", "resumeGoal"], "question.answer": ["owner", "questionId", "answer"],
+        "permissions.set": ["owner", "enabled", "questionId"],
         "control.request": ["owner", "action", "text"], "command.status": ["requestId"]]
     static func opaque(_ value: String) throws {
         guard value.range(of: "^[A-Za-z0-9_-]{1,80}$", options: .regularExpression) != nil else { throw CoreApplicationError("INVALID_REQUEST") }
@@ -187,6 +188,10 @@ enum CoreApplicationProtocol {
                   !id.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         if op == "question.answer" { _ = try uuid(params["questionId"]?.string) }
+        if op == "permissions.set" {
+            guard params["enabled"]?.bool != nil else { throw CoreApplicationError("INVALID_REQUEST") }
+            if let question = params["questionId"] { _ = try uuid(question.string) }
+        }
         if op == "notifications.register" {
             guard let token = params["deviceToken"]?.string, token.range(of: "^[0-9a-f]{64,512}$", options: .regularExpression) != nil,
                   token.count.isMultiple(of: 2), ["sandbox", "production"].contains(params["environment"]?.string ?? ""),

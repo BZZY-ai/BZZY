@@ -11,10 +11,11 @@ import { renderMessageContent } from './message-renderer.js';
 import { createTerminalTheme } from './terminal-theme.js';
 import { HostMetricsMonitor } from './host-metrics.js';
 import { shareSavedSession } from './session-browser.js';
+import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff } = {}) {
+  constructor({ json = false, pet = true, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
     this.json = json;
     this.pet = pet;
     this.input = input;
@@ -28,6 +29,7 @@ export class UI {
     this.promptQueue = Promise.resolve();
     this.cursors = new Map();
     this.messageStreams = new Map();
+    this.launchYolo = yolo; this.readOnlyExecution = readOnly; this.sessionPermissionStates = new Map();
     this.updateHandoff = updateHandoff;
     if (updateHandoff) { this.sessionId = updateHandoff.sessionId; this.activeTab = updateHandoff.activeTab; }
   }
@@ -46,6 +48,38 @@ export class UI {
     }
   }
   executionIndicator(enabled = true) { return new Pet(this, enabled); }
+  yoloEnabled(id = this.sessionId) {
+    if (this.launchYolo === true && !this.yoloLaunchInitialized?.has(id)) return true;
+    return this.sessionPermissionStates.get(id) ?? false;
+  }
+  executionOptions(options, session) {
+    this.launchYolo ??= Boolean(options.yolo);
+    return { ...options, yolo: terminalYolo(session.id) ?? this.yoloEnabled(session.id) };
+  }
+  async toggleYolo() {
+    const tui = this.tui, id = this.sessionId;
+    if (!this.interactive || !id || !tui || tui.selection || tui.renderingPicker || tui.hidden || tui.promptDraft || this.privateView) return false;
+    if (this.sessionMode === 'VIEW' || this.readOnlyExecution || tui.executionPolicy?.mode === 'read-only') { tui.notice('YOLO is unavailable in read-only mode.', true); return false; }
+    if (this.coreLifecycleInterrupted || this.permissionSubmitting) return false;
+    this.permissionSubmitting = true; tui.schedule();
+    try {
+      const result = await changeTerminalYolo(this, !this.yoloEnabled(id));
+      (this.yoloLaunchInitialized ||= new Set()).add(id);
+      this.sessionPermissionStates.set(id, result.yolo);
+      if (result.approvedQuestionId === tui.pendingApproval?.id) tui.pendingApproval = null;
+      tui.notice(result.yolo ? result.approvedQuestionId ? 'YOLO on · pending action approved.' : 'YOLO on · native approvals bypassed for the next run.' : 'YOLO off · normal approvals for the next run.');
+      return true;
+    } catch (error) { tui.notice(error.message, true); return false; }
+    finally { this.permissionSubmitting = false; tui.schedule(); }
+  }
+  async answerApproval(answer) {
+    const question = this.tui?.pendingApproval;
+    if (!question || question.kind !== 'approval' || !['yes', 'no'].includes(answer) || this.sessionMode === 'VIEW' || !this.onAnswerApproval || this.tui.approvalSubmitting) return;
+    this.tui.approvalSubmitting = true; this.tui.schedule();
+    try { await this.onAnswerApproval(question, answer); }
+    catch (error) { this.tui.notice(error.message, true); }
+    finally { this.tui.approvalSubmitting = false; this.tui.schedule(); }
+  }
 
   setSession(id, mode = 'CONTROL') {
     if (this.sessionId !== id) { this.tabs = null; this.activeTab = null; this.tui?.clear(); }
@@ -61,6 +95,7 @@ export class UI {
   clearHistory() { this.tui?.clear(); this.lineOpen = false; }
   redrawPrompt() { if (this.tui) this.tui.schedule(); else if (this.reader && !this.lineOpen) this.reader.prompt(true); }
   updateSession(snapshot) {
+    if (snapshot.permissions) this.sessionPermissionStates.set(this.sessionId || snapshot.session?.id, snapshot.permissions.yolo === true);
     this.tui?.update(snapshot);
     if (this.accountStatusEnabled) {
       this.accountMonitor ||= new AccountStatusMonitor(status => { this.accountStatus = status; this.tui?.schedule(); });
@@ -70,6 +105,7 @@ export class UI {
   showAccountStatus() { this.event('info', { message: accountStatusDetails(this.accountStatus) }); }
   openSettings() { this.openTerminal(); this.settings ||= new ClientSettings(this); this.tui?.setPanel('settings'); }
   async settingsCommand(input) {
+    if (input.trim() === '/yolo') { await this.toggleYolo(); return true; }
     if (/^\/session-action(?:\s|$)/.test(input)) {
       const match = /^\/session-action share ([a-f0-9-]{36})$/.exec(input.trim());
       try {
@@ -221,6 +257,15 @@ export class UI {
     if (!this.interactive) {
       this.event('error', { message: `Approval required: ${label}. Run interactively to approve it, or explicitly select --yolo.` });
       return false;
+    }
+    if (this.tui) {
+      const entry = this.tui.add('approval', clean(label), { questionId: 'local-approval', expanded: true });
+      const selected = await this.chooseOne('Permission requested', { description: clean(label), choices: [
+        { value: 'deny', label: '✕ Deny', selected: true, tone: 'danger' },
+        { value: 'approve', label: '✔ Approve once', tone: 'goalSuccess' },
+      ] }, { kind: 'approval', presentation: 'dropdown' });
+      entry.decision = selected === 'approve' ? 'approved' : 'denied'; this.tui.entryLayouts.delete(entry); this.tui.contentRevision++; this.tui.schedule();
+      return selected === 'approve';
     }
     return /^y(es)?$/i.test((await this.ask(`${clean(label)}\nAllow once? [y/N] `)) || '');
   }

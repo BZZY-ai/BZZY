@@ -7,7 +7,19 @@ provider authorization. Closing/backgrounding iOS does not remove registration.
 
 Implemented events are `goal.completed`, `goal.stalled` and
 `goal.waiting_for_input`. An execution merely ending does not create a verified
-goal-completion alert. The requested compact alert uses `Goal achieved`, `Goal stalled` or `Input needed`, an optional terminal alias and a bounded objective preview. Recognized credential-like text is omitted. Navigation uses opaque identifiers; conversations, file contents, provider keys and invitation codes are excluded. Tapping an alert only opens/reconciles an authorized view.
+goal-completion alert. Titles use `Goal achieved - ALIAS`, `Goal stalled - ALIAS`
+or `Input needed - ALIAS` (the alias is omitted if unavailable/unsafe). Completion
+and stalled descriptions preview the last assistant reply, capped at **180 Unicode
+characters including `...`** when truncated. Core pins the sanitized preview in
+the durable outcome event, so delayed delivery cannot substitute a later chat or
+goal. Rich emphasis becomes readable text. Debate uses its saved conclusions;
+parallel/besties previews label the current group's agents. Missing output uses
+a safe blocker or a short open-app message; older queued events retain their
+bounded objective fallback. Recognized credential-like text is omitted before
+persistence and checked again before dispatch. Input alerts keep commands and
+question details out of push payloads. Navigation uses opaque identifiers; full
+conversations, files, provider keys and invitation codes are excluded. Tapping an
+alert only opens/reconciles an authorized view.
 
 ## Host setup
 
@@ -87,7 +99,7 @@ Expired/revoked grants, revoked device pins or narrower Core tokens, disabled
 preferences, private authentication directories and internal contexts stop
 future sends. APNs `410`/invalid-device-token responses disable the matching
 token registration, respecting a newer device registration timestamp. Already
-accepted notifications cannot be recalled. Alias and objective previews can appear on the lock screen; use iOS notification-preview settings to hide them. Other metadata remains private; opaque session/agent IDs only guide navigation, and the app rechecks
+accepted notifications cannot be recalled. Alias and reply previews can appear on the lock screen; use iOS notification-preview settings to hide them. Other metadata remains private; opaque session/agent IDs only guide navigation, and the app rechecks
 permission through authoritative discovery before loading details. Generic alert
 titles distinguish completion, waiting for input and attention; opaque thread
 identifiers group updates without exposing project names or paths.

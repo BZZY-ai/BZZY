@@ -6,7 +6,18 @@ Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen
 
 Open [BZZY.xcodeproj](BZZY.xcodeproj), select **BZZY** and an iPhone simulator, then Run. Simulator runs use Xcode’s local signing; do not disable signing when testing Keychain. For a physical iPhone, select your Apple development team. Push notifications require a push-enabled App ID and a matching provisioning profile. Debug uses the development APNs environment; Release uses production.
 
-The current verified device installation is **Debug 0.1.0 (7)**, installed in place through Xcode tooling on the connected iPhone 15 Pro Max. The device reports version 0.1.0/build 7; signing identity, push environment, permission/privacy declarations and the compiled animation shader were checked. No uninstall or data reset was performed. The device was locked during the automated launch attempt; microphone recognition, audible speech and real APNs delivery remain manual checks. TestFlight is deferred. Build 7 adds send-on-release, fluid 64-band audio, independent speech-language settings and alias-only terminal rows to build 6's animated artwork and visual polish. The CLI updater installs host CLI/Core updates; iPhone app changes require a separately built and installed iOS binary.
+The current verified device installation is **Debug 0.1.0 (8)**, installed in place
+and launched on the connected iPhone 15 Pro Max. The device reports build 8;
+development APNs metadata, privacy declarations and the signed artifact passed
+validation. No uninstall or data reset was performed. Build 8 adds the chat
+permission controls below; the host must be updated separately through the CLI
+before YOLO is available. The actual phone approval interaction remains a manual
+check. TestFlight is deferred. The CLI updater installs host CLI/Core updates;
+iPhone app changes require a separately built and installed iOS binary.
+
+Build 7 previously added send-on-release, fluid 64-band audio, independent
+speech-language settings and alias-only terminal rows to build 6's animated
+artwork and visual polish.
 
 The local `RelayKit` Swift package pins [swift-sodium](https://github.com/jedisct1/swift-sodium) at `cfd195c76882aa9b997560ca7cb95d72fbf5db00`. Xcode resolves it automatically. No provider SDK or second agent runtime is added.
 
@@ -32,6 +43,18 @@ With explicit host `agentAccess`, Agents lists real persistent Core records. Cre
 Existing local drafts remain labelled inactive. Samples and demo sessions are limited to previews/UI tests. Opening a conversation, foregrounding, reconnecting or opening a notification never submits a draft or starts work. Agent management lives in iPhone; CLI stays terminal-oriented.
 
 ## Chat and response formatting
+
+Build 8 adds a gray **YOLO OFF** / pink **YOLO ON** control to live terminal chats,
+using the same Core-owned permission setting as CLI. Enabling it while a request
+is pending atomically accepts that exact approval. The full own-phone grant and
+input lease are required; scoped friends and isolated persistent Agents cannot
+enable it. Pause active work before disabling an already launched bypass mode;
+the full native launch/sandbox setting changes on the next execution. Older Core
+versions leave the control unavailable until the host is updated through CLI.
+Approval cards now appear directly in chat with command details and green
+**✔ Approve once** / red **✕ Deny** controls. Commands remain inspectable, typed
+drafts stay intact, and Core rechecks question identity, expiry and ownership.
+The composer also shows authoritative goal progress/completion/stall colors.
 
 Every agent and terminal opens the same native chat at its most recent message, without an animated trip through old history. Late Core history also lands at the bottom. Turquoise user bubbles sit on the right and dark assistant bubbles on the left, with a compact header and composer. COOL, Signal, Subscriptions, Design review and Research contain fictional conversations. The examples demonstrate native tables, normal/bold/italic text, three text sizes, colored highlights, lists, quotes and literal code blocks. Sending in a Demo chat adds a predefined local reply. Created agent drafts remain separate and never receive these fake responses.
 
@@ -69,7 +92,7 @@ Settings → BZZY Updates shows the authoritative Core update status. The fully 
 
 Settings → Notifications requests native alert/sound/badge permission only when **Enable notifications** is tapped. It shows current permission, an Activity alerts toggle, an iOS Settings shortcut and an explicit test notification. Native notification taps select an allowlisted screen and reconcile state; they never execute commands. Verified pairing approval/revocation can emit generic local alerts. No private content or pairing codes enter notifications.
 
-APNs registration is sent through the encrypted Core contract. The daemon uses the durable goal outbox for generic completion, attention and input-needed alerts while the app is closed. Exact session or explicitly approved terminal/Agent scopes apply, with expiry/revocation, deduplication and bounded retries. Taps recheck authorization and navigate without executing. **Actual background delivery requires Apple provisioning, private host APNs configuration and a physical-device test.** Missing configuration is reported as pending, never as working delivery. See [host push setup](../BZZY-CORE/docs/PUSH.md).
+APNs registration is sent through the encrypted Core contract. The daemon uses the durable goal outbox while the app is closed. Goal alerts use **Goal achieved/stalled - Session** with a sanitized final-reply preview limited to 180 Unicode characters, including `...` when truncated. Input alerts keep command details inside the app. Exact session or explicitly approved terminal/Agent scopes apply, with expiry/revocation, deduplication and bounded retries. Taps recheck authorization and navigate without executing. **Actual background delivery requires Apple provisioning, private host APNs configuration and a physical-device test.** Missing configuration is reported as pending, never as working delivery. See [host push setup](../BZZY-CORE/docs/PUSH.md).
 
 Voice drafts use Apple Speech and AVFoundation with English/Spanish selection. Recording requests microphone/speech access only after a tap and requires supported on-device recognition. Otherwise text remains editable. Capture stops on dismissal/backgrounding. Physical-device permissions and transcription accuracy still need validation.
 
@@ -80,6 +103,16 @@ Settings → Voice provides separate **Listening language · STT** and **Speakin
 Voice runs through the fully approved own-phone pairing and Core's independent default assistant, in its configured managed folder. Core validates the folder's actual identity before enabling capture. Setup notices identify CLI Settings on the host computer. Core stores execution/history normally; the phone saves only an opaque pending request receipt. Reopening reads the receipt without resending. Update CLI/Core through the CLI updater and configure `bzzy-core assistant` plus the default BZZY folder if needed. See [Core voice contract](../BZZY-CORE/docs/VOICE.md). Recognition, physical microphone quality and audible playback still require manual testing. Terminal picker rows show only an icon and alias; directory/model details remain inside the selected conversation.
 
 ## Verification
+
+Build 8 validation (2026-10-23): **197 Core**, **413 CLI** (21 optional/platform
+skips), and **50 native Swift tests** pass. Native model/chat checks also pass,
+including keeping approval decisions in activity instead of adding yes/no chat
+bubbles. Core tests exercise exact-question atomic acceptance, stale/expired and
+foreign requests, read-only/Agent boundaries, full-phone versus scoped grants,
+idempotency and pinned reply previews. CLI layouts were inspected at 80×24 and
+140×40. The signed build 8 artifact passed validation and was installed and
+launched on the connected phone. Physical approval interaction and the changed
+notification preview remain manual checks after updating the host through CLI.
 
 Build 7 validation (2026-10-23): **188 Core**, **401 CLI** (21 platform/optional skips), and **49 native Swift tests** pass. Model checks cover exactly-once release intent, permission/background/error cancellation, final-word waiting, 64-band FFT and smoothing to silence. Two simulator UI tests pass for independent persisted speech settings, alias-only terminal rows, the text-free voice screen and latest-message chat entry. The signed device artifact validates and build 7 is installed. The folder's stale mount identity was explicitly reconfirmed on the host; the reusable fix validates volume UUID/inode continuity without accepting a replaced directory. See [build 7 validation](docs/full-line-validation.md#speech-settings-folder-recovery-and-updater-reload-build-7-2026-10-23).
 

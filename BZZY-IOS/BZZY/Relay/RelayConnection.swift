@@ -180,6 +180,8 @@ public final class RelayConnection {
     public private(set) var coreCatalogAvailable = false
     public private(set) var coreCatalogReady = false
     public private(set) var coreSharingAllowed = false
+    public private(set) var coreYoloEnabled = false
+    public private(set) var coreYoloControl = false
     @ObservationIgnored private var recentCoreShares: [String: CoreShareReference] = [:]
     @ObservationIgnored private var pendingCoreShareRequests: [String: String] = [:]
     @ObservationIgnored private var pushRegistrationHash: String?
@@ -635,6 +637,8 @@ public final class RelayConnection {
         if coreSessionID != sessionID { coreCommandStatus = ""; coreTaskStatus = "" }
         coreSessionID = sessionID
         coreSharingAllowed = snapshot["capabilities"]["shareAccess"].bool == true && (!coreIsAgent || coreAgentsAvailable)
+        coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
+        coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
         corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
         if let claimedOwnerID, snapshot["inputOwner"]["owner"].string != claimedOwnerID {
             coreOwnsInput = false; self.claimedOwnerID = nil; inputRenewal?.cancel(); inputRenewal = nil
@@ -1264,6 +1268,7 @@ public final class RelayConnection {
         coreCommandUncertain = state.pendingCoreCommand != nil || state.pendingAgentCommand != nil
         coreConnected = false; coreOwnsInput = false; claimedOwnerID = nil
         coreSubscriptionID = nil; corePermissions = []; coreIsAssistant = false; coreSharingAllowed = false; coreIsAgent = false
+        coreYoloEnabled = false; coreYoloControl = false
         if purge {
             confirmedCorePair = false; state.corePairValidated = false
             do {
@@ -1385,6 +1390,8 @@ public final class RelayConnection {
             guard snapshot["session"]["id"].string == coreSessionID else { throw RelayFailure("INVALID_MESSAGE") }
             guard coreHealth.confirm(generation, scope: client.resource) else { return }
             coreSharingAllowed = snapshot["capabilities"]["shareAccess"].bool == true && (!coreIsAgent || coreAgentsAvailable)
+            coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
+            coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
             corePermissions.formIntersection(Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []))
             onCoreSnapshot?(try JSONEncoder().encode(snapshot))
             if let claimedOwnerID, snapshot["inputOwner"]["owner"].string != claimedOwnerID {
@@ -1461,6 +1468,17 @@ public final class RelayConnection {
         guard sessionID == nil || sessionID == coreSessionID else { return false }
         guard corePermissions.contains("answer"), UUID(uuidString: id) != nil, answer.utf8.count <= 16 * 1024 else { return false }
         return await mutateCore("question.answer", params: ["questionId": .string(id), "answer": .string(answer)])
+    }
+
+    @discardableResult public func setCoreYolo(_ enabled: Bool, questionID: String? = nil, sessionID: String? = nil) async -> Bool {
+        guard sessionID == nil || sessionID == coreSessionID, coreYoloControl, !coreIsAgent,
+              corePermissions.contains("execute"), corePermissions.contains("answer") else { return false }
+        var params: [String: CoreJSONValue] = ["enabled": .bool(enabled)]
+        if enabled, let questionID {
+            guard UUID(uuidString: questionID) != nil else { return false }
+            params["questionId"] = .string(questionID)
+        }
+        return await mutateCore("permissions.set", params: params)
     }
 
     @discardableResult public func controlCore(_ action: String, text: String? = nil, sessionID: String? = nil) async -> Bool {

@@ -106,6 +106,25 @@ final class CoreApplicationTests: XCTestCase {
         XCTAssertEqual(h.sent.count, before + 1)
     }
 
+    @MainActor func testYoloAcceptanceMustMatchModeAndExactPendingApproval() async throws {
+        let h = CoreHarness(); try await h.bind()
+        let question = UUID().uuidString.lowercased()
+        let params: [String: CoreJSONValue] = ["owner": .string("phone"), "enabled": .bool(true), "questionId": .string(question)]
+        h.result = .object(["state": .string("accepted"), "yolo": .bool(true), "approvedQuestionId": .string(question)])
+        let accepted = try await h.client.request("permissions.set", params: params)
+        XCTAssertEqual(accepted["approvedQuestionId"].string, question)
+        for bad: CoreJSONValue in [
+            .object(["state": .string("accepted"), "yolo": .bool(false), "approvedQuestionId": .string(question)]),
+            .object(["state": .string("accepted"), "yolo": .bool(true), "approvedQuestionId": .string(UUID().uuidString.lowercased())]),
+            .object(["state": .string("accepted"), "yolo": .bool(true)])
+        ] {
+            h.result = bad
+            do { _ = try await h.client.request("permissions.set", params: params); XCTFail("Mismatched approval accepted") }
+            catch { XCTAssertEqual((error as? CoreApplicationError)?.code, "UNCERTAIN") }
+        }
+        XCTAssertThrowsError(try CoreApplicationProtocol.request(op: "permissions.set", params: ["owner": .string("phone"), "enabled": .string("yes")], id: "bad-yolo", resource: "resource"))
+    }
+
     @MainActor func testTaskAndExecutionAcceptanceShapesAndUncertainty() async throws {
         let h = CoreHarness(); try await h.bind()
         h.result = .object(["state": .string("accepted"), "taskId": .string("opaque-task-id")])

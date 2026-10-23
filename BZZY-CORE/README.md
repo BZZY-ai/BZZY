@@ -40,12 +40,15 @@ Implemented:
   delegation, account tools or schedules. Native provider configuration and
   permissions are restricted separately from ordinary terminal execution; see
   [Agent execution](docs/AGENT-EXECUTION.md).
-- Send generic goal alerts from the daemon's durable outbox through APNs after
+- Send compact goal alerts with aliased titles and bounded final-reply previews from the daemon's durable outbox through APNs after
   private Apple setup and encrypted device registration; see [push setup](docs/PUSH.md).
 
 - Configure Core's independent coordinator provider/model/effort from the host
   API or `bzzy-core assistant`; create independent task contexts.
   CLI chat presets do not automatically select or change Core's coordinator.
+- Share a Core-owned terminal YOLO setting between CLI and the fully approved own
+  iPhone. Enabling it can atomically answer an exact pending approval; ownership,
+  expiry, read-only policies and isolated Agent boundaries remain enforced.
 - Own provider authentication/configuration and dynamic model discovery; terminal
   selectors consume the same Core registry without duplicating backend adapters.
 - Submit background tasks through scoped Relay resources and inspect their

@@ -4,6 +4,7 @@ import { loadSession, saveSession } from './store.js';
 import { delay } from './delegation.js';
 import { config } from './providers.js';
 import { NotificationHub } from './notifications.js';
+import { terminalYolo, approvePendingWithYolo } from './terminal-permissions.js';
 
 export class RunnerUI {
   constructor(sessionId, options = {}) {
@@ -41,6 +42,7 @@ export class RunnerUI {
     if (session.goal && !session.suppressNotifications) new NotificationHub({ ui: this }).publish(session, { question: record }).catch(error => this.event('error', { message: `Input notification failed: ${error.message}` }));
     try { while (!this.cancelled && Date.now() < deadline) {
       const current = getRecord('question', record.id);
+      if (kind === 'approval' && current?.state === 'pending' && approvePendingWithYolo(record.id, this.sessionId)) return 'yes';
       if (current?.state === 'answered') return current.answer;
       if (current?.state !== 'pending') return '';
       await delay(100);
@@ -56,6 +58,6 @@ export class RunnerUI {
       if (latest?.executionState === 'waiting_for_input' && !listRecords('question', { sessionId: this.sessionId, state: 'pending', limit: 1 }).length) { latest.executionState = 'running'; saveSession(latest); }
     }
   }
-  async approve(label) { return /^y(es)?$/i.test((await this.ask(`${label}\nAllow once? [y/N] `, 'approval')) || ''); }
+  async approve(label) { return terminalYolo(this.sessionId) === true || /^y(es)?$/i.test((await this.ask(`${label}\nAllow once? [y/N] `, 'approval')) || ''); }
   close() { this.cancelled = true; }
 }

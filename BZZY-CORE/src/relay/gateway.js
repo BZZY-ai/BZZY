@@ -1,5 +1,7 @@
 import { coreUpdates } from '../engine/updates.js';
 import { CoreVoiceChat } from '../engine/voice-chat.js';
+import { setTerminalYolo } from '../engine/terminal-permissions.js';
+import { authorizedUpdateGrant as authorizedOwnPhone } from '../engine/update-access.js';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -359,6 +361,11 @@ export class RelayGateway extends EventEmitter {
   }
 
   #owner(row, value) { opaque(value, 'Client owner ID'); return `relay_${digest({ peer: row.peerId, resource: row.resource, owner: value })}`; }
+  #yoloAllowed(row) {
+    const parent = authorizedOwnPhone(row.relayGrantId || row.id), session = loadSession(row.sessionId);
+    return Boolean(parent && parent.peerId === row.peerId && terminalSession(session) && session.contract?.policy?.mode !== 'read-only'
+      && session.policy?.mode !== 'read-only' && row.permissions.includes('execute') && row.permissions.includes('answer'));
+  }
   #commandKey(row, id) { return digest({ host: row.hostId, peer: row.peerId, resource: row.resource, request: id }); }
   #shareBinding(row) { return { grantId: row.id, peerId: row.peerId, resource: row.resource }; }
   #shareAuthorize(row) {
@@ -634,6 +641,7 @@ export class RelayGateway extends EventEmitter {
           questions: snapshot.questions.filter(question => question.sessionId === row.sessionId).map(question => pick(question, ['id', 'sessionId', 'question', 'text', 'kind', 'options', 'createdAt', 'expiresAt'])),
           inputOwner: pick(snapshot.inputOwner, ['owner', 'sessionId', 'expiresAt']),
           capabilities: { activeSteering: Boolean(snapshot.capabilities.activeSteering && row.permissions.includes('steer')),
+            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row),
             durableEvents: true, permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
             relay: true, portableSharing: row.shareAccess === true, shareKind: row.kind === 'agent' ? 'AGENT' : 'TERMINAL' } };
       }
@@ -678,7 +686,7 @@ export class RelayGateway extends EventEmitter {
           putRecord('core.relay.command', record.id, record);
         }
       }
-      const kind = { 'execution.execute': 'execute', 'task.submit': 'execute', 'question.answer': 'answer', 'control.request': 'control' }[record.op];
+      const kind = { 'execution.execute': 'execute', 'task.submit': 'execute', 'question.answer': 'answer', 'permissions.set': 'permissions', 'control.request': 'control' }[record.op];
       const core = database().prepare('SELECT response FROM requests WHERE scope=? AND id=?').get(`${kind}:${row.sessionId}`, `relay.${record.id}`);
       if (core?.response) {
         record = { ...record, state: 'accepted', result: JSON.parse(core.response), reconciledAt: now() };
@@ -706,6 +714,11 @@ export class RelayGateway extends EventEmitter {
       for (const key of ['goal', 'resumeGoal']) if (params[key] !== undefined && typeof params[key] !== 'boolean') fail('INVALID_REQUEST', 'Goal flags must be boolean.');
     }
     if (request.op === 'question.answer') { uuid(params.questionId); if (typeof params.answer !== 'string' || Buffer.byteLength(params.answer) > LIMITS.promptBytes) fail('INVALID_REQUEST', 'Question answers must be bounded text.'); }
+    if (request.op === 'permissions.set') {
+      if (!this.#yoloAllowed(row)) fail('FORBIDDEN', 'YOLO requires the fully approved own phone and an ordinary terminal.', 403);
+      if (typeof params.enabled !== 'boolean') fail('INVALID_REQUEST', 'YOLO mode must be boolean.');
+      if (params.questionId !== undefined) uuid(params.questionId);
+    }
     if (request.op === 'control.request' && (params.text !== undefined && typeof params.text !== 'string' || params.text && Buffer.byteLength(params.text) > LIMITS.promptBytes)) fail('INVALID_REQUEST', 'Control text must be bounded text.');
     const key = this.#commandKey(row, request.id), fingerprint = digest({ op: request.op, params });
     const previous = getRecord('core.relay.command', key);
@@ -729,6 +742,14 @@ export class RelayGateway extends EventEmitter {
       if (request.op === 'task.submit') result = await client.execute(row.sessionId, { owner, prompt: params.instruction, goal: false, resumeGoal: false, requestId });
       else if (request.op === 'execution.execute') result = await client.execute(row.sessionId, { owner, prompt: params.prompt, goal: params.goal ?? false, resumeGoal: params.resumeGoal ?? false, requestId });
       else if (request.op === 'question.answer') result = await client.answer(row.sessionId, { owner, questionId: params.questionId, answer: params.answer, requestId });
+      else if (request.op === 'permissions.set') {
+        const host = await runtime();
+        result = setTerminalYolo(row.sessionId, { enabled: params.enabled, questionId: params.questionId }, requestId, { authorize: () => {
+          this.#authorize(row.id, row.peerId, row.resource, 'execute');
+          if (!this.#yoloAllowed(row)) fail('FORBIDDEN', 'YOLO permission was revoked.', 403);
+          host.requireOwner(row.sessionId, owner);
+        } });
+      }
       else result = await client.control(row.sessionId, { owner, action: params.action, text: params.text, requestId });
       this.#check();
       putRecord('core.relay.command', key, { ...getRecord('core.relay.command', key), state: 'accepted', result, acceptedAt: now() });

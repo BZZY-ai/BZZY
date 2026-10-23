@@ -189,15 +189,38 @@ struct LiveQuestionView: View {
     @State private var answer = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(question.text).bzzyFont(14)
-            Text(question.kind).bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
+            if question.kind == "approval" {
+                Label("Permission requested", systemImage: "lock.shield").bzzyFont(13, weight: .semibold).foregroundStyle(BZZYTheme.amber)
+                Text(question.text.components(separatedBy: "\nAllow once?").first ?? question.text)
+                    .bzzyFont(12, design: .monospaced).foregroundStyle(BZZYTheme.secondary).lineLimit(2)
+                DisclosureGroup("Review action") {
+                    Text(question.text.replacingOccurrences(of: "\nAllow once? [y/N] ", with: ""))
+                        .bzzyFont(12, design: .monospaced).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                }.bzzyFont(12).tint(BZZYTheme.accent)
+            } else {
+                Text(question.text).bzzyFont(14)
+                Text(question.kind).bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
+            }
             if !question.options.isEmpty { Text(question.options.joined(separator: " · ")).bzzyFont(12) }
             if relay.corePermissions.contains("answer") {
-                TextField("Answer", text: $answer, axis: .vertical).textFieldStyle(.roundedBorder)
-                Button("Submit answer") { Task { if await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) { answer = "" } } }
-                    .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !relay.coreConnected || relay.coreBusy || relay.coreCommandUncertain)
+                if question.kind == "approval" {
+                    HStack(spacing: 10) {
+                        approvalButton("Approve once", symbol: "checkmark", answer: "yes", tone: BZZYTheme.success)
+                        approvalButton("Deny", symbol: "xmark", answer: "no", tone: BZZYTheme.danger)
+                    }.disabled(!relay.coreActionsAvailable || relay.coreBusy || relay.coreCommandUncertain)
+                } else {
+                    TextField("Answer", text: $answer, axis: .vertical).textFieldStyle(.roundedBorder)
+                    Button("Submit answer") { Task { if await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) { answer = "" } } }
+                        .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !relay.coreConnected || relay.coreBusy || relay.coreCommandUncertain)
+                }
             }
         }.panel()
+    }
+    private func approvalButton(_ title: String, symbol: String, answer: String, tone: Color) -> some View {
+        Button { Task { await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) }; BZZYTheme.haptic() } label: {
+            Label(title, systemImage: symbol).bzzyFont(13, weight: .semibold).frame(maxWidth: .infinity, minHeight: 44)
+                .foregroundStyle(BZZYTheme.background).background(tone, in: RoundedRectangle(cornerRadius: 13))
+        }.buttonStyle(BZZYPressStyle()).accessibilityIdentifier(answer == "yes" ? "approve-once" : "deny-approval")
     }
 }
 

@@ -20,6 +20,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /doctor            Test the current subscription login, backend connection and model reply.
 /settings          Workspace, iPhone, Core and private DeepSeek API-key setup.
 /settings modes    Save models, efforts and counts for terminal agent modes.
+/yolo              Toggle native permission bypass for this terminal’s next run.
 bzzy settings      Open Settings directly without starting a conversation.
 bzzy doctor        Check both installed backends; add --live to test actual replies.
 
@@ -30,6 +31,7 @@ export const chatCommands = [
   { command: '/update', description: 'Check GitHub and update CLI and Core together' },
   { command: '/skills', description: 'View, create, import and enable shared Core skills' },
   { command: '/goal', description: 'Work until an objective is resolved', argument: true },
+  { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/debate', description: 'Choose agents to challenge the latest reply' },
   { command: '/models', description: 'Choose a model and reasoning effort' },
   { command: '/providers', description: 'Choose Codex, Claude or DeepSeek' },
@@ -63,4 +65,4 @@ export function commandSuggestions(value) {
   return chatCommands.filter(item => item.command.startsWith(value));
 }
 
-export function privateChatCommand(value) { return /^\/(?:import|session-action)(?:\s|$)/.test(String(value).trim()); }
+export function privateChatCommand(value) { return /^\/(?:import|session-action|yolo)(?:\s|$)/.test(String(value).trim()); }

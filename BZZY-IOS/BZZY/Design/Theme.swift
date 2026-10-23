@@ -13,6 +13,9 @@ enum BZZYTheme {
     static let muted = Color(hex: 0x718F9E)
     static let line = Color(hex: 0x1A4354)
     static let amber = Color(hex: 0xE4BD7C)
+    static let success = Color(hex: 0x16E09A)
+    static let danger = Color(hex: 0xFF526C)
+    static let yolo = Color(hex: 0xFF5BBF)
 
     static func haptic() {
         #if os(iOS)

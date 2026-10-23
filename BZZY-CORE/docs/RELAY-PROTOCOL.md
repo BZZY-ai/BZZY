@@ -35,7 +35,9 @@ UUID on the host. A normal pairing cannot choose another session/path/URL.
 
 Unknown versions, types, operations and fields are rejected. Requests cannot
 contain arbitrary URLs, headers, credentials, environment variables, runtime
-options or shell commands. Pairing/permission administration has no remote RPC.
+options or shell commands. Pairing/grant administration has no remote RPC. The
+explicit terminal YOLO operation below is restricted to the fully approved own
+phone; it cannot change scoped grants or isolated Agent permissions.
 
 Success:
 
@@ -84,6 +86,7 @@ An authenticated transport receipt alone is never an application response.
 | `input.release` | `owner` | `claim`; releases only the namespaced device/client owner |
 | `execution.execute` | `owner`, `prompt`, optional boolean `goal`, `resumeGoal` | `execute`; existing configured session/goal only, no overrides; prompt up to 16 KiB |
 | `question.answer` | `owner`, `questionId`, `answer` | `answer`; existing pending same-session question, bounded answer text |
+| `permissions.set` | `owner`, boolean `enabled`, optional `questionId` | `execute` plus full own-phone base authorization; ordinary terminal only. Enabling with a pending approval atomically saves YOLO and answers exactly that approval. Requires the input lease; no takeover. |
 | `control.request` | `owner`, `action`, optional `text` | Matching `pause`, `cancel` or `steer`; owner required; active steering checked by Core |
 | `command.status` | `requestId` | `observe`; reconciles this device/resource's saved mutation acceptance |
 
