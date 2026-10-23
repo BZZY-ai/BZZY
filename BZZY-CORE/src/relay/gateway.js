@@ -1,4 +1,5 @@
 import { coreUpdates } from '../engine/updates.js';
+import { CoreVoiceChat } from '../engine/voice-chat.js';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -23,7 +24,7 @@ const publicGrant = row => ({ id: row.id, deviceId: row.peerId, resource: row.re
   agentAccess: row.agentAccess === true, expiresAt: row.expiresAt, revokedAt: row.revokedAt || null });
 const pick = (value, keys) => value && Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
 const commandAcceptance = record => record.op === 'task.submit' ? { taskId: record.id } : record.result;
-const safeCodes = new Set(['FORBIDDEN', 'INVALID_REQUEST', 'CONFLICT', 'UNCERTAIN', 'OPERATION_DENIED', 'PROTOCOL_UNSUPPORTED',
+const safeCodes = new Set(['ASSISTANT_SETUP_REQUIRED', 'VOICE_UNAVAILABLE', 'FORBIDDEN', 'INVALID_REQUEST', 'CONFLICT', 'UNCERTAIN', 'OPERATION_DENIED', 'PROTOCOL_UNSUPPORTED',
   'REQUEST_TOO_LARGE', 'RESULT_TOO_LARGE', 'RATE_LIMITED', 'CAPACITY', 'INVALID_CURSOR', 'GRANT_UNAVAILABLE', 'AUTHORIZATION_REQUIRED',
   'WORKSPACE_SETUP_REQUIRED', 'WORKSPACE_CHANGED', 'WORKSPACE_UNAVAILABLE', 'PROVIDER_UNAVAILABLE', 'CORE_STOPPED',
   'CONFIRMATION_REQUIRED', 'EXPORT_ACTIVE', 'SECRET_DETECTED', 'EXPORT_INVALID', 'SHARE_CONTEXT_INCOMPLETE',
@@ -54,12 +55,14 @@ export class RelayGateway extends EventEmitter {
   #transfers;
   #agents;
   #agentImports;
+  #voice;
 
   constructor({ identity = loadRelayIdentity(), url = DEFAULT_RELAY_URL, allowInsecureLocal = false,
     autoReconnect = true, requestTimeoutMs = 10000, pollIntervalMs = 500, clientFactory = options => new RelayClient(options) } = {}) {
     super(); verifyCertificate(identity.certificate);
     this.#home = home(); this.#identity = structuredClone(identity); this.#core = new BzzyCore();
     this.#agents = new CoreAgents();
+    this.#voice = new CoreVoiceChat({ client: context => this.#clientFor(context) });
     this.#agentImports = new CoreAgentImports({ agents: this.#agents, url, allowInsecureLocal });
     this.#pollIntervalMs = boundedInteger(pollIntervalMs, 100, 5000);
     this.#relay = clientFactory({ identity: this.#identity, url, allowInsecureLocal, autoReconnect, requestTimeoutMs });
@@ -590,6 +593,8 @@ export class RelayGateway extends EventEmitter {
     return { state: 'accepted', ...result };
   }
   async #read(row, request) {
+    if (request.op === 'voice.status') return this.#voice.status(row);
+    if (request.op === 'voice.poll') return this.#voice.poll(row, request.params.requestId, request.params.cursor);
     if (request.op === 'updates.status') return coreUpdates().status(row);
     if (request.op === 'updates.check') return coreUpdates().checkNow(row);
     if (request.op.startsWith('agents.')) return this.#agentRead(row, request);
@@ -684,6 +689,8 @@ export class RelayGateway extends EventEmitter {
   }
 
   async #command(row, request) {
+    if (request.op === 'voice.send') return this.#voice.send(row, request.params.text, request.id);
+    if (request.op === 'voice.cancel') return this.#voice.cancel(row, request.params.requestId, request.id);
     if (request.op === 'updates.configure') return coreUpdates().configure(row, request.params);
     if (request.op === 'updates.install') return coreUpdates().requestInstall(row, request.params, request.id);
     if (request.op.startsWith('agents.')) return this.#agentCommand(row, request);

@@ -432,6 +432,30 @@ test('remote turns use principal-bound ownership and durable idempotency on the 
   assert.doesNotMatch(JSON.stringify(f.relayAudit), /PRIVATE_GATEWAY_TASK_FIXTURE/);
 });
 
+test('full-phone voice chat executes the default Core assistant through encrypted Relay and recovers the spoken reply', async t => {
+  const f = await fixture(t), seed = f.createSession();
+  new CoreWorkspaces().configure({ path: f.workspace }, { requestId: randomUUID(), expectedRevision: 0 });
+  new CoreAssistant().configure({ source: 'core', provider: 'codex', model: 'fixture-model' }, { requestId: randomUUID(), expectedRevision: 0 });
+  const paired = await f.pair(seed.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });
+  const before = listRecords('execution').length;
+  assert.equal((await f.rpc(paired, 'voice.status')).result.configured, true);
+  assert.equal(listRecords('execution').length, before);
+  const id = randomUUID(), text = 'SYNTHETIC_VOICE_MESSAGE';
+  assert.equal((await f.rpc(paired, 'voice.send', { text }, { id })).result.state, 'accepted');
+  assert.equal((await f.rpc(paired, 'voice.send', { text }, { id })).result.state, 'accepted');
+  const record = listRecords('core.voice.turn')[0];
+  await waitFor(() => getRecord('execution', record.executionId)?.state === 'finished');
+  const spoken = await f.rpc(paired, 'voice.poll', { requestId: id, cursor: 0 });
+  assert.equal(spoken.ok, true); assert.equal(spoken.result.state, 'finished'); assert.match(spoken.result.text, /First pass/);
+  assert.equal(listRecords('execution').length, before + 1);
+  assert.doesNotMatch(f.wire.join('\n'), /SYNTHETIC_VOICE_MESSAGE/);
+  const contexts = listRecords('core.relay.context').filter(row => row.kind === 'voice');
+  assert.equal(contexts.length, 1); assert.equal(getRecord('session', contexts[0].sessionId).model, 'fixture-model');
+  const observer = await f.pair(seed.id, ['observe']);
+  assert.equal((await f.rpc(observer, 'voice.status')).error.code, 'FORBIDDEN');
+  assert.equal((await f.rpc(observer, 'voice.poll', { requestId: id, cursor: 0 })).error.code, 'FORBIDDEN');
+});
+
 test('a background task uses the configured Core AI and the same durable execution without terminal chat input', async t => {
   const f = await fixture(t), assistant = new CoreAssistant();
   assistant.configure({ source: 'core', provider: 'codex', model: 'fixture-model' }, { requestId: randomUUID(), expectedRevision: 0 });

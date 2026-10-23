@@ -92,9 +92,18 @@ struct ConversationCanvas: View {
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 16)
                 }.scrollIndicators(.hidden).scrollDismissesKeyboard(.interactively)
-                    .onAppear { reader.scrollTo("bottom", anchor: .bottom) }
+                    .defaultScrollAnchor(.bottom)
+                    .task(id: conversationID) {
+                        // Lazy children and restored remote history may arrive
+                        // after appearance. Place the first frame at the latest
+                        // entry without animating through the entire history.
+                        await Task.yield()
+                        var transaction = Transaction(); transaction.disablesAnimations = true
+                        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
+                    }
                     .onChange(of: messages.count) {
-                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { reader.scrollTo("bottom", anchor: .bottom) }
+                        var transaction = Transaction(); transaction.disablesAnimations = true
+                        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
                     }
                     .onChange(of: composerFocused) {
                         if composerFocused { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { reader.scrollTo("bottom", anchor: .bottom) } }

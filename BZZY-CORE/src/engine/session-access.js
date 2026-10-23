@@ -27,7 +27,7 @@ export function migrateSessionAccess() {
     }
   });
 }
-export function createSessionAccess({ sessionId, permissions = ['observe'], recipient, expiresInSeconds = 86400, includeChildren = true }) {
+export function createSessionAccess({ sessionId, permissions = ['observe'], recipient, expiresInSeconds = 86400, includeChildren = true }, db) {
   if (typeof sessionId !== 'string' || !/^[a-f0-9-]{36}$/.test(sessionId) || !loadSession(sessionId)) throw new Error('Session token needs an existing session ID.');
   if (!Array.isArray(permissions) || !permissions.length || new Set(permissions).size !== permissions.length || permissions.some(p => !sessionPermissions.includes(p)) || !permissions.includes('observe')) throw new Error('Choose explicit session permissions including observe.');
   if (permissions.some(p => p !== 'observe' && p !== 'claim') && !permissions.includes('claim')) throw new Error('Session control requires the claim permission.');
@@ -36,7 +36,9 @@ export function createSessionAccess({ sessionId, permissions = ['observe'], reci
   if (recipient !== undefined && (typeof recipient !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(recipient))) throw new Error('Use an opaque recipient ID of 1–80 letters, digits, _ or -.');
   if (permissions.length > 1 && !recipient) throw new Error('A control grant needs an explicit recipient ID.');
   const token = randomBytes(32).toString('base64url'), access = { id: randomUUID(), sessionId, recipient, permissions, includeChildren, expiresAt: Date.now() + expiresInSeconds * 1000, createdAt: now() };
-  transaction(db => { putRecord('access-token', digest(token), access, db); appendEvent(sessionId, 'access.granted', publicAccess(access), db); });
+  const save = connection => { putRecord('access-token', digest(token), access, connection); appendEvent(sessionId, 'access.granted', publicAccess(access), connection); };
+  // Trusted callers may create a context and its narrow grant atomically.
+  if (db) save(db); else transaction(save);
   return { token, ...publicAccess(access) };
 }
 export function revokeSessionAccess(id) {

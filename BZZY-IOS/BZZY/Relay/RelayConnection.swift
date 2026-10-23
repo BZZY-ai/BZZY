@@ -105,6 +105,7 @@ private struct PendingCoreUpdate: Codable {
 }
 
 private struct SavedRelayState: Codable {
+    var pendingVoice: PendingVoiceTurn?
     var pendingUpdate: PendingCoreUpdate?
     var host: HostBinding?
     var pending: PendingPair?
@@ -120,6 +121,12 @@ private struct SavedRelayState: Codable {
     var agentImport: AgentImportReference?
 }
 
+private struct PendingVoiceTurn: Codable {
+    let hostID: String
+    let grantID: String
+    let requestID: String
+}
+
 public struct CoreShareReference: Sendable {
     public let shareID: String
     public let expiresAt: Date?
@@ -131,6 +138,12 @@ public enum RelayStatus: String, Sendable {
 
 @MainActor @Observable
 public final class RelayConnection {
+    public private(set) var voicePhase = "idle"
+    public private(set) var voiceReply = ""
+    public private(set) var voiceErrorCode: String?
+    public private(set) var voiceConfigured = false
+    public var voiceWaiting: Bool { ["sending", "waiting", "uncertain"].contains(voicePhase) }
+    @ObservationIgnored private var voicePoll: Task<Void, Never>?
     public private(set) var status: RelayStatus = .offline
     public private(set) var hostStatus = "Not paired"
     public private(set) var deviceFingerprint = ""
@@ -734,8 +747,84 @@ public final class RelayConnection {
         }
     }
 
-    /// Host updates always use the approved base pairing, never a selected
-    /// terminal/Agent context or notification payload. Reconnect only reads status.
+    /// Voice uses the approved base pairing and Core's independent default
+    /// assistant. Reconnect only reads status and saved turn receipts.
+    public func prepareVoiceChat() async {
+        guard coreActionsAvailable, !suspended, let client = catalogClient else { voiceErrorCode = "OFFLINE"; return }
+        voiceErrorCode = nil
+        do {
+            let result = try await client.request("voice.status")
+            guard coreActionsAvailable, !suspended, catalogClient === client else { return }
+            voiceConfigured = result["configured"].bool == true
+            if !voiceConfigured { voiceErrorCode = result["assistantConfigured"].bool == true ? "WORKSPACE_SETUP_REQUIRED" : "ASSISTANT_SETUP_REQUIRED" }
+            if state.pendingVoice != nil { startVoicePolling(client) }
+        } catch { voiceConfigured = false; voiceErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE" }
+    }
+
+    public func sendVoiceText(_ text: String) async -> Bool {
+        guard coreActionsAvailable, !suspended, voiceConfigured, !voiceWaiting, let client = catalogClient else { voiceErrorCode = "OFFLINE"; return false }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.utf8.count <= CoreApplicationProtocol.promptBytes else { voiceErrorCode = "INVALID_REQUEST"; return false }
+        voiceErrorCode = nil; voiceReply = ""; voicePhase = "sending"
+        let pending = PendingVoiceTurn(hostID: client.hostID, grantID: client.grantID, requestID: CoreRelayClient.commandID())
+        do {
+            state.pendingVoice = pending; try save()
+            _ = try await client.request("voice.send", params: ["text": .string(text)], id: pending.requestID)
+            guard coreActionsAvailable, catalogClient === client, state.pendingVoice?.requestID == pending.requestID else { return false }
+            voicePhase = "waiting"; startVoicePolling(client); return true
+        } catch {
+            let code = (error as? CoreApplicationError)?.code ?? "UNCERTAIN"
+            if ["FORBIDDEN", "GRANT_UNAVAILABLE", "INVALID_REQUEST", "CONFLICT", "CAPACITY", "CORE_STOPPED", "ASSISTANT_SETUP_REQUIRED", "WORKSPACE_SETUP_REQUIRED", "WORKSPACE_CHANGED", "WORKSPACE_UNAVAILABLE", "PROVIDER_UNAVAILABLE", "OPERATION_DENIED"].contains(code) {
+                state.pendingVoice = nil; try? save(); voicePhase = "idle"
+            } else { voicePhase = "uncertain"; startVoicePolling(client) }
+            voiceErrorCode = code; return false
+        }
+    }
+
+    private func startVoicePolling(_ client: CoreRelayClient) {
+        guard let pending = state.pendingVoice, pending.hostID == client.hostID, pending.grantID == client.grantID else { return }
+        voicePoll?.cancel()
+        voicePoll = Task { [weak self, weak client] in
+            guard let self, let client else { return }
+            var cursor: Int64 = 0, reply = ""
+            while !Task.isCancelled, self.coreActionsAvailable, self.catalogClient === client, self.state.pendingVoice?.requestID == pending.requestID {
+                do {
+                    let result = try await client.request("voice.poll", params: ["requestId": .string(pending.requestID), "cursor": .number(Double(cursor))])
+                    guard !Task.isCancelled, self.catalogClient === client, self.state.pendingVoice?.requestID == pending.requestID else { return }
+                    let next = result["cursor"].integer ?? cursor
+                    guard next >= cursor, let text = result["text"].string, reply.utf8.count + text.utf8.count <= 2_000_000 else { throw CoreApplicationError("INVALID_RESPONSE") }
+                    cursor = next; reply += text
+                    let phase = result["state"].string ?? "uncertain"
+                    if result["hasMore"].bool == true { continue }
+                    if ["queued", "launching", "running", "dispatching", "uncertain"].contains(phase) {
+                        self.voicePhase = phase == "uncertain" ? "uncertain" : "waiting"
+                        try await Task.sleep(for: .seconds(2)); continue
+                    }
+                    self.state.pendingVoice = nil; try self.save()
+                    if let question = result["question"].string, !question.isEmpty { reply += (reply.isEmpty ? "" : "\n") + question }
+                    if !reply.isEmpty, ["failed", "paused", "cancelled"].contains(phase) { reply = "The assistant response stopped before it finished.\n" + reply }
+                    self.voiceReply = reply
+                    self.voicePhase = reply.isEmpty ? "idle" : "answered"
+                    if reply.isEmpty { self.voiceErrorCode = result["code"].string ?? (phase == "unknown" ? "VOICE_NOT_SENT" : ["failed", "paused", "cancelled"].contains(phase) ? "VOICE_STOPPED" : "VOICE_EMPTY_REPLY") }
+                    return
+                } catch is CancellationError { return }
+                catch { self.voicePhase = "uncertain"; self.voiceErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE"; return }
+            }
+        }
+    }
+
+    public func stopVoiceObservation() { voicePoll?.cancel(); voicePoll = nil }
+    public func stopVoiceTurn() async {
+        stopVoiceObservation()
+        guard coreActionsAvailable, let client = catalogClient, let pending = state.pendingVoice,
+              pending.hostID == client.hostID, pending.grantID == client.grantID else { return }
+        do {
+            _ = try await client.request("voice.cancel", params: ["requestId": .string(pending.requestID)])
+            guard catalogClient === client, state.pendingVoice?.requestID == pending.requestID else { return }
+            state.pendingVoice = nil; try save(); voicePhase = "idle"
+        } catch { voicePhase = "uncertain"; voiceErrorCode = (error as? CoreApplicationError)?.code ?? "UNCERTAIN" }
+    }
+
     public func refreshCoreUpdates(checkNow: Bool = false) async {
         guard coreActionsAvailable, !suspended, !coreUpdateBusy, let client = catalogClient else { return }
         coreUpdateBusy = true; defer { coreUpdateBusy = false }
@@ -1157,6 +1246,8 @@ public final class RelayConnection {
     }
 
     private func stopCore(purge: Bool, preserveCatalog: Bool = false) {
+        stopVoiceObservation(); voiceConfigured = false
+        if purge { state.pendingVoice = nil; voiceReply = ""; voicePhase = "idle"; voiceErrorCode = nil }
         if purge { coreUpdateSnapshot = nil; state.pendingUpdate = nil }
         coreHealth.disconnect()
         metricsEpoch = UUID(); metricsPolling?.cancel(); metricsPolling = nil

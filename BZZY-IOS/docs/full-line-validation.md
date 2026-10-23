@@ -339,3 +339,45 @@ Composer dictation uses on-device Apple Speech: hold the microphone before Send,
 Verification: **99 focused CLI tests pass** (3 Linux-only PTY cases skipped), **44 Swift tests pass**, model/lifecycle checks pass, and the navigation/draft UI test passes in the iOS simulator. A separate actual macOS PTY test verifies newest-first aliases, arrow/Enter opening, original cwd and saved history with zero execution. Installed Settings and Sessions smoke checks pass at 80x24 and leave Core running. Apple Vision decoded the new terminal QR render exactly. Telemetry-failure fixtures retain readiness only after an authorized session heartbeat, while explicit Core stop still locks actions.
 
 No automated check captured microphone audio; real speech recognition and first-use permission behavior still require the user's phone test. No new production pairing was created/approved/revoked, and credentials and host identity are unchanged. The deployment record is `~/BZZY/Setup/SESSIONS-VOICE-UPDATE-STATUS.json`.
+## Voice and open-eye animation build 6 (2026-10-23)
+
+Build 6 preserves the supplied face asset unchanged and animates its existing
+pixels through the shared Metal shader. Pupils track and antennae sway; no blink
+or eyelid state exists. The face is displayed 25% larger. Shared celeste action
+surfaces replace bare buttons, and chats open at the latest message immediately,
+including history loaded after opening.
+
+The full-screen voice surface contains only icon controls and a 32-band spectrum
+from microphone FFT data. Capture uses on-device Apple Speech. Release finalizes;
+explicit Send forwards text through the encrypted own-phone/Core API. Apple TTS
+reads replies and safe connection notices. Closing/backgrounding stops local
+audio and observation; accepted work is recovered through its saved receipt.
+Core selects its independent default assistant and managed folder, retains the
+normal execution/history path and does not expose its private context token.
+
+Validation completed:
+
+- Core: **185/185 tests**, including real encrypted voice execution, lost
+  acceptance, output/question boundaries, Unicode pages, revocation/root changes,
+  transaction rollback and Stop against a newer turn.
+- CLI: **396 passed, 21 platform/optional skips**, with no failures; Core/CLI
+  source checks pass.
+- Native Swift: **49/49 tests**, including a real `RelayConnection` voice request,
+  Core-default selection and background/reconnect recovery with one execution.
+- Model checks: no-blink bounded motion, paused animation clock, synthetic
+  low/high tone FFT separation and silence. No ambient microphone input is used.
+- Targeted simulator UI: text-free voice, latest Agent/terminal message on entry,
+  existing rich chats and Core-offline locking pass. The three checks passed
+  across focused runs; screenshots were inspected.
+- Native macOS previews: 14 layouts and six open-eye expressions rendered with
+  the same compiled shader. These are previews, not device screenshots.
+- Signed physical **Debug 0.1.0 (6)** builds, validates and installs in place on
+  the connected iPhone. The phone reports build 6. Application signing identity,
+  development push entitlement, permission/privacy declarations, eye/icon assets
+  and `default.metallib` were checked before installation. No app uninstall or
+  data reset was performed.
+
+Physical microphone permission/recognition, audible TTS and the user's saved
+pairing were not exercised by automation. The host Core must receive the new API
+through the CLI updater; this device installation does not update the running
+host. APNs delivery still depends on its separate private Apple/host setup.

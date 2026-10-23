@@ -17,21 +17,18 @@ struct AgentsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 24) {
                     FlyEyes().frame(maxWidth: .infinity).padding(.horizontal, -14)
-                    if store.showsDemoContent || !store.agents.isEmpty {
                     Button { showVoice = true } label: {
-                        Image(systemName: "waveform").font(.system(size: 19, weight: .light))
-                            .foregroundStyle(BZZYTheme.accent).frame(width: 48, height: 48)
-                            .background(BZZYTheme.accent.opacity(0.055), in: Circle())
-                    }.buttonStyle(.plain).accessibilityLabel("Open voice")
-                    }
-                }.frame(maxWidth: .infinity).padding(.top, 72).padding(.bottom, 46)
+                        Label("Talk to BZZY", systemImage: "waveform").bzzyFont(13, weight: .medium)
+                    }.buttonStyle(BZZYActionStyle()).accessibilityLabel("Open voice").accessibilityIdentifier("open-voice-chat")
+                }.frame(maxWidth: .infinity).padding(.top, 32).padding(.bottom, 30)
 
                 if relay.coreAgentsAvailable {
                     VStack(alignment: .leading, spacing: 15) {
                         HStack {
                             Text("On demand").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                             Spacer()
-                            Button("Refresh") { Task { await relay.refreshCoreAgents() } }.bzzyFont(12).disabled(!relay.coreCatalogReady)
+                            Button { Task { await relay.refreshCoreAgents() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                                .bzzyFont(12).disabled(!relay.coreCatalogReady)
                         }
                         if !store.hostAgentsConfigured {
                             Text("Configure the default Agents workspace on your host to create agents.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
@@ -81,7 +78,7 @@ struct AgentsView: View {
                     }
                     if store.agents.isEmpty {
                         VStack(spacing: 8) {
-                            Button("New agent") { showCreate = true }
+                            AccentButton(title: "New agent", symbol: "plus") { showCreate = true }
                         }.frame(maxWidth: .infinity).padding(.vertical, 30)
                     }
                 }
@@ -103,7 +100,7 @@ struct AgentsView: View {
                     } }
                 }
             }
-            .sheet(isPresented: $showVoice) { VoiceView(store: store) }
+            .voiceChatScreen(isPresented: $showVoice)
             .navigationDestination(item: $openedAgent) { agent in ConversationView(store: store, agent: agent) }
             .navigationDestination(item: $notificationAgent) { agent in HostAgentConversationView(store: store, agent: agent) }
             .onChange(of: store.notificationAgentID) { _, id in

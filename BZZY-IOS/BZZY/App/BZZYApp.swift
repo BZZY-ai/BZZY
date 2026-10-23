@@ -287,7 +287,7 @@ private struct CoreAvailabilityGate: ViewModifier {
                         Button("Connection") { showConnection = true }
                         Button("Settings") { showSettings = true }
                     }.bzzyFont(13)
-                }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }.buttonStyle(BZZYActionStyle()).padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(BZZYTheme.background).accessibilityIdentifier("core-offline-lock")
             }
         }

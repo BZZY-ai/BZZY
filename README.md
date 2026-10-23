@@ -12,7 +12,7 @@ BZZY CLI ↔ BZZY Core ↔ BZZY Relay ↔ BZZY iOS
 | [Core](BZZY-CORE/README.md) | Sessions, providers/auth, tools, goals, persistent Agents, sharing and the host Relay gateway. |
 | [CLI](BZZY-CLI/BZZY-CLI-TERMINAL/README.md) | Terminal chat, aliased sessions, Settings, pairing and local Core controls. |
 | [Relay](BZZY-RELAY/README.md) | Authenticated encrypted transport and expiring QR/import codes; no model execution or provider credentials. |
-| [iOS](BZZY-IOS/README.md) | Pairing, Agent management, existing terminal chat/history, activity and on-device dictation. |
+| [iOS](BZZY-IOS/README.md) | Pairing, Agent management, terminal chat/history, activity, on-device dictation and voice chat. |
 
 Keep this directory layout when cloning: the Node packages use sibling file
 dependencies. Agent and sharing implementations live in Core and their clients.

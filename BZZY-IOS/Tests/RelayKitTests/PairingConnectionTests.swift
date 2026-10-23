@@ -2,6 +2,9 @@ import XCTest
 @testable import RelayKit
 
 final class PairingConnectionTests: XCTestCase {
+    @MainActor func testVoiceUsesCoreDefaultAndRecoversAfterBackgroundWithoutSendingAgain() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, voiceChat: true)
+    }
     @MainActor func testNotificationCenterRoundtripKeepsAuthorizedCoreOnline() async throws {
         try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, overlayResume: true)
     }
@@ -31,7 +34,7 @@ final class PairingConnectionTests: XCTestCase {
     }
 
     @MainActor private func checkPairing(ignoreDecisionEvent: Bool, backgroundBeforeApproval: Bool,
-                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false) async throws {
+                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false) async throws {
         let fixture = try PairingConnectionFixture()
         defer { fixture.shutdown() }
         let identity = try RelayIdentity.generate()
@@ -84,6 +87,26 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertFalse(connection.coreIsAssistant, "A terminal pair must not depend on coordinator setup")
         XCTAssertEqual(connection.corePermissions, Set(["observe", "claim", "takeover", "execute", "answer", "pause", "cancel", "steer"]))
         XCTAssertTrue(availabilityFailures.isEmpty, "Approval must not cancel its own initial Core read: \(availabilityFailures)")
+        if voiceChat {
+            await connection.prepareVoiceChat()
+            XCTAssertFalse(connection.voiceConfigured)
+            XCTAssertEqual(connection.voiceErrorCode, "ASSISTANT_SETUP_REQUIRED")
+            _ = try fixture.request(["op": .string("voice-configure")])
+            await connection.prepareVoiceChat()
+            XCTAssertTrue(connection.voiceConfigured)
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["executionCount"].integer, 0, "Checking voice readiness never starts work")
+            let accepted = await connection.sendVoiceText("SYNTHETIC_NATIVE_VOICE")
+            XCTAssertTrue(accepted)
+            XCTAssertFalse(String(data: savedAuthorization ?? Data(), encoding: .utf8)?.contains("SYNTHETIC_NATIVE_VOICE") ?? true, "Only the request receipt is saved on the phone")
+            connection.pause()
+            await connection.resume()
+            try await eventually { connection.coreActionsAvailable }
+            await connection.prepareVoiceChat()
+            try await eventually { connection.voicePhase == "answered" }
+            XCTAssertTrue(connection.voiceReply.contains("First pass"))
+            XCTAssertFalse(connection.coreIsAssistant, "Voice must not replace the selected terminal resource")
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["executionCount"].integer, 1)
+        }
         if updatePreferences {
             await connection.refreshCoreUpdates()
             XCTAssertEqual(connection.coreUpdateSnapshot?["remoteUpdatesEnabled"].bool, false)
@@ -141,8 +164,8 @@ final class PairingConnectionTests: XCTestCase {
         await connection.resume()
         try await eventually { connection.coreActionsAvailable }
         let state = try fixture.request(["op": .string("state")])
-        XCTAssertEqual(state["executionCount"].integer, 0, "Pairing and reconnecting observe only")
-        XCTAssertEqual(state["coordinatorConfigured"].bool, false)
+        XCTAssertEqual(state["executionCount"].integer, voiceChat ? 1 : 0, "Pairing and reconnecting observe only")
+        XCTAssertEqual(state["coordinatorConfigured"].bool, voiceChat)
         XCTAssertEqual(state["activeGrants"].integer, 1)
         if failMetrics {
             XCTAssertEqual(try fixture.request(["op": .string("core-stop")])["stopped"].bool, true)

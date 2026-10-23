@@ -92,7 +92,7 @@ import Foundation
                 } else {
                     try frame.record(["v", "protocol", "type", "id", "ok", "error"])
                     try frame["error"].record(["code"])
-                    let codes: Set<String> = ["FORBIDDEN", "INVALID_REQUEST", "CONFLICT", "UNCERTAIN", "OPERATION_DENIED", "PROTOCOL_UNSUPPORTED", "REQUEST_TOO_LARGE", "RESULT_TOO_LARGE", "RATE_LIMITED", "CAPACITY", "INVALID_CURSOR", "GRANT_UNAVAILABLE", "AUTHORIZATION_REQUIRED", "GATEWAY_UNAVAILABLE", "CORE_STOPPED", "WORKSPACE_SETUP_REQUIRED", "WORKSPACE_CHANGED", "WORKSPACE_UNAVAILABLE", "PROVIDER_UNAVAILABLE", "CONFIRMATION_REQUIRED", "EXPORT_ACTIVE", "SECRET_DETECTED", "EXPORT_INVALID", "SHARE_CONTEXT_INCOMPLETE"]
+                    let codes: Set<String> = ["ASSISTANT_SETUP_REQUIRED", "VOICE_UNAVAILABLE", "FORBIDDEN", "INVALID_REQUEST", "CONFLICT", "UNCERTAIN", "OPERATION_DENIED", "PROTOCOL_UNSUPPORTED", "REQUEST_TOO_LARGE", "RESULT_TOO_LARGE", "RATE_LIMITED", "CAPACITY", "INVALID_CURSOR", "GRANT_UNAVAILABLE", "AUTHORIZATION_REQUIRED", "GATEWAY_UNAVAILABLE", "CORE_STOPPED", "WORKSPACE_SETUP_REQUIRED", "WORKSPACE_CHANGED", "WORKSPACE_UNAVAILABLE", "PROVIDER_UNAVAILABLE", "CONFIRMATION_REQUIRED", "EXPORT_ACTIVE", "SECRET_DETECTED", "EXPORT_INVALID", "SHARE_CONTEXT_INCOMPLETE"]
                     guard let code = frame["error"]["code"].string, codes.contains(code) || ["IMPORT_UNAVAILABLE", "IMPORT_INVALID", "IMPORT_CONFLICT", "TRANSFER_UNAVAILABLE", "CANCELLED"].contains(code) else { throw CoreApplicationError("INVALID_RESPONSE") }
                     finish(id, result: .failure(CoreApplicationError(code)))
                 }
@@ -127,6 +127,21 @@ import Foundation
     private func acceptResult(_ result: CoreJSONValue, op: String, params: [String: CoreJSONValue]) throws {
         guard result.object != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
         switch op {
+        case "voice.status":
+            try result.record(["configured", "assistantConfigured", "workspaceConfigured"])
+            guard result["configured"].bool != nil, result["assistantConfigured"].bool != nil, result["workspaceConfigured"].bool != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
+        case "voice.send":
+            try result.record(["state", "requestId"])
+            guard result["state"].string == "accepted", let id = result["requestId"].string else { throw CoreApplicationError("INVALID_RESPONSE") }
+            try CoreApplicationProtocol.opaque(id)
+        case "voice.cancel":
+            try result.record(["stopped"]); guard result["stopped"].bool == true else { throw CoreApplicationError("INVALID_RESPONSE") }
+        case "voice.poll":
+            try result.record(["state", "text", "cursor", "hasMore", "question", "verification", "code"], required: ["state", "text", "cursor", "hasMore"])
+            guard ["unknown", "dispatching", "rejected", "uncertain", "accepted", "queued", "launching", "running", "waiting_for_input", "finished", "failed", "cancelled", "paused"].contains(result["state"].string ?? ""),
+                  let text = result["text"].string, text.utf8.count <= 6000, let cursor = result["cursor"].integer, cursor >= 0 && cursor <= 2_000_000,
+                  result["hasMore"].bool != nil, result["verification"] == .null || result["verification"].string == "not-assessed" else { throw CoreApplicationError("INVALID_RESPONSE") }
+            if result["question"] != .null { guard let text = result["question"].string, text.utf8.count <= 16000 else { throw CoreApplicationError("INVALID_RESPONSE") } }
         case "host.metrics":
             _ = try CoreHostMetrics(result)
         case "session.get":

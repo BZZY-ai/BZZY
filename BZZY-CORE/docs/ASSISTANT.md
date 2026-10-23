@@ -29,6 +29,12 @@ and Pair iPhone. Provider/model discovery still uses Core's installed adapters
 and catalogs without a second client-side model list. Saving checks the
 Core settings revision and never changes CLI defaults or starts a model turn.
 
+The iPhone's text-free **Talk to BZZY** surface now uses these independent Core
+defaults through the own-phone voice protocol. Readiness checks do not start
+inference; explicit Send creates/reuses a private Core context in the managed
+folder. Apple Speech/TTS and the live spectrum run on iPhone. See [voice](VOICE.md)
+for permissions, acceptance, questions and recovery.
+
 Authentication continues through Core's existing private provider setup on the
 host; configuration never copies credentials into contexts, prompts or Relay
 messages. Shared provider availability does not give a context another agent's

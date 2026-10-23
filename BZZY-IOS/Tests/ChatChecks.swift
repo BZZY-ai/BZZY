@@ -60,6 +60,27 @@ struct ChatChecks {
         let beforePause = motion.position.x
         motion.pause(); motion.advance(toward: CGPoint(x: -1, y: 0), time: 1000)
         require(beforePause - motion.position.x <= 0.056, "Resuming cannot fast-forward into a jump")
+        var clock = FlyAnimationClock()
+        clock.advance(10); let firstFrame = clock.elapsed
+        clock.pause(); clock.advance(1000)
+        require(clock.elapsed - firstFrame < 0.04, "Background time must not advance antenna or eye motion")
+        for mood in FlyMood.allCases {
+            for frame in 0...390 {
+                let pose = FlyAnimationPose(time: Double(frame) / 30, mood: mood, touchAge: 100, touch: .zero, still: false)
+                require(pose.target.x.isFinite && pose.target.y.isFinite && abs(pose.target.x) <= 1 && abs(pose.target.y) <= 1, "Every mood keeps pupil tracking bounded")
+                let reduced = FlyAnimationPose(time: Double(frame), mood: mood, touchAge: 0, touch: CGPoint(x: 1, y: 1), still: true)
+                require(reduced.target == .zero && reduced.energy == 0, "Reduce Motion holds the reference artwork still")
+            }
+        }
+        let spectrum = VoiceFrequencyAnalyzer(), sampleRate = 48000.0
+        func peak(_ frequency: Double) -> Int {
+            let signal = (0..<1024).map { Float(sin(Double($0) * 2 * .pi * frequency / sampleRate) * 0.4) }
+            let levels = spectrum.levels(signal, sampleRate: sampleRate)!
+            require(levels.allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 }, "Spectrum energy must stay finite and bounded")
+            return levels.indices.max(by: { levels[$0] < levels[$1] })!
+        }
+        require(peak(4000) > peak(500), "Actual higher microphone frequencies must light higher bands")
+        require(spectrum.levels(Array(repeating: 0, count: 1024), sampleRate: sampleRate)!.allSatisfy { $0 == 0 }, "Silence must never display invented voice activity")
         print("PASS: rich message examples, nested styles, tables, escapes, code, malformed/untrusted markup rejection, demo isolation, smooth gaze")
     }
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) { precondition(condition(), message) }

@@ -3,8 +3,15 @@
 `BZZY/Assets.xcassets/BZZYEyes.imageset/eyes.png` is the supplied two-eye PNG,
 copied without redrawing, cropping or resampling. The iOS view scales it as a
 complete mark and uses screen blending to integrate its black background with
-the app surface. Touch/idle motion moves the complete artwork; it does not
-replace its pupils or compound-eye texture with approximated native shapes.
+the app surface. The original asset remains byte-identical to the supplied PNG.
+The view displays it 25% larger, clipping only unused black side margins.
+`FlyMotion.metal` gently distorts the original pixels for pupil tracking, antenna
+sway and breathing; it never replaces the compound-eye texture or draws eyelids.
+There is no blinking or eye-closing state. Touch targets ease with a speed limit;
+the animation clock pauses offscreen/background and ignores long frame gaps.
+Reduce Motion disables the distortion and returns to the original still image.
+The Xcode Metal toolchain compiles the shader; native macOS previews compile and
+load the same source into their own Metal library.
 
 The opaque 1024×1024 `AppIcon.appiconset/AppIcon.png` adapts the supplied
 single-eye crop. The inner side is cut at the left edge, with one illuminated eye

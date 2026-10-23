@@ -111,7 +111,7 @@ public struct CoreEventBatch: Sendable {
 enum CoreApplicationProtocol {
     static let payloadBytes = 28 * 1024
     static let promptBytes = 16 * 1024
-    static let commands: Set<String> = ["updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
+    static let commands: Set<String> = ["voice.send", "voice.cancel", "updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
     static let fields: [String: Set<String>] = [
         "updates.status": [], "updates.check": [], "updates.configure": ["monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"], "updates.install": ["target"],
         "host.metrics": [],
@@ -123,7 +123,7 @@ enum CoreApplicationProtocol {
         "notifications.register": ["deviceToken", "environment", "enabled", "scope"], "notifications.update": ["enabled"], "notifications.revoke": [],
         "share.create": [], "share.status": ["shareId"], "share.approve": ["shareId", "claimId", "confirmedFingerprint"], "share.revoke": ["shareId"],
         "session.get": [], "session.usage": [], "sessions.list": ["after", "limit"], "sessions.open": ["sessionId"],
-        "assistant.status": [], "task.submit": ["owner", "instruction"], "task.get": ["taskId"],
+        "assistant.status": [], "voice.status": [], "voice.send": ["text"], "voice.poll": ["requestId", "cursor"], "voice.cancel": ["requestId"], "task.submit": ["owner", "instruction"], "task.get": ["taskId"],
         "events.list": ["after", "limit"], "events.subscribe": ["consumerId"], "events.ack": ["subscriptionId", "seq"],
         "events.unsubscribe": ["subscriptionId"], "input.claim": ["owner", "takeover"], "input.release": ["owner"],
         "execution.execute": ["owner", "prompt", "goal", "resumeGoal"], "question.answer": ["owner", "questionId", "answer"],
@@ -138,6 +138,9 @@ enum CoreApplicationProtocol {
         try opaque(id); try opaque(resource)
         guard let allowed = fields[op], Set(params.keys).isSubset(of: allowed) else { throw CoreApplicationError("OPERATION_DENIED") }
         var optional: Set<String> = ["after", "limit", "takeover", "goal", "resumeGoal", "text", "scope", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
+        if op == "voice.send" { optional.remove("text") }
+        if op == "voice.poll" { guard let cursor = params["cursor"]?.integer, cursor >= 0 && cursor <= 2_000_000 else { throw CoreApplicationError("INVALID_REQUEST") } }
+        if op == "voice.send" { guard let text = params["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "agents.update" { optional.formUnion(["name", "instructions", "provider"]) }
         if op == "agents.import" { optional.insert("name"); optional.subtract(["model", "effort"]) }
         guard allowed.subtracting(optional).isSubset(of: Set(params.keys)) else { throw CoreApplicationError("INVALID_REQUEST") }

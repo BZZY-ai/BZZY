@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startRelay } from '../../BZZY-RELAY/src/server.js';
 import { RelayStore } from '../../BZZY-RELAY/src/store.js';
@@ -11,6 +12,7 @@ import { encodePairingQR } from '../../BZZY-RELAY/src/invitation.js';
 import { RelayGateway } from '../../BZZY-CORE/src/relay/gateway.js';
 import { BzzyCore } from '../../BZZY-CORE/src/core.js';
 import { CoreAssistant } from '../../BZZY-CORE/src/assistant.js';
+import { CoreWorkspaces } from '../../BZZY-CORE/src/workspaces.js';
 import { listRecords, putRecord } from '../../BZZY-CORE/src/engine.js';
 import { runtimeInfo, runtimeRequest } from '../../BZZY-CORE/src/engine/runtime.js';
 import { identityAlive } from '../../BZZY-CORE/src/engine/process-identity.js';
@@ -20,7 +22,9 @@ import { attachSession } from '../../BZZY-CLI/BZZY-CLI-TERMINAL/src/runtime-clie
 const directory = fs.mkdtempSync('/tmp/bzzy-pair-connection-');
 for (const name of ['private', 'codex', 'claude', 'project']) fs.mkdirSync(path.join(directory, name), { mode: 0o700 });
 Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'),
-  BZZY_CODEX_HOME: path.join(directory, 'codex'), BZZY_CLAUDE_HOME: path.join(directory, 'claude') });
+  BZZY_CODEX_HOME: path.join(directory, 'codex'), BZZY_CLAUDE_HOME: path.join(directory, 'claude'),
+  BZZY_CODEX_BIN: fileURLToPath(new URL('../../BZZY-CORE/test/fixtures/codex.mjs', import.meta.url)) });
+fs.writeFileSync(path.join(directory, 'codex/auth.json'), '{"fixture":true}', { mode: 0o600 });
 putRecord('core.update.preferences', 'default', { monitoringEnabled: false });
 const store = new RelayStore(), host = createIdentity();
 store.provisionHost(host.certificate);
@@ -101,6 +105,10 @@ async function handle(input) {
       return { closed: true, ownsInput: snapshot.inputOwner != null };
     }
     case 'metrics-failure': metricsFailure = true; return { enabled: true };
+    case 'voice-configure':
+      new CoreWorkspaces().configure({ path: path.join(directory, 'project') }, { expectedRevision: 0, requestId: randomUUID() });
+      new CoreAssistant().configure({ source: 'core', provider: 'codex', model: 'native-voice-fixture' }, { expectedRevision: 0, requestId: randomUUID() });
+      return { configured: true };
     case 'core-stop':
       await runtimeRequest(runtimeInfo(), 'POST', '/operator-stop', { shutdown: false });
       return { stopped: true };

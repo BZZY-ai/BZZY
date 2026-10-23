@@ -12,6 +12,15 @@ struct RenderPreview {
         NSApplication.shared.setActivationPolicy(.prohibited)
         let folder = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        if let source = Bundle.module.url(forResource: "FlyMotion", withExtension: "metal") {
+            let air = folder.appendingPathComponent("fly-motion.air"), library = folder.appendingPathComponent("fly-motion.metallib")
+            for arguments in [["-sdk", "macosx", "metal", "-c", source.path, "-o", air.path], ["-sdk", "macosx", "metallib", air.path, "-o", library.path]] {
+                let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun"); process.arguments = arguments
+                try process.run(); process.waitUntilExit()
+                guard process.terminationStatus == 0 else { throw CocoaError(.executableLoad) }
+            }
+            FlyEyes.previewShaderURL = library
+        }
         let agents = WorkspaceStore()
         let terminal = WorkspaceStore()
         terminal.selectedTab = .terminal
@@ -23,13 +32,14 @@ struct RenderPreview {
         try render("research-chat", view: TerminalConversationView(store: terminal, session: TerminalPreview.samples[1]), folder: folder)
         try render("chat-large-text", view: ConversationView(store: agents, agent: agents.agents[0]).environment(\.dynamicTypeSize, .accessibility2), folder: folder)
         try render("voice", view: VoiceView(store: agents, conversationID: agents.agents[0].id.uuidString, agentName: "COOL"), folder: folder)
+        try render("voice-only", view: VoiceChatView(), folder: folder)
         try render("activity", view: ActivityView(), folder: folder)
         try render("share", view: ShareResourceView(target: .agent(agents.agents[0]))
             .environment(DemoTransferStore()).environment(RelayConnection(networkingEnabled: false)), folder: folder)
         try render("import", view: ImportResourceView(store: agents, kind: .agent).environment(DemoTransferStore()), folder: folder)
         try render("agents-small", view: WorkspaceView(store: WorkspaceStore()), folder: folder, width: 375, height: 667)
         try render("agents-large-text", view: WorkspaceView(store: WorkspaceStore()).environment(\.dynamicTypeSize, .accessibility2), folder: folder)
-        let expressions: [(String, FlyMood, Double)] = [("idle", .idle, 0), ("glance", .curious, 3), ("blink", .idle, 5.86), ("resting", .resting, 0), ("happy", .happy, 0), ("thinking", .thinking, 0)]
+        let expressions: [(String, FlyMood, Double)] = [("idle", .idle, 0), ("glance", .curious, 3), ("antennae", .idle, 5.86), ("resting", .resting, 6), ("happy", .happy, 4), ("thinking", .thinking, 4)]
         for expression in expressions {
             let renderer = ImageRenderer(content: FlyEyes(mood: expression.1, interactive: false, frozenTime: expression.2)
                 .frame(width: 552, height: 310).padding(35).background(BZZYTheme.background))
@@ -41,7 +51,7 @@ struct RenderPreview {
             if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
             try FileManager.default.copyItem(at: icon, to: destination)
         }
-        print("Rendered 13 native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
+        print("Rendered 14 native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
     }
 
     @MainActor private static func render<V: View>(_ name: String, view: V, folder: URL, width: CGFloat = 393, height: CGFloat = 852) throws {

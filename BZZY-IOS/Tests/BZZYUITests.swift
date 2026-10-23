@@ -197,6 +197,28 @@ final class BZZYUITests: XCTestCase {
         // Diagnostic identity is disposable and removed. No host invitations or commands are sent.
     }
 
+    func testVoiceScreenHasOnlyControlsAndChatsOpenAtLatest() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing"]
+        app.launch()
+        XCTAssertTrue(app.buttons["open-voice-chat"].waitForExistence(timeout: 10))
+        app.buttons["open-voice-chat"].tap()
+        let voice = app.descendants(matching: .any)["voice-only-chat"]
+        XCTAssertTrue(voice.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["voice-chat-record"].exists, app.debugDescription)
+        attach(app, name: "Voice-only minimal interface")
+        XCTAssertEqual(voice.staticTexts.count, 0, "The voice screen must not display transcripts, labels or text status: \(voice.debugDescription)")
+        app.buttons["Close voice chat"].tap()
+        app.buttons["agent-COOL"].tap()
+        let latest = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "We can keep it focused.")).firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 5)); XCTAssertTrue(latest.isHittable, "Opening an agent chat must land at the newest message")
+        app.buttons["Back"].tap(); app.buttons["tab-terminal"].tap(); app.buttons["terminal-session-research"].tap()
+        let terminalLatest = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Then refine the details.")).firstMatch
+        XCTAssertTrue(terminalLatest.waitForExistence(timeout: 5)); XCTAssertTrue(terminalLatest.isHittable, "Opening a terminal chat must land at the newest message")
+        attach(app, name: "Latest terminal message on entry")
+    }
+
     func testAgentAndTerminalDemoChats() {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -20,7 +20,7 @@ struct TerminalView: View {
                     HStack {
                         Text("Your terminals").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         Spacer()
-                        Button("Refresh") { Task { await relay.refreshCoreSessions() } }.bzzyFont(12)
+                        Button { Task { await relay.refreshCoreSessions() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }.bzzyFont(12)
                             .disabled(!relay.coreCatalogReady)
                     }
                     if relay.coreSessionAttachmentPending {

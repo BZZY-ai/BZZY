@@ -9,6 +9,7 @@ import Speech
 final class VoiceCapture {
     var transcript = ""
     var error: String?
+    var spectrum = [Float](repeating: 0, count: 32)
     private var lifecycle = VoiceCaptureLifecycle()
     var isRecording: Bool { lifecycle.phase == .recording }
     var isStarting: Bool { lifecycle.phase == .starting }
@@ -66,7 +67,16 @@ final class VoiceCapture {
                 return
             }
             transcript = ""
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+            let analyzer = VoiceFrequencyAnalyzer()
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                request.append(buffer)
+                guard let channel = buffer.floatChannelData?[0],
+                      let levels = analyzer.levels(Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))), sampleRate: buffer.format.sampleRate, time: ProcessInfo.processInfo.systemUptime) else { return }
+                Task { @MainActor in
+                    guard let self, self.lifecycle.id == generation, self.isRecording || self.isStarting else { return }
+                    self.spectrum = levels
+                }
+            }
             tapInstalled = true
             recognition = recognizer.recognitionTask(with: request) { [weak self] result, failure in
                 Task { @MainActor in
@@ -128,6 +138,7 @@ final class VoiceCapture {
     }
 
     private func cleanup() {
+        spectrum = Array(repeating: 0, count: 32)
         deadline?.cancel(); deadline = nil
         #if os(iOS)
         stopMicrophone()
