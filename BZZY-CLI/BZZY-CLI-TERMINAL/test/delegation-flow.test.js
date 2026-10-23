@@ -129,7 +129,8 @@ test('mouse phrase selection copies Unicode screen cells without interrupting wo
     const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.key('Keep this draft', {});
     ui.event('text', { text: 'alpha naïve 世界 omega', itemId: 'reply' }); ui.tui.render();
     const row = ui.tui.lastFrame.findIndex(line => clean(line).includes('alpha naïve 世界 omega')) + 1;
-    const left = (ui.tui.composerLeft || 0) + cellWidth('  alpha ') + 1, right = left + cellWidth('naïve 世界') - 1;
+    const screen = clean(ui.tui.lastFrame[row - 1]);
+    const left = cellWidth(screen.slice(0, screen.indexOf('naïve'))) + 1, right = left + cellWidth('naïve 世界') - 1;
     input.write(`\x1b[<0;${left};${row}M`); input.write(`\x1b[<32;${right};${row}M`); input.write(`\x1b[<0;${right};${row}m`); ui.tui.render();
     assert.equal(ui.tui.selectedText(), 'naïve 世界');
     assert.ok(ui.tui.lastFrame[row - 1].includes(ui.tui.theme.level ? ui.tui.theme.background(palette.accent) : '\x1b[7m'));

@@ -39,7 +39,7 @@ Hold the microphone beside Send to dictate using on-device Apple Speech. Partial
 
 [message_format.txt](message_format.txt) is the versioned body-format contract to pass to BZZY-Core. Responses remain strings, with a small XML-compatible HTML-like vocabulary inside `<message version="1">`. The app translates it into SwiftUI views. Plain text and basic inline Markdown also work. No WebView, CSS or remote asset loading is involved. Malformed/unsupported rich content falls back to bounded plain text. Tables scroll horizontally and text respects Dynamic Type. Formatting is presentation, separate from runtime permissions and verified outcomes.
 
-The mascot's gaze uses gradual easing and a speed limit for touch, idle glances and return motion. New touch targets and background/resume no longer move the pupils instantly across the face.
+The mascot uses the supplied two-eye artwork directly, preserving the original silhouette, pupils, compound-eye texture and antennae. Gentle whole-mark motion uses gradual easing and a speed limit for touch and idle movement; Reduce Motion and backgrounding pause it. The app icon shows a cropped single eye. Buttons, borders and selection states share the artwork's sky-blue/celeste accent. See [brand assets and palette](docs/BRAND.md).
 
 ## Relay connection
 

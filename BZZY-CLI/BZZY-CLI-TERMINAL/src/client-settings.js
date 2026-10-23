@@ -277,11 +277,11 @@ export class ClientSettings {
       else if (action === 'core-model') {
         const shown = (this.assistant ||= new CoreAssistant()).settings();
         this.coreRevision = shown.revision;
-        const selected = await chooseUnifiedModel({ ...this.coreSelection, cwd: this.ui.tui.cwd || process.cwd() }, this.ui, { title: 'BZZY Core default model' });
+        const selected = await chooseUnifiedModel({ ...this.coreSelection, cwd: this.ui.tui.cwd || process.cwd() }, this.ui, { title: 'BZZY Core default model', scope: 'core' });
         if (selected) this.coreSelection = selected;
       } else if (action === 'core-effort') {
         if (!this.coreSelection) throw Object.assign(new Error('Select a Core model first.'), { code: 'ASSISTANT_SETUP_REQUIRED' });
-        const selected = await chooseEffort({ ...this.coreSelection, selectedEffort: this.coreSelection.effort, modelCapabilities: this.coreSelection.capabilities, cwd: this.ui.tui.cwd || process.cwd() }, this.ui);
+        const selected = await chooseEffort({ ...this.coreSelection, selectedEffort: this.coreSelection.effort, modelCapabilities: this.coreSelection.capabilities, cwd: this.ui.tui.cwd || process.cwd() }, this.ui, { scope: 'core' });
         if (selected) this.coreSelection = { ...this.coreSelection, ...selected };
       } else if (action === 'core-save') {
         if (!this.coreSelection) throw Object.assign(new Error('Select a Core model first.'), { code: 'ASSISTANT_SETUP_REQUIRED' });

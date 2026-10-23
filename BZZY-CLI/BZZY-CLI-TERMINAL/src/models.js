@@ -24,7 +24,7 @@ export async function chooseModel(session, argument, ui, { title, description } 
         { value: CUSTOM, label: 'Enter a model ID…', description: result.description || 'Enter any model ID supported by this provider.' },
       ] };
     });
-    const choice = await ui.chooseOne(title || 'Choose model · ' + provider.id, choices);
+    const choice = await ui.chooseOne(title || 'Choose model · ' + provider.id, choices, { presentation: 'dropdown', kind: 'model' });
     if (choice == null) return null;
     const selected = typeof choice === 'object' ? choice.value : choice;
     const effort = typeof choice === 'object' ? choice.effort || 'default' : null;

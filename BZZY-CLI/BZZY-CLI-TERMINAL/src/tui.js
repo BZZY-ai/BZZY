@@ -11,10 +11,13 @@ import { palette, createTerminalTheme } from './terminal-theme.js';
 import { messageBodyToPlainText, parseMessageBody } from '@bzzy/core/message-format';
 import { renderMessageContent } from './message-renderer.js';
 import { hostMetricsLabel } from './host-metrics.js';
+import { choicePopup, visibleChoices } from './choice-popup.js';
+import { fillSurface, replaceCells, sliceCells } from './terminal-surface.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
-const mouseOn = '\x1b[?1000h\x1b[?1002h\x1b[?1006h', mouseOff = '\x1b[?1000l\x1b[?1002l\x1b[?1006l';
+const mouseOn = '\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h', mouseOff = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l';
+const targetKey = hit => hit && [hit.type, hit.command || hit.action || hit.panel || hit.id || hit.index || '', hit.row, hit.left, hit.right].join(':');
 
 export class TerminalChat {
   constructor(ui) {
@@ -31,7 +34,7 @@ export class TerminalChat {
     readline.emitKeypressEvents(this.input, { escapeCodeTimeout: 50 }); this.input.setRawMode?.(true); this.input.resume();
     this.onKey = (text, key) => this.key(text, key || {});
     this.input.on('keypress', this.onKey);
-    this.onResize = () => { this.textSelection = null; if (this.copyMode) this.setCopyMode(false); this.lastFrame = []; this.dashboardFrame = null; this.render(); };
+    this.onResize = () => { this.textSelection = null; if (this.copyMode) this.setCopyMode(false); this.lastFrame = []; this.dashboardFrame = null; this.paintedFrame = null; this.render(); };
     this.output.on?.('resize', this.onResize);
     this.onDrain = () => { this.outputBlocked = false; this.lastFrame = []; this.schedule(); };
     this.output.on?.('drain', this.onDrain);
@@ -60,7 +63,7 @@ export class TerminalChat {
   writeFrame(frame) { if (frame && !this.output.write(frame)) this.outputBlocked = true; }
   paintEyes() {
     const region = this.eyeRegion;
-    if (!region || this.copyMode || this.textSelection || this.outputBlocked || this.closed) return;
+    if (!region || this.selection || this.copyMode || this.textSelection || this.outputBlocked || this.closed) return;
     const next = mascotCells(this.animationTime, { columns: region.columns, rows: region.rows, compact: region.compact ?? true });
     let output = '';
     for (let row = 0; row < next.length; row++) {
@@ -71,7 +74,11 @@ export class TerminalChat {
         while (column < region.columns && changed(column)) column++;
         output += `\x1b[${region.top + row};${region.left + start}H` + mascotLine(next[row].slice(start, column), this.theme);
       }
-      if (!this.privateFrame) this.lastFrame[region.top + row - 1] = ' '.repeat(region.left - 1) + mascotLine(next[row], this.theme) + region.suffixes[row];
+      if (!this.privateFrame) {
+        const index = region.top + row - 1;
+        this.lastFrame[index] = replaceCells(this.lastFrame[index] || '', region.left - 1, mascotLine(next[row], this.theme), (this.output.columns || 80) - 1, this.theme, palette.background);
+        if (this.paintedFrame) this.paintedFrame[index] = this.lastFrame[index];
+      }
     }
     this.eyeCells = next;
     if (output) this.writeFrame('\x1b7' + this.theme.background(palette.background) + output + '\x1b[0m\x1b8');
@@ -87,6 +94,7 @@ export class TerminalChat {
   update(snapshot) {
     const session = snapshot.session || snapshot;
     this.provider = session.provider || this.provider;
+    this.modelCapabilities = session.modelCapabilities;
     this.modelSelectionRequired = Boolean(session.modelSelectionRequired);
     this.model = this.modelSelectionRequired ? 'Select model' : session.resolvedModel || session.model || 'Provider default';
     this.effort = session.selectedEffort === 'default' ? 'effort default' : session.selectedEffort || session.reasoningEffort || '';
@@ -172,14 +180,14 @@ export class TerminalChat {
       }
     }
     else if (type === 'summary') { this.add(data.status === 'complete' ? 'success' : 'notice', data.message); this.busy = false; if (['besties', 'parallel'].includes(this.mode) && data.usage) this.acceptGroupUsage(data.usage); }
-    else if (type === 'error' || type === 'control.failed') this.add('error', data.message);
+    else if (type === 'error' || type === 'control.failed') { this.add('error', data.message); this.notice(data.message, true); }
     else if (type === 'worker.progress') {
       if (data.type === 'error') this.add('error', `${this.mode === 'delegate' ? 'Hands' : 'Agent'} · ${data.agent || data.workerSessionId?.slice(0, 8) || 'worker'}: ${data.message}`);
       if (data.type === 'tool' && this.mode === 'delegate') this.delegationPhase = 'Executor running';
     }
     else if (type === 'debate.message') this.add('assistant', data.text, { label: `${data.participant} · ${data.role}${data.round ? ` · round ${data.round}/${data.maxRounds}` : ''}` });
     else if (type === 'debate.result') this.add(data.status === 'complete' ? 'success' : 'notice', data.message);
-    else if (type === 'info' && data.message) this.add('notice', data.message, { welcome: Boolean(data.welcome) });
+    else if (type === 'info' && data.message) { this.add('notice', data.message, { welcome: Boolean(data.welcome) }); if (!data.welcome) this.notice(data.message); }
     else if (type === 'execution.finished') { this.busy = false; this.streaming = false; }
     else if (type === 'goal' && data.status) this.goalStatus = data.status;
     if (this.activities.length > 1000) this.activities.shift();
@@ -265,10 +273,10 @@ export class TerminalChat {
       this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule();
     });
   }
-  chooseOne(title, choices) {
+  chooseOne(title, choices, options = {}) {
     this.textSelection = null;
     return new Promise(resolve => {
-      const picker = { title, loadingLabel: /updates/i.test(title) ? 'Checking GitHub…' : /model/i.test(title) ? 'Loading available models…' : 'Loading choices…', choices: [], focus: 0, resolve, single: true, loading: true };
+      const picker = { title, loadingLabel: /updates/i.test(title) ? 'Checking GitHub…' : /model/i.test(title) ? 'Loading available models…' : 'Loading choices…', choices: [], focus: 0, resolve, single: true, loading: true, query: '', ...options };
       this.selection = picker; this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule();
       Promise.resolve(choices).then(result => {
         if (this.selection !== picker) return;
@@ -287,7 +295,7 @@ export class TerminalChat {
       });
     });
   }
-  finishSelection(value) { const selection = this.selection; if (!selection) return; this.selection = null; this.ui.reader = null; selection.resolve(value); this.schedule(); }
+  finishSelection(value) { const selection = this.selection; if (!selection) return; this.selection = null; this.hoverTarget = null; this.ui.reader = null; selection.resolve(value); this.schedule(); }
   finish(answer) {
     const resolve = this.resolveInput; if (!resolve) return;
     this.resolveInput = null; this.ui.reader = null;
@@ -296,7 +304,7 @@ export class TerminalChat {
     else if (answer != null) { this.value = ''; this.cursor = 0; }
     this.hidden = false; resolve(answer); this.schedule();
   }
-  canCompose() { return ['settings', 'skills'].includes(this.panel) && !this.promptDraft ? false : Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.selection && !this.promptDraft); }
+  canCompose() { return this.selection || this.renderingPicker || ['settings', 'skills'].includes(this.panel) && !this.promptDraft ? false : Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft); }
   submitMessage() {
     if (this.resolveInput) { this.finish(this.value); return; }
     if (!this.value.trim()) return;
@@ -307,7 +315,7 @@ export class TerminalChat {
   }
   completions() {
     if (['settings', 'skills'].includes(this.panel)) return [];
-    if (!this.resolveInput || this.hidden || this.selection || this.pasting || !/^bzzy\b/.test(this.question || '')) return [];
+    if (!this.resolveInput || this.hidden || this.selection || this.renderingPicker || this.pasting || !/^bzzy\b/.test(this.question || '')) return [];
     if (this.completionQuery !== this.value) { this.completionQuery = this.value; this.completionFocus = 0; this.completionDismissed = false; }
     return this.completionDismissed ? [] : commandSuggestions(this.value);
   }
@@ -336,6 +344,24 @@ export class TerminalChat {
     // Dispatch through the normal client loop, never a model conversation.
     this.finish(`/settings ${action}`);
   }
+  notice(message, warning = false) {
+    if (!message || this.closed) return;
+    this.actionNotice = { message: clean(message).split('\n')[0], warning };
+    clearTimeout(this.noticeTimer); this.noticeTimer = setTimeout(() => { this.actionNotice = null; this.schedule(); }, 4000); this.noticeTimer.unref(); this.schedule();
+  }
+  feedback(hit) {
+    this.pressedTarget = targetKey(hit); this.pressedUntil = Date.now() + 180;
+    clearTimeout(this.feedbackTimer); this.feedbackTimer = setTimeout(() => { this.pressedTarget = null; this.schedule(); }, 180); this.feedbackTimer.unref();
+    this.schedule();
+  }
+  chooseFocused() {
+    const picker = this.selection, choice = picker?.choices[picker.focus];
+    if (!picker || picker.loading || !choice || !visibleChoices(picker).some(item => item.index === picker.focus)) return;
+    if (choice.disabled) { picker.error = choice.description || 'This option is unavailable.'; this.schedule(); return; }
+    if (picker.single) this.finishSelection(picker.selectEffort ? { value: choice.value, effort: picker.efforts.get(choice.value) } : choice.value);
+    else if (picker.selected.size) this.finishSelection([...picker.selected]);
+    else { picker.error = 'Select at least one agent.'; this.schedule(); }
+  }
   selectedText() {
     const selected = this.textSelection;
     if (!selected?.moved) return '';
@@ -349,6 +375,7 @@ export class TerminalChat {
   }
   clipboardNotice(message) {
     if (this.closed) return;
+    this.notice(message);
     clearTimeout(this.clipboardNoticeTimer); this.clipboardStatus = message; this.clipboardStatusUntil = Date.now() + 4500; this.schedule();
     this.clipboardNoticeTimer = setTimeout(() => { this.clipboardStatus = null; this.schedule(); }, 4500); this.clipboardNoticeTimer.unref();
   }
@@ -410,7 +437,8 @@ export class TerminalChat {
       this.textSelection = null;
       const delta = button & 1 ? 3 : -3;
       if (this.selection) {
-        if (!this.selection.loading && this.selection.choices.length) this.selection.focus = Math.max(0, Math.min(this.selection.choices.length - 1, this.selection.focus + delta));
+        const choices = visibleChoices(this.selection), at = choices.findIndex(item => item.index === this.selection.focus);
+        if (!this.selection.loading && choices.length) this.selection.focus = choices[Math.max(0, Math.min(choices.length - 1, at + delta))].index;
       } else if (this.panel === 'settings' && !this.promptDraft) {
         this.settingsOffset = Math.max(0, Math.min(this.settingsMaximum || 0, (this.settingsOffset || 0) + delta)); this.settingsEnsureFocus = false;
       } else this.scroll = Math.max(0, Math.min(this.scrollbar?.maximum || 0, this.scroll - delta));
@@ -424,7 +452,13 @@ export class TerminalChat {
       const selected = this.textSelection;
       selected.focus = screenPoint(x, y, selected.region); selected.moved ||= selected.focus.x !== selected.anchor.x || selected.focus.y !== selected.anchor.y; this.schedule(); return;
     }
-    if (motion || (button & 3) !== 0) return;
+    if (motion) {
+      const hit = this.hitTargets?.findLast(target => y === target.row && x >= target.left && x <= target.right);
+      const hover = targetKey(hit);
+      if (hover !== this.hoverTarget) { this.hoverTarget = hover; this.schedule(); }
+      return;
+    }
+    if ((button & 3) !== 0) return;
     this.textSelection = null;
     const bar = this.scrollbar;
     if (bar?.maximum && x === bar.column && y >= bar.top && y < bar.top + bar.height) {
@@ -433,8 +467,17 @@ export class TerminalChat {
       this.scroll = Math.round((1 - fraction) * bar.maximum); this.schedule(); return;
     }
     const hit = this.hitTargets?.findLast(target => y === target.row && x >= target.left && x <= target.right);
+    if (this.selection && !hit) { if (this.selection.presentation === 'dropdown' && !(this.popupRegion && x >= this.popupRegion.left && x <= this.popupRegion.right && y >= this.popupRegion.top && y <= this.popupRegion.bottom)) this.finishSelection(null); return; }
+    if (hit) this.feedback(hit);
+    if (hit?.type === 'alias-save') { const value = this.aliasEdit?.value.trim(); this.aliasEdit = null; if (value) this.localCommand('/alias ' + value); this.schedule(); return; }
+    if (hit?.type === 'alias-cancel') { this.aliasEdit = null; this.schedule(); return; }
+    if (this.aliasEdit && hit?.type !== 'alias') { this.aliasEdit = null; this.schedule(); }
     if (hit?.type === 'panel') this.setPanel(hit.panel);
-    else if (hit?.type === 'model-control') this.localCommand(hit.command);
+    else if (hit?.type === 'model-control') {
+      if (hit.disabled) this.notice(this.ui.sessionMode === 'VIEW' ? 'This terminal is read-only.' : this.busy ? 'Pause the current response before changing its model.' : 'Select a model first.', true);
+      else if (hit.command === '/settings core') { this.ui.openSettings(); this.settingsAction('core'); }
+      else this.localCommand(hit.command);
+    }
     else if (hit?.type === 'skill-action') this.localCommand('/skills ' + hit.action);
     else if (hit?.type === 'saved-session') this.localCommand('/open-session ' + hit.id);
     else if (hit?.type === 'alias') {
@@ -443,17 +486,25 @@ export class TerminalChat {
       this.aliasClickedAt = time; this.schedule();
     }
     else if (hit?.type === 'settings') this.settingsAction(hit.action);
+    else if (hit?.type === 'settings-back') { if (!this.ui.settings.busy) { if (!this.ui.settings.back()) { if (this.ui.settingsOnly) this.finish(null); else this.setPanel('chat'); } } }
+    else if (hit?.type === 'qr-back') { this.ui.settings.qrView = false; this.lastFrame = []; this.schedule(); }
+    else if (hit?.type === 'private-cancel') { if (this.resolveInput) this.finish(null); else this.ui.privateView?.onCancel?.(); }
     else if (hit?.type === 'copy-response') { this.clipboardTask = this.copySelection(clean(messageBodyToPlainText(hit.entry.text))); }
     else if (hit?.type === 'tab') this.ui.onSelectTab?.(hit.id);
     else if (hit?.type === 'command') this.completeCommand(hit.choice);
     else if (hit?.type === 'choice' && this.selection && !this.selection.loading) {
       this.selection.focus = hit.index;
-      if (!this.selection.single) {
+      if (this.selection.presentation === 'dropdown') this.chooseFocused();
+      else if (!this.selection.single) {
         const value = this.selection.choices[hit.index].value;
         if (this.selection.selected.has(value)) this.selection.selected.delete(value); else this.selection.selected.add(value);
       }
       this.schedule();
     } else if (hit?.type === 'effort' && this.selection) { this.selection.focus = hit.index; this.key('', { name: hit.direction }); }
+    else if (hit?.type === 'paste') { this.clipboardTask = this.pasteClipboard(); }
+    else if (hit?.type === 'latest') { this.scroll = 0; this.schedule(); }
+    else if (hit?.type === 'tools') { this.showTools = !this.showTools; this.schedule(); }
+    else if (hit?.type === 'commands') { if (this.canCompose()) { this.value = '/'; this.cursor = 1; this.schedule(); } }
     else if (hit?.type === 'confirm') this.key('', { name: 'return' });
     else if (hit?.type === 'cancel') this.key('', { name: 'escape' });
     else if (this.resolveInput && !this.selection && y === this.composerRow) {
@@ -469,11 +520,6 @@ export class TerminalChat {
     }
   }
   key(text, key) {
-    if (this.ui.privateView && !this.resolveInput) {
-      key.bzzyHandled = true;
-      if (key.name === 'escape' || key.ctrl && key.name === 'c') this.ui.privateView.onCancel?.();
-      return;
-    }
     // readline emits an SGR mouse report as a CSI prefix followed by ordinary characters.
     // Consume the entire report before any character can enter the message or secret input.
     if (key.sequence === '\x1b[<') { this.mouseReport = ''; key.bzzyHandled = true; return; }
@@ -483,6 +529,11 @@ export class TerminalChat {
         const report = /^(\d+);(\d+);(\d+)([Mm])$/.exec(this.mouseReport); this.mouseReport = null;
         if (report) this.mouse(Number(report[1]), Number(report[2]), Number(report[3]), report[4] === 'm');
       } else if (this.mouseReport.length > 64 || /[^\d;]/.test(this.mouseReport)) this.mouseReport = null;
+      return;
+    }
+    if (this.ui.privateView && !this.resolveInput) {
+      key.bzzyHandled = true;
+      if (key.name === 'escape' || key.ctrl && key.name === 'c') this.ui.privateView.onCancel?.();
       return;
     }
     if (this.aliasEdit) {
@@ -520,7 +571,10 @@ export class TerminalChat {
         const choice = picker.choices[picker.focus];
         if (!choice.disabled) this.finishSelection({ value: choice.value, action: picker.shortcuts[key.name] });
       }
-      else if (key.name === 'up' || key.name === 'down') picker.focus = (picker.focus + (key.name === 'up' ? picker.choices.length - 1 : 1)) % picker.choices.length;
+      else if (['up', 'down', 'pageup', 'pagedown', 'home', 'end'].includes(key.name)) {
+        const choices = visibleChoices(picker), at = choices.findIndex(item => item.index === picker.focus), step = key.name === 'up' ? -1 : key.name === 'down' ? 1 : key.name === 'pageup' ? -6 : 6;
+        if (choices.length) picker.focus = choices[key.name === 'home' ? 0 : key.name === 'end' ? choices.length - 1 : (Math.max(0, at) + step % choices.length + choices.length) % choices.length].index;
+      }
       else if (picker.selectEffort && (key.name === 'left' || key.name === 'right')) {
         const choice = picker.choices[picker.focus];
         if (choice.efforts?.length) {
@@ -529,13 +583,10 @@ export class TerminalChat {
         }
       }
       else if (key.name === 'space' && !picker.single) { const value = picker.choices[picker.focus].value; if (picker.selected.has(value)) picker.selected.delete(value); else picker.selected.add(value); }
-      else if (key.name === 'return') {
-        if (picker.single) {
-          const choice = picker.choices[picker.focus];
-          if (choice.disabled) { picker.error = choice.description || 'This option is not available yet.'; this.schedule(); return; }
-          this.finishSelection(picker.selectEffort ? { value: choice.value, effort: picker.efforts.get(choice.value) } : choice.value);
-        } else if (picker.selected.size) this.finishSelection([...picker.selected]); else picker.error = 'Select at least one agent.';
-      }
+      else if (key.name === 'return') this.chooseFocused();
+      else if (picker.kind === 'model' && key.name === 'backspace') { picker.query = [...(picker.query || '')].slice(0, -1).join(''); picker.error = ''; }
+      else if (picker.kind === 'model' && key.ctrl && key.name === 'u') { picker.query = ''; picker.error = ''; }
+      else if (picker.kind === 'model' && text && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(text)) { picker.query = ((picker.query || '') + text).slice(0, 120); picker.error = ''; }
       this.schedule(); return;
     }
     if (key.name === 'paste-start') { this.pasting = true; return; }
@@ -547,7 +598,7 @@ export class TerminalChat {
     }
     if (key.ctrl && key.name === 'g') { const panels = this.panels(); this.setPanel(panels[(panels.indexOf(this.panel) + 1) % panels.length]); return; }
     if (key.ctrl && key.name === 'o') { this.showTools = !this.showTools; this.schedule(); return; }
-    if (key.ctrl && key.name === 'l') { this.lastFrame = []; this.dashboardFrame = null; this.schedule(); return; }
+    if (key.ctrl && key.name === 'l') { this.lastFrame = []; this.dashboardFrame = null; this.paintedFrame = null; this.schedule(); return; }
     if (key.ctrl && key.name === 'c') {
       if (!this.promptDraft && process.listenerCount('SIGINT')) process.emit('SIGINT'); else this.finish(null);
       return;
@@ -710,7 +761,7 @@ export class TerminalChat {
       for (const entry of this.entries) {
         if (entry.kind === 'tool' && !this.showTools) continue;
         const layout = this.entryLayout(entry, width);
-        if (layout.copyLeft != null) this.contentHits.push({ type: 'copy-response', entry, row: lines.length, left: layout.copyLeft, right: layout.copyLeft + 2 });
+        if (layout.copyLeft != null) this.contentHits.push({ type: 'copy-response', entry, row: lines.length, left: layout.copyLeft, right: layout.copyLeft + 5 });
         for (const line of layout.lines) lines.push(line);
       }
     }
@@ -722,6 +773,7 @@ export class TerminalChat {
     if (cached?.width === width && cached.text === entry.text) return cached;
     const { color } = this.theme;
     const lines = [], put = (text, tone = palette.text, bold = false) => lines.push(color(text, tone, bold));
+    const replyLine = line => color('  ▎ ', palette.accent) + fillSurface(line, width - 6, this.theme, palette.surface, palette.text);
     let copyLeft;
     if (entry.kind === 'notice') { for (const line of wrap(entry.text, width - 5)) put('  · ' + line, palette.muted); put(''); }
     else if (entry.kind === 'tool') put('  › ' + clip(entry.text, width - 5), palette.muted);
@@ -736,9 +788,9 @@ export class TerminalChat {
       const displayLabel = entry.kind === 'assistant' ? clip(label, width - 9) : label;
       if (entry.kind === 'assistant') copyLeft = cellWidth('  ' + displayLabel + '  ') + 1;
       if (isFormatted) {
-        put(`  ${displayLabel}  [c]`, tone, true);
-        const rendered = renderMessageContent(projection, { width: width - 5, theme: this.theme, background: palette.background });
-        for (const line of rendered.lines) lines.push('  ' + line);
+        put(`  ${displayLabel}  [Copy]`, tone, true);
+        const rendered = renderMessageContent(projection, { width: width - 7, theme: this.theme, background: palette.surface });
+        for (const line of rendered.lines) lines.push(replyLine(line));
         put('');
         const layout = { width, text: entry.text, lines, copyLeft, displayText, isFormatted };
         this.entryLayouts.set(entry, layout); return layout;
@@ -746,13 +798,14 @@ export class TerminalChat {
       const append = entry.kind === 'assistant' && cached?.width === width && cached.rawLines && isFormatted === cached.isFormatted && displayText.startsWith(cached.displayText);
       // Only the final wrapped line can change when a response receives a delta.
       // Keep older Unicode/Markdown lines as well as completed replies cached.
-      const tail = wrap(append ? cached.rawLines.at(-1) + displayText.slice(cached.displayText.length) : displayText, width - 5);
+      const tail = wrap(append ? cached.rawLines.at(-1) + displayText.slice(cached.displayText.length) : displayText, width - (entry.kind === 'assistant' ? 7 : 5));
       const rawLines = append ? [...cached.rawLines.slice(0, -1), ...tail] : tail;
       if (append) for (const line of cached.lines.slice(0, -2)) lines.push(line);
-      else put(`  ${displayLabel}${entry.kind === 'assistant' ? '  [c]' : ''}`, tone, true);
+      else put(`  ${displayLabel}${entry.kind === 'assistant' ? '  [Copy]' : ''}`, tone, true);
       for (const line of tail) {
         const text = isFormatted ? line : line.replace(/\*\*(.*?)\*\*/g, '$1').replace(/^#{1,6}\s+/, '');
-        put('  ' + text, entry.kind === 'error' ? palette.warning : palette.text, !isFormatted && /^#{1,6}\s/.test(line));
+        if (entry.kind === 'assistant') lines.push(replyLine(text));
+        else put('  ' + text, entry.kind === 'error' ? palette.warning : palette.text, !isFormatted && /^#{1,6}\s/.test(line));
       }
       put('');
       const layout = { width, text: entry.text, lines, copyLeft, rawLines, displayText, isFormatted };
@@ -775,27 +828,40 @@ export class TerminalChat {
   }
   modelHeader(width) {
     const color = this.theme.color, lines = [];
-    const effort = '[ effort ' + (this.effort || 'default').replace(/^effort /, '') + ' ▾ ]';
-    const model = '[ ' + clip(this.model, Math.max(1, width - cellWidth(effort) - 20)) + ' ▾ ]';
+    const effort = ' Effort: ' + (this.effort || 'default').replace(/^effort /, '') + ' ▾ ';
+    const model = ' ' + clip(this.model, Math.max(1, width - cellWidth(effort) - 17)) + ' ▾ ';
     let column = 3;
-    const controls = [[model, '/providers'], [effort, '/models @effort'], ['[ Save ]', '/default']];
+    const controls = [[model, '/providers'], [effort, '/models @effort'], [' Save ', '/default']];
     let line = '  ';
     for (const [label, command] of controls) {
       if (column + cellWidth(label) > width) break;
-      this.hitTargets.push({ type: 'model-control', command, row: 0, left: column, right: column + cellWidth(label) - 1 });
-      column += cellWidth(label) + 1; line += color(label, palette.accent, true) + ' ';
+      const disabled = this.busy || this.ui.sessionMode === 'VIEW' || command !== '/providers' && this.modelSelectionRequired;
+      this.hitTargets.push({ type: 'model-control', command, disabled, row: 0, left: column, right: column + cellWidth(label) - 1 });
+      column += cellWidth(label) + 1; line += fillSurface(label, cellWidth(label), this.theme, command === '/default' && !disabled ? palette.selection : palette.surface, disabled ? palette.muted : palette.accent, !disabled) + ' ';
     }
     lines.push(line); return lines;
   }
   persistentHeader(width, height, { compact = false, controls = '' } = {}) {
     if (this.dashboardRendering && !compact) {
       const color = this.theme.color, title = this.aliasEdit ? [...this.aliasEdit.value].slice(0, this.aliasEdit.cursor).join('') + '▏' + [...this.aliasEdit.value].slice(this.aliasEdit.cursor).join('') : this.alias || 'Untitled project';
-      const header = [color('  ▱ ' + clip(title, width - 18) + '  · ' + this.state, palette.text, true), color('  ' + clip(this.cwd || '', width - 3), palette.muted)];
+      const header = [color('  ▱ ' + clip(title, width - 20), palette.text, true) + color('  ● ' + (this.busy ? this.state : 'Idle'), this.busy ? palette.accent : palette.muted), color('  ' + clip(this.cwd || '', width - 3), palette.muted), ''];
       this.hitTargets.push({ type: 'alias', row: 1, left: 3, right: Math.min(width - 1, 5 + cellWidth(title)) });
-      const modelRow = header.length + 1; header.push(...this.modelHeader(width));
-      for (const hit of this.hitTargets) if (hit.type === 'model-control' && hit.row === 0) hit.row = modelRow;
+      if (this.aliasEdit) {
+        const controls = ' Save name   Cancel ', left = width - cellWidth(controls) - 1;
+        header[1] = replaceCells(header[1], left, fillSurface(controls, cellWidth(controls), this.theme, palette.selection, palette.accent, true), width, this.theme, palette.background);
+        this.hitTargets.push({ type: 'alias-save', row: 2, left: left + 1, right: left + 11 }, { type: 'alias-cancel', row: 2, left: left + 12, right: width - 2 });
+      }
+      if (width >= 92 && !this.aliasEdit) {
+        const controls = this.modelHeader(width - 26)[0], size = cellWidth(controls) - 2, left = width - size - 2;
+        header[0] = replaceCells(color('  ▱ ' + clip(title, left - 6), palette.text, true), left, sliceCells(controls, 2, cellWidth(controls)), width, this.theme, palette.background);
+        const alias = this.hitTargets.find(hit => hit.type === 'alias'); alias.right = Math.min(alias.right, left);
+        for (const hit of this.hitTargets) if (hit.type === 'model-control' && hit.row === 0) { hit.row = 1; hit.left += left - 2; hit.right += left - 2; }
+      } else {
+        const modelRow = header.length + 1; header.push(...this.modelHeader(width));
+        for (const hit of this.hitTargets) if (hit.type === 'model-control' && hit.row === 0) hit.row = modelRow;
+      }
       if (this.ui.accountStatusEnabled) header.push(color('  ' + clip(accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width - 3), palette.accent));
-      header.push(color('  ' + clip(this.counters() + ' · ' + hostMetricsLabel(this.ui.hostMetrics, width - 4), width - 3), palette.muted));
+      header.push(color('  ' + clip([this.provider, this.tokenLabel(), hostMetricsLabel(this.ui.hostMetrics, width - 4)].filter(Boolean).join('  ·  '), width - 3), palette.muted));
       if (this.ui.tabs?.length > 1) {
         let column = 1; header.push(this.ui.tabs.map((tab, index) => { const label = ` [${index} ${agentLabel(tab.agent)}] `; this.hitTargets.push({ type: 'tab', id: tab.id, row: header.length + 1, left: column, right: column + cellWidth(label) - 1 }); column += cellWidth(label); return color(label, tab.id === this.ui.activeTab ? palette.accent : palette.muted); }).join(''));
       }
@@ -862,6 +928,7 @@ export class TerminalChat {
     const { color } = this.theme, settings = this.ui.settings;
     const title = settings.page === 'approve' ? 'Confirm iPhone' : settings.page === 'pair' ? 'Pair iPhone' : settings.page === 'core' ? 'BZZY Core' : 'Settings';
     const header = this.persistentHeader(width, height);
+    this.sceneHeaderLength = header.length + (this.dashboardRendering ? 3 : 0);
     header.push(color(clip('  ' + title, width), palette.accent, true));
     const compact = height - header.length < 16;
     if (!compact) header.push('');
@@ -870,7 +937,8 @@ export class TerminalChat {
     if (settings.message) for (const line of wrap(settings.message, width - 4, 3)) footer.push(color('  ' + line, settings.warning ? palette.warning : palette.accent));
     const exit = settings.page !== 'main' ? 'back' : this.ui.settingsOnly ? 'close' : 'chat';
     if (!compact) footer.push('');
-    footer.push(color(clip('  ↑/↓ choose   Enter open   Esc ' + exit, width), palette.muted));
+    const exitRow = footer.length;
+    footer.push(color(clip('  ‹ ' + (exit === 'back' ? 'Back' : exit === 'close' ? 'Close' : 'Back to chat') + '    ↑/↓ choose · Enter open', width), palette.muted));
     if (!compact) footer.push('');
     const bodyHeight = Math.max(1, height - header.length - footer.length);
     const body = this.content(width - 2), focus = this.settingsFocusRow || 0;
@@ -886,6 +954,7 @@ export class TerminalChat {
     while (visible.length < bodyHeight) visible.push('');
     this.hitTargets.push(...this.contentHits.filter(hit => hit.row >= this.settingsOffset && hit.row < this.settingsOffset + bodyHeight)
       .map(hit => ({ ...hit, row: header.length + hit.row - this.settingsOffset + 1 })));
+    this.hitTargets.push({ type: 'settings-back', row: header.length + bodyHeight + exitRow + 1, left: 3, right: exit === 'chat' ? 16 : 10 });
     const lines = [...header, ...visible, ...footer];
     let frame = '\x1b[?25l';
     for (let row = 0; row < height; row++) {
@@ -926,6 +995,8 @@ export class TerminalChat {
       const openLeft = compact ? this.compactControlLeft + cellWidth('C Copy code  ') : 16;
       this.hitTargets.push({ type: 'settings', action: 'copy-code', row: actionRow, left: copyLeft, right: Math.min(width, copyLeft + 10) },
         { type: 'settings', action: 'open-qr', row: actionRow, left: openLeft, right: Math.min(width, openLeft + 11) });
+      lines[actionRow - 1] = replaceCells(lines[actionRow - 1], width - 10, color(' ‹ Back ', palette.accent), width, this.theme, palette.background);
+      this.hitTargets.push({ type: 'qr-back', row: actionRow, left: width - 9, right: width - 3 });
     } else {
       lines.push(color(clip('  Pair iPhone', width), palette.accent, true), '');
       for (const line of wrap('Open the QR image to scan with your iPhone, or use the code.', width - 4)) lines.push(color('  ' + line, palette.muted));
@@ -958,59 +1029,125 @@ export class TerminalChat {
     }
     if (view.notice && lines.length < height - 4) lines.push(color(clip('  ' + clean(view.notice), width), palette.warning));
     while (lines.length < height - 3) lines.push('');
-    lines.push(color(clip('  ' + clean(this.resolveInput ? this.question : 'Waiting for encrypted transfer · Esc cancels'), width), palette.muted));
+    const cancelRow = lines.length + 1, cancelLeft = width - 10;
+    lines.push(replaceCells(color(clip('  ' + clean(this.resolveInput ? this.question : 'Waiting for encrypted transfer'), width - 12), palette.muted), cancelLeft, color(' Cancel ', palette.accent, true), width, this.theme, palette.background));
     const value = this.hidden ? '•'.repeat([...this.value].length) : clean(this.value);
     lines.push(color(clip('  › ' + value, width), palette.text), '');
     let frame = '\x1b[?25l';
     for (let row = 0; row < height; row++) frame += `\x1b[${row + 1};1H${this.theme.background(palette.background)}${this.theme.foreground(palette.text)}\x1b[2K${lines[row] || ''}\x1b[0m`;
     // Private codes/QRs never enter chat entries, copy regions or frame caches.
-    this.hitTargets = []; this.textRegion = null; this.scrollbar = null; this.privateFrame = true; this.lastFrame = []; this.lastBackgrounds = [];
+    this.hitTargets = [{ type: 'private-cancel', row: cancelRow, left: cancelLeft + 1, right: cancelLeft + 8 }]; this.textRegion = null; this.scrollbar = null; this.privateFrame = true; this.lastFrame = []; this.lastBackgrounds = [];
     if (this.resolveInput) frame += `\x1b[${height - 1};${Math.min(width, 5 + cellWidth(value))}H\x1b[?25h`;
     this.writeFrame(frame);
   }
   renderDashboard(width, height) {
-    const output = this.output, sidebarWidth = 25, contentWidth = width - sidebarWidth;
+    const output = this.output, sidebarWidth = width >= 140 ? 29 : 26, contentWidth = width - sidebarWidth - 3;
+    const bodyTop = 3, bodyHeight = height - 4, contentLeft = sidebarWidth + 2;
     const oldWrite = this.writeFrame;
     this.dashboardRendering = true; this.dashboardActive = true;
-    this.output = { columns: contentWidth + 1, rows: height };
+    this.output = { columns: contentWidth + 1, rows: bodyHeight };
     this.writeFrame = () => {};
-    try { this.render({ force: true }); } finally { this.output = output; this.writeFrame = oldWrite; this.dashboardRendering = false; }
+    try { this.renderScene({ force: true }); } finally { this.output = output; this.writeFrame = oldWrite; this.dashboardRendering = false; }
     const { color } = this.theme, muted = text => color(text, palette.muted), accent = text => color(text, palette.accent, true), edge = text => color(text, palette.border);
-    const side = Array(height).fill(''), put = (row, text) => { if (row >= 0 && row < height) side[row] = text; };
-    put(0, accent(' ● bzzy ~'));
+    const side = Array(bodyHeight).fill(''), sidebarHits = [];
+    const put = (row, text) => { if (row >= 0 && row < bodyHeight) side[row] = text; };
+    const hit = (row, target) => sidebarHits.push({ ...target, row: bodyTop + row + 1, left: 3, right: sidebarWidth });
+    put(0, accent('  B Z Z Y'));
     const eyes = mascotCells(this.animationTime, { columns: 19, rows: 5, compact: false });
-    if (this.ui.pet !== false) for (let row = 0; row < eyes.length; row++) put(row + 2, '  ' + mascotLine(eyes[row], this.theme));
-    put(8, accent('  B Z Z Y')); put(9, muted('  your AI workspace'));
-    let row = 11;
+    if (this.ui.pet !== false) for (let row = 0; row < eyes.length; row++) put(row + 1, '  ' + mascotLine(eyes[row], this.theme));
+    put(6, muted('  your personal AI'));
+    const icons = { chat: '◇', room: '◎', activity: '≋', http: '⌁', sessions: '▱', skills: '✧', settings: '☷' };
+    let row = 8;
     for (const panel of this.panels()) {
       const label = panel === 'http' ? 'Network' : panel === 'room' ? 'SHARED ROOM' : panel[0].toUpperCase() + panel.slice(1);
-      put(row, (panel === this.panel ? accent : muted)(` ${panel === this.panel ? '▎' : ' '} ${label}`));
-      this.hitTargets.push({ type: 'sidebar-panel', panel, row: ++row, left: 1, right: sidebarWidth - 1 });
+      const active = panel === this.panel, text = ` ${active ? '▎' : ' '} ${icons[panel]}  ${label}`;
+      put(row, fillSurface(text + ' '.repeat(Math.max(0, sidebarWidth - cellWidth(text) - 3)) + (active ? ' › ' : '   '), sidebarWidth, this.theme, active ? palette.selection : palette.background, active ? palette.accent : palette.text, active));
+      hit(row++, { type: 'panel', panel });
     }
-    row++; put(row++, edge('  ────────────────────')); put(row++, accent('  RECENT SESSIONS'));
+    row++; put(row++, edge('  ' + '─'.repeat(sidebarWidth - 4))); put(row++, accent('  RECENT SESSIONS'));
     if (!this.recentCache || Date.now() - this.recentCache.at > 2000) this.recentCache = { at: Date.now(), sessions: namedTerminalSessions().slice(0, 5) };
-    for (const session of this.recentCache.sessions.slice(0, Math.max(0, Math.min(5, height - row - 5)))) {
-      put(row, muted('  › ' + clip(session.alias, 19)));
-      this.hitTargets.push({ type: 'sidebar-session', id: session.id, row: ++row, left: 1, right: sidebarWidth - 1 });
+    for (const session of this.recentCache.sessions.slice(0, Math.max(0, Math.min(5, bodyHeight - row - 6)))) {
+      put(row, (session.id === (this.ui.activeTab || this.ui.sessionId) ? accent : muted)('  › ' + clip(session.alias, sidebarWidth - 5)));
+      hit(row++, { type: 'saved-session', id: session.id });
     }
-    put(height - 4, accent('  ' + (this.ui.updateStatus || 'Check for updates')));
-    this.hitTargets.push({ type: 'sidebar-update', command: '/update', row: height - 3, left: 1, right: sidebarWidth - 1 });
-    put(height - 2, muted('  Ctrl+G · switch view')); put(height - 1, muted('  / commands · ? help'));
+    if (!this.recentCache.sessions.length && row < bodyHeight - 6) put(row, muted('  Name a chat with /alias'));
+    put(bodyHeight - 5, edge('  ' + '─'.repeat(sidebarWidth - 4)));
+    put(bodyHeight - 4, fillSurface('  ↑ ' + clip(this.ui.updateStatus || 'Check for updates', sidebarWidth - 5), sidebarWidth, this.theme, palette.surface, palette.accent));
+    hit(bodyHeight - 4, { type: 'model-control', command: '/update' });
+    put(bodyHeight - 2, muted('  ? Help    / Commands'));
+    sidebarHits.push({ type: 'model-control', command: '/help', row: bodyTop + bodyHeight - 1, left: 3, right: 10 }, { type: 'commands', row: bodyTop + bodyHeight - 1, left: 13, right: sidebarWidth });
     const raw = this.lastFrame.slice();
-    const mainHits = this.hitTargets.filter(hit => !hit.type.startsWith('sidebar-'));
-    this.hitTargets = [...mainHits.map(hit => ({ ...hit, left: hit.left + sidebarWidth, right: hit.right + sidebarWidth })), ...this.hitTargets.filter(hit => hit.type.startsWith('sidebar-')).map(hit => ({ ...hit, type: hit.type === 'sidebar-panel' ? 'panel' : hit.type === 'sidebar-update' ? 'model-control' : 'saved-session' }))];
-    if (this.scrollbar) this.scrollbar.column += sidebarWidth;
-    if (this.textRegion) { this.textRegion.left += sidebarWidth; this.textRegion.right += sidebarWidth; }
-    this.composerLeft = sidebarWidth;
-    const lines = raw.map((line, index) => side[index] + ' '.repeat(Math.max(0, sidebarWidth - 1 - cellWidth(side[index]))) + edge('│') + line);
+    this.hitTargets = [...this.hitTargets.map(hit => ({ ...hit, row: hit.row + bodyTop, left: hit.left + contentLeft, right: hit.right + contentLeft })), ...sidebarHits];
+    if (this.scrollbar) { this.scrollbar.column += contentLeft; this.scrollbar.top += bodyTop; this.scrollbar.thumbTop += bodyTop; }
+    if (this.textRegion) { this.textRegion.left += contentLeft; this.textRegion.right += contentLeft; this.textRegion.top += bodyTop; this.textRegion.bottom += bodyTop; }
+    this.composerLeft = contentLeft; this.composerRow += bodyTop;
+    const state = this.copyMode ? 'COPY MODE' : this.ui.coreLifecycleInterrupted ? '○ Core stopped' : this.busy ? '● Working' : '● Ready';
+    const timestamp = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    const status = `${timestamp}   │   ${state} `, brand = ' ● bzzy  ~';
+    const lines = [edge('╭' + '─'.repeat(width - 2) + '╮'), edge('│') + accent(brand) + ' '.repeat(Math.max(0, width - 2 - cellWidth(brand + status))) + muted(status) + edge('│'), edge('├' + '─'.repeat(sidebarWidth) + '┬' + '─'.repeat(contentWidth) + '┤')];
+    for (let index = 0; index < bodyHeight; index++) {
+      const main = raw[index] || '', sidebar = side[index];
+      lines.push(edge('│') + sidebar + ' '.repeat(Math.max(0, sidebarWidth - cellWidth(sidebar))) + edge('│') + main + ' '.repeat(Math.max(0, contentWidth - cellWidth(main))) + edge('│'));
+    }
+    lines.push(edge('╰' + '─'.repeat(sidebarWidth) + '┴' + '─'.repeat(contentWidth) + '╯'));
+    this.hitTargets.push({ type: 'panel', panel: 'chat', row: 2, left: 3, right: 12 }, { type: 'model-control', command: '/settings core', row: 2, left: width - cellWidth(state) - 1, right: width - 2 });
     let frame = '\x1b[?25l';
     for (let index = 0; index < height; index++) if (lines[index] !== this.dashboardFrame?.[index]) frame += `\x1b[${index + 1};1H${this.theme.background(palette.background)}\x1b[2K${lines[index] || ''}\x1b[0m`;
     this.dashboardFrame = lines; this.lastFrame = lines;
-    if (this.ui.pet !== false) { this.eyeCells = eyes; this.eyeRegion = { top: 3, left: 3, columns: 19, rows: 5, compact: false, suffixes: eyes.map((_, row) => ' '.repeat(sidebarWidth - 21 - 1) + edge('│') + (raw[row + 2] || '')) }; }
-    if (this.canCompose() && !this.aliasEdit) frame += `\x1b[${this.composerRow};${sidebarWidth + Math.min(contentWidth - 1, 3 + cellWidth(this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ')) - (this.composerOffset || 0))}H\x1b[?25h`;
+    if (this.ui.pet !== false) { this.eyeCells = eyes; this.eyeRegion = { top: bodyTop + 2, left: 4, columns: 19, rows: 5, compact: false, suffixes: eyes.map((_, row) => ' '.repeat(sidebarWidth - 21) + edge('│') + (raw[row + 1] || '') + edge('│')) }; }
+    if (this.canCompose() && !this.aliasEdit) frame += `\x1b[${this.composerRow};${contentLeft + Math.min(contentWidth - 1, 3 + cellWidth(this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ')) - (this.composerOffset || 0))}H\x1b[?25h`;
     this.writeFrame(frame);
   }
   render({ force = false } = {}) {
+    if (this.closed || this.outputBlocked || this.copyMode && !force) return;
+    if (this.textSelection && !this.selection) { this.renderTextSelection(); return; }
+    const picker = this.selection, writer = this.writeFrame;
+    this.selection = null; this.renderingPicker = picker;
+    this.writeFrame = () => {};
+    try { this.renderScene({ force }); }
+    finally { this.selection = picker; this.renderingPicker = null; this.writeFrame = writer; }
+    if (this.privateFrame) { this.paintedFrame = null; return this.renderScene({ force }); }
+    const width = Math.max(16, (this.output.columns || 80) - 1), height = Math.max(8, this.output.rows || 24);
+    const lines = this.lastFrame.slice();
+    this.popupRegion = null;
+    if (picker) {
+      const action = picker.kind === 'effort' ? 'core-effort' : 'core-model', command = picker.kind === 'effort' ? '/models @effort' : '/providers';
+      const anchor = this.hitTargets.find(hit => picker.scope === 'core' ? hit.type === 'settings' && hit.action === action : hit.type === 'model-control' && hit.command === command);
+      const popup = choicePopup(picker, { width, height, anchor, minimumTop: this.sceneHeaderLength, theme: this.theme });
+      this.popupRegion = { left: popup.left + 1, right: popup.left + popup.width, top: popup.top + 1, bottom: popup.top + popup.lines.length };
+      for (let index = 0; index < popup.lines.length; index++) {
+        const row = popup.top + index;
+        if (row >= height) break;
+        if (row + 1 < height - 1 && popup.left + popup.width < width) lines[row + 1] = replaceCells(lines[row + 1] || '', popup.left + 1, fillSurface('', popup.width, this.theme, '#000000', palette.text), width, this.theme, palette.background);
+        lines[row] = replaceCells(lines[row] || '', popup.left, popup.lines[index], width, this.theme, palette.background);
+      }
+      this.hitTargets = popup.hits.filter(hit => hit.row > 0 && hit.row <= height && hit.left <= hit.right);
+      this.scrollbar = null; this.textRegion = null;
+    }
+    for (const hit of this.hitTargets) {
+      const pressed = this.pressedTarget === targetKey(hit) && Date.now() < this.pressedUntil, hovered = this.hoverTarget === targetKey(hit);
+      if ((!pressed && !hovered) || hit.row < 1 || hit.row > height) continue;
+      const text = clean(sliceCells(lines[hit.row - 1] || '', hit.left - 1, hit.right));
+      lines[hit.row - 1] = replaceCells(lines[hit.row - 1] || '', hit.left - 1, fillSurface(text, hit.right - hit.left + 1, this.theme, pressed ? palette.accent : palette.hover, pressed ? palette.background : palette.text, true), width, this.theme, palette.background);
+    }
+    if (this.actionNotice && !picker && !this.hidden && !this.promptDraft) {
+      const text = ' ' + clip(this.actionNotice.message, Math.min(75, width - 8)) + ' ', size = cellWidth(text);
+      const row = Math.max(0, Math.min(height - 2, (this.composerRow || height - 3) - 4));
+      lines[row] = replaceCells(lines[row] || '', Math.max(0, width - size - 2), fillSurface(text, size, this.theme, palette.selection, this.actionNotice.warning ? palette.warning : palette.accent), width, this.theme, palette.background);
+    }
+    let frame = '\x1b[?25l';
+    for (let row = 0; row < height; row++) {
+      const line = lines[row] || '';
+      if (this.paintedFrame?.[row] !== line || force) frame += `\x1b[${row + 1};1H${this.theme.background(palette.background)}${this.theme.foreground(palette.text)}\x1b[2K${line}\x1b[0m`;
+    }
+    this.lastFrame = lines; this.paintedFrame = lines.slice();
+    if (this.canCompose() && !this.aliasEdit) {
+      const before = this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
+      frame += `\x1b[${Math.min(height, this.composerRow)};${Math.max(1, Math.min(width - 1, (this.composerLeft || 0) + 3 + cellWidth(before) - (this.composerOffset || 0)))}H\x1b[?25h`;
+    }
+    this.writeFrame(frame);
+  }
+  renderScene({ force = false } = {}) {
     if (this.closed || this.outputBlocked || this.copyMode && !force) return;
     if (!this.dashboardRendering && !this.ui.privateView && !this.ui.settings?.qrView && (this.output.columns || 80) >= 100 && (this.output.rows || 24) >= 28 && !this.textSelection) { this.renderDashboard((this.output.columns || 80) - 1, this.output.rows || 24); return; }
     if (!this.dashboardRendering) { this.dashboardActive = false; this.composerLeft = 0; this.dashboardFrame = null; }
@@ -1032,7 +1169,7 @@ export class TerminalChat {
     const selected = this.ui.tabs?.find(tab => tab.id === this.ui.activeTab);
     const completions = this.completions();
     const maximumPinned = height < 22 ? 1 : 2;
-    const pinned = this.pinned && this.panel !== 'settings' ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
+    const pinned = this.pinned && this.panel !== 'settings' && (!this.dashboardRendering || this.busy || this.scroll > 0 || this.goal) ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
     const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
     const header = this.persistentHeader(width, height);
     if (pinned.length) {
@@ -1040,10 +1177,13 @@ export class TerminalChat {
       for (const [index, line] of pinned.slice(0, maximumPinned).entries()) header.push(color('  │ ' + clip(line + (index === maximumPinned - 1 && pinned.length > maximumPinned ? ' …' : ''), width - 5), palette.accent));
       header.push(edge('─'.repeat(width)));
     }
+    this.sceneHeaderLength = header.length + (this.dashboardRendering ? 3 : 0);
     const bottom = [edge('─'.repeat(width))];
     if (this.mode === 'delegate') {
       const phase = this.busy ? this.delegationPhase || 'Supervisor planning' : this.goal?.status === 'complete' ? 'Goal complete' : 'Delegation';
-      bottom.push(color('  ' + clip(phase + ' · ' + delegationCounters(this.delegationUsage), width - 3), palette.accent));
+      const counters = delegationCounters(this.delegationUsage), text = phase + ' · ' + counters;
+      if (cellWidth(text) > width - 3) bottom.push(color('  ' + phase, palette.accent), color('  ' + clip(counters, width - 3), palette.accent));
+      else bottom.push(color('  ' + text, palette.accent));
     }
     const bottomHits = [];
     if (this.busy && (this.currentTool || this.currentActivity)) bottom.push(muted('  ' + clip(this.currentTool || this.currentActivity, width - 3)));
@@ -1058,16 +1198,33 @@ export class TerminalChat {
     }
     const prompt = this.panel === 'settings' && !this.promptDraft ? 'Settings' : !this.resolveInput || /^(bzzy\b)/.test(this.question || '') ? 'Message' : clip(this.question || 'Message', width - 6);
     bottom.push(edge('╭─ ') + color(prompt, palette.text, true) + edge(' ' + '─'.repeat(Math.max(0, width - cellWidth(prompt) - 5)) + '╮'));
+    if (this.promptDraft) {
+      const left = width - 11;
+      bottom[bottom.length - 1] = replaceCells(bottom.at(-1), left, color(' Cancel ', palette.accent, true), width, this.theme, palette.background);
+      bottomHits.push({ type: 'cancel', row: bottom.length - 1, left: left + 1, right: left + 8 });
+    }
     const visibleValue = this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
     const before = this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
-    const inputWidth = width - 5, offset = Math.max(0, cellWidth(before) - inputWidth + 1);
+    const hasSubmit = Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
+    const sendLabel = this.promptDraft ? ' Confirm ' : ' Send ↵ ';
+    const inputWidth = Math.max(1, width - 5 - (hasSubmit ? cellWidth(sendLabel) + 1 : 0)), offset = Math.max(0, cellWidth(before) - inputWidth + 1);
     const cropped = cropLeft(visibleValue, offset);
     const inputText = this.value ? clip(cropped, inputWidth, '') : clip(this.panel === 'settings' && !this.promptDraft ? `↑/↓ choose · Enter opens · Esc ${this.ui.settingsOnly ? 'closes Settings' : 'returns to chat'}` : this.ui.sessionMode === 'VIEW' ? 'Read-only · /tabs or /detach' : this.mode === 'delegate' && !this.goal ? 'Chat, or /goal <objective> for supervised work' : 'Ask something, or /goal an objective', inputWidth);
-    bottom.push(edge('│ ') + color(inputText, this.value ? palette.text : palette.muted) + ' '.repeat(Math.max(0, width - 4 - cellWidth(inputText))) + edge(' │'));
+    const inputLine = color(inputText, this.value ? palette.text : palette.muted) + ' '.repeat(Math.max(0, inputWidth - cellWidth(inputText)));
+    bottom.push(edge('│ ') + inputLine + (hasSubmit ? ' ' + fillSurface(sendLabel, cellWidth(sendLabel), this.theme, this.value && !this.renderingPicker ? palette.accent : palette.selection, this.value && !this.renderingPicker ? palette.background : palette.accent, true) : '') + '  ' + edge('│'));
     const inputIndex = bottom.length - 1;
-    const send = this.canCompose() && !this.selection && !this.copyMode;
-    if (send) bottomHits.push({ type: 'confirm', row: bottom.length, left: Math.max(2, width - 10), right: width - 1 });
-    bottom.push(edge('╰' + '─'.repeat(Math.max(0, width - (send ? 12 : 2))) + (send ? color(' Send ↵ ', palette.accent) + edge('──╯') : '╯')));
+    if (hasSubmit) bottomHits.push({ type: 'confirm', row: inputIndex, left: inputWidth + 4, right: inputWidth + 3 + cellWidth(sendLabel) });
+    bottom.push(edge('╰' + '─'.repeat(Math.max(0, width - 2)) + '╯'));
+    if (!this.promptDraft && height >= 28) {
+      const controls = [[' Paste ', 'paste'], [' ↓ Latest ', 'latest'], [this.showTools ? ' Hide tools ' : ' Show tools ', 'tools'], ...(this.busy ? [[' Pause ', 'model-control', '/pause']] : [])];
+      let left = 3, line = '  ';
+      for (const [label, type, command] of controls) {
+        if (left + cellWidth(label) > width) break;
+        bottomHits.push({ type, command, row: bottom.length, left, right: left + cellWidth(label) - 1 });
+        line += color(label, palette.muted) + ' '; left += cellWidth(label) + 1;
+      }
+      bottom.push(line);
+    }
     for (const line of wrap(sessionLabel, width - 2)) bottom.push(muted(' ' + line));
     if (selected && selected.id !== this.ui.sessionId) for (const line of wrap(`Chat: ${selected.id}`, width - 2)) bottom.push(muted(' ' + line));
     // Keep the host header in place; constrained terminals spend their
@@ -1116,7 +1273,7 @@ export class TerminalChat {
     for (let index = 0; index < visibleBody.length; index++) {
       let line = visibleBody[index];
       if (cellWidth(line) > contentWidth) line = color(clip(line, contentWidth), palette.text);
-      visibleBody[index] = line + ' '.repeat(Math.max(0, width - 1 - cellWidth(line))) + (this.selection ? ' ' : maximum && index >= thumbOffset && index < thumbOffset + thumbHeight ? color('┃', palette.accent) : edge('│'));
+      visibleBody[index] = line + ' '.repeat(Math.max(0, width - 1 - cellWidth(line))) + (this.selection || !maximum ? ' ' : index >= thumbOffset && index < thumbOffset + thumbHeight ? color('┃', palette.accent) : edge('│'));
     }
     if (['chat', 'room', 'skills', 'settings'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
     for (const hit of bottomHits) this.hitTargets.push({ ...hit, row: header.length + bodyHeight + hit.row + 1 });
@@ -1141,9 +1298,9 @@ export class TerminalChat {
     }
     this.writeFrame(frame);
   }
-  restore() { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1049l'); }
+  restore() { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l'); }
   close() {
-    if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer);
+    if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer); clearTimeout(this.feedbackTimer); clearTimeout(this.noticeTimer);
     this.finish(null); this.finishSelection(null); this.input.removeListener('keypress', this.onKey); this.output.removeListener?.('resize', this.onResize); this.output.removeListener?.('drain', this.onDrain); process.removeListener('exit', this.onExit); this.restore(); this.input.pause();
   }
 }

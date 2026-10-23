@@ -1,7 +1,8 @@
 // Keep the terminal and local session viewer aligned with BZZY iOS.
 export const palette = Object.freeze({
-  background: '#030908', surface: '#0B1413', accent: '#00E5CB',
-  text: '#EDF5F2', muted: '#91A6A1', border: '#18332D', warning: '#E4BD7C',
+  background: '#03090F', surface: '#0A151F', accent: '#24DFFF',
+  text: '#EDF5F2', muted: '#94ADB8', border: '#1A4354', warning: '#E4BD7C',
+  selection: '#0B3444', hover: '#12475A',
 });
 
 export function colorLevel(output, env = process.env) {

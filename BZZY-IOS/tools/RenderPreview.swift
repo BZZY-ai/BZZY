@@ -36,11 +36,12 @@ struct RenderPreview {
             renderer.scale = 2
             try write(renderer.cgImage, to: folder.appendingPathComponent("eyes-\(expression.0).png"))
         }
-        let icon = ImageRenderer(content: FlyEyes(interactive: false, frozenTime: 0)
-            .frame(width: 880).frame(width: 1024, height: 1024).background(BZZYTheme.background))
-        icon.scale = 1
-        try write(icon.cgImage, to: folder.appendingPathComponent("AppIcon.png"))
-        print("Rendered 13 native layouts, 6 procedural mascot poses, and an app icon into \(folder.path)")
+        if let icon = Bundle.module.url(forResource: "AppIcon", withExtension: "png", subdirectory: "Assets.xcassets/AppIcon.appiconset") {
+            let destination = folder.appendingPathComponent("AppIcon.png")
+            if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+            try FileManager.default.copyItem(at: icon, to: destination)
+        }
+        print("Rendered 13 native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
     }
 
     @MainActor private static func render<V: View>(_ name: String, view: V, folder: URL, width: CGFloat = 393, height: CGFloat = 852) throws {

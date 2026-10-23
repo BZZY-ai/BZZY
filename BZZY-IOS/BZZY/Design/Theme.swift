@@ -4,14 +4,14 @@ import UIKit
 #endif
 
 enum BZZYTheme {
-    static let background = Color(hex: 0x030908)
-    static let surface = Color(hex: 0x0B1413)
-    static let elevated = Color(hex: 0x101D1B)
-    static let accent = Color(hex: 0x00E5CB)
+    static let background = Color(hex: 0x03090F)
+    static let surface = Color(hex: 0x0A151F)
+    static let elevated = Color(hex: 0x102331)
+    static let accent = Color(hex: 0x24DFFF)
     static let text = Color(hex: 0xEDF5F2)
-    static let secondary = Color(hex: 0x91A6A1)
-    static let muted = Color(hex: 0x728D85)
-    static let line = Color(hex: 0x18332D)
+    static let secondary = Color(hex: 0x94ADB8)
+    static let muted = Color(hex: 0x718F9E)
+    static let line = Color(hex: 0x1A4354)
     static let amber = Color(hex: 0xE4BD7C)
 
     static func haptic() {
@@ -46,11 +46,11 @@ struct RoundButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 17, weight: .regular))
-                .foregroundStyle(BZZYTheme.secondary)
+                .foregroundStyle(BZZYTheme.accent)
                 .frame(width: 44, height: 44)
                 .background(BZZYTheme.surface, in: Circle())
                 .overlay(Circle().stroke(BZZYTheme.line, lineWidth: 0.5))
-        }.buttonStyle(.plain).accessibilityLabel(label)
+        }.buttonStyle(BZZYPressStyle()).accessibilityLabel(label)
     }
 }
 
@@ -67,7 +67,17 @@ struct AccentButton: View {
             }.padding(.horizontal, 20).frame(minHeight: 54)
                 .foregroundStyle(BZZYTheme.background)
                 .background(BZZYTheme.accent, in: RoundedRectangle(cornerRadius: 18))
-        }.buttonStyle(.plain)
+        }.buttonStyle(BZZYPressStyle())
+    }
+}
+
+struct BZZYPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.76 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

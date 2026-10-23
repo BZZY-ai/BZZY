@@ -175,7 +175,7 @@ test('choosing another provider opens its model and effort picker and retains th
   const ui = { interactive: true, event() {}, updateSession() {}, async chooseOne(title, choices) {
     titles.push(title); const picker = await choices;
     if (Array.isArray(picker)) return 'claude';
-    assert.equal(picker.selectEffort, true); assert.ok(picker.choices.some(choice => choice.value === JSON.stringify(['claude', 'sonnet'])));
+    assert.notEqual(picker.selectEffort, true, 'header model and effort are separate dropdowns'); assert.ok(picker.choices.some(choice => choice.value === JSON.stringify(['claude', 'sonnet'])));
     return { value: JSON.stringify(['claude', 'sonnet']), effort: 'high' };
   } };
   const next = await changeConversationProvider(source, '', ui);

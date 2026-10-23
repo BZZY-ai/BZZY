@@ -2,7 +2,7 @@ import { providers, getProvider } from './providers.js';
 import { availableModels, normalizeModel } from './models.js';
 
 // Catalogs belong to Core. No model/provider list is hardcoded into the TUI.
-export async function chooseUnifiedModel(current, ui, { title = 'Choose model' } = {}) {
+export async function chooseUnifiedModel(current, ui, { title = 'Choose model', scope = 'chat' } = {}) {
   const abort = new AbortController();
   const selections = new Map();
   try {
@@ -19,13 +19,13 @@ export async function chooseUnifiedModel(current, ui, { title = 'Choose model' }
           supportsEffort: model.capabilities?.supportsEffort, efforts: model.capabilities?.supportedEfforts || [],
           effort: current.provider === provider.id && current.model === model.id ? current.selectedEffort || 'default' : 'default' };
       });
-    })).then(results => ({ selectEffort: true, choices: [...results.flatMap(result => result.status === 'fulfilled' ? result.value : []), { value: '@custom', label: 'Enter provider and model…' }],
-      description: 'Choose a model from any Core provider. Effort applies to the next turn; Save keeps the CLI default.' }));
-    const chosen = await ui.chooseOne(title, choices);
+    })).then(results => ({ choices: [...results.flatMap(result => result.status === 'fulfilled' ? result.value : []), { value: '@custom', label: 'Enter provider and model…' }],
+      description: 'Choose a model. Its supported reasoning levels appear in the adjacent Effort dropdown.' }));
+    const chosen = await ui.chooseOne(title, choices, { presentation: 'dropdown', kind: 'model', scope });
     if (!chosen) return null;
     const value = typeof chosen === 'object' ? chosen.value : chosen;
     if (value === '@custom') {
-      const selectedProvider = await ui.chooseOne('Provider', Object.values(providers()).map(provider => ({ value: provider.id, label: provider.name })));
+      const selectedProvider = await ui.chooseOne('Provider', Object.values(providers()).map(provider => ({ value: provider.id, label: provider.name })), { presentation: 'dropdown', kind: 'model', scope });
       if (!selectedProvider) return null;
       const input = (await ui.ask('Model ID · Esc cancels'))?.trim();
       if (!input) return null;
@@ -33,20 +33,27 @@ export async function chooseUnifiedModel(current, ui, { title = 'Choose model' }
     }
     const selected = selections.get(value);
     if (!selected) throw new Error('Choose a model from the current Core catalog.');
-    const effort = chosen.effort || 'default';
+    const previous = selected.provider === current.provider && selected.model === current.model ? current.selectedEffort || current.effort || 'default' : 'default';
+    const effort = typeof chosen === 'object' ? chosen.effort || previous : previous;
     if (effort !== 'default' && (selected.capabilities?.supportsEffort === false || !selected.capabilities?.supportedEfforts?.includes(effort))) throw new Error('Choose an effort supported by this model.');
     return { ...selected, effort };
   } finally { abort.abort(); }
 }
 
-export async function chooseEffort(session, ui) {
+export async function chooseEffort(session, ui, { scope = 'chat' } = {}) {
   if (session.modelSelectionRequired) throw new Error('Select a model before choosing its effort.');
-  let capabilities = session.modelCapabilities;
-  if (!capabilities) {
-    const catalog = await availableModels(session);
-    capabilities = catalog.models.find(model => model.id === (session.model || session.resolvedModel))?.capabilities;
-  }
-  const efforts = capabilities?.supportsEffort === false ? [] : capabilities?.supportedEfforts || [];
-  const effort = await ui.chooseOne('Reasoning effort', ['default', ...new Set(efforts)].map(value => ({ value, label: value, selected: value === (session.selectedEffort || 'default') })));
-  return effort ? { model: session.model, effort, capabilities: capabilities || null } : null;
+  const abort = new AbortController(); let capabilities = session.modelCapabilities;
+  try {
+    const choices = (async () => {
+      if (!capabilities) {
+        const catalog = await availableModels(session, { signal: abort.signal });
+        capabilities = catalog.models.find(model => model.id === (session.model || session.resolvedModel))?.capabilities;
+      }
+      const efforts = capabilities?.supportsEffort === false ? [] : capabilities?.supportedEfforts || [];
+      return { description: capabilities?.supportsEffort === false ? 'This model does not support adjustable reasoning effort.' : 'Only reasoning levels supported by the selected model are listed.',
+        choices: [...new Set(['default', ...efforts])].map(value => ({ value, label: value === 'default' ? 'Default · model decides' : value[0].toUpperCase() + value.slice(1), selected: value === (session.selectedEffort || 'default') })) };
+    })();
+    const effort = await ui.chooseOne('Reasoning effort', choices, { presentation: 'dropdown', kind: 'effort', scope });
+    return effort ? { model: session.model, effort, capabilities: capabilities || null } : null;
+  } finally { abort.abort(); }
 }

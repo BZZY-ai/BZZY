@@ -111,7 +111,9 @@ hints map to terminal emphasis/dim. Raw history/JSON events remain unchanged and
 clipboard copies are readable text. Invalid or incomplete markup falls back to
 literal safe text; markup never executes actions or grants permissions.
 
-The TUI follows the reference sidebar layout on wide terminals, with Chat, Activity, Network, Sessions, Skills and Settings. Smaller terminals retain a compact layout and the complete pairing QR. Click the header model dropdown for all Core-discovered providers/models, click effort beside it, and use Save to keep the CLI default. Double-click the project alias to rename it inline; Enter saves and Esc cancels. Core's own model default remains independent in Settings → BZZY Core.
+The TUI follows the reference sidebar layout on wide terminals, with Chat, Activity, Network, Sessions, Skills and Settings. Smaller terminals retain a compact layout and the complete pairing QR. Sky-blue controls have hover and pressed feedback; navigation, recent sessions, Settings actions, Back, Send, Paste, Latest, Show tools, Copy and the update checker accept mouse clicks. The composer preserves unsent drafts across local controls.
+
+The header model control opens a floating searchable dropdown over the current chat. Click a model once to apply it; use the mouse wheel or arrows to browse, type to filter, and click outside or press Esc to cancel. The adjacent effort dropdown lists the selected model's supported reasoning levels. Save keeps the CLI default. Other selectors use floating dialogs with explicit Confirm/Cancel controls, preserving approval confirmations. Double-click the project alias to rename it inline; Enter/Save name confirms and Esc/Cancel returns. Core's own model and effort dropdowns remain independent in Settings → BZZY Core.
 
 Open **Skills** or `/skills` to view, create, import folders/ZIPs and explicitly enable shared workflows for every model. See [Core skills](../../BZZY-CORE/docs/SKILLS.md).
 
@@ -161,7 +163,7 @@ The daemon keeps the gateway connected after CLI closes. Native local full-line
 tests validate iOS interoperability; public host enrollment, real-device checks
 and unattended boot/logout behavior remain deployment checks.
 
-The terminal and bundled local viewer use the BZZY iOS turquoise/teal palette.
+The terminal uses the same sky-blue/celeste accent and dark surfaces as BZZY iOS.
 True-color terminals show the exact palette, with 256/basic-color fallbacks and
 `NO_COLOR` support. QR display keeps black/white contrast and its quiet zone;
 small terminals show the required dimensions and retain the manual-code option.

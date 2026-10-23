@@ -3,7 +3,9 @@ import { clean, cellWidth, wrap } from './terminal-format.js';
 import { createTerminalTheme, palette } from './terminal-theme.js';
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-const colors = Object.freeze({ mint: palette.accent, amber: palette.warning, coral: '#F28B82', blue: '#8CBDF5', lavender: '#B9A5F5', muted: palette.muted });
+// Message colors are part of the cross-client body contract, independent of
+// future changes to button, navigation and border colors.
+const colors = Object.freeze({ mint: '#00E5CB', amber: '#E4BD7C', coral: '#F28B82', blue: '#8CBDF5', lavender: '#B9A5F5', muted: '#91A6A1' });
 const basicColors = Object.freeze({ mint: 96, amber: 93, coral: 91, blue: 94, lavender: 95, muted: 37 });
 const safeText = text => clean(text).replace(/[\u2028\u2029]/g, '\n').replaceAll('\t', '  ');
 const elements = node => node.children.filter(child => child.tag !== '#text');

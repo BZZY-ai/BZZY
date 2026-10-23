@@ -74,8 +74,8 @@ export class UI {
     if (this.tui) return this.tui.chooseMany(title, choices);
     return choices.filter(choice => choice.selected).map(choice => choice.value);
   }
-  async chooseOne(title, choices) {
-    if (this.tui) return this.tui.chooseOne(title, choices);
+  async chooseOne(title, choices, options = {}) {
+    if (this.tui) return this.tui.chooseOne(title, choices, options);
     return null;
   }
 

@@ -61,12 +61,12 @@ struct ChatRichText: View {
     }
     private func color(_ value: ChatTextColor) -> Color {
         switch value {
-        case .mint: BZZYTheme.accent
+        case .mint: Color(hex: 0x00E5CB)
         case .amber: BZZYTheme.amber
         case .coral: Color(hex: 0xF28B82)
         case .blue: Color(hex: 0x8CBDF5)
         case .lavender: Color(hex: 0xB9A5F5)
-        case .muted: BZZYTheme.secondary
+        case .muted: Color(hex: 0x91A6A1)
         }
     }
     private func tableView(_ table: ChatTable) -> some View {

@@ -48,7 +48,7 @@ test('full-screen chat retains streaming replies and pins the latest user messag
     assert.equal(ui.tui.pinned, 'Validate this ownership finding');
     assert.match(ui.tui.entries.find(entry => entry.kind === 'assistant').text, /Evidence line 69/);
     const frame = ui.tui.lastFrame.map(clean).join('\n');
-    assert.match(frame, /YOU ASKED\n.*Validate this ownership finding/);
+    assert.match(frame, /YOU ASKED[\s\S]*Validate this ownership finding/);
     assert.match(frame, /Evidence line 69/); assert.match(frame, /1,234 tokens/); assert.match(frame, new RegExp(sessionId));
     assert.ok(term.written.includes('\x1b[1;')); assert.ok(term.written.includes('\x1b[?1049h'));
     ui.tui.key('n', { name: 'n' }); ui.event('text', { text: 'Still visible.', itemId: 'reply' }); ui.tui.render();
@@ -152,7 +152,7 @@ test('the same eyes, model, tokens and host metrics remain above Settings, panel
       for (const panel of ['chat', 'activity', 'http', 'settings']) {
         ui.tui.setPanel(panel); ui.tui.render();
         const frame = ui.tui.lastFrame.map(clean);
-        const boundary = frame.findIndex(line => /(?:^|│)─+$/.test(line));
+        const boundary = frame.findIndex(line => /(?:^|│)─+│?$/.test(line));
         const header = frame.slice(0, boundary + 1);
         if (expected) assert.deepEqual(header, expected, 'screen changes only replace the lower region'); else expected = header;
         assert.match(header.join('\n'), /chosen-model/); assert.match(header.join('\n'), /1,234 tokens/);

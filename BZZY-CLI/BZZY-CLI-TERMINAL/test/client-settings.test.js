@@ -104,7 +104,7 @@ test('Settings retains the host header and all four choices fit normal terminal 
     const frame = ui.tui.lastFrame.map(clean).join('\n');
     for (const label of ['DeepSeek API key', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
     assert.match(frame, /fixture-model-banner/); assert.match(frame, /fixture-project-path/);
-    assert.match(frame, /987,654 tokens/); assert.match(frame, /effort default/);
+    assert.match(frame, /987,654 tokens/); assert.match(frame, /[Ee]ffort:? default/);
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === 'settings'));
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === 'skills'));
     assert.doesNotMatch(frame, /Core service/);
@@ -504,8 +504,8 @@ test('Settings pairs through the real Core/Relay adapter, requires phone confirm
 test('the iOS palette uses exact RGB where supported and readable terminal fallbacks', () => {
   const output = { isTTY: true };
   const rgb = createTerminalTheme(output, { COLORTERM: 'truecolor' });
-  assert.equal(rgb.background(palette.background), '\x1b[48;2;3;9;8m');
-  assert.equal(rgb.foreground(palette.accent), '\x1b[38;2;0;229;203m');
+  assert.equal(rgb.background(palette.background), '\x1b[48;2;3;9;15m');
+  assert.equal(rgb.foreground(palette.accent), '\x1b[38;2;36;223;255m');
   for (const env of [{ TERM: 'xterm-256color' }, { TERM: 'linux' }, { NO_COLOR: '1' }, { TERM: 'dumb' }]) {
     const theme = createTerminalTheme(output, env), line = theme.color('Text 世界', palette.text);
     assert.equal(clean(line), 'Text 世界'); assert.equal(cellWidth(line), 9);
