@@ -46,7 +46,7 @@ export async function checkInstallationUpdate({ directory = installationDirector
   return { repository: updateRepository, current: head, target, branch: targetBranch, available: head !== target && !ahead, blocked: blocked || (ahead ? 'This checkout is ahead of GitHub. No downgrade will be performed.' : null), checkedAt: Date.now(), directory: cwd };
 }
 
-export async function applyInstallationUpdate(check, { run = runUpdateCommand } = {}) {
+export async function applyInstallationUpdate(check, { run = runUpdateCommand, inherit = true } = {}) {
   if (!check || check.blocked || !check.available || !/^[a-f0-9]{40,64}$/.test(check.target)) throw new Error('Check for an available update before installing.');
   const release = lockFile(path.join(home(), 'runtime', 'update.lock'), 'Another BZZY update is in progress.');
   try {
@@ -54,7 +54,7 @@ export async function applyInstallationUpdate(check, { run = runUpdateCommand } 
     if (fresh.blocked || fresh.current !== check.current || fresh.target !== check.target) throw new Error('The installation or GitHub revision changed. Check again before updating.');
     // The child exits after replacing both products; it never continues a chat
     // with a mixture of old in-memory code and newly installed source.
-    return await run(process.execPath, [fileURLToPath(new URL('../../bin/bzzy-core.js', import.meta.url)), 'update'], { cwd: check.directory, inherit: true,
+    return await run(process.execPath, [fileURLToPath(new URL('../../bin/bzzy-core.js', import.meta.url)), 'update'], { cwd: check.directory, inherit,
       signal: AbortSignal.timeout(300000), target: check.target });
   } finally { release(); }
 }

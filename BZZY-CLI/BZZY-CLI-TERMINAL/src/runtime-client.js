@@ -148,7 +148,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           finally { modalTask = false; }
           continue;
         }
-        if (/^\/settings(?:\s|$)/.test(text)) {
+        if (text === '/update' || /^\/(?:settings|skills)(?:\s|$)/.test(text)) {
           modalTask = true;
           try { await ui.settingsCommand(text); } finally { modalTask = false; }
           continue;
@@ -373,7 +373,12 @@ export async function conversationInput(session, ui, connection) {
 export async function attachSession(session, options, ui) {
   options = { ...options, cwd: session.cwd, mode: session.mode || 'solo', provider: session.provider, model: session.model, effort: session.selectedEffort };
   const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
-  await api('POST', 'claim', { takeover: true });
+  try { await api('POST', 'claim', { takeover: !options.restoreAfterUpdate }); }
+  catch (error) {
+    if (!options.restoreAfterUpdate || error.status !== 409 && error.code !== 'CONFLICT') throw error;
+    ui.event('info', { message: 'Updated. Another client owns input; this terminal reopened as a viewer.' });
+    return viewSession(session, { ...options, follow: true }, ui);
+  }
   let renewing = false, lost = false, redirect;
   const heartbeat = setInterval(async () => {
     if (renewing || lost || ui.coreLifecycleInterrupted) return; renewing = true;

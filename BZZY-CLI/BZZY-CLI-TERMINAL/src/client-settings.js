@@ -106,7 +106,8 @@ export class ClientSettings {
       put('Independent from the CLI chat default.', 'muted');
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
       const push = notificationDeliveryStatus();
-      put(); put(push.message, push.configured && push.compatibleDevices ? 'muted' : 'warning');
+      put(); put(!push.configured ? 'iPhone push alerts · Apple setup needed' : push.message, 'muted');
+      if (!push.configured) put('Core model and voice chat still work.', 'muted');
       put(); put('Back', 'muted', 'back');
       return rows;
     }

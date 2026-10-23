@@ -34,6 +34,7 @@ import { chooseSavedCombo } from './mode-presets.js';
 import { chatHelp } from './terminal-commands.js';
 import { whoami } from './whoami.js';
 import { updateCoreAndCLI } from './update.js';
+import { readUpdateHandoff, execUpdatedCLI } from './update-handoff.js';
 import { retireTelegram } from './migrations.js';
 import { backendCommand } from '@bzzy/core/engine/entry.js';
 import { activateCLIHost, coreHostStatus, stopCoreHost } from '@bzzy/core/engine/host-service.js';
@@ -457,8 +458,13 @@ async function coreServiceSettings(ui, options) {
 }
 
 export async function main(argv) {
+  const updateHandoff = readUpdateHandoff();
+  if (updateHandoff) argv = updateHandoff.sessionId && !updateHandoff.settingsOnly && !updateHandoff.coreStopped
+    ? [updateHandoff.mode === 'VIEW' ? '--view' : '--attach', updateHandoff.sessionId]
+    : updateHandoff.settingsOnly || updateHandoff.coreStopped ? ['settings'] : [];
   if (['internal-mcp', 'internal-tools', 'internal-service', 'internal-execution', 'internal-assignment'].includes(argv[0])) return backendCommand(argv);
   const { options, args } = parseArgs(argv);
+  if (updateHandoff) options.restoreAfterUpdate = true;
   if (options.version) { process.stdout.write('bzzy 0.2.0\n'); return 0; }
   if (options.whoami) { process.stdout.write(whoami(options.cwd)); return 0; }
   if (options.help || args[0] === 'help') { process.stdout.write(HELP); return 0; }
@@ -473,10 +479,10 @@ export async function main(argv) {
   await retireTelegram();
   const launchCommand = args[0];
   const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth']);
-  if (!staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
+  if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
-  const ui = new UI({ ...options, hostMetrics: true });
+  const ui = new UI({ ...options, hostMetrics: true, updateHandoff });
   ui.accountStatusEnabled = ui.interactive;
   ui.onDebate = (id, focus) => debateConversation(loadSession(id), focus, options, ui);
   ui.onProvider = (id, argument, connection) => changeConversationProvider(loadSession(id), argument, ui, connection);
@@ -675,10 +681,16 @@ export async function main(argv) {
     let result;
     try { result = await launch(); }
     catch (error) { if (!ui.coreLifecycleInterrupted) throw error; }
-    while (ui.coreLifecycleInterrupted) {
+    while (ui.coreLifecycleInterrupted && !ui.updateRestart) {
       try { result = await coreServiceSettings(ui, options); }
       catch (error) { if (!ui.coreLifecycleInterrupted) throw error; }
     }
     return result ?? 0;
-  } finally { await ui.settings?.close(); ui.close(); }
+  } finally {
+    await ui.settings?.close(); ui.close({ preserveScreen: Boolean(ui.updateRestart) });
+    if (ui.updateRestart) {
+      try { execUpdatedCLI(ui.updateRestart); }
+      catch (error) { ui.output.write('\x1b[0m\x1b[?25h\x1b[?1049l'); throw error; }
+    }
+  }
 }

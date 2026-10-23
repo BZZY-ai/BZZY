@@ -197,6 +197,34 @@ final class BZZYUITests: XCTestCase {
         // Diagnostic identity is disposable and removed. No host invitations or commands are sent.
     }
 
+    func testSpeechLanguagesPersistIndependentlyAndTerminalRowsShowOnlyAliases() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing"]
+        app.launch()
+        app.buttons["Settings"].tap()
+        let listening = app.segmentedControls["speech-recognition-language"]
+        for _ in 0..<3 { if listening.exists && listening.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(listening.waitForExistence(timeout: 5))
+        listening.buttons["Español"].tap()
+        let speaking = app.segmentedControls["speech-synthesis-language"]
+        speaking.buttons["English"].tap()
+        XCTAssertTrue(listening.buttons["Español"].isSelected)
+        XCTAssertTrue(speaking.buttons["English"].isSelected)
+        attach(app, name: "Independent speech languages")
+        app.terminate(); app.launchArguments = ["--ui-testing"]; app.launch()
+        app.buttons["Settings"].tap()
+        for _ in 0..<3 { if listening.exists && listening.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(listening.buttons["Español"].isSelected)
+        XCTAssertTrue(speaking.buttons["English"].isSelected)
+        app.buttons["Close"].tap(); app.buttons["tab-terminal"].tap()
+        let row = app.buttons["terminal-session-design"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.staticTexts["Design review"].exists)
+        XCTAssertEqual(row.staticTexts.count, 1, "A terminal row displays only its alias beside the icon")
+        attach(app, name: "Alias-only terminal picker")
+    }
+
     func testVoiceScreenHasOnlyControlsAndChatsOpenAtLatest() {
         continueAfterFailure = false
         let app = XCUIApplication()

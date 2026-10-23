@@ -9,8 +9,23 @@ checking never installs, changes project files or starts model work.
 The install action updates the complete workspace, including Core and Relay,
 then runs the existing nested CLI installer to refresh both launchers and their
 runtime/dependencies. Core work is paused durably. A previously running Core is
-started again afterward without replaying paused work; the old CLI exits and the
-user launches `bzzy` again to load the installed code.
+started again afterward without replaying paused work. The TUI stays visible
+during installation, then reloads the new CLI in the same OS process and terminal.
+The current conversation, selected chat tab and unsent composer drafts reopen;
+no manual close or relaunch is required. Reloading claims available input without
+taking it from another client; a busy lease reopens as a viewer. An explicitly
+stopped Core stays stopped and opens local Settings.
+
+The handoff contains UI data only, in a bounded owner-only file under private
+Core runtime storage. The new CLI consumes it once; old goals, commands and
+model work are never resubmitted. Private/hidden input cannot enter the handoff.
+Installation cannot be dismissed through Cancel/Esc while files are changing.
+Failures keep the terminal and draft available and report failure. The plain
+`bzzy --update` command still completes as a standalone command.
+
+A CLI that predates this behavior still uses its already-loaded updater for the
+first upgrade. Reopen it once after that upgrade; subsequent TUI updates reload
+automatically.
 
 Checks enforce a complete Git checkout, an official GitHub origin, an attached
 default branch and a clean worktree across the entire workspace. Local edits,

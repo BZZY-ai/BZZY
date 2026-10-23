@@ -33,6 +33,7 @@ struct RenderPreview {
         try render("chat-large-text", view: ConversationView(store: agents, agent: agents.agents[0]).environment(\.dynamicTypeSize, .accessibility2), folder: folder)
         try render("voice", view: VoiceView(store: agents, conversationID: agents.agents[0].id.uuidString, agentName: "COOL"), folder: folder)
         try render("voice-only", view: VoiceChatView(), folder: folder)
+        try render("settings-voice", view: SettingsView().environment(NotificationStore()), folder: folder)
         try render("activity", view: ActivityView(), folder: folder)
         try render("share", view: ShareResourceView(target: .agent(agents.agents[0]))
             .environment(DemoTransferStore()).environment(RelayConnection(networkingEnabled: false)), folder: folder)
@@ -51,7 +52,7 @@ struct RenderPreview {
             if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
             try FileManager.default.copyItem(at: icon, to: destination)
         }
-        print("Rendered 14 native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
+        print("Rendered 15 native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
     }
 
     @MainActor private static func render<V: View>(_ name: String, view: V, folder: URL, width: CGFloat = 393, height: CGFloat = 852) throws {

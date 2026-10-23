@@ -1,10 +1,14 @@
 # Voice conversations
 
 iOS **Talk to BZZY** is a text-free voice surface for Core's own assistant. Apple
-on-device Speech recognizes the held microphone input, a local FFT displays its
-frequency spectrum, and AVSpeechSynthesizer speaks replies. Release finalizes
-capture; the user must tap Send. Core and Relay receive recognized text, never
-audio. The regular chat composer retains its separate editable dictation flow.
+on-device Speech recognizes the held microphone input, a local FFT displays 64
+frequency bands smoothed at display cadence, and AVSpeechSynthesizer speaks replies.
+The user's deliberate release stops capture and sends the final recognized text
+after a brief finalization window (up to 650 ms), without another Send tap.
+Core and Relay receive text, never audio. Permission cancellation, recognition
+failure, navigation, backgrounding and reconnect never send a recording. Failed
+recognition/dispatch can leave an explicit retry arrow. The regular chat composer
+retains its separate editable dictation flow and explicit Send button.
 
 Core must have an explicit coordinator selection (`bzzy-core assistant set` or
 the Core secondary settings screen) and a managed folder (`bzzy-core workspace
@@ -12,6 +16,15 @@ set` or CLI's Default BZZY folder). CLI chat defaults stay independent. Provider
 continue to authenticate privately on the host through existing adapters. No
 provider keys, owner tokens, arbitrary model selections, paths or runtime options
 are accepted from the phone.
+
+iOS Settings has independent English/Spanish listening (STT) and speaking (TTS)
+preferences. Both voice mode and chat dictation use the listening selection;
+Apple's speaking voice and safe spoken notices use the speaking selection.
+Model replies continue to follow the conversational language instructions.
+Readiness validates the actual pinned folder before enabling capture. New macOS
+folder pins include the filesystem volume UUID, so a verified device-number
+change after remount does not itself revoke the same directory/inode. Changed
+directories, volumes and unverified legacy pins still require host confirmation.
 
 ## Encrypted operations
 

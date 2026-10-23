@@ -74,13 +74,31 @@ struct ChatChecks {
         }
         let spectrum = VoiceFrequencyAnalyzer(), sampleRate = 48000.0
         func peak(_ frequency: Double) -> Int {
-            let signal = (0..<1024).map { Float(sin(Double($0) * 2 * .pi * frequency / sampleRate) * 0.4) }
+            let signal = (0..<2048).map { Float(sin(Double($0) * 2 * .pi * frequency / sampleRate) * 0.4) }
             let levels = spectrum.levels(signal, sampleRate: sampleRate)!
             require(levels.allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 }, "Spectrum energy must stay finite and bounded")
             return levels.indices.max(by: { levels[$0] < levels[$1] })!
         }
         require(peak(4000) > peak(500), "Actual higher microphone frequencies must light higher bands")
-        require(spectrum.levels(Array(repeating: 0, count: 1024), sampleRate: sampleRate)!.allSatisfy { $0 == 0 }, "Silence must never display invented voice activity")
+        require(spectrum.levels(Array(repeating: 0, count: 2048), sampleRate: sampleRate)!.allSatisfy { $0 == 0 }, "Silence must never display invented voice activity")
+        require(VoiceFrequencyAnalyzer.bandCount == 64, "The spectrum has 64 actual frequency bands")
+        var fluid = VoiceSpectrumSmoother()
+        fluid.advance(toward: Array(repeating: 1, count: 64), time: 0)
+        require(fluid.levels.allSatisfy { $0 > 0 && $0 < 1 }, "Real audio samples ease into place without jumping")
+        for frame in 1...100 { fluid.advance(toward: Array(repeating: 0, count: 64), time: Double(frame) / 60) }
+        require(fluid.levels.allSatisfy { $0 == 0 }, "Display smoothing returns silence to an exact flat line")
+        var release = VoiceReleaseIntent()
+        release.begin(); release.audioStarted(); release.release()
+        require(release.consume("final words", busy: true, failed: false, allowed: true) == nil, "Release briefly waits for final recognition")
+        require(release.consume("final words", busy: false, failed: false, allowed: true) == "final words", "Deliberate release sends the completed words")
+        require(release.consume("final words", busy: false, failed: false, allowed: true) == nil, "A release can submit only once")
+        release.begin(); release.release()
+        require(release.consume("late permission", busy: false, failed: false, allowed: true) == nil, "Release during permission setup cannot send")
+        release.begin(); release.audioStarted(); release.cancel(); release.release()
+        require(release.consume("background", busy: false, failed: false, allowed: true) == nil, "Navigation/background cancellation never sends speech")
+        release.begin(); release.audioStarted(); release.release()
+        require(release.consume("failed recognition", busy: false, failed: true, allowed: true) == nil, "Failed recognition needs an explicit retry")
+        require(SpeechLanguage.resolve("es-ES") == .spanish && SpeechLanguage.resolve("en-US") == .english, "Listening and speaking preferences resolve independently")
         print("PASS: rich message examples, nested styles, tables, escapes, code, malformed/untrusted markup rejection, demo isolation, smooth gaze")
     }
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) { precondition(condition(), message) }

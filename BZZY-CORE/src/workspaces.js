@@ -5,12 +5,11 @@ import { randomUUID } from 'node:crypto';
 import { home, requireNode, getRecord, putRecord, reserveRequest, now } from './engine.js';
 import { fail, object } from './validation.js';
 import { canonicalPath, contains } from './paths.js';
+import { directoryIdentity, sameDirectoryIdentity, matchesDirectoryIdentity } from './engine/directory-identity.js';
 
 const privateNames = new Set(['.bzzy', '.ssh', '.aws', '.azure', '.gnupg', '.codex', '.claude', '.config', '.local',
   '.keychain', 'keychains', '.secrets', '.credentials']);
 const publicRoot = root => ({ id: root.id, revision: root.revision, path: root.path, name: path.basename(root.path) || root.path });
-const identity = stat => ({ dev: String(stat.dev), ino: String(stat.ino) });
-const sameIdentity = (left, right) => left?.dev === right?.dev && left?.ino === right?.ino;
 const privateDirectories = () => [home(), path.join(os.homedir(), '.codex'), path.join(os.homedir(), '.claude'),
   path.join(os.homedir(), '.ssh'), path.join(os.homedir(), '.aws'), path.join(os.homedir(), 'Library/Keychains'),
   ...['BZZY_CODEX_HOME', 'CODEX_HOME', 'BZZY_CLAUDE_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR']
@@ -46,7 +45,7 @@ export class CoreWorkspaces {
       if (!stat.isDirectory() || stat.isSymbolicLink()) fail('FORBIDDEN', 'The configured root must be a real directory.', 403);
       const canonical = fs.realpathSync(requested);
       assertNotPrivate(canonical, { root: true });
-      const root = { id: randomUUID(), revision: expectedRevision + 1, path: canonical, identity: identity(fs.statSync(canonical)), createdAt: now() };
+      const root = { id: randomUUID(), revision: expectedRevision + 1, path: canonical, identity: directoryIdentity(canonical), createdAt: now() };
       putRecord('core.workspace', 'default', root, db);
       return { configured: true, revision: root.revision, root: publicRoot(root) };
     });
@@ -58,11 +57,15 @@ export class CoreWorkspaces {
   }
   assertPin(pin) {
     this.#check(); const current = getRecord('core.workspace', 'default');
-    if (!current || !pin || current.id !== pin.id || current.revision !== pin.revision || current.path !== pin.path || !sameIdentity(current.identity, pin.identity)) fail('WORKSPACE_CHANGED', 'Workspace authorization must be approved again after a root change.', 403);
+    if (!current || !pin || current.id !== pin.id || current.revision !== pin.revision || current.path !== pin.path || !sameDirectoryIdentity(current.identity, pin.identity)) fail('WORKSPACE_CHANGED', 'Workspace authorization must be approved again after a root change.', 403);
     try {
       const stat = fs.lstatSync(current.path);
-      if (stat.isSymbolicLink() || !stat.isDirectory() || fs.realpathSync(current.path) !== current.path || !sameIdentity(identity(stat), current.identity)) fail('WORKSPACE_CHANGED', 'The pinned workspace directory changed.', 403);
+      if (stat.isSymbolicLink() || !stat.isDirectory() || fs.realpathSync(current.path) !== current.path || !matchesDirectoryIdentity(current.path, current.identity, stat)) fail('WORKSPACE_CHANGED', 'The pinned workspace directory changed.', 403);
       assertNotPrivate(current.path, { root: true });
+      if (current.identity.dev !== String(stat.dev)) {
+        current.identity = { ...current.identity, dev: String(stat.dev) };
+        putRecord('core.workspace', 'default', current);
+      }
     } catch (error) { if (error.code === 'FORBIDDEN' || error.code === 'WORKSPACE_CHANGED') throw error; fail('WORKSPACE_UNAVAILABLE', 'The workspace directory is unavailable.', 403); }
     return current;
   }

@@ -13,7 +13,7 @@ import { HostMetricsMonitor } from './host-metrics.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader } = {}) {
+  constructor({ json = false, pet = true, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff } = {}) {
     this.json = json;
     this.pet = pet;
     this.input = input;
@@ -27,11 +27,18 @@ export class UI {
     this.promptQueue = Promise.resolve();
     this.cursors = new Map();
     this.messageStreams = new Map();
+    this.updateHandoff = updateHandoff;
+    if (updateHandoff) { this.sessionId = updateHandoff.sessionId; this.activeTab = updateHandoff.activeTab; }
   }
 
   openTerminal() {
     if (!this.interactive) return;
     this.tui ||= new TerminalChat(this);
+    if (this.updateHandoff) {
+      this.tui.drafts = new Map(this.updateHandoff.drafts);
+      Object.assign(this.tui, this.tui.drafts.get(this.activeTab || this.sessionId) || { value: '', cursor: 0 });
+      this.updateHandoff = null;
+    }
     if (this.hostMetricsEnabled && !this.hostMetricsMonitor && !this.closed) {
       this.hostMetricsMonitor = new HostMetricsMonitor(sample => { this.hostMetrics = sample; this.tui?.schedule(); },
         this.metricsLoader ? { load: this.metricsLoader } : {}).start();
@@ -237,11 +244,12 @@ export class UI {
     });
   }
 
-  close() {
+  close({ preserveScreen = false } = {}) {
+    if (this.closed) return;
     this.hostMetricsMonitor?.close();
     void this.settings?.close();
     this.accountMonitor?.close();
     this.closed = true; this.reader?.close(); this.newline();
-    if (this.tui) { this.tui.close(); if (this.sessionId) this.output.write(`Session: ${this.sessionId}\nAttach: bzzy --attach ${this.sessionId}\n`); }
+    if (this.tui) { this.tui.close({ preserveScreen }); if (this.sessionId && !preserveScreen) this.output.write(`Session: ${this.sessionId}\nAttach: bzzy --attach ${this.sessionId}\n`); }
   }
 }

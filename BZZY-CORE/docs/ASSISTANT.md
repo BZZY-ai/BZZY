@@ -31,7 +31,7 @@ Core settings revision and never changes CLI defaults or starts a model turn.
 
 The iPhone's text-free **Talk to BZZY** surface now uses these independent Core
 defaults through the own-phone voice protocol. Readiness checks do not start
-inference; explicit Send creates/reuses a private Core context in the managed
+inference; a deliberately released voice recording creates/reuses a private Core context in the managed
 folder. Apple Speech/TTS and the live spectrum run on iPhone. See [voice](VOICE.md)
 for permissions, acceptance, questions and recovery.
 

@@ -64,6 +64,20 @@ test('runtime survives client detachment and view replays history without execut
   const activity = (await client.activities(session.id)).items[0];
   assert.ok(activity.closedAt); assert.equal(activity.executionActive, false); assert.equal(activity.status, 'running');
 });
+test('an update restores the saved chat without replaying work or taking input from the phone', async () => {
+  const session = createSession(BUILTINS.codex, dir), info = await ensureRuntime(), phone = 'paired-phone';
+  appendEvent(session.id, 'message.user', { text: 'Saved conversation' });
+  appendEvent(session.id, 'text', { text: 'Saved answer' });
+  await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner: phone });
+  let mode, cwd;
+  const ui = { interactive: true, cursors: new Map(), event() {}, ask: async () => null,
+    setSession(_id, value) { mode = value; }, updateSession(snapshot) { cwd = snapshot.session.cwd; } };
+  await attachSession(session, { restoreAfterUpdate: true }, ui);
+  assert.equal(mode, 'VIEW', 'Reloading must not silently take over the phone lease');
+  assert.equal(cwd, dir, 'The existing chat keeps its original directory');
+  assert.equal((await runtimeRequest(info, 'GET', `/sessions/${session.id}`)).inputOwner.owner, phone);
+  assert.equal(listRecords('execution', { sessionId: session.id }).length, 0);
+});
 test('a bestie child view replays the complete parent shared room', async () => {
   const parent = makeSession({ mode: 'besties', besties: [{ provider: 'codex' }, { provider: 'claude' }] });
   const first = createSession(BUILTINS.codex, dir), second = createSession(BUILTINS.claude, dir);

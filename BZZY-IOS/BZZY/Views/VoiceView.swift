@@ -8,7 +8,7 @@ struct VoiceView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var capture = VoiceCapture()
-    @State private var locale = "en-US"
+    @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var locale = SpeechLanguage.preferred.rawValue
     @State private var selectedAgentID: UUID?
     @State private var recordingTask: Task<Void, Never>?
 

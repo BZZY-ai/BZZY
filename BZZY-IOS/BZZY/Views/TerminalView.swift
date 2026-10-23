@@ -35,7 +35,7 @@ struct TerminalView: View {
                             NavigationLink {
                                 RemoteTerminalConversationView(store: store, terminal: terminal)
                             } label: {
-                                sessionRow(name: terminal.title, subtitle: "\(terminal.directory)\n\(terminal.model) · \(terminal.execution)", symbol: "terminal")
+                                sessionRow(name: terminal.title, symbol: "terminal")
                             }.buttonStyle(.plain)
                                 .disabled(!relay.coreCatalogReady || relay.coreBusy || relay.coreCommandUncertain)
                                 .accessibilityIdentifier("terminal-host-\(terminal.id)")
@@ -49,9 +49,8 @@ struct TerminalView: View {
                             ConversationCanvas(store: store, conversationID: session.id, title: session.title,
                                 subtitle: "\(session.model) · \(store.liveAvailable ? session.execution : "Disconnected")", assistantName: session.model, remoteSession: true)
                         } label: {
-                            sessionRow(name: session.title, subtitle: "\(session.provider) · \(store.liveStatus)", symbol: "terminal")
+                            sessionRow(name: session.title, symbol: "terminal")
                         }.buttonStyle(.plain).accessibilityIdentifier("terminal-live")
-                        Text("Host-approved session").bzzyFont(10).foregroundStyle(BZZYTheme.muted)
                     }
                 }
                 if !store.terminalDrafts.isEmpty {
@@ -62,7 +61,7 @@ struct TerminalView: View {
                                                    subtitle: "Draft · Inactive", shareTarget: .init(id: draft.id.uuidString, kind: .terminal, name: draft.name, isDemo: false),
                                                    instructions: draft.instructions)
                             } label: {
-                                sessionRow(name: draft.name, subtitle: "Draft", symbol: draft.symbol)
+                                sessionRow(name: draft.name, symbol: draft.symbol)
                             }.buttonStyle(.plain).accessibilityIdentifier("terminal-draft-\(draft.id.uuidString)")
                             Rectangle().fill(BZZYTheme.line.opacity(0.6)).frame(height: 0.5)
                         }
@@ -74,7 +73,7 @@ struct TerminalView: View {
                         NavigationLink {
                             TerminalConversationView(store: store, session: session)
                         } label: {
-                            sessionRow(name: session.name, subtitle: session.model, symbol: session.symbol)
+                            sessionRow(name: session.name, symbol: session.symbol)
                         }.buttonStyle(.plain).accessibilityIdentifier("terminal-\(session.id)")
                         Rectangle().fill(BZZYTheme.line.opacity(0.6)).frame(height: 0.5)
                     }
@@ -89,16 +88,12 @@ struct TerminalView: View {
                 if let id, let terminal = store.liveTerminals.first(where: { $0.id == id }) { notificationTerminal = terminal; store.notificationTerminalID = nil }
             }
     }
-    private func sessionRow(name: String, subtitle: String, symbol: String) -> some View {
+    private func sessionRow(name: String, symbol: String) -> some View {
         HStack(spacing: 17) {
             Image(systemName: symbol).font(.system(size: 21, weight: .light))
                 .foregroundStyle(BZZYTheme.secondary).frame(width: 30)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.text)
-                Text(subtitle).bzzyFont(11).foregroundStyle(BZZYTheme.muted)
-            }
+            Text(name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.text)
             Spacer()
-            Image(systemName: "arrow.up.right").font(.system(size: 12)).foregroundStyle(BZZYTheme.muted)
         }.padding(.vertical, 21).contentShape(Rectangle())
     }
 }

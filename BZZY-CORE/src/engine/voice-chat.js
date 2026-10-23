@@ -33,6 +33,7 @@ export class CoreVoiceChat {
   status(row) {
     this.#check(row);
     const assistant = new CoreAssistant().settings(), workspace = new CoreWorkspaces().settings();
+    if (workspace.configured) new CoreWorkspaces().pin();
     return { configured: assistant.configured && workspace.configured, assistantConfigured: assistant.configured, workspaceConfigured: workspace.configured };
   }
   #context(row) {

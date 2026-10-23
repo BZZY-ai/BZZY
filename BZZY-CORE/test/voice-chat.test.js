@@ -49,6 +49,12 @@ test('voice status never starts inference; explicit sends use only Core defaults
   assert.equal(listRecords('core.relay.context')[0].kind, 'voice');
   await assert.rejects(voice.send(row, 'Different words', 'voice-request'), { code: 'CONFLICT' });
 });
+test('voice readiness validates the actual folder before enabling the microphone', () => {
+  const row = phone(), voice = service(), root = new CoreWorkspaces().settings().root.path;
+  fs.renameSync(root, root + '-old'); fs.mkdirSync(root);
+  assert.throws(() => voice.status(row), { code: 'WORKSPACE_CHANGED' });
+  assert.equal(listRecords('execution').length, 0);
+});
 test('voice replies are paginated plain speech from only the accepted execution; later turns never enter its result', async () => {
   const row = phone(), voice = service(); await voice.send(row, 'Speak this reply.', 'first');
   const job = listRecords('execution')[0], text = '漢字 🐝 '.repeat(1500);

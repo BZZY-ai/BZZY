@@ -30,6 +30,13 @@ struct BZZYApp: App {
     @State private var smokeResult = "Checking"
     @State private var store = WorkspaceStore.deviceStore()
     @State private var relay = Self.makeRelay()
+    init() {
+        #if DEBUG
+        if AppLaunchMode.contains("--ui-testing") && AppLaunchMode.contains("--reset-ui-testing") {
+            UserDefaults(suiteName: "app.bzzy.ios.voice-tests")?.removePersistentDomain(forName: "app.bzzy.ios.voice-tests")
+        }
+        #endif
+    }
     @MainActor private static func makeRelay() -> RelayConnection {
         #if DEBUG
         if AppLaunchMode.contains("--ui-testing") && AppLaunchMode.contains("--core-offline-testing"),

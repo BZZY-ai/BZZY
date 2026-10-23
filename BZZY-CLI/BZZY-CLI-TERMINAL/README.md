@@ -117,7 +117,7 @@ The header model control opens a floating searchable dropdown over the current c
 
 Open **Skills** or `/skills` to view, create, import folders/ZIPs and explicitly enable shared workflows for every model. See [Core skills](../../BZZY-CORE/docs/SKILLS.md).
 
-Use **Check for updates** or `/update` to check GitHub and update CLI and Core together. See [update behavior and limits](docs/UPDATES.md). The existing command remains:
+Use **Check for updates** or `/update` to update CLI and Core together. The TUI stays open during installation, then reloads the new frontend in the same terminal with its saved chat and unsent draft. Core briefly restarts; paused work stays paused and another client's input lease is respected. Older already-running CLIs need one final reopen to load this updater. See [update behavior and limits](docs/UPDATES.md). The existing command remains:
 
 ```bash
 bzzy --update

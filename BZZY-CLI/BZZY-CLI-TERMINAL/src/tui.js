@@ -295,7 +295,7 @@ export class TerminalChat {
       });
     });
   }
-  finishSelection(value) { const selection = this.selection; if (!selection) return; this.selection = null; this.hoverTarget = null; this.ui.reader = null; selection.resolve(value); this.schedule(); }
+  finishSelection(value, force = false) { const selection = this.selection; if (!selection || selection.locked && selection.loading && !force) return; this.selection = null; this.hoverTarget = null; this.ui.reader = null; selection.resolve(value); this.schedule(); }
   finish(answer) {
     const resolve = this.resolveInput; if (!resolve) return;
     this.resolveInput = null; this.ui.reader = null;
@@ -699,8 +699,10 @@ export class TerminalChat {
       if (picker.error) put('  ' + picker.error, palette.warning);
       if (!compact) put('');
       for (const line of detailLines) put('  ' + line, palette.muted);
-      this.contentHits.push({ type: 'confirm', row: lines.length, left: 3, right: 13 }, { type: 'cancel', row: lines.length, left: 17, right: 26 });
-      put('  [ Confirm ]   [ Cancel ]', palette.accent);
+      if (!picker.locked || !picker.loading) {
+        this.contentHits.push({ type: 'confirm', row: lines.length, left: 3, right: 13 }, { type: 'cancel', row: lines.length, left: 17, right: 26 });
+        put('  [ Confirm ]   [ Cancel ]', palette.accent);
+      }
     } else if (this.panel === 'settings') {
       const rows = this.ui.settings.rows(), actions = rows.filter(row => row.action);
       this.ui.settings.focus = Math.max(0, Math.min(this.ui.settings.focus, actions.length - 1));
@@ -1298,10 +1300,10 @@ export class TerminalChat {
     }
     this.writeFrame(frame);
   }
-  restore() { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l'); }
-  close() {
+  restore(preserveScreen = false) { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l' + (preserveScreen ? '' : '\x1b[?1049l')); }
+  close({ preserveScreen = false } = {}) {
     if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer); clearTimeout(this.feedbackTimer); clearTimeout(this.noticeTimer);
-    this.finish(null); this.finishSelection(null); this.input.removeListener('keypress', this.onKey); this.output.removeListener?.('resize', this.onResize); this.output.removeListener?.('drain', this.onDrain); process.removeListener('exit', this.onExit); this.restore(); this.input.pause();
+    this.finish(null); this.finishSelection(null, true); this.input.removeListener('keypress', this.onKey); this.output.removeListener?.('resize', this.onResize); this.output.removeListener?.('drain', this.onDrain); process.removeListener('exit', this.onExit); this.restore(preserveScreen); this.input.pause();
   }
 }
 function agentLabel(value) {

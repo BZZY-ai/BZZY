@@ -25,9 +25,10 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   const lines = [], hits = [], edge = text => theme.color(text, palette.border);
   const put = (text = '', tone = palette.text, bold = false, background = palette.surface) => lines.push(edge('│') + fillSurface(clip(text, inner), inner, theme, background, tone, bold) + edge('│'));
   lines.push(edge('╭' + '─'.repeat(inner) + '╮'));
-  const close = ' × ', title = ' ' + clip(picker.title, inner - 5);
+  const locked = picker.locked && picker.loading;
+  const close = locked ? '   ' : ' × ', title = ' ' + clip(picker.title, inner - 5);
   put(title + ' '.repeat(Math.max(0, inner - cellWidth(title) - 3)) + close, palette.accent, true);
-  hits.push({ type: 'cancel', row: 1, left: size - 4, right: size - 2 });
+  if (!locked) hits.push({ type: 'cancel', row: 1, left: size - 4, right: size - 2 });
   if (searchable) {
     put(' / ' + (picker.query || 'Search models and providers…'), picker.query ? palette.text : palette.muted);
     hits.push({ type: 'picker-search', row: lines.length - 1, left: 2, right: size - 3 });
@@ -52,7 +53,7 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   if (picker.selectEffort && focused?.efforts?.length) put(' Effort: ' + picker.efforts.get(focused.value) + ' · ←/→ changes', palette.accent);
   const count = filtered.length ? `${position + 1}/${filtered.length}` : '';
   put(' ' + clip((dropdown ? 'Click select · ↑↓ · Esc' : picker.hint || (picker.single ? '↑↓ choose · Enter confirm · Esc cancel' : 'Space selects · Enter confirms')) + (count ? '  ' + count : ''), inner - 1), palette.muted);
-  if (!dropdown) {
+  if (!dropdown && !locked) {
     put(' [ Confirm ]   [ Cancel ]', palette.accent, true);
     hits.push({ type: 'confirm', row: lines.length - 1, left: 2, right: 13 }, { type: 'cancel', row: lines.length - 1, left: 16, right: 26 });
   }

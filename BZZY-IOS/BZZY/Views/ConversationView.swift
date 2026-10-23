@@ -29,6 +29,7 @@ struct ConversationCanvas: View {
     @State private var pendingSubmittedDraft: String?
     @State private var showShare = false
     @State private var voice = VoiceCapture()
+    @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var recognitionLanguage = SpeechLanguage.preferred.rawValue
     @State private var voiceDraft: VoiceDraft?
     @State private var recordingTask: Task<Void, Never>?
     @GestureState private var voiceHeld = false
@@ -208,7 +209,7 @@ struct ConversationCanvas: View {
         voiceDraft = VoiceDraft(original: draft)
         recordingTask = Task {
             guard !Task.isCancelled else { return }
-            await voice.start(locale: Locale.preferredLanguages.first ?? Locale.current.identifier)
+            await voice.start(locale: SpeechLanguage.resolve(recognitionLanguage).rawValue)
         }
     }
 

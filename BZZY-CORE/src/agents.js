@@ -9,6 +9,7 @@ import { providerSelection, insertConversation, conversationExport } from './con
 import { assertSessionIdle, availableModels } from './engine/models.js';
 import { writeJson } from './engine/files.js';
 import { canonicalPath, contains } from './paths.js';
+import { directoryIdentity, matchesDirectoryIdentity } from './engine/directory-identity.js';
 
 const summary = row => {
   const session = getRecord('session', row.sessionId);
@@ -21,11 +22,11 @@ const boundedText = (value, maximum, label) => {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > maximum || /[\x00\x7f-\x9f]/u.test(value)) fail('INVALID_REQUEST', `Choose valid ${label}.`);
   return value.trim();
 };
-const identity = file => { const stat = fs.lstatSync(file); return { dev: String(stat.dev), ino: String(stat.ino) }; };
+const identity = directoryIdentity;
 function validateDirectory(directory, pin) {
   try {
     const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory || String(stat.dev) !== pin.dev || String(stat.ino) !== pin.ino || contains(canonicalPath(home()), directory)) fail('WORKSPACE_UNAVAILABLE', 'The agent workspace changed.', 403);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory || !matchesDirectoryIdentity(directory, pin, stat) || contains(canonicalPath(home()), directory)) fail('WORKSPACE_UNAVAILABLE', 'The agent workspace changed.', 403);
   } catch { fail('WORKSPACE_UNAVAILABLE', 'The agent workspace is unavailable.', 403); }
 }
 

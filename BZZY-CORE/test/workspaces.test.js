@@ -6,7 +6,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreWorkspaces } from '../src/workspaces.js';
 import { BzzyCore } from '../src/core.js';
-import { getRecord } from '../src/engine.js';
+import { getRecord, putRecord } from '../src/engine.js';
+import { directoryIdentity, sameDirectoryIdentity } from '../src/engine/directory-identity.js';
 
 let directory, saved;
 test.beforeEach(() => {
@@ -60,4 +61,29 @@ test('pinned root replacement is detected without granting access to the replace
   api.configure({ path: selected, create: true }, { requestId: randomUUID(), expectedRevision: 0 }); const pin = api.pin();
   fs.renameSync(selected, selected + '-old'); fs.mkdirSync(selected);
   assert.throws(() => api.assertPin(pin), { code: 'WORKSPACE_CHANGED' });
+});
+
+test('volume identity tolerates a remount but never an inode or volume replacement', () => {
+  const selected = path.join(directory, 'root'); fs.mkdirSync(selected);
+  const run = command => ({ status: 0, stdout: command.endsWith('/df') ? 'Filesystem Blocks Used Available Capacity Mounted on\n/dev/disk3s5 10 1 9 10% /\n'
+    : '<plist><dict><key>VolumeUUID</key><string>12345678-1234-4234-8234-123456789ABC</string></dict></plist>' });
+  const pin = directoryIdentity(selected, { platform: 'darwin', run });
+  assert.ok(pin.volume); assert.equal(sameDirectoryIdentity(pin, { ...pin, dev: 'remounted' }), true);
+  assert.equal(sameDirectoryIdentity(pin, { ...pin, ino: 'replaced' }), false);
+  assert.equal(sameDirectoryIdentity(pin, { ...pin, volume: 'different' }), false);
+  assert.equal(sameDirectoryIdentity({ dev: 'old', ino: pin.ino }, { ...pin, dev: 'new' }), false, 'Unverifiable legacy pins still need explicit confirmation');
+});
+
+test('macOS workspace pins survive a verified device-number change with the same volume and inode', { skip: process.platform !== 'darwin' }, () => {
+  const selected = path.join(directory, 'managed'), api = new CoreWorkspaces();
+  api.configure({ path: selected, create: true }, { expectedRevision: 0, requestId: randomUUID() });
+  const original = getRecord('core.workspace', 'default');
+  if (!original.identity.volume) return;
+  const remounted = { ...original, identity: { ...original.identity, dev: 'previous-boot' } };
+  putRecord('core.workspace', 'default', remounted);
+  assert.equal(api.assertPin(remounted).id, original.id);
+  assert.equal(getRecord('core.workspace', 'default').identity.dev, String(fs.statSync(selected).dev));
+  assert.equal(getRecord('core.workspace', 'default').revision, original.revision);
+  fs.renameSync(selected, selected + '-old'); fs.mkdirSync(selected);
+  assert.throws(() => api.assertPin(remounted), { code: 'WORKSPACE_CHANGED' });
 });

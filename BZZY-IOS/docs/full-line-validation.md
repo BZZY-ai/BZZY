@@ -381,3 +381,40 @@ Physical microphone permission/recognition, audible TTS and the user's saved
 pairing were not exercised by automation. The host Core must receive the new API
 through the CLI updater; this device installation does not update the running
 host. APNs delivery still depends on its separate private Apple/host setup.
+
+## Speech settings, folder recovery and updater reload build 7 (2026-10-23)
+
+The voice screen now sends on the user's deliberate release, with up to 650 ms
+for final recognition. Permission cancellation, background/navigation, failed
+recognition and reconnect cannot submit speech. Regular chat dictation keeps its
+editable draft and explicit Send. The real FFT has 64 bands, a 2,048-sample window
+and display-cadence attack/release smoothing. English/Spanish listening and Apple
+speaking voice are separate persisted settings. Terminal picker rows contain
+only their icon and alias.
+
+The host folder error was traced to a changed macOS device number with the same
+inode/path. Its existing configured directory was explicitly reconfirmed; no
+model execution, terminal-directory move or app data reset was performed. New
+folder identities include a stable volume UUID when available. Core accepts a
+verified remount of the same volume/inode and still rejects replaced directories,
+different volumes and unverifiable legacy pins. Voice readiness checks the real
+folder before capture is enabled. Core's saved model is independent of the
+separate missing-APNs warning.
+
+The CLI updater keeps its TUI visible during installation and then replaces its
+process with the updated CLI, preserving the terminal, saved chat/tab and composer
+draft. A bounded, private, one-time UI handoff contains no executable work or
+credentials. Reloading does not take another client's input lease or start
+paused work, and an explicitly stopped Core stays stopped. A preexisting old CLI
+must be reopened once after installing this updater. Tests replace an actual
+Node process, verify its PID/stdio continue, and verify draft recovery, failure
+handling, locked progress controls, private-file checks and read-only restoration.
+
+Validation: **188 Core tests**, **401 CLI tests** (21 platform/optional skips),
+**49 native Swift tests**, model checks and two focused simulator UI tests pass.
+Fifteen native macOS layouts and six open-eye expressions render. The signed
+Debug **0.1.0 (7)** artifact passes signature/identity, development APNs metadata,
+permission/privacy and shader checks; the connected phone reports build 7 after
+in-place installation. Launch was blocked by the device lock. No automated test
+records ambient microphone audio or claims audible physical-device validation.
+Actual background push still needs the private Apple APNs key/configuration.

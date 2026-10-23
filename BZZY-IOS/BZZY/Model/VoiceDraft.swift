@@ -1,5 +1,36 @@
 import Foundation
 
+enum SpeechLanguage: String, CaseIterable, Identifiable {
+    case english = "en-US", spanish = "es-ES"
+    var id: String { rawValue }
+    var name: String { self == .spanish ? "Español" : "English" }
+    static var preferred: Self { Locale.preferredLanguages.first?.hasPrefix("es") == true ? .spanish : .english }
+    static let recognitionKey = "bzzy.speech.recognition-language"
+    static let synthesisKey = "bzzy.speech.synthesis-language"
+    static var preferences: UserDefaults {
+        CommandLine.arguments.contains("--ui-testing") ? UserDefaults(suiteName: "app.bzzy.ios.voice-tests")! : .standard
+    }
+    static func resolve(_ value: String) -> Self { Self(rawValue: value) ?? preferred }
+}
+
+/// Only a deliberate release after audio began can submit a voice turn.
+/// Permission cancellation, navigation and recognition errors never submit.
+struct VoiceReleaseIntent {
+    private(set) var held = false
+    private(set) var pending = false
+    private var recorded = false
+    mutating func begin() { held = true; recorded = false; pending = false }
+    mutating func audioStarted() { if held { recorded = true } }
+    mutating func release() { held = false; pending = recorded; recorded = false }
+    mutating func cancel() { held = false; pending = false; recorded = false }
+    mutating func consume(_ text: String, busy: Bool, failed: Bool, allowed: Bool) -> String? {
+        guard pending, !busy else { return nil }
+        pending = false
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return allowed && !failed && !text.isEmpty ? text : nil
+    }
+}
+
 /// Speech revises earlier words: replace the dictated suffix, preserving typed text.
 struct VoiceDraft {
     let original: String

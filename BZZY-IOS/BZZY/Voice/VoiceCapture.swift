@@ -9,7 +9,7 @@ import Speech
 final class VoiceCapture {
     var transcript = ""
     var error: String?
-    var spectrum = [Float](repeating: 0, count: 32)
+    var spectrum = [Float](repeating: 0, count: VoiceFrequencyAnalyzer.bandCount)
     private var lifecycle = VoiceCaptureLifecycle()
     var isRecording: Bool { lifecycle.phase == .recording }
     var isStarting: Bool { lifecycle.phase == .starting }
@@ -109,7 +109,7 @@ final class VoiceCapture {
     }
 
     /// Release stops audio immediately but lets Apple deliver the final words.
-    func stop() {
+    func stop(finalizationSeconds: Double = 3) {
         if isStarting { cancel(); return }
         guard isRecording, let generation = lifecycle.id else { return }
         lifecycle.finish()
@@ -119,7 +119,7 @@ final class VoiceCapture {
         request?.endAudio()
         #endif
         deadline = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            do { try await Task.sleep(for: .seconds(max(0.1, min(3, finalizationSeconds)))) } catch { return }
             guard let self, self.lifecycle.id == generation else { return }
             // Keep the last partial if the recognizer never supplies a final result.
             self.complete(generation)
@@ -138,7 +138,7 @@ final class VoiceCapture {
     }
 
     private func cleanup() {
-        spectrum = Array(repeating: 0, count: 32)
+        spectrum = Array(repeating: 0, count: VoiceFrequencyAnalyzer.bandCount)
         deadline?.cancel(); deadline = nil
         #if os(iOS)
         stopMicrophone()

@@ -9,6 +9,8 @@ struct SettingsView: View {
     @State private var showNotifications = false
     @State private var confirmUpdate = false
     @State private var updateTarget: String?
+    @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var recognitionLanguage = SpeechLanguage.preferred.rawValue
+    @AppStorage(SpeechLanguage.synthesisKey, store: SpeechLanguage.preferences) private var synthesisLanguage = SpeechLanguage.preferred.rawValue
     @Environment(NotificationStore.self) private var notifications
 
     var body: some View {
@@ -37,6 +39,11 @@ struct SettingsView: View {
                             Image(systemName: "chevron.right").bzzyFont(11)
                         }.panel()
                     }.buttonStyle(.plain).accessibilityIdentifier("notification-settings")
+                    Eyebrow(text: "Voice")
+                    VStack(alignment: .leading, spacing: 20) {
+                        languagePicker("Listening language · STT", selection: $recognitionLanguage, identifier: "speech-recognition-language")
+                        languagePicker("Speaking voice · TTS", selection: $synthesisLanguage, identifier: "speech-synthesis-language")
+                    }.panel()
                     Eyebrow(text: "BZZY Updates")
                     VStack(alignment: .leading, spacing: 16) {
                         Text(relay.coreUpdateStatus).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
@@ -81,6 +88,14 @@ struct SettingsView: View {
                 .sheet(isPresented: $showConnection) { ConnectView() }
                 .sheet(isPresented: $showNotifications) { NotificationsView() }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
+    }
+    private func languagePicker(_ label: String, selection: Binding<String>, identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(label).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+            Picker(label, selection: selection) {
+                ForEach(SpeechLanguage.allCases) { Text($0.name).tag($0.rawValue) }
+            }.pickerStyle(.segmented).accessibilityIdentifier(identifier)
+        }
     }
     private func updatePreference(_ key: String) -> Binding<Bool> {
         Binding(get: { relay.coreUpdateSnapshot?[key].bool ?? false }, set: { value in
