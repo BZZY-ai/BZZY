@@ -10,6 +10,7 @@ import { sessions, loadSession } from './store.js';
 import { copyText } from './clipboard.js';
 import { PairingQRImage } from './pairing-qr-image.js';
 import { home } from './files.js';
+import { ModeSettings, modeSettings } from './mode-settings.js';
 
 const loadRelay = () => {
   let location;
@@ -19,6 +20,9 @@ const loadRelay = () => {
 };
 const loadHost = () => import('@bzzy/core/engine/host-service.js');
 const messages = {
+  MODE_INCOMPLETE: 'Choose a model for every agent before saving.',
+  MODE_MODEL_REQUIRED: 'Choose this agent’s model first.',
+  MODE_COUNT_INVALID: 'Choose two or three agents. Delegate always uses two.',
   HOST_ENROLLMENT_REQUIRED: 'This host needs Relay enrollment. Run bzzy-core relay init and enroll its public certificate.',
   HOST_REQUIRED: 'Relay needs this host’s public certificate enrolled by its operator.',
   BZZY_LOCKED: 'Another Core Relay gateway is running. Stop that gateway before connecting here.',
@@ -52,9 +56,19 @@ export class ClientSettings {
     this.ui = ui; this.relayLoader = relayLoader; this.workspaces = workspaces;
     this.hostLoader = hostLoader; this.hostHome = home();
     this.qrImage = qrImage;
+    this.modes = new ModeSettings(ui);
     this.message = ''; this.warning = false; this.focus = 0; this.page = 'main';
   }
   changed() { if (this.closed) return; if (this.ui.tui) this.ui.tui.settingsEnsureFocus = true; this.ui.tui?.schedule(); }
+  get pageTitle() {
+    return this.page === 'mode-edit' ? `${modeSettings[this.modes.mode].title} default`
+      : { main: 'Settings', core: 'BZZY Core', modes: 'Terminal agent setups', pair: 'Pair iPhone', approve: 'Confirm iPhone' }[this.page] || 'Settings';
+  }
+  get pageSubtitle() {
+    return { main: 'Your workspace, connections and defaults', core: 'Service and assistant · terminal presets stay independent',
+      modes: 'Saved CLI combinations · editing starts no work', 'mode-edit': 'Choose each role’s model and effort, then save',
+      pair: 'Your iPhone · full access through Core', approve: 'Compare the complete fingerprint with your iPhone' }[this.page] || '';
+  }
   focusAction(action) {
     const index = this.rows().filter(row => row.action).findIndex(row => row.action === action);
     if (index >= 0) this.focus = index;
@@ -68,6 +82,8 @@ export class ClientSettings {
   grants() { return (this.gateway?.grants() || []).filter(grant => !grant.revokedAt && grant.expiresAt > Date.now()); }
   back() {
     if (this.page === 'main' || this.busy) return false;
+    if (this.page === 'mode-edit') { this.page = 'modes'; this.focus = 0; this.message = ''; this.changed(); return true; }
+    if (this.page === 'modes') { this.page = 'core'; this.focus = 0; this.message = ''; this.changed(); return true; }
     if (this.page === 'approve') {
       this.page = 'pair'; this.#approvalRequest = undefined; this.message = ''; this.warning = false;
       this.focusAction('approve'); this.changed(); return true;
@@ -78,32 +94,35 @@ export class ClientSettings {
   }
   rows() {
     const rows = [], put = (text = '', tone = 'text', action) => rows.push({ text, tone, action });
+    if (this.page === 'modes') return this.modes.homeRows();
+    if (this.page === 'mode-edit') return this.modes.rows();
     if (this.page === 'main') {
       const key = this.keyStatus();
-      put('DeepSeek API key', 'accent', 'deepseek');
-      put(key.unavailable ? '  Unavailable' : key.environment ? '  Environment key · Enter to replace' : key.saved ? '  Configured · Enter to replace' : '  Add your key', 'muted');
-      put();
-      put('Default BZZY folder', 'accent', 'workspace-root');
-      try { put('  ' + (this.workspaces.settings().root?.path || 'Choose a folder'), 'muted'); }
-      catch { put('  Unavailable', 'warning'); }
-      put();
-      put('Pair iPhone', 'accent', 'pair');
-      put(this.pending().length ? '  iPhone waiting for approval' : this.grants().length ? '  iPhone paired' : '  Full access · QR or code', 'muted');
-      put(); put('BZZY Core' + (this.hostStatus ? ` · ${this.hostLabel()}` : ''), 'accent', 'core');
+      rows.push({ text: 'DeepSeek API key', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
+        detail: key.unavailable ? 'Unavailable' : key.environment ? 'Environment key · click to replace' : key.saved ? 'Configured · stored privately' : 'Add your key securely' });
+      let folder; try { folder = this.workspaces.settings().root?.path || 'Choose a folder'; } catch { folder = 'Unavailable'; }
+      rows.push({ text: 'Default BZZY folder', action: 'workspace-root', icon: '▱', card: true, tone: 'accent', detail: folder });
+      rows.push({ text: 'Pair iPhone', action: 'pair', icon: '⌁', card: true, tone: 'accent',
+        detail: this.pending().length ? 'iPhone waiting for approval' : this.grants().length ? 'iPhone paired' : 'Full access · QR or code' });
+      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, default assistant and terminal agent setups', value: this.hostStatus ? this.hostLabel() : undefined });
       return rows;
     }
     if (this.page === 'core') {
+      rows.push({ text: 'Background service', section: true });
       put(`Status · ${this.hostLabel()}`, 'muted', 'core-status');
       put();
       put('Start', 'accent', 'core-start');
       put('Stop', 'warning', 'core-stop');
       put('Restart', 'accent', 'core-restart');
+      rows.slice(-3).forEach(row => { row.inline = 'lifecycle'; row.control = true; });
       const assistant = (this.assistant ||= new CoreAssistant()).settings();
       if (!Object.hasOwn(this, 'coreSelection')) { this.coreSelection = assistant.selection; this.coreRevision = assistant.revision; }
-      put(); put('Default Core model · ' + (this.coreSelection ? `${this.coreSelection.provider} · ${this.coreSelection.model || 'provider default'} ▾` : 'Select model ▾'), 'accent', 'core-model');
-      put('Effort · ' + (this.coreSelection?.effort || 'default') + ' ▾', 'accent', 'core-effort');
+      rows.push({ text: 'Default Core assistant', section: true });
+      rows.push({ text: 'Model', value: this.coreSelection ? `${this.coreSelection.provider} · ${this.coreSelection.model || 'Provider default'} ▾` : 'Choose a model ▾', action: 'core-model', inline: 'agent-core', control: true });
+      rows.push({ text: 'Effort', value: (this.coreSelection?.effort || 'default') + ' ▾', action: 'core-effort', inline: 'agent-core', control: true });
       put('Save Core default', 'accent', 'core-save');
       put('Independent from the CLI chat default.', 'muted');
+      rows.push({ text: 'Terminal agent setups', action: 'modes', icon: '◎', card: true, tone: 'accent', detail: 'Debate · Parallel · Besties · Delegate' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
       const push = notificationDeliveryStatus();
       put(); put(!push.configured ? 'iPhone push alerts · Apple setup needed' : push.message, 'muted');
@@ -269,10 +288,13 @@ export class ClientSettings {
   }
   async run(action) {
     if (!this.ui.interactive || !this.ui.tui || this.ui.closed || this.closed || this.busy) return;
-    if (!this.rows().some(row => row.action === action)) return;
+    if (action !== 'modes' && !this.rows().some(row => row.action === action)) return;
     this.busy = true; this.message = ''; this.warning = false; this.changed();
     try {
-      if (action === 'workspace-root') await this.configureWorkspace();
+      if (action === 'modes') { this.page = 'modes'; this.focus = 0; }
+      else if (action.startsWith('mode:')) { this.modes.open(action.slice(5)); this.page = 'mode-edit'; this.focus = 0; }
+      else if (action.startsWith('preset-')) { const message = await this.modes.run(action); if (message) this.message = message; }
+      else if (action === 'workspace-root') await this.configureWorkspace();
       else if (action === 'deepseek') await this.saveDeepseek();
       else if (action === 'core') { delete this.coreSelection; delete this.coreRevision; this.page = 'core'; this.focus = 0; await this.refreshHost(); }
       else if (action === 'core-model') {

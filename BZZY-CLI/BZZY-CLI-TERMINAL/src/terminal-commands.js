@@ -18,7 +18,8 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 --import FILE.zip|CODE Restore a project ZIP or Relay terminal copy here; keeps work paused.
 /skill_that [name] Turn the last completed goal into SKILL.md with detailed steps and references.
 /doctor            Test the current subscription login, backend connection and model reply.
-/settings          Device enrolment, Relay status and private DeepSeek API-key setup.
+/settings          Workspace, iPhone, Core and private DeepSeek API-key setup.
+/settings modes    Save models, efforts and counts for terminal agent modes.
 bzzy settings      Open Settings directly without starting a conversation.
 bzzy doctor        Check both installed backends; add --live to test actual replies.
 
@@ -45,7 +46,7 @@ export const chatCommands = [
   { command: '/room', description: 'Show besties messages, evidence and peer reviews' },
   { command: '/activity', description: 'Show detailed agent activity' },
   { command: '/http', description: 'Show observed HTTP requests' },
-  { command: '/settings', description: 'Device enrolment and DeepSeek API key' },
+  { command: '/settings', description: 'Workspace, iPhone, Core and terminal mode defaults' },
   { command: '/copy', description: 'Select and copy text with your terminal' },
   { command: '/help', description: 'Show commands and shortcuts' },
   { command: '/new', description: 'Start a new conversation' },
@@ -62,4 +63,4 @@ export function commandSuggestions(value) {
   return chatCommands.filter(item => item.command.startsWith(value));
 }
 
-export function privateChatCommand(value) { return /^\/import(?:\s|$)/.test(String(value).trim()); }
+export function privateChatCommand(value) { return /^\/(?:import|session-action)(?:\s|$)/.test(String(value).trim()); }

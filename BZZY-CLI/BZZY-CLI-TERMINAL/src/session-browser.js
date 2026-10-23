@@ -1,5 +1,6 @@
 import { terminalSession } from '@bzzy/core';
 import { loadSession, sessions, setSessionAlias } from './store.js';
+import { shareTerminal } from './share-ui.js';
 
 export function sessionLabel(session) {
   return typeof session.alias === 'string' ? session.alias.trim() : '';
@@ -37,15 +38,16 @@ export async function chooseSavedSession(ui) {
     const aliases = new Map();
     for (const session of saved) aliases.set(sessionLabel(session), (aliases.get(sessionLabel(session)) || 0) + 1);
     const selected = await ui.chooseOne('Sessions', {
-      hint: '↑/↓ select · Enter open · Esc back',
+      hint: 'Enter open · Right-click / F10 actions · Esc back',
       descriptionRows: 1,
       choices: saved.map(session => ({ value: session.id, label: sessionLabel(session),
         ...(aliases.get(sessionLabel(session)) > 1 ? { description: session.cwd } : {}) })),
-    });
+    }, { scope: 'sessions' });
     if (selected == null) return null;
     const id = typeof selected === 'object' ? selected.value : selected;
     const session = saved.some(item => item.id === id) && loadSession(id);
     if (!session || !namedTerminalSessions([session]).length) { ui.event('info', { message: 'This named terminal is no longer available. Open Sessions to refresh.' }); return null; }
+    if (selected.action === 'share') { await shareSavedSession(ui, id); return null; }
     return { session, action: 'attach' };
   } finally {
     ui.tui?.setPanel('chat');
@@ -53,6 +55,15 @@ export async function chooseSavedSession(ui) {
     ui.sessionBrowserDrafts?.delete(sessionId);
     if (draft && ui.tui) Object.assign(ui.tui, { value: draft.value, cursor: draft.cursor });
   }
+}
+
+// A host-only client action. Loading context for sharing never attaches to a
+// session, takes its input lease or replays model work.
+export async function shareSavedSession(ui, id, { share = shareTerminal } = {}) {
+  if (ui.sessionMode === 'VIEW') throw new Error('Attach with control before sharing a terminal.');
+  const session = loadSession(id);
+  if (!session || !namedTerminalSessions([session]).length) throw new Error('Choose an existing named terminal.');
+  return share(session, ui);
 }
 
 export async function promptSessionAlias(id, argument, ui, authorize) {

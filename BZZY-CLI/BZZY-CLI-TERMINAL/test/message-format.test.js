@@ -112,8 +112,10 @@ test('TUI projects valid markup at rendering/copy boundaries and retains origina
     assert.equal(entry.text, table);
     assert.match(frame, /Summary/); assert.match(frame, /│ Item +│ Status/); assert.match(frame, /│ Review │ Pending/);
     assert.doesNotMatch(frame, /<message|<table|<span/);
-    const icon = ui.tui.hitTargets.find(hit => hit.type === 'copy-response'); assert.ok(icon);
-    ui.tui.mouse(0, icon.left, icon.row); await ui.tui.clipboardTask;
+    const reply = ui.tui.hitTargets.find(hit => hit.type === 'response'); assert.ok(reply);
+    ui.tui.mouse(2, reply.left, reply.row); ui.tui.render();
+    const copy = ui.tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 0);
+    ui.tui.mouse(0, copy.left, copy.row); await ui.tui.clipboardTask;
     assert.deepEqual(copied, ['Summary\n\nItem · Status\nReview · Pending']);
     assert.equal(entry.text, table);
   } finally { ui.close(); }

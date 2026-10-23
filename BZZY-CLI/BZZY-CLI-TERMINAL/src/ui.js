@@ -10,6 +10,7 @@ import { MESSAGE_FORMAT_LIMITS, parseMessageBody } from '@bzzy/core/message-form
 import { renderMessageContent } from './message-renderer.js';
 import { createTerminalTheme } from './terminal-theme.js';
 import { HostMetricsMonitor } from './host-metrics.js';
+import { shareSavedSession } from './session-browser.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
@@ -69,6 +70,14 @@ export class UI {
   showAccountStatus() { this.event('info', { message: accountStatusDetails(this.accountStatus) }); }
   openSettings() { this.openTerminal(); this.settings ||= new ClientSettings(this); this.tui?.setPanel('settings'); }
   async settingsCommand(input) {
+    if (/^\/session-action(?:\s|$)/.test(input)) {
+      const match = /^\/session-action share ([a-f0-9-]{36})$/.exec(input.trim());
+      try {
+        if (!match) throw new Error('Choose Share full context from a terminal’s menu.');
+        await shareSavedSession(this, match[1]);
+      } catch (error) { this.event('error', { message: error.message }); }
+      return true;
+    }
     if (input.trim() === '/update') { await updateCommand(this); return true; }
     if (await skillsCommand(input, this)) return true;
     if (!/^\/settings(?:\s|$)/.test(input)) return false;

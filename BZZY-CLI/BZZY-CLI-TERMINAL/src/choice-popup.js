@@ -1,4 +1,4 @@
-import { cellWidth, clip, wrap } from './terminal-format.js';
+import { cellWidth, clip, wrapProse as wrap } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
 import { fillSurface } from './terminal-surface.js';
 
@@ -9,7 +9,7 @@ export function visibleChoices(picker) {
 }
 
 export function choicePopup(picker, { width, height, anchor, minimumTop = 0, theme }) {
-  const dropdown = picker.presentation === 'dropdown', searchable = picker.kind === 'model';
+  const dropdown = ['dropdown', 'context'].includes(picker.presentation), searchable = picker.kind === 'model';
   const desiredWidth = Math.max(36, ...picker.choices.map(choice => cellWidth(choice.label) + 8));
   const size = Math.max(16, Math.min(width - 2, dropdown ? Math.min(62, desiredWidth) : Math.min(76, width - 6)));
   const inner = size - 2, filtered = visibleChoices(picker), found = filtered.findIndex(item => item.index === picker.focus);

@@ -112,6 +112,29 @@ test('Settings retains the host header and all four choices fit normal terminal 
   }
 });
 
+test('terminal mode settings have separate clickable model/effort fields and preserve unsaved edits through Back', async () => {
+  const { ui, output } = terminal(); ui.openSettings();
+  await ui.settingsCommand('/settings modes'); assert.equal(ui.settings.page, 'modes');
+  assert.deepEqual(ui.settings.rows().map(row => row.action), ['mode:debate', 'mode:parallel', 'mode:besties', 'mode:delegate']);
+  await ui.settings.run('mode:debate'); assert.equal(ui.settings.pageTitle, 'Debate default');
+  ui.settings.modes.modelPicker = async () => ({ provider: 'codex', model: 'fixture', effort: 'default' });
+  await ui.settings.run('preset-model:0'); assert.equal(ui.settings.modes.draft.dirty, true);
+  for (const [columns, rows] of [[80, 24], [140, 40]]) {
+    Object.assign(output, { columns, rows }); ui.settings.focusAction('preset-model:0'); ui.tui.settingsEnsureFocus = true; ui.tui.render();
+    const model = ui.tui.hitTargets.find(hit => hit.action === 'preset-model:0'), effort = ui.tui.hitTargets.find(hit => hit.action === 'preset-effort:0');
+    assert.ok(model && effort); assert.equal(model.row, effort.row); assert.ok(model.right < effort.left);
+    assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
+  }
+  ui.settings.back(); assert.equal(ui.settings.page, 'modes');
+  await ui.settings.run('mode:debate'); assert.equal(ui.settings.modes.draft.agents[0].model, 'fixture');
+  await ui.settings.run('preset-save'); assert.equal(ui.settings.warning, true); assert.match(ui.settings.message, /every agent/);
+  await ui.settings.run('preset-model:1'); await ui.settings.run('preset-save');
+  assert.equal(ui.settings.warning, false, ui.settings.message); assert.match(ui.settings.message, /2 agents/);
+  assert.equal(listRecords('execution').length, 0); assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
+  ui.settings.back(); ui.settings.back(); assert.equal(ui.settings.page, 'core'); ui.settings.back();
+  assert.deepEqual(ui.settings.rows().map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
+});
+
 test('removed Settings actions cannot change lifecycle, coordinator or identity from the compact menu', async () => {
   const { ui } = terminal(), calls = [];
   const facade = { coreHostStatus: async () => ({ running: false }),
@@ -140,7 +163,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'core-model', 'core-effort', 'core-save', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'core-model', 'core-effort', 'core-save', 'modes', 'back']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');
@@ -385,7 +408,7 @@ test('workspace Settings saves a separate managed root and preserves external te
   assert.equal(new CoreWorkspaces().settings().root.path, selected);
   assert.ok(fs.statSync(selected).isDirectory());
   assert.deepEqual(listRecords('session').map(session => ({ id: session.id, cwd: session.cwd })), before);
-  assert.match(ui.settings.rows().map(row => row.text).join('\n'), /BZZY managed/);
+  assert.match(ui.settings.rows().find(row => row.action === 'workspace-root').detail, /BZZY managed/);
   assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
   assert.equal(listRecords('execution').length, 0);
   assert.equal(fs.lstatSync(selected).isSymbolicLink(), false);
@@ -439,7 +462,7 @@ test('a damaged credential store cannot leak private parse fragments into Settin
   const term = terminal(), { ui } = term;
   fs.writeFileSync(path.join(home(), 'credentials.json'), 'fixture-private-damaged-json', { mode: 0o600 });
   ui.openSettings(); ui.tui.render();
-  assert.match(ui.settings.rows().map(row => row.text).join('\n'), /Unavailable/i);
+  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Unavailable/i);
   assert.doesNotMatch(term.written, /fixture-private-damaged-json/);
 });
 

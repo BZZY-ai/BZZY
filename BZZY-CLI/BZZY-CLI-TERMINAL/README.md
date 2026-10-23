@@ -66,6 +66,29 @@ first. Use ↑/↓ and Enter to open the existing chat and history in its origin
 directory; Esc returns without changing it. Rows show the alias, with a directory
 hint only when names repeat. Opening a session never resumes a paused goal or
 starts another execution.
+Right-click a named terminal in **Sessions** or **Recent sessions**, or right-click
+the current alias, for **Open terminal** and **Share full context**. **F10**
+(or Shift+F10) opens the same menu for the focused session. Sharing uses the
+existing complete-project Relay flow: typed confirmation, QR/expiring code and
+recipient fingerprint approval. It never attaches to the source or replays work.
+The copy includes saved chats, project files, notes, memory and execution/evidence
+context; credentials and live permissions remain excluded. Escape or an outside
+click closes the menu. Terminals that reserve right-click can use F10 instead.
+
+Chat distinguishes **YOU** in teal cards from **AGENT** replies with lavender
+rails. Right-click anywhere on an agent reply for **Copy response**, including
+replies in the shared room; no Copy button occupies the conversation. Hovering
+a reply and pressing F10 opens its menu too. Copy uses the complete reply’s
+readable body, including content outside the viewport. Labels and borders remain readable without color.
+Settings keeps its four main entries in compact cards. Open **Settings > BZZY
+Core > Terminal agent setups**, or `/settings modes`, to save each mode’s models,
+efforts and agent count. Debate, Parallel and Besties support two or three agents;
+Delegate has two roles, supervisor and executor. Model/effort fields use the Core
+catalog and floating dropdowns. Editing starts no work; Save applies to the next
+mode launch, and `--MODE --default` reuses its saved combination directly.
+Terminal mode presets stay independent from the normal chat and Core assistant
+defaults. Unsaved edits survive Back; Reload saved setup explicitly discards them.
+
 Set Core's default home for agents/managed imports with
 `bzzy-core workspace set /absolute/BZZY` or **Settings > Default BZZY folder**; this never moves or links
 existing projects. The installer provides both `bzzy` and `bzzy-core` launchers.

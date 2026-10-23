@@ -3,6 +3,8 @@ export const palette = Object.freeze({
   background: '#03090F', surface: '#0A151F', accent: '#24DFFF',
   text: '#EDF5F2', muted: '#94ADB8', border: '#1A4354', warning: '#E4BD7C',
   selection: '#0B3444', hover: '#12475A',
+  elevated: '#102331', user: '#58DFC7', userSurface: '#0B302E', userText: '#DCFFF6',
+  agent: '#B9B6FF', agentSurface: '#101B2C', success: '#7DDFAD',
 });
 
 export function colorLevel(output, env = process.env) {
@@ -21,6 +23,9 @@ const xterm = Array.from({ length: 240 }, (_, offset) => {
 });
 const basic = new Map([[palette.background, 0], [palette.surface, 0], [palette.text, 15],
   [palette.muted, 7], [palette.border, 6], [palette.accent, 14], [palette.warning, 11]]);
+basic.set(palette.user, 14); basic.set(palette.userText, 15); basic.set(palette.agent, 13);
+for (const tone of [palette.elevated, palette.userSurface, palette.agentSurface]) basic.set(tone, 0);
+basic.set(palette.success, 10);
 
 export function createTerminalTheme(output = process.stdout, env = process.env) {
   const level = colorLevel(output, env), cache = new Map();

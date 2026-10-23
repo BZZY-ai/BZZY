@@ -10,6 +10,7 @@ import { eyeMotion } from '../src/mascot.js';
 import { RunnerUI } from '../src/runtime-ui.js';
 import { events } from '../src/database.js';
 import { commandSuggestions } from '../src/terminal-commands.js';
+import { palette, createTerminalTheme } from '../src/terminal-theme.js';
 
 const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 function terminal() {
@@ -19,6 +20,61 @@ function terminal() {
   const ui = new UI({ input, output, error: output }); ui.setSession(sessionId);
   return { ui, input, output, get written() { return written; } };
 }
+test('user cards and agent replies retain distinct roles in RGB, basic-color and monochrome terminals', () => {
+  const { ui, output } = terminal();
+  try {
+    for (const level of ['3', '1', '0']) {
+      ui.tui.theme = createTerminalTheme(output, { FORCE_COLOR: level }); ui.tui.entryLayouts = new WeakMap();
+      const user = ui.tui.entryLayout({ kind: 'user', text: 'Review the café 🐝 and 漢字 layout.', goal: true }, 66).lines;
+      const agent = ui.tui.entryLayout({ kind: 'assistant', label: 'Codex', text: 'I checked the layout.\nThe saved history stays intact.' }, 66).lines;
+      assert.match(user.map(clean).join('\n'), /YOU · \/goal/); assert.match(agent.map(clean).join('\n'), /AGENT · Codex/);
+      assert.doesNotMatch(agent.map(clean).join('\n'), /\[Copy\]/);
+      assert.ok([...user, ...agent].every(line => cellWidth(line) <= 66));
+      assert.ok(user.map(clean).some(line => line.trim().startsWith('╭')));
+      if (level === '0') assert.doesNotMatch([...user, ...agent].join(''), /\x1b/);
+      else {
+        assert.ok(user.join('').includes(ui.tui.theme.foreground(palette.user)));
+        assert.ok(agent.join('').includes(ui.tui.theme.foreground(palette.agent)));
+        assert.notEqual(ui.tui.theme.foreground(palette.user), ui.tui.theme.foreground(palette.agent));
+      }
+    }
+  } finally { ui.close(); }
+});
+test('prose wraps at word boundaries and cached Unicode streaming matches a fresh layout', () => {
+  const { ui } = terminal();
+  try {
+    const entry = { kind: 'assistant', text: '' };
+    const text = 'Review the café 🐝 and 漢字 layout with longer prose.\nAReallyLongTokenWithoutSpaces1234567890 and the next sentence.';
+    for (const character of text) {
+      entry.text += character;
+      assert.deepEqual(ui.tui.entryLayout(entry, 35).lines, ui.tui.entryLayout({ ...entry }, 35).lines);
+    }
+    const rows = ui.tui.entryLayout({ kind: 'user', text: 'Keep all these words readable when the terminal is compact.' }, 50).lines.map(clean);
+    assert.ok(rows.some(line => line.includes('these words')));
+  } finally { ui.close(); }
+});
+test('right-click on a reply body offers Copy response while left-click selection, draft and cancel stay local', async () => {
+  const { ui } = terminal(), copied = [];
+  ui.clipboard = { async copyText(text) { copied.push(text); return { copied: true, method: 'native' }; } };
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.value = 'My draft'; ui.tui.cursor = 8;
+    ui.event('text', { text: 'Complete response body.', itemId: 'copy-context' }); ui.tui.render();
+    ui.openSettings(); ui.tui.render(); ui.tui.setPanel('chat'); ui.tui.render();
+    assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /\[Copy\]|\[c\]/);
+    let body = ui.tui.hitTargets.filter(hit => hit.type === 'response').at(-1);
+    ui.tui.mouse(0, body.left + 3, body.row); assert.equal(copied.length, 0); assert.ok(ui.tui.textSelection);
+    ui.tui.mouse(0, body.left + 3, body.row, true);
+    ui.tui.mouse(2, body.left + 3, body.row); ui.tui.render(); assert.equal(ui.tui.selection.scope, 'response-menu');
+    assert.equal(copied.length, 0); ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.value, 'My draft');
+    ui.tui.render(); body = ui.tui.hitTargets.filter(hit => hit.type === 'response').at(-1);
+    ui.tui.mouse(32, body.left + 3, body.row); ui.tui.key('', { name: 'f10' }); assert.equal(ui.tui.selection.scope, 'response-menu');
+    ui.event('text', { text: ' Latest streaming addition.', itemId: 'copy-context' });
+    ui.tui.key('', { name: 'return' }); await ui.tui.clipboardTask;
+    assert.deepEqual(copied, ['Complete response body. Latest streaming addition.']);
+    assert.equal(ui.tui.value, 'My draft'); assert.equal(ui.tui.inputQueue.length, 0); assert.equal(ui.tui.entries.length, 1);
+    ui.reader.close(); await answer;
+  } finally { ui.close(); }
+});
 test('a disabled Continue row stays visible and cannot confirm an incomplete parallel selection', async () => {
   const { ui } = terminal();
   try {
@@ -213,8 +269,10 @@ test('overview peer replies keep native identity and copy complete interleaved r
     assert.equal(answers.length, 3);
     assert.deepEqual(answers.map(entry => entry.text), ['**First peer** complete answer.', '**Second peer** independent answer.', 'A distinct later reply.']);
     ui.tui.render(); ui.tui.scroll = ui.tui.scrollbar.maximum; ui.tui.render();
-    const icon = ui.tui.hitTargets.find(hit => hit.type === 'copy-response' && hit.entry.peerSessionId === 'peer-session-a'); assert.ok(icon);
-    ui.tui.mouse(0, icon.left, icon.row); await ui.tui.clipboardTask;
+    const reply = ui.tui.hitTargets.find(hit => hit.type === 'response' && hit.entry.peerSessionId === 'peer-session-a'); assert.ok(reply);
+    ui.tui.mouse(2, reply.left, reply.row); ui.tui.render();
+    const copy = ui.tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 0);
+    ui.tui.mouse(0, copy.left, copy.row); await ui.tui.clipboardTask;
     assert.deepEqual(copied, ['**First peer** complete answer.']);
     assert.equal(ui.tui.entries.length, 3, 'copying does not create a chat message');
   } finally {
@@ -267,8 +325,10 @@ test('besties has a shared room for deduplicated messages and evidence reviews w
     }
     Object.assign(output, { columns: 100, rows: 32 }); ui.tui.render(); ui.tui.scroll = ui.tui.scrollbar.maximum; ui.tui.render();
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /codex · 1 → codex · 2/);
-    const icon = ui.tui.hitTargets.find(hit => hit.type === 'copy-response'); assert.ok(icon);
-    ui.tui.mouse(0, icon.left + 1, icon.row); await ui.tui.clipboardTask;
+    const reply = ui.tui.hitTargets.find(hit => hit.type === 'response'); assert.ok(reply);
+    ui.tui.mouse(2, reply.left + 1, reply.row); ui.tui.render();
+    const copy = ui.tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 0);
+    ui.tui.mouse(0, copy.left, copy.row); await ui.tui.clipboardTask;
     assert.deepEqual(copied, ['The local parser accepts this candidate. Please inspect my recorded evidence.']);
     ui.tui.setPanel('chat'); ui.tui.key('', { name: 'g', ctrl: true }); assert.equal(ui.tui.panel, 'room');
     ui.tui.setPanel('chat'); ui.tui.value = '/room'; ui.tui.cursor = 5; ui.tui.key('\r', { name: 'return' });

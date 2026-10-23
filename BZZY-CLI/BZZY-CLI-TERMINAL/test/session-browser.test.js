@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { createSession, saveSession, loadSession, sessions, findSession, setSessionAlias, sessionPath } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
-import { chooseSavedSession, namedTerminalSessions, promptSessionAlias, queueSessionBrowser } from '../src/session-browser.js';
+import { chooseSavedSession, namedTerminalSessions, promptSessionAlias, queueSessionBrowser, shareSavedSession } from '../src/session-browser.js';
 import { attachSession, viewSession, watchRegistry } from '../src/runtime-client.js';
 import { UI } from '../src/ui.js';
 import { parseArgs } from '../src/cli.js';
@@ -33,6 +33,51 @@ test.afterEach(async () => {
   for (let index = 0; index < 100 && info && identityAlive(info.identity); index++) await new Promise(resolve => setTimeout(resolve, 20));
   for (const [key, value] of Object.entries(previous)) if (value == null) delete process.env[key]; else process.env[key] = value;
   fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test('right-click and F10 offer a named terminal menu without attaching, executing or losing the Sessions picker', async () => {
+  const selected = createSession(BUILTINS.codex, work, null, 'Full context');
+  const input = new PassThrough(); Object.assign(input, { isTTY: true, setRawMode() {} });
+  const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 40, columns: 140 }); output.resume();
+  const ui = new UI({ input, output, error: output }); ui.setSession(selected.id); ui.updateSession(selected);
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.value = 'unsent draft'; ui.tui.cursor = 12;
+    ui.tui.render(); const alias = ui.tui.hitTargets.find(hit => hit.type === 'alias');
+    ui.tui.mouse(2, alias.left, alias.row); ui.tui.render();
+    assert.equal(ui.tui.selection.scope, 'session-menu'); assert.equal(ui.tui.inputQueue.length, 0);
+    assert.equal(ui.tui.value, 'unsent draft'); assert.equal(listRecords('execution').length, 0);
+    ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.selection == null, true);
+    ui.tui.key('', { name: 'f10' }); ui.tui.render();
+    const share = ui.tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 1);
+    ui.tui.mouse(0, share.left, share.row);
+    assert.equal(await answer, `/session-action share ${selected.id}`);
+    assert.equal(ui.tui.history.some(item => item.startsWith('/session-action')), false);
+    ui.ask = async prompt => {
+      assert.match(prompt, /Type SHARE/);
+      assert.match(ui.privateView.lines.join('\n'), /full chats.*memory.*evidence/);
+      return null;
+    };
+    assert.equal(await ui.settingsCommand(`/session-action share ${selected.id}`), true);
+    assert.equal(ui.privateView, undefined); assert.equal(listRecords('execution').length, 0);
+    const picker = ui.chooseOne('Sessions', [{ value: selected.id, label: selected.alias }], { scope: 'sessions' });
+    await Promise.resolve(); ui.tui.render(); const parent = ui.tui.selection;
+    ui.tui.key('', { name: 'f10' }); ui.tui.render(); assert.equal(ui.tui.selection.scope, 'session-menu');
+    ui.tui.mouse(0, 1, 1); assert.equal(ui.tui.selection, parent);
+    ui.tui.key('', { name: 'f10' }); ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'return' });
+    assert.deepEqual(await picker, { value: selected.id, action: 'share' });
+  } finally { ui.close(); }
+});
+
+test('sharing a saved terminal selects its original full-context source and rejects unnamed, internal or read-only sessions', async () => {
+  const selected = createSession(BUILTINS.codex, work, null, 'Project');
+  const unnamed = createSession(BUILTINS.codex, elsewhere);
+  const child = createSession(BUILTINS.codex, work, null, 'Child'); child.parentSessionId = selected.id; saveSession(child);
+  const before = events(selected.id), calls = [], ui = { sessionId: unnamed.id, sessionMode: 'CONTROL' };
+  await shareSavedSession(ui, selected.id, { share: async (source, target) => { calls.push(source); assert.equal(target, ui); } });
+  assert.equal(calls[0].id, selected.id); assert.equal(calls[0].cwd, work); assert.equal(ui.sessionId, unnamed.id);
+  assert.deepEqual(events(selected.id), before); assert.equal(listRecords('execution').length, 0);
+  for (const id of [unnamed.id, child.id, '00000000-0000-0000-0000-000000000000']) await assert.rejects(shareSavedSession(ui, id), /named terminal/);
+  ui.sessionMode = 'VIEW'; await assert.rejects(shareSavedSession(ui, selected.id), /control/);
 });
 
 test('aliases identify the original session and its directory without changing its history', () => {

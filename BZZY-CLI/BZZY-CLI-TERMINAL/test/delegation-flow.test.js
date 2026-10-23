@@ -151,10 +151,12 @@ test('each assistant copy icon copies its full latest response in read-only view
     const full = '**Supported conclusion**\n' + Array.from({ length: 40 }, (_, index) => `Evidence line ${index} with original markdown.`).join('\n');
     ui.event('text', { text: full, itemId: 'long-answer' }); ui.tui.render();
     ui.tui.scroll = ui.tui.scrollbar.maximum; ui.tui.render();
-    let icon = ui.tui.hitTargets.find(hit => hit.type === 'copy-response'); assert.ok(icon);
+    const reply = ui.tui.hitTargets.find(hit => hit.type === 'response'); assert.ok(reply);
     assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /Evidence line 39/);
     ui.event('text', { text: '\nLast streaming addition.', itemId: 'long-answer' });
-    ui.tui.mouse(0, icon.left, icon.row); await ui.tui.clipboardTask;
+    ui.tui.mouse(2, reply.left, reply.row); ui.tui.render();
+    const copy = ui.tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 0);
+    ui.tui.mouse(0, copy.left, copy.row); await ui.tui.clipboardTask;
     assert.deepEqual(copied, [full + '\nLast streaming addition.']);
     ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Copy request sent/);
   } finally { ui.close(); }
