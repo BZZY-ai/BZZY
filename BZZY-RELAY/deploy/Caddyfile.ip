@@ -1,0 +1,21 @@
+# Use a public IP certificate when no DNS name is available. Replace the reserved
+# documentation IP with the VPS address. Requires a current Caddy build.
+https://192.0.2.1 {
+    tls {
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+            profile shortlived
+        }
+    }
+    handle /v1/socket {
+        reverse_proxy 127.0.0.1:8787 {
+            stream_close_delay 5s
+        }
+    }
+    handle /healthz {
+        reverse_proxy 127.0.0.1:8787
+    }
+    handle {
+        respond 404
+    }
+}

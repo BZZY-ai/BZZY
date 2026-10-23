@@ -50,8 +50,4 @@ export function wrap(value, width, limit = Infinity) {
   return lines;
 }
 export const color = (text, code, bold = false) => `\x1b[${bold ? '1;' : ''}38;5;${code}m${text}\x1b[22;39m`;
-export function duration(seconds) {
-  const total = Math.max(0, Math.floor(seconds));
-  return [Math.floor(total / 3600), Math.floor(total / 60) % 60, total % 60]
-    .map(value => String(value).padStart(2, '0')).join(':');
-}
+export { duration } from '@bzzy/core/engine/format-duration.js';

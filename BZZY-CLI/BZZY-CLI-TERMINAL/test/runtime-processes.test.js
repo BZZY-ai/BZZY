@@ -6,13 +6,13 @@ import { randomUUID, createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { root } from '../src/process.js';
-import { ensureRuntime, runtimeRequest, runtimeInfo } from '../src/runtime.js';
+import { ensureRuntime, runtimeRequest, runtimeInfo, executeJob } from '../src/runtime.js';
 import { createSession, loadSession, saveSession } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
 import { prepareTask } from '../src/task.js';
-import { events, getRecord, putRecord } from '../src/database.js';
+import { events, getRecord, putRecord, listRecords } from '../src/database.js';
 import { processIdentity, identityAlive, signalProcess } from '../src/recovery.js';
-import { requestExecutionStop, superviseExecutions } from '../src/runtime-processes.js';
+import { reserveExecutionLaunch, recordExecutionProcess, requestExecutionStop, superviseExecutions } from '../src/runtime-processes.js';
 import { newGoal } from '../src/goals.js';
 
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CLAUDE_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_BOOT_FILE', 'BZZY_TEST_BACKEND_FILE', 'BZZY_TEST_LOG', 'NODE_OPTIONS', 'DEEPSEEK_API_KEY', 'PATH'];
@@ -93,6 +93,56 @@ test('stopping queued chat never launches it or changes an older completed goal'
   requestExecutionStop(session.id, randomUUID(), 'pause'); superviseExecutions();
   assert.equal(getRecord('execution', job.id).exitCode, 130); assert.equal(loadSession(session.id).goal.status, 'complete');
   assert.equal(fs.existsSync(process.env.BZZY_TEST_LOG), false);
+});
+
+test('a stale scheduler candidate cannot resurrect a cancelled queued execution', () => {
+  const session = createSession(BUILTINS.claude, work); session.goal = newGoal('Cancelled group task'); saveSession(session);
+  const job = { id: randomUUID(), sessionId: session.id, goal: true, state: 'queued', createdAt: new Date().toISOString() };
+  putRecord('execution', job.id, job);
+  const candidate = listRecords('execution', { state: 'queued' })[0];
+  requestExecutionStop(session.id, randomUUID(), 'cancel'); superviseExecutions();
+  const cancelled = getRecord('execution', job.id);
+  assert.equal(cancelled.state, 'stopped'); assert.equal(cancelled.exitCode, 130);
+  assert.equal(reserveExecutionLaunch(candidate.id, path.join(dir, 'must-not-launch.log')), null);
+  assert.deepEqual(getRecord('execution', job.id), cancelled);
+  assert.equal(loadSession(session.id).goal.status, 'cancelled');
+  assert.equal(events(session.id).filter(event => event.type === 'execution.finished').length, 1);
+  assert.equal(fs.existsSync(process.env.BZZY_TEST_LOG), false);
+});
+
+test('cancellation after launch reservation prevents runner acquisition and backend execution', async () => {
+  const session = createSession(BUILTINS.claude, work); session.goal = newGoal('Cancelled before runner starts'); saveSession(session);
+  const job = { id: randomUUID(), sessionId: session.id, goal: true, state: 'queued', createdAt: new Date().toISOString() };
+  putRecord('execution', job.id, job);
+  assert.equal(reserveExecutionLaunch(job.id, path.join(dir, 'must-not-start.log')).state, 'launching');
+  assert.equal(reserveExecutionLaunch(job.id, path.join(dir, 'duplicate.log')), null, 'only one launch reservation may acquire a queued job');
+  requestExecutionStop(session.id, randomUUID(), 'cancel');
+  const stopping = getRecord('execution', job.id);
+  assert.equal(await executeJob(job.id), 0);
+  assert.deepEqual(getRecord('execution', job.id), stopping, 'a runner must not acquire or clear a pending cancellation');
+  assert.equal(events(session.id).some(event => event.type === 'execution.started'), false);
+  assert.equal(fs.existsSync(process.env.BZZY_TEST_LOG), false);
+  superviseExecutions();
+  assert.equal(getRecord('execution', job.id).exitCode, 130);
+  assert.equal(loadSession(session.id).goal.status, 'cancelled');
+});
+
+test('late runner identification preserves cancellation instead of restoring a stale launch state', () => {
+  const session = createSession(BUILTINS.claude, work); session.goal = newGoal('Cancelled during runner identification'); saveSession(session);
+  const job = { id: randomUUID(), sessionId: session.id, goal: true, state: 'queued', createdAt: new Date().toISOString() };
+  putRecord('execution', job.id, job);
+  assert.equal(reserveExecutionLaunch(job.id, path.join(dir, 'must-not-start.log')).state, 'launching');
+  const runner = processIdentity();
+  requestExecutionStop(session.id, randomUUID(), 'cancel'); superviseExecutions();
+  const cancelled = getRecord('execution', job.id);
+  assert.equal(cancelled.state, 'stopped'); assert.equal(cancelled.exitCode, 130);
+  assert.deepEqual(recordExecutionProcess(job.id, { runner }), { ...cancelled, runner });
+  const exited = { runnerExitedAt: new Date().toISOString(), runnerExitCode: 0, runnerExitSignal: null };
+  assert.deepEqual(recordExecutionProcess(job.id, exited), { ...cancelled, runner, ...exited });
+  assert.equal(recordExecutionProcess(job.id, { state: 'running', stopAction: null }).state, 'stopped', 'process metadata cannot change execution state');
+  assert.equal(getRecord('execution', job.id).stopAction, 'cancel');
+  assert.equal(loadSession(session.id).goal.status, 'cancelled');
+  assert.equal(events(session.id).filter(event => event.type === 'execution.finished').length, 1);
 });
 
 test('a cooperative pause is consumed and cannot interrupt the following reply', async () => {

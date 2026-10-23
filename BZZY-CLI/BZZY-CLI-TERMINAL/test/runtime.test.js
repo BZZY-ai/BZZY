@@ -134,11 +134,10 @@ test('model changes preserve the goal and native thread, reject active or unowne
   assert.equal(events(session.id, 0, 1000).filter(event => event.type === 'model.changed').length, 2);
 });
 test('attached chats process the plural models shortcut before exiting without inference', async () => {
-  const session = makeSession(), inputs = ['/telegram off', '/telegram status', '/models attached-model', '/exit'];
+  const session = makeSession(), inputs = ['/models attached-model', '/exit'];
   const ui = { interactive: true, cursors: new Map(), setSession() {}, event() {}, updateSession() {}, async ask() { return inputs.shift(); } };
   assert.equal(await attachSession(session, {}, ui), 0);
   assert.equal(loadSession(session.id).model, 'attached-model');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'private', 'config.json'))).notifications.telegram.enabled, false);
   assert.equal(fs.existsSync(path.join(dir, 'backend.jsonl')), false);
 });
 test('an idle terminal observes and completes replies started by another input channel', async () => {

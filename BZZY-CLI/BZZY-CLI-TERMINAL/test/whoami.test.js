@@ -18,7 +18,7 @@ test('--whoami prints a detailed text reference before setup without starting ba
     for (const mode of ['--parallel', '--debate', '--delegate', '--besties', '--default']) assert.ok(result.stdout.includes(mode));
     for (const topic of ['bzzy.sqlite', 'credentials.json', 'goal-history', 'defaultSelection', 'parallelDefault', 'debateDefault', 'bestiesDefault',
       'delegateDefault', 'HH:MM:SS', 'awaiting_review', 'BRAIN', 'HANDS', 'BzzyClient', '/v1/sessions/ID/events', 'Idempotency-Key',
-      'read-only', 'context-file', 'autoAttach', 'WHOAMI.md']) assert.ok(result.stdout.includes(topic), `Missing ${topic}`);
+      'read-only', 'context-file', 'sandbox-exec', 'WHOAMI.md']) assert.ok(result.stdout.includes(topic), `Missing ${topic}`);
     assert.ok(result.stdout.includes(JSON.stringify(home))); assert.ok(result.stdout.includes(JSON.stringify(directory)));
     assert.ok(result.stdout.length > 20000, 'the output is a full integration reference');
     assert.doesNotMatch(result.stdout, /whoami-api-secret-sentinel|whoami-bot-secret-sentinel|\x1b/);

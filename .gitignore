@@ -1,0 +1,55 @@
+# Dependencies and generated output
+node_modules/
+.build/
+.swiftpm/
+DerivedData/
+previews/
+coverage/
+artifacts/
+.bzzy-runtime/
+.bzzy-package/
+*.tgz
+*.zip
+*.xcresult/
+*.xcarchive/
+*.app/
+*.ipa
+*.dSYM/
+
+# Local accounts, runtime state and private deployment notes
+.env
+.env.*
+.bzzy/
+.codex/
+.claude/
+.relay-state/
+*.sqlite*
+*.db
+*.identity.json
+credentials.json
+auth.json
+connect.txt
+*.key
+*.pem
+*.p8
+*.p12
+*.pfx
+*.mobileprovision
+*.log
+
+# Editor and macOS metadata
+.DS_Store
+._*
+xcuserdata/
+*.xcuserstate
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Superseded scratch/planning files
+idea.txt
+/1.txt
+/2.txt
+/3.txt

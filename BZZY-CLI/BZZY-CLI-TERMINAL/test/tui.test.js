@@ -133,27 +133,45 @@ test('weekly quotas stay in the header and Activity shows readable progress with
     }
   } finally { ui.close(); }
 });
-test('Telegram controls stay visible while its message log scrolls, mask tokens and work by keyboard and mouse', async () => {
-  const { ui, output } = terminal();
+test('the same eyes, model, tokens and host metrics remain above Settings, panels and pickers', async () => {
+  const term = terminal(), { ui, output } = term;
   try {
-    ui.accountStatusEnabled = true;
-    ui.telegramState = { configured: true, tokenConfigured: true, chatId: '42', goalNotifications: true, attached: true, attachedSessionId: sessionId, status: 'connected' };
-    ui.refreshTelegramState = () => {};
-    ui.tui.setPanel('telegram');
-    for (let index = 0; index < 30; index++) ui.event('telegram.message', { id: String(index), direction: 'incoming', status: 'received', text: 'Chat message ' + index });
+    ui.updateSession({ id: sessionId, provider: 'codex', model: 'chosen-model', selectedEffort: 'high', cwd: '/project',
+      executionState: 'idle', usage: { tokens: 1234, available: true } });
+    ui.hostMetricsEnabled = true;
+    ui.hostMetricsMonitor = { close() {} };
+    ui.hostMetrics = { host: { cpuPercent: 12, memory: { totalBytes: 16 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 } }, core: { rssBytes: 80 * 1024 ** 2 } };
+    ui.settings = { page: 'main', focus: 0, message: '', close() {}, rows: () => [
+      { text: 'DeepSeek API key', action: 'deepseek' },
+      { text: 'Default BZZY folder', action: 'workspace-root' },
+      { text: 'Pair iPhone', action: 'pair' },
+    ] };
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
-      Object.assign(output, { columns, rows }); ui.tui.render();
-      const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /\[x\] Goal notifications/); assert.match(frame, /\[x\] Attach Telegram/);
-      assert.match(frame, /saved · hidden/); assert.match(frame, /Message/); assert.match(frame, new RegExp(sessionId));
-      assert.ok(ui.tui.scrollbar.maximum > 0);
-      ui.tui.scroll = 15; ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /\[x\] Goal notifications/);
+      Object.assign(output, { columns, rows });
+      let expected;
+      for (const panel of ['chat', 'activity', 'http', 'settings']) {
+        ui.tui.setPanel(panel); ui.tui.render();
+        const frame = ui.tui.lastFrame.map(clean);
+        const boundary = frame.findIndex(line => /^─+$/.test(line));
+        const header = frame.slice(0, boundary + 1);
+        if (expected) assert.deepEqual(header, expected, 'screen changes only replace the lower region'); else expected = header;
+        assert.match(header.join('\n'), /chosen-model/); assert.match(header.join('\n'), /1,234 tokens/);
+        assert.match(header.join('\n'), /CPU.*12.*RAM.*4.0\/16 GB/);
+        assert.ok(ui.tui.eyeRegion && header.some(line => /[\u2800-\u28ff]/u.test(line)));
+        assert.equal(frame.length, rows);
+      }
+      const picker = ui.chooseOne('Named sessions', { choices: [{ value: 'named', label: 'My Project' }] });
+      await Promise.resolve(); ui.tui.render();
+      assert.deepEqual(ui.tui.lastFrame.map(clean).slice(0, expected.length), expected);
+      ui.tui.key('', { name: 'escape' }); await picker;
+      const before = term.written.length;
+      ui.privateView = { title: 'Share project', lines: ['Private fixture'] }; ui.tui.render();
+      const privateFrame = clean(term.written.slice(before));
+      assert.match(privateFrame, /chosen-model/); assert.match(privateFrame, /1,234 tokens/); assert.match(privateFrame, /CPU.*RAM/);
+      assert.ok(ui.tui.eyeRegion); assert.equal(ui.tui.lastFrame.length, 0, 'private content stays out of frame caches');
+      ui.tui.animationTime = 2; ui.tui.paintEyes(); assert.equal(ui.tui.lastFrame.length, 0);
+      ui.privateView = null;
     }
-    let answer = ui.ask('bzzy › '); await Promise.resolve();
-    ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' }); assert.equal(await answer, '/telegram detach');
-    answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.render();
-    const setup = ui.tui.hitTargets.find(hit => hit.command === '/telegram pair'); assert.ok(setup);
-    ui.tui.mouse(0, setup.left + 2, setup.row); assert.equal(await answer, '/telegram pair');
   } finally { ui.close(); }
 });
 test('agent tabs preserve drafts and retain separate activity and HTTP panels', async () => {
@@ -309,7 +327,7 @@ test('slash suggestions filter, complete without switching agent tabs, and keep 
     input.write('/'); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
     assert.ok(frame.includes('/models'));
-    for (const command of ['/debate', '/models', '/providers', '/default', '/telegram']) assert.ok(commandSuggestions('/').some(item => item.command === command));
+    for (const command of ['/debate', '/models', '/providers', '/default', '/doctor']) assert.ok(commandSuggestions('/').some(item => item.command === command));
     const eyeRows = ui.tui.lastFrame.flatMap((line, index) => /[\u2800-\u28ff]/u.test(clean(line)) ? [index] : []);
     assert.ok(eyeRows.length >= 5, 'the header has enough terminal pixels for the larger eyes');
     assert.ok(eyeRows.every(index => index < ui.tui.eyeRegion.top + ui.tui.eyeRegion.rows), 'the mascot stays in the header');
@@ -318,11 +336,11 @@ test('slash suggestions filter, complete without switching agent tabs, and keep 
     assert.equal(ui.tui.value, '/models '); assert.equal(tabSwitches, 0);
     ui.tui.key('', { name: 'u', ctrl: true }); input.write('/http\r');
     assert.equal(ui.tui.panel, 'http'); assert.ok(ui.tui.resolveInput, 'a local panel command leaves the chat prompt open');
-    input.write('/te'); ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.completions().length, 0);
-    input.write('l'); assert.equal(ui.tui.completions()[0].command, '/telegram');
+    input.write('/do'); ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.completions().length, 0);
+    input.write('c'); assert.equal(ui.tui.completions()[0].command, '/doctor');
     Object.assign(output, { columns: 80, rows: 24 }); ui.event('message.user', { text: 'Keep this question pinned' }); ui.tui.render();
     const smaller = ui.tui.lastFrame.map(clean).join('\n'); assert.match(smaller, /Keep this question pinned/); assert.match(smaller, new RegExp(sessionId));
-    ui.tui.key('', { name: 'u', ctrl: true }); input.write('/telegram of\r'); assert.equal(await answer, '/telegram off');
+    ui.tui.key('', { name: 'u', ctrl: true }); input.write('/goal status\r'); assert.equal(await answer, '/goal status');
   } finally { ui.close(); }
 });
 test('Left and Right adjust only the focused model effort and confirmation returns both settings', async () => {
@@ -364,12 +382,12 @@ test('mouse reports click views, scroll and drag the right scrollbar without bec
     const chosen = ui.chooseOne('Choose provider', [{ value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude' }]); await Promise.resolve(); ui.tui.render();
     const row = ui.tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 1); mouse(0, row.left + 1, row.row); ui.tui.render();
     const confirm = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); mouse(0, confirm.left + 1, confirm.row); assert.equal(await chosen, 'claude');
-    const secret = ui.secret('Telegram bot token (hidden): '); await Promise.resolve(); input.write('123:fixture');
+    const secret = ui.secret('Provider API key (hidden): '); await Promise.resolve(); input.write('123:fixture');
     // SGR packets may arrive split across reads; their coordinates must stay out of secrets.
     input.write('\x1b[<64;'); input.write('30;10M'); ui.tui.render();
     assert.equal(ui.tui.value, '123:fixture'); assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /123:fixture/);
     input.write('\r'); assert.equal(await secret, '123:fixture'); assert.ok(!ui.tui.history.includes('123:fixture'));
-    const cancelledSecret = ui.secret('Telegram bot token (hidden): '); await Promise.resolve(); input.write('123:discarded');
+    const cancelledSecret = ui.secret('Provider API key (hidden): '); await Promise.resolve(); input.write('123:discarded');
     input.write('\x1b'); await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(await cancelledSecret, null); ui.tui.render();
     assert.equal(ui.tui.value, 'unsent draft'); assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /123:discarded/);

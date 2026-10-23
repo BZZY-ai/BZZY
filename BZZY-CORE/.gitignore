@@ -1,0 +1,12 @@
+node_modules/
+.bzzy-package/
+coverage/
+._*
+.DS_Store
+.env
+.env.*
+*.identity.json
+*.sqlite*
+credentials.json
+*.key
+*.pem

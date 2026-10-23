@@ -1,25 +1,41 @@
 import readline from 'node:readline';
 import { TerminalChat } from './tui.js';
-import { clean } from './terminal-format.js';
+import { clean, cellWidth, clip } from './terminal-format.js';
 import { AccountStatusMonitor, accountStatusDetails } from './account-status.js';
-import { telegramViewState } from './telegram-state.js';
+import { ClientSettings } from './client-settings.js';
+import { Pet } from './mascot.js';
+import { MESSAGE_FORMAT_LIMITS, parseMessageBody } from '@bzzy/core/message-format';
+import { renderMessageContent } from './message-renderer.js';
+import { createTerminalTheme } from './terminal-theme.js';
+import { HostMetricsMonitor } from './host-metrics.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, input = process.stdin, output = process.stdout, error = process.stderr } = {}) {
+  constructor({ json = false, pet = true, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader } = {}) {
     this.json = json;
     this.pet = pet;
     this.input = input;
     this.output = output;
     this.error = error;
     this.interactive = Boolean(input.isTTY && output.isTTY && !json);
+    this.hostMetricsEnabled = hostMetrics && this.interactive;
+    this.metricsLoader = metricsLoader;
     this.lineOpen = false;
     this.reader = null;
     this.promptQueue = Promise.resolve();
     this.cursors = new Map();
+    this.messageStreams = new Map();
   }
 
-  openTerminal() { if (this.interactive) this.tui ||= new TerminalChat(this); }
+  openTerminal() {
+    if (!this.interactive) return;
+    this.tui ||= new TerminalChat(this);
+    if (this.hostMetricsEnabled && !this.hostMetricsMonitor && !this.closed) {
+      this.hostMetricsMonitor = new HostMetricsMonitor(sample => { this.hostMetrics = sample; this.tui?.schedule(); },
+        this.metricsLoader ? { load: this.metricsLoader } : {}).start();
+    }
+  }
+  executionIndicator(enabled = true) { return new Pet(this, enabled); }
 
   setSession(id, mode = 'CONTROL') {
     if (this.sessionId !== id) { this.tabs = null; this.activeTab = null; this.tui?.clear(); }
@@ -40,18 +56,16 @@ export class UI {
       this.accountMonitor ||= new AccountStatusMonitor(status => { this.accountStatus = status; this.tui?.schedule(); });
       this.accountMonitor.update(snapshot.session || snapshot);
     }
-    if (this.telegramSupportEnabled && Date.now() - (this.telegramRefreshedAt || 0) > 1000) this.refreshTelegramState();
-  }
-  refreshTelegramState() {
-    this.telegramRefreshedAt = Date.now();
-    const state = telegramViewState(this.activeTab || this.sessionId);
-    if (JSON.stringify(state) !== JSON.stringify(this.telegramState)) { this.telegramState = state; if (this.tui) { this.tui.contentRevision = (this.tui.contentRevision || 0) + 1; this.tui.schedule(); } }
-    if (state.attachedSessionId && this.telegramSupportEnabled && !this.telegramRelayStarted) {
-      this.telegramRelayStarted = true;
-      import('./telegram-bridge.js').then(module => module.ensureTelegramBridge()).catch(error => { this.event('error', { message: error.message }); });
-    }
   }
   showAccountStatus() { this.event('info', { message: accountStatusDetails(this.accountStatus) }); }
+  openSettings() { this.openTerminal(); this.settings ||= new ClientSettings(this); this.tui?.setPanel('settings'); }
+  async settingsCommand(input) {
+    if (!/^\/settings(?:\s|$)/.test(input)) return false;
+    this.openSettings();
+    const action = input.slice(9).trim();
+    if (action) await this.settings.run(action);
+    return true;
+  }
   async chooseMany(title, choices) {
     if (this.tui) return this.tui.chooseMany(title, choices);
     return choices.filter(choice => choice.selected).map(choice => choice.value);
@@ -70,13 +84,15 @@ export class UI {
     if (type === 'account.quota') this.accountMonitor?.accept(data);
     if (this.tui) { this.tui.event(type, data); return; }
     if (this.json) { this.output.write(`${JSON.stringify({ type, ...data })}\n`); return; }
-    if (type === 'text') { const text = clean(data.text); this.output.write(text); this.lineOpen = !text.endsWith('\n'); return; }
+    if (type === 'text' || type === 'peer.text') { this.assistantText(type, data); return; }
     if (type === 'message.user') { this.newline(); this.output.write(`\nYou${data.kind === 'goal' ? ' /goal' : ''} › ${clean(data.text)}\n\n`); return; }
     if (type === 'question') { this.newline(); this.output.write(`\nAgent asks › ${clean(data.question)}\n`); return; }
     if (type === 'question.answered') { this.newline(); this.output.write(`You › ${clean(data.answer)}\n\n`); return; }
-    if (type === 'peer.text') { const text = clean(data.text); this.newline(); this.output.write(`[${clean(data.agent)}] ${text}`); this.lineOpen = !text.endsWith('\n'); return; }
     if (type === 'activity') { this.activity = data.summary; this.renderFooter(); }
-    this.newline();
+    // Invisible transport/usage events can interleave with a rich body. They
+    // must not flush an incomplete root between its streamed chunks.
+    if (['tool', 'goal', 'error', 'worker.progress', 'activity', 'network.response', 'summary', 'execution.finished'].includes(type)
+      || type === 'backend' && /^(?:turn|item)\/completed$/.test(data.method || '') || data.message) this.newline();
     if (type === 'tool') this.output.write(`  · ${clean(data.name)}${data.detail ? `  ${clean(data.detail).slice(0, 240)}` : ''}\n`);
     else if (type === 'goal') this.output.write(`  goal ${data.status}${data.tokensUsed != null ? ` · ${data.tokensUsed} tokens` : ''}\n`);
     else if (type === 'error') this.error.write(`${clean(data.message)}\n`);
@@ -84,9 +100,79 @@ export class UI {
     else if (type === 'activity') this.output.write(`  ◉ ${clean(data.message || data.summary)}\n`);
     else if (type === 'network.response') this.output.write(`  ↔ ${clean(data.method)} ${clean(data.url)} → ${data.status} · ${data.durationMs}ms\n`);
     else if (data.message) this.output.write(`${clean(data.message)}\n`);
+    if (type === 'execution.finished') this.messageStreams.clear();
   }
 
-  newline() { if (!this.tui && this.lineOpen) { this.output.write('\n'); this.lineOpen = false; } }
+  writeAssistantText(text, stream) {
+    this.emitAssistantText(clean(text), stream);
+  }
+
+  assistantPrefix(stream) {
+    if (!stream.peer) return '';
+    const width = Math.max(4, Math.min(1000, this.output.columns || 80));
+    return `[${clip(stream.agent, Math.max(1, width - 4))}] `;
+  }
+
+  // Call only with sanitized ordinary text or locally rendered, validated SGR.
+  emitAssistantText(text, stream) {
+    if (!text) return;
+    if (stream.peer) {
+      if (this.lineOpen) this.output.write('\n');
+      this.output.write(this.assistantPrefix(stream));
+    }
+    this.output.write(text); this.lineOpen = !clean(text).endsWith('\n');
+  }
+
+  assistantText(type, data) {
+    const key = JSON.stringify([type, data.childSessionId || data.sessionId || this.activeTab || this.sessionId || '', data.agent || '', data.itemId || '', data.turnId || '']);
+    let stream = this.messageStreams.get(key);
+    if (!stream) {
+      // Bound client bookkeeping while retaining recent interleaved peer replies.
+      if (this.messageStreams.size >= 128) {
+        const oldest = this.messageStreams.keys().next().value;
+        this.flushAssistantText(this.messageStreams.get(oldest)); this.messageStreams.delete(oldest);
+      }
+      stream = { mode: 'probe', buffer: '', peer: type === 'peer.text', agent: data.agent || data.childSessionId || data.sessionId || 'Agent' };
+      this.messageStreams.set(key, stream);
+    }
+    const text = String(data.text ?? '');
+    if (stream.mode === 'truncated') return;
+    if (stream.mode === 'plain') { this.writeAssistantText(text, stream); return; }
+    stream.buffer += text;
+    const candidate = stream.buffer.trimStart();
+    if (Buffer.byteLength(stream.buffer) > MESSAGE_FORMAT_LIMITS.bytes) {
+      this.writeAssistantText(parseMessageBody(stream.buffer).plainText, stream);
+      stream.buffer = ''; stream.mode = 'truncated'; return;
+    }
+    if (candidate && !'<message'.startsWith(candidate) && !/^<message[\t\r\n />]/.test(candidate)) {
+      this.writeAssistantText(stream.buffer, stream);
+      stream.buffer = ''; stream.mode = 'plain'; return;
+    }
+    const complete = candidate.trimEnd();
+    if (/<\/message[\t\r\n ]*>$/.test(complete) || /^<message[\t\r\n ][^<>]*\/>$/.test(complete)) this.flushAssistantText(stream);
+  }
+
+  flushAssistantText(stream) {
+    const streams = stream ? [stream] : this.messageStreams.values();
+    for (const current of streams) {
+      if (!current.buffer) continue;
+      const parsed = parseMessageBody(current.buffer);
+      if (parsed.isFormatted) {
+        this.messageTheme ||= createTerminalTheme(this.output);
+        const width = (this.output.columns || 80) - cellWidth(this.assistantPrefix(current));
+        const rendered = renderMessageContent(parsed, { width, theme: this.messageTheme });
+        this.emitAssistantText(rendered.lines.join('\n'), current);
+      } else this.writeAssistantText(parsed.plainText, current);
+      current.buffer = ''; current.mode = 'plain';
+    }
+  }
+
+  newline() {
+    if (this.tui || this.json) return;
+    this.flushAssistantText();
+    this.messageStreams.clear();
+    if (this.lineOpen) { this.output.write('\n'); this.lineOpen = false; }
+  }
 
   ask(question) {
     this.beforeOutput?.();
@@ -148,6 +234,8 @@ export class UI {
   }
 
   close() {
+    this.hostMetricsMonitor?.close();
+    void this.settings?.close();
     this.accountMonitor?.close();
     this.closed = true; this.reader?.close(); this.newline();
     if (this.tui) { this.tui.close(); if (this.sessionId) this.output.write(`Session: ${this.sessionId}\nAttach: bzzy --attach ${this.sessionId}\n`); }

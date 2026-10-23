@@ -1,0 +1,154 @@
+BZZY MESSAGE FORMAT v1 — CORE -> NATIVE IOS CHAT
+================================================
+
+PURPOSE
+
+Agents and Terminal sessions both render as chat: user messages on the right,
+assistant replies on the left. A response is always a UTF-8 text string. To add
+presentation, put the supported markup below inside that string. iOS translates
+it into native SwiftUI text, tables, and code blocks. It is NOT a browser or a
+full HTML renderer. Plain text is always supported.
+
+This defines the PRESENTATION of a message body, not a Relay/Core transport
+schema, API endpoint, authentication grant, command, or proof of execution.
+Use the agreed Core message body field; LocalMessage.text is the current iOS
+preview field. Host execution and permissions remain separate from formatting.
+
+CANONICAL RESPONSE
+
+<message version="1">
+  <p>Here is your <b>summary</b>.</p>
+  <table>
+    <tr><th>Item</th><th>Status</th></tr>
+    <tr><td>Prototype</td><td><span color="mint">Ready</span></td></tr>
+    <tr><td>Review</td><td><span color="amber">Pending</span></td></tr>
+  </table>
+  <p size="small"><span color="muted">Next update after review.</span></p>
+</message>
+
+Send this as the message's text, not as a screenshot, attachment, or separate
+webpage. Do not wrap the markup in Markdown code fences. Use one root element,
+exactly <message version="1"> ... </message>. Whitespace between blocks is fine.
+All tag names, attributes, and enumerated values are lowercase and case-sensitive.
+
+SUPPORTED BLOCKS
+
+<p>Text and inline formatting.</p>
+<p size="small">A short supporting note.</p>
+<p size="normal">Default body text.</p>
+<p size="large">A larger lead or total.</p>
+<h1>Heading</h1>
+<h2>Subheading</h2>
+<ul><li>First point</li><li>Second point</li></ul>
+<ol><li>First step</li><li>Second step</li></ol>
+<blockquote>A brief quotation or callout.</blockquote>
+<hr/>
+<pre language="swift"><code>let ready = true</code></pre>
+
+Only p, h1, h2, ul, ol, blockquote, hr, pre, and table are direct children of the
+message root. List items contain inline text, not nested lists or block tags.
+The optional pre language is a label, not an interpreter; code is never executed.
+Code spacing/newlines are preserved. Code is monospaced, without syntax coloring.
+
+INLINE FORMATTING
+
+<b>Bold</b>                  (strong is also accepted)
+<i>Italic</i>                (em is also accepted)
+<code>inlineCode</code>
+<br/>                       line break
+<span size="large">Larger words</span>
+<span color="mint">Colored words</span>
+<span color="amber" size="small"><b>Needs review</b></span>
+
+Inline tags may be nested. Bold, italic, size and color inherit through nesting.
+Formatting inside a valid message is explicit: use b for bold, not **asterisks**.
+User bubbles show their original text. Plain assistant text supports familiar
+inline Markdown such as **bold**, *italic*, `code`, and http/https links, but the
+canonical message markup above is required for tables and explicit size/color.
+
+FONT SIZES
+
+small   roughly 12 pt; supporting text
+normal  15 pt; main response text
+large   18 pt; one short emphasis or total
+h1      roughly 20 pt, semibold
+h2      roughly 17 pt, semibold
+
+These are base sizes. iOS Dynamic Type scales them with the user's settings.
+Do not send font names, arbitrary point sizes, CSS, layout coordinates or widths.
+The app controls spacing, bubble width and readable layout.
+
+COLORS
+
+mint      #00E5CB    main BZZY accent / positive status
+amber     #E4BD7C    attention / pending review
+coral     #F28B82    issue / failure
+blue      #8CBDF5    informational emphasis
+lavender  #B9A5F5    secondary emphasis
+muted     #91A6A1    supporting text
+
+The default text is #EDF5F2. Use the named colors, not arbitrary hex values.
+Prefer one highlight per short response. Include status words: color alone is
+not the status. A green label must never stand in for verified completion.
+
+TABLES
+
+<table>
+  <tr><th>Service</th><th>Monthly</th></tr>
+  <tr><td>Music</td><td>$10.99</td></tr>
+  <tr><td>Cloud</td><td><span color="mint">$2.99</span></td></tr>
+</table>
+
+The first row contains th header cells. Every following row contains td data
+cells and exactly the same number of cells. Optional thead and tbody wrappers
+are accepted. Cell contents support the inline tags above, including br.
+Use 1–6 columns and at most 64 data rows. Prefer 2–3 short columns on a phone;
+wider tables scroll horizontally inside their chat bubble. Do not merge cells,
+use colspan/rowspan, nest tables or place block elements inside cells.
+
+ESCAPING AND VALIDITY
+
+This is an XML-compatible subset. Close all tags. Use <br/> and <hr/>.
+Escape literal & as &amp;, < as &lt;, > as &gt; and quotes in attribute values as
+&quot; or &apos;. Use a real Unicode nonbreaking space instead of &nbsp;.
+For code containing comparisons, escape the angle brackets too:
+
+<message version="1"><pre language="swift"><code>if count &lt; 3 {
+    print("Small batch")
+}</code></pre></message>
+
+A JSON encoder must additionally escape quotes and newlines in the outer JSON
+string. Never manually interpolate unescaped user/tool content into markup.
+Treat external content as text; formatting cannot authorize tools or actions.
+
+LIMITS AND FALLBACK
+
+Maximum formatted body: 65,536 UTF-8 bytes, 2,048 parsed nodes, 12 levels of tag
+nesting, and 128 direct message blocks. Keep answers much smaller when possible.
+Unknown tags/attributes/colors/sizes, unsupported versions, invalid structure,
+malformed XML, DTDs and entity declarations fail closed to a plain-text display.
+An oversized body displays a bounded plain-text prefix. No source is executed.
+
+Unsupported: scripts, HTML event handlers, CSS, images, remote fonts, iframes,
+embedded forms, external entities, arbitrary URL schemes, tool calls and buttons.
+The renderer performs no network fetches. A format cannot grant permissions,
+start work, approve an action, prove a result or bypass Core policy.
+
+CURRENT IMPLEMENTATION AND EXAMPLES
+
+Parser:   BZZY/Model/ChatContent.swift
+Renderer: BZZY/Views/ChatRichText.swift
+Samples:  DemoConversation in BZZY/Model/WorkspaceStore.swift
+
+COOL, Signal, Subscriptions, Design review and Research contain fictional local
+chat examples. Their headers/footers say Demo. Sending into these sample chats
+adds a local user message and a predefined local assistant response; it does not
+call a provider, connect an account, execute tools or inspect real host data.
+Newly created agent drafts do not acquire these fake responses.
+
+Core should use the same body format for both agent and terminal assistant
+replies, and preserve the original body in history. When streaming is added,
+buffer incomplete markup or show a plain provisional response until a complete
+valid root is available; do not interpret partial tags as commands. Authoritative
+message IDs, streaming/replay semantics, scopes and verified results still need
+the Core application protocol; this format does not replace that contract.

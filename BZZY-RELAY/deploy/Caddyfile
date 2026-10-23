@@ -1,0 +1,15 @@
+# Replace this reserved hostname with your DNS name. Caddy manages TLS renewal.
+relay.example.invalid {
+    handle /v1/socket {
+        reverse_proxy 127.0.0.1:8787 {
+            stream_close_delay 5s
+        }
+    }
+    handle /healthz {
+        reverse_proxy 127.0.0.1:8787
+    }
+    handle {
+        respond 404
+    }
+    # Access logging intentionally disabled. Never add invitation payload logging.
+}

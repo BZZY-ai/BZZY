@@ -4,6 +4,36 @@ bzzy runs a local service and durable execution runners. Terminal clients,
 the bundled web view, and your application observe the same sessions. Closing
 a terminal or losing a stream does not stop the agent.
 
+The CLI targets Debian 12/13, Ubuntu 24.04+ and macOS 15+ with Node 24+.
+Enforced policies and multi-agent modes use Linux bubblewrap/user namespaces or
+the native macOS sandbox-exec adapter. macOS capability detection executes
+canaries for allowed writes, denied writes, descendant/symlink escapes and
+denied networking before advertising enforcement. There is no unrestricted
+fallback when an enforcement probe fails.
+
+Both adapters constrain writes; host reads remain broadly available. macOS also
+restricts signalling/inspection of unrelated host processes and Apple Events;
+it does not provide Linux PID namespaces. Temporary writes on macOS use a
+private per-process directory removed at process exit. Model connectivity and
+tool networking retain the existing backend-specific policy handling; unsupported
+Claude networking policies still fail closed. Native provider behavior beyond
+the fixture tests requires the existing real-engine smoke checks.
+
+The OS-provided macOS sandbox utility must remain available and pass its probe.
+The active `.github/workflows/platforms.yml` checks both Linux distributions and
+Intel/Apple Silicon macOS. The extra namespace capabilities in its ephemeral
+Linux test containers are CI configuration; production is intended to run as an
+unprivileged user with working user namespaces.
+
+Telegram has been retired. Commands, pairing, bot controls, polling, chat
+attachment and its notification transport are removed. Normal startup stops a
+verified legacy bridge, removes only its token/settings and operational records,
+and preserves conversations, goal events, provider credentials and accepted
+managed executions. Old Telegram events can remain in historical replay;
+clients should continue ignoring unknown event types. Legacy environment
+bindings are excluded from new executions. No replacement third-party chat
+transport is automatically enabled.
+
 ## Start and discover
 
 ```bash
@@ -13,6 +43,9 @@ bzzy sessions
 bzzy service web                 # local conversation/activity/traffic UI
 bzzy service web SESSION_ID
 bzzy service token SESSION_ID --json
+bzzy service grants --json
+bzzy service grant SESSION_ID device_A observe,claim,answer,pause 3600 --json
+bzzy service revoke GRANT_ID
 bzzy integration                # this guide, also shipped with the package
 ```
 
@@ -24,12 +57,63 @@ permissions. Full owner credentials remain stable in `runtime/listener.json`.
 `service token` creates a read-only token for one conversation, including its
 child chats, expiring in 24 hours. Observer tokens cannot claim input, execute,
 answer questions or control agents. `POST /v1/tokens` can select an expiry up to
-30 days. Owner tokens grant control over the local runtime.
+30 days (60–2592000 seconds, integer). Owner tokens grant control over the local runtime.
+`service web SESSION_ID` now uses an observer token; opening the web UI without
+a session retains the local owner's existing full-runtime view.
 
 For your website, connect **your backend** to the local service and forward
 events through your existing authenticated website connection. Browser clients
 on another origin are not granted CORS access automatically. Keep owner tokens
 on your backend; use scoped observer tokens for displays.
+
+## Scoped clients and revocation
+
+Only the local owner creates, lists or revokes session credentials. A control
+grant requires an opaque recipient ID and an explicit set of permissions:
+`observe`, `claim`, `takeover`, `execute`, `answer`, `pause`, `cancel`, `steer`.
+Every grant includes `observe`; mutations also require `claim`. `takeover` is
+separate and never implied by `claim`. A recipient ID labels the owner's grant;
+it is not cryptographic device pairing. These are local gateway credentials,
+not Relay invitations or portable imports. Do not transfer an owner token.
+
+`POST /v1/tokens` accepts `{sessionId, recipient, permissions,
+expiresInSeconds, includeChildren}`. Observation is the default. Child access
+defaults to true for compatibility with existing observers; set it to false to
+deny direct child access and exclude child snapshots/questions. A parent stream
+can still contain results the runtime explicitly publishes to that parent.
+Controlling a group requires child access. A token for an individual child is
+discoverable through `/v1/sessions`, without exposing other sessions.
+
+```js
+// Run this on the authorized host, using its private owner credential.
+const grant = await ownerClient.sessionToken(sessionId, {
+  recipient: 'device_A',
+  permissions: ['observe', 'claim', 'execute', 'answer', 'pause'],
+  expiresInSeconds: 3600,
+  includeChildren: false,
+});
+// Securely provision grant.token through your authenticated local integration.
+// Device pairing is separate: use Settings with the Core Relay gateway.
+await ownerClient.revokeToken(grant.id);
+```
+
+The token value is returned only at creation; storage holds its SHA-256 digest.
+`GET /v1/tokens` returns grant metadata without values or hashes. New grants
+emit `access.granted` and `access.revoked` audit events without token values.
+Existing observer credentials retain their tokens and scopes; service startup
+assigns stable grant IDs so they can also be listed and revoked.
+Revocation is idempotent, survives restarts, invalidates input leases, and closes
+open SSE connections on the next stream check. Expiration has the same effect.
+Already delivered data cannot be recalled; already accepted work continues.
+
+Input ownership is tied to the authenticated grant as well as the client-chosen
+owner ID. A second credential cannot spoof that ID to renew/release ownership or
+submit commands. Ownership transfers require an explicit authorized takeover.
+Scoped execution uses saved host configuration; clients cannot submit an
+environment or execution-option overrides such as `yolo`, paths or task policy.
+An `execute` grant authorizes work through the session's existing backend and
+tools. It is a powerful grant subject to the host's saved policies; it is not
+an isolated account broker or an OS confidentiality boundary.
 
 ## Public API v1
 
@@ -40,7 +124,8 @@ except the event stream. The unprefixed endpoints are compatibility aliases.
 | --- | --- | --- |
 | GET | `/v1/health` | Runtime/API version and pinned Codex baseline |
 | GET | `/v1/schema` | Public event-envelope JSON Schema |
-| GET | `/v1/sessions` | List root conversations visible to the token |
+| GET | `/v1/capabilities` | Managed execution/event/access capabilities and actual platform isolation support |
+| GET | `/v1/sessions` | Owner's root conversations, or the scoped token's conversation |
 | GET | `/v1/sessions/ID` | Goal, state, latest execution, questions, input owner, capabilities and child chats |
 | GET | `/v1/sessions/ID/usage` | Reported usage and terminal totals |
 | GET | `/v1/sessions/ID/activities` | Current activity records |
@@ -52,7 +137,9 @@ except the event stream. The unprefixed endpoints are compatibility aliases.
 | POST | `/v1/sessions/ID/execute` | Queue a turn or resume; `{owner,prompt,options,goal,resumeGoal}` |
 | POST | `/v1/sessions/ID/answer` | Answer an existing question; `{owner,questionId,answer}` |
 | POST | `/v1/sessions/ID/control` | Request `pause`, `cancel` or supported `steer`; `{owner,action,text}` |
-| POST | `/v1/tokens` | Create an observer credential; `{sessionId,expiresInSeconds}` |
+| POST | `/v1/tokens` | Owner: create an observer or explicitly scoped control credential |
+| GET | `/v1/tokens` | Owner: list grant metadata |
+| DELETE | `/v1/tokens/GRANT_ID` | Owner: revoke a grant |
 
 Sessions are created by bzzy's terminal commands. Use the returned UUID to connect
 your application. API routes require the full UUID; terminal commands also accept
@@ -67,6 +154,15 @@ They provide current records; **use event sequence cursors for reliable live
 updates**, including updates to existing activity and traffic records.
 
 ## Events and reconnects
+
+The bundled `BzzyClient` resumes from the last received sequence, ignores
+duplicates, and handles split UTF-8, LF/CRLF frames and multiline SSE data.
+Malformed or oversized event frames and permanent HTTP client errors terminate
+the stream instead of retrying forever. Temporary disconnects reconnect.
+Persist the sequence only after your application has processed an event, keyed
+by session ID, and pass it as `after` when recreating a client. A live
+subscription never starts a new execution. Supply a stable `requestId` when
+calling `execute`, `answer` or `control`; reuse it for a retry of the same input.
 
 ```json
 {
@@ -106,11 +202,9 @@ updates**, including updates to existing activity and traffic records.
 | `question` / `worker.question` | Durable outstanding question and originating chat |
 | `question.answered` | Accepted answer and question ID |
 | `input.owner` | Ownership changes |
+| `access.granted` / `access.revoked` | Grant ID, recipient reference, session, actions and expiry; no token value |
 | `model.changed` | Provider, previous model, selected model, selected effort and `appliesTo: next_turn`; session and native thread stay the same |
 | `provider.changed` | Previous and selected provider/model, selected effort and `conversationThrough` cursor; same session ID, with prior chat supplied to the new native thread |
-| `telegram.attachment` | Chat relay attached/detached; does not alter goal notification settings |
-| `telegram.status` | Connection state, sanitized error and optional bot username |
-| `telegram.message` | `id`, incoming/outgoing `direction`, delivery `status`, readable `text` and timestamp; upsert by ID |
 | `artifact`, `checkpoint`, `assessment`, `acceptance` | Evidence and verification progress |
 | `assignment.*`, `worker.progress`, `peer.text` | Multi-agent activity and results |
 | `peer.message` / `peer.sent` | Besties message ID, group/goal ID, sender, recipient, durable sequence, readable text and selected evidence IDs |
@@ -292,21 +386,6 @@ inside bzzy and labels that fallback. Clipboard contents are not read on startup
 No text needs to be scraped from the TUI
 to implement these panels in another client.
 
-Telegram attachment is another explicitly authorized input channel for the same
-conversation. It does not take input ownership from a controlling terminal.
-`message.user.channel: telegram` identifies relay input; native text and goal
-events keep their usual schema. The relay uses the same atomic execution queue,
-so terminal and Telegram requests cannot start simultaneous runs in one session.
-Pending Telegram messages wait until the current execution ends. An explicit
-reply to a relayed question records `question.answered.channel: telegram`.
-
-Attaching starts at the current event cursor, never by replaying old conversation
-text to Telegram. Detaching revokes the attachment and prevents queued input or
-unsent messages from being forwarded. The private delivery outbox distinguishes
-sent, failed and uncertain results. `telegram.message` updates carry that status;
-an uncertain send is not retried automatically. These events are separate from
-the goal notification hub and its independent on/off control.
-
 `/debate` creates a child debate session linked from the selected conversation.
 Subscribe to that child for its independent-investigation phase, discussion
 turns and final result. A `debate.result` is also recorded on the original chat,
@@ -364,3 +443,102 @@ Codex native-goal accounting and backend token counters retain their source;
 Claude includes reported cached input where available. Claude's optional dollar
 figures are estimates, not subscription invoices. No exact subscription cost is
 invented. Limits are checked at available backend checkpoints and can overshoot.
+
+## Credential separation and platform integration status
+
+This CLI remains the execution host. Its existing SQLite store, runner queue,
+goal acceptance checks, evidence hashes, API v1 and replay stream are reused;
+there is no second runtime or extracted Core service.
+
+Agent instructions for ordinary chat, goals, workers and documentation drafting
+include the mandatory generation policy shipped in
+`assets/generation-security.txt`. Generated skills also retain that policy.
+The prompt does not grant permissions or establish a sandbox.
+
+Execution environments now inherit a defined configuration allowlist, plus
+locally declared provider keys needed by the runtime. Other host variables are
+dropped. Native subscription backends and host verification commands do not
+receive unrelated provider keys. The selected API adapter still injects its own
+provider key into its backend process, as required by the current adapter;
+provider authentication stores remain private host state.
+
+If a project needs additional **non-secret configuration**, declare names in
+`executionEnvironment.allow` in the private local config, or set the
+comma-separated host variable `BZZY_ENV_ALLOW`. Values stay outside execution
+records/events. Credential-like names cannot be added this way; provider key
+names come from provider configuration. Do not allow executable startup hooks
+such as `NODE_OPTIONS` in normal use. The test launcher explicitly allows its
+own mock-backend fixture controls and preload hook.
+
+```json
+{"executionEnvironment":{"allow":["PROJECT_REGION"]}}
+```
+
+Snapshots/worker copies exclude known credential paths even if tracked by Git:
+environment files, SSH/cloud/backend auth stores, common login files, private
+key extensions and AppleDouble metadata. `record_evidence` refuses these paths;
+normal containment and symlink checks still apply. This exclusion cannot prove
+that an arbitrary source file contains no secrets.
+
+## Local client settings and enrolment
+
+The Settings tab, `/settings` and `bzzy settings` manage local DeepSeek key entry
+and the existing sibling Core Relay adapter. These are trusted local UI actions;
+there is no settings/credential endpoint exposed to session clients or models.
+Key entry is masked and excluded from transcript/history/events. Keys remain in
+the private credentials store with mode 0600, preserving unrelated bindings.
+When an environment key exists, the user explicitly chooses whether to keep it
+or use the newly saved key for subsequent requests from this terminal. Existing
+runs retain their execution environment; no paid model request validates a key.
+
+Enrolment selects one existing session and either observation (default) or an
+explicit `observe,claim,execute,answer,pause,cancel` grant. There is no inherited
+child access, takeover, steering or host administration. The same Core-generated
+PAIR request supplies both the QR and typed code, expiring after ten minutes.
+The local host must compare the actual phone fingerprint before approval; grants
+expire after 24 hours and can be revoked locally even when Relay is offline.
+Private invitation values exist only in memory/private terminal display and are
+discarded after expiry/approval/denial or client shutdown. A full QR is shown only
+when its dimensions and quiet zone fit; otherwise the code remains usable.
+
+The adapter is loaded only on an explicit enrolment/connection action. A
+standalone CLI install without Core/Relay dependencies reports it unavailable.
+An unenrolled host can prepare/copy its public certificate for the Relay operator;
+the UI cannot authorize its own registration. A running external gateway owns
+the same host lock, so Settings reports a conflict rather than launching another.
+Closing this CLI disconnects its gateway while managed executions continue.
+See the sibling Core `docs/RELAY.md` for foreground/unattended operation limits.
+
+Remaining platform work, outside this CLI change:
+
+- A scoped account/tool broker with per-user/workspace/capability bindings and
+  read confidentiality. OS policies constrain writes/network;
+  they do not hide all host reads. Strict modes require a verified OS sandbox.
+- Actual iOS-to-host interoperability and unattended gateway setup. Local runtime
+  capability discovery still reports `relay: false` and `portableSharing: false`;
+  it describes the local API, while the separate Core gateway reports its own
+  transport capabilities. Pairing is not Agent/Terminal portable import.
+- Safe portable package allowlisting, inactive reviewed imports and recipient
+  account/workspace binding. Existing `/export` ZIPs are private full-project
+  backups containing project data, history, and potentially secrets; they are
+  unsuitable for sharing. Existing generated skill references can also retain
+  private task data and require review. Neither is the future Share format.
+- Client integration with persistent named Agent resources and optional
+  scheduler/event triggers. Current durable sessions remain the local foundation.
+
+No invitation URLs, Relay service, iOS app, new deployment or new provider
+inference request is introduced by these CLI changes.
+
+Local validation on 2026-10-22: macOS 27.0.1, Node 24.19.0, full suite **332 tests:
+311 passed, 21 skipped, zero failures**. Checks include actual native filesystem,
+symlink, descendant, network and signalling denials; managed multi-agent flows
+use fixture backends without paid inference. Syntax and whitespace checks pass.
+The platform workflow YAML also parses locally. Debian/Ubuntu and the macOS 15
+CI targets have been configured, but their remote jobs have not run here;
+the local Docker daemon is unavailable. Real native-provider inference and
+real iOS interoperability remain unverified by this change. Settings additionally
+passes a local real Core/Relay pairing test with explicit confirmation, scoped
+revocation and no model execution, plus hidden-key/history isolation checks. A
+subsequent private-store error regression brings the focused settings checks to
+seven passing tests. A real PTY launch also opens Settings before provider setup,
+renders the exact RGB colors and exits cleanly without connecting Relay.

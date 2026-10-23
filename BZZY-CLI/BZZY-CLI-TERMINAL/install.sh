@@ -6,6 +6,13 @@ bzzy_runtime="$bzzy_root/.bzzy-runtime"
 bzzy_node="$(command -v node || true)"
 echo 'Installing bzzy...'
 
+# Whole-project sharing/import uses the standard-library ZIP helper. Report the
+# prerequisite before downloads or installation, without privileged OS changes.
+if ! command -v python3 >/dev/null || ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+  echo 'BZZY requires Python 3.9+ (python3) for project sharing/import. Install it with your OS package manager, then run this installer again.' >&2
+  exit 1
+fi
+
 if [[ -x "$bzzy_runtime/node/bin/node" ]] && { [[ -z "$bzzy_node" ]] || ! "$bzzy_node" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)' 2>/dev/null; }; then
   bzzy_node="$bzzy_runtime/node/bin/node"
 fi
@@ -36,13 +43,35 @@ fi
 export PATH="$(dirname -- "$bzzy_node"):$PATH"
 cd "$bzzy_root"
 
+# Development checkouts install the locked Relay SDK and link the shared Core.
+# Release tarballs already contain this dependency tree and work without npm or
+# the original sibling source directories. Neither path installs AI backends.
+if [[ -f "$bzzy_root/../../BZZY-CORE/package.json" ]]; then
+  command -v npm >/dev/null || { echo 'The BZZY source workspace needs npm from the selected Node installation.' >&2; exit 1; }
+  (cd "$bzzy_root/../../BZZY-CORE" && npm ci --ignore-scripts --install-links=true --no-audit --no-fund)
+  npm ci --ignore-scripts --install-links=false --no-audit --no-fund
+elif [[ ! -f "$bzzy_root/node_modules/@bzzy/core/package.json" ]]; then
+  echo 'BZZY Core is missing. Use a bundled BZZY release or keep BZZY-CORE and BZZY-RELAY beside BZZY-CLI in the complete source workspace.' >&2
+  exit 1
+fi
+
 bzzy_bin_dir="${BZZY_BIN_DIR:-$HOME/.local/bin}"
 mkdir -p "$bzzy_bin_dir"
 "$bzzy_node" "$bzzy_root/scripts/install-launcher.mjs" "$bzzy_bin_dir" "$bzzy_node"
 "$bzzy_node" "$bzzy_root/bin/bzzy.js" --version >/dev/null
 
+# Prepare a disabled user manifest. A fresh bzzy invocation or bzzy-core start
+# explicitly enables it; installation never starts a model or daemon.
+if [[ "${BZZY_SKIP_SERVICE_SETUP:-0}" != 1 ]]; then
+  "$bzzy_node" "$bzzy_root/bin/bzzy-core.js" service install >/dev/null
+fi
+
 echo
 echo 'bzzy is installed. Run: bzzy'
+echo 'Core administration is available with: bzzy-core help'
+echo 'Check this host with: bzzy-core doctor'
+echo 'Core: bzzy-core start | status | stop | restart'
+echo 'Opening bzzy starts its prepared Core service automatically.'
 case ":$PATH:" in
   *":$bzzy_bin_dir:"*) ;;
   *)

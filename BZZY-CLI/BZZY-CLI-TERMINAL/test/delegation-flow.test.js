@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { palette } from '../src/terminal-theme.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { describeDelegation } from '../src/delegation-setup.js';
 import { UI } from '../src/ui.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { printGoalSummary } from '../src/controller.js';
-import { goalEvent, formatTelegram } from '../src/notifications.js';
+import { goalEvent } from '../src/notifications.js';
 
 const project = new URL('../', import.meta.url).pathname;
 const source = file => new URL(file, new URL('../', import.meta.url)).href;
@@ -40,9 +41,8 @@ test('completed delegation output names brain, executor and total usage, includi
   assert.match(summary.message, /BRAIN · codex \/ strong-model: 1,234 tokens/);
   assert.match(summary.message, /HANDS \/ EXECUTOR · deepseek \/ routine-model: 5,678 tokens/);
   assert.match(summary.message, /TOTAL: 6,912 tokens/);
-  const event = goalEvent(session), telegram = formatTelegram(event);
+  const event = goalEvent(session);
   assert.equal(event.usage.supervisorTokens, 1234); assert.equal(event.usage.delegatedTokens, 5678); assert.equal(event.usage.assignmentCount, 1);
-  assert.match(telegram, /BRAIN.*1,234 tokens/); assert.match(telegram, /HANDS \/ EXECUTOR.*5,678 tokens/); assert.match(telegram, /TOTAL: 6,912 tokens/);
   Object.assign(usage, { assignmentCount: 0, delegatedTokens: 0, totalTokens: 1234, providers: [], agents: [] });
   printGoalSummary(session, ui);
   assert.match(summary.message, /HANDS \/ EXECUTOR.*0 tokens · not used \(no assignments\)/);
@@ -112,7 +112,8 @@ test('terminal navigation keeps the views, session ID and composer without persi
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /CHAT\s+ACTIVITY\s+HTTP\s+TELEGRAM/);
+      assert.match(frame, /CHAT\s+ACTIVITY\s+HTTP/);
+      assert.doesNotMatch(frame, /TELEGRAM/);
       assert.match(frame, /╭─ Message/); assert.match(frame, new RegExp(sessionId));
       assert.doesNotMatch(frame, /Ctrl\+G|Ctrl\+S|Wheel\/PgUp|COPY/);
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'copy'), false);
@@ -131,7 +132,7 @@ test('mouse phrase selection copies Unicode screen cells without interrupting wo
     const left = cellWidth('  alpha ') + 1, right = left + cellWidth('naïve 世界') - 1;
     input.write(`\x1b[<0;${left};${row}M`); input.write(`\x1b[<32;${right};${row}M`); input.write(`\x1b[<0;${right};${row}m`); ui.tui.render();
     assert.equal(ui.tui.selectedText(), 'naïve 世界');
-    assert.ok(ui.tui.lastFrame[row - 1].includes('\x1b[48;5;24m'));
+    assert.ok(ui.tui.lastFrame[row - 1].includes(ui.tui.theme.level ? ui.tui.theme.background(palette.accent) : '\x1b[7m'));
     ui.event('text', { text: '\nA reply arrived while selecting.', itemId: 'reply' }); ui.tui.render();
     assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /arrived while selecting/);
     input.write('\x03'); await ui.tui.clipboardTask; ui.tui.render();

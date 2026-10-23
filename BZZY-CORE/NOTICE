@@ -1,0 +1,13 @@
+bzzy
+
+The agent instructions and goal continuation policy in assets/ are derived from
+OpenAI Codex 0.162.0 (tag rust-v0.162.0, commit
+c1382380de69521303b416720a52f42d51af6248), https://github.com/openai/codex,
+Copyright 2025 OpenAI,
+licensed under the Apache License, Version 2.0. They have been modified for bzzy:
+provider-neutral identity and an MCP-based goal reporting interface for Claude.
+
+Codex and Claude Code are separate upstream dependencies. Their names identify
+the backends used; bzzy is an independent project. Claude Code is installed and
+executed unmodified under Anthropic's applicable terms. Dependency licenses and
+notices remain in their respective packages.

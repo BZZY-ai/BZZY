@@ -138,13 +138,13 @@ its temporary source file is cleaned up. Changed source contents and corrupt
 copies still invalidate evidence. Explicit criteria, required artifacts and
 verification commands retain their checks against the current workspace.
 
-Enforced filesystem policies require Linux bubblewrap and working user
-namespaces. The process sandbox keeps the host filesystem read-only except for
+Enforced filesystem policies require working Linux bubblewrap/user namespaces
+or the verified native sandbox-exec adapter on macOS. The process sandbox keeps the host filesystem read-only except for
 declared workspace directories and necessary backend runtime state; descendants
 inherit that boundary. Unsupported strict policies fail closed. Claude's adapter
 does not claim it can disable tool networking while keeping model networking;
-that explicit policy is rejected. macOS can run ordinary sessions, but these
-strict delegation/reviewer workflows currently require Linux. `--yolo` does not
+that explicit policy is rejected. macOS supports these
+strict delegation/reviewer workflows when the native enforcement probe passes. `--yolo` does not
 override a declared read-only task policy.
 
 ## Delegation
@@ -180,7 +180,7 @@ completion when no current-goal executor assignment has been reviewed. A reviewe
 executor failure permits the supervisor to take over and verify the remaining
 work. Ordinary chat still does not launch workers.
 
-Terminal summaries and Telegram goal alerts list **BRAIN**, **HANDS / EXECUTOR**,
+Terminal summaries and goal events list **BRAIN**, **HANDS / EXECUTOR**,
 and **TOTAL** tokens separately. No assignments means **not used**, while missing
 worker usage means **usage unavailable** rather than zero. Goal events expose
 `usage.supervisorTokens`, `usage.delegatedTokens` and `usage.assignmentCount` for

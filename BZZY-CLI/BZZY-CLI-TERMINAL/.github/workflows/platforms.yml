@@ -1,0 +1,74 @@
+# Workspace workflow template: place this at the complete BZZY repository root.
+# A terminal-only checkout cannot build the extracted Core dependency.
+name: Debian, Ubuntu and macOS
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: BZZY-CLI/BZZY-CLI-TERMINAL
+
+jobs:
+  linux:
+    name: ${{ matrix.image }} / Node 24
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12-slim', 'debian:13-slim', 'ubuntu:24.04']
+    container:
+      image: ${{ matrix.image }}
+      # Test-only namespace permissions inside the ephemeral CI container.
+      # Production uses unprivileged bubblewrap; no privileged installer exists.
+      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+    steps:
+      - name: Install test dependencies
+        working-directory: /
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git python3 openssl bubblewrap util-linux
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install the locked Core and Relay SDK
+        working-directory: BZZY-CORE
+        run: npm ci --ignore-scripts
+      - name: Link the terminal to Core
+        run: npm ci --ignore-scripts
+      - name: Require real policy enforcement
+        run: node --input-type=module -e 'import {requireSandbox} from "./src/policy.js"; requireSandbox("Platform CI");'
+      - run: npm run check
+      - run: npm test
+
+  macos:
+    name: ${{ matrix.os }} / Node 24
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install the locked Core and Relay SDK
+        working-directory: BZZY-CORE
+        run: npm ci --ignore-scripts
+      - name: Link the terminal to Core
+        run: npm ci --ignore-scripts
+      - name: Require real policy enforcement
+        run: node --input-type=module -e 'import {requireSandbox} from "./src/policy.js"; requireSandbox("Platform CI");'
+      - run: npm run check
+      - run: npm test

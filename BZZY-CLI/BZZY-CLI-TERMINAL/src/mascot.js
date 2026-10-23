@@ -1,12 +1,15 @@
 import fs from 'node:fs';
 import { inflateSync } from 'node:zlib';
+import { palette, createTerminalTheme } from './terminal-theme.js';
 
 // Cyan light samples from the user's bzzy_img.jpeg, rather than a substitute face.
 // Each Braille cell holds a 2×4 pixel grid, keeping the antennae and compound-eye texture.
 const reference = JSON.parse(fs.readFileSync(new URL('../assets/bzzy-eyes.json', import.meta.url), 'utf8'));
 const pixels = inflateSync(Buffer.from(reference.cyan, 'base64'));
 const dots = [[0, 0, 1], [0, 1, 2], [0, 2, 4], [1, 0, 8], [1, 1, 16], [1, 2, 32], [0, 3, 64], [1, 3, 128]];
-const tones = [23, 30, 37, 43, 50, 51, 87, 123, 159];
+const channels = hex => hex.slice(1).match(/../g).map(value => parseInt(value, 16));
+const dark = channels(palette.border), bright = channels(palette.accent);
+const tones = Array.from({ length: 9 }, (_, index) => '#' + bright.map((channel, axis) => Math.round(dark[axis] + (channel - dark[axis]) * index / 8).toString(16).padStart(2, '0')).join(''));
 
 function sample(x, y) {
   const px = x * (reference.width - 1), py = y * (reference.height - 1), left = Math.floor(px), top = Math.floor(py);
@@ -56,22 +59,23 @@ export function mascotCells(seconds = 0, { columns = 44, rows = 12, compact = fa
   return lines;
 }
 
-export function mascotLine(cells) {
+export function mascotLine(cells, theme = createTerminalTheme()) {
   let line = '', previousTone = null;
   for (const cell of cells) {
-    if (cell.tone != null && cell.tone !== previousTone) { line += `\x1b[38;5;${cell.tone}m`; previousTone = cell.tone; }
+    if (cell.tone != null && cell.tone !== previousTone) { line += theme.foreground(cell.tone); previousTone = cell.tone; }
     line += cell.text;
   }
-  return line + '\x1b[39m';
+  return line + theme.foreground(palette.text);
 }
 
 export function mascot(seconds = 0, options = {}) {
-  return mascotCells(seconds, options).map(mascotLine).join('\n');
+  const theme = options.theme || createTerminalTheme();
+  return mascotCells(seconds, options).map(cells => mascotLine(cells, theme)).join('\n');
 }
 
 export class Pet {
   constructor(ui, enabled = true) { this.ui = ui; this.enabled = enabled && ui.interactive; this.timer = null; this.frame = 0; }
-  greet() { if (this.enabled && !this.ui.tui) this.ui.output.write(`\n${mascot()}\n\n`); }
+  greet() { if (this.enabled && !this.ui.tui) this.ui.output.write(`\n${mascot(0, { theme: createTerminalTheme(this.ui.output) })}\n\n`); }
   start() {
     if (!this.enabled || this.timer || this.ui.tui) return;
     const tick = () => this.ui.error.write(`\r\x1b[2K${['◖◈◗ ◖◈◗', '◖◉◗ ◖◉◗', '◖─◗ ◖─◗', '◖◉◗ ◖◉◗'][this.frame++ % 4]} buzzing…`);

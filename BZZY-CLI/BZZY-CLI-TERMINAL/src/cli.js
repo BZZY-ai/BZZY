@@ -1,48 +1,44 @@
 import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { config, providers, getProvider, setDefault, addProvider, apiKey, saveKey, ensureApiKey, defaultSelection, chooseProvider, saveDefaultSelection } from './providers.js';
+import { config, providers, getProvider, setDefault, addProvider, apiKey, saveKey, ensureApiKey, chooseProvider, saveDefaultSelection } from './providers.js';
 import { chooseModel } from './models.js';
-import { home, readJson, createSession, saveSession, findSession, sessions, lockSession, loadSession, normalizeSessionAlias, setSessionAlias } from './store.js';
-import { chooseSavedSession, promptSessionAlias, sessionLabel } from './session-browser.js';
+import { home, findSession, sessions, loadSession, normalizeSessionAlias, setSessionAlias } from './store.js';
+import { chooseSavedSession, namedTerminalSessions, promptSessionAlias, queueSessionBrowser, sessionLabel } from './session-browser.js';
 import { exportProject, importProject } from './project-bundle.js';
+import { shareTerminal, importTerminal, relayImportArgument, forgetPrivateImportInput } from './share-ui.js';
 import { skillThat } from './skill-that.js';
-import { inherited, root } from './process.js';
+import { root } from './process.js';
 import { checkConnections } from './connection-check.js';
 import { UI } from './ui.js';
 import { Pet } from './mascot.js';
-import { newGoal } from './goals.js';
-import { runSession } from './controller.js';
-import { CodexEngine } from './engines/codex.js';
-import { claudeEnvironment } from './engines/claude.js';
 import { NotificationHub } from './notifications.js';
-import { configureTelegram, autoAttachTelegram } from './telegram.js';
-import { serveGoalTools } from './mcp.js';
-import { serveTaskBridge } from './tools.js';
-import { executeManaged, viewSession, attachSession, controlSession, changeSessionModel } from './runtime-client.js';
-import { serveRuntime, executeJob, ensureRuntime, runtimeInfo, runtimeRequest } from './runtime.js';
-import { runAssignment, agentChoice } from './delegation.js';
-import { prepareTask, readContextFile } from './task.js';
+import { executeManaged, viewSession, attachSession, changeSessionModel } from './runtime-client.js';
+import { ensureRuntime, runtimeInfo, runtimeRequest } from './runtime.js';
+import { agentChoice } from './delegation.js';
+import { readContextFile } from './task.js';
 import { reconcileSession, identityAlive } from './recovery.js';
-import { getRecord, putRecord, listRecords, digest, appendEvent, reserveRequest } from './database.js';
-import { recall, remember, invalidateMemory } from './memory.js';
+import { recall, invalidateMemory } from './memory.js';
 import { sandboxSupport } from './policy.js';
-import { projectContext, initializeProject } from './project.js';
-import { subscriptionStatus, subscriptionEnvironment } from './auth.js';
+import { projectContext } from './project.js';
+import { subscriptionStatus } from './auth.js';
 import { prepareChatDebate, finishChatDebate } from './chat-debate.js';
 import { restoreConversation, conversationInput } from './runtime-client.js';
 import { changeConversationProvider } from './conversation-settings.js';
-import { serveTelegramBridge, ensureTelegramBridge, stopTelegramBridge } from './telegram-bridge.js';
-import { chooseDelegation, applyDelegationSelection, describeDelegation } from './delegation-setup.js';
-import { chooseBestiesWithDefault, configuredBesties, applyBestiesSelection, describeBesties } from './besties-setup.js';
-import { chooseParallelWithDefault, chooseParallelGoal, configuredParallel, applyParallelSelection } from './parallel-setup.js';
+import { chooseDelegation, describeDelegation } from './delegation-setup.js';
+import { chooseBestiesWithDefault, configuredBesties, describeBesties } from './besties-setup.js';
+import { chooseParallelWithDefault, chooseParallelGoal, configuredParallel } from './parallel-setup.js';
 
-import { chooseDebate, configuredDebate, applyDebateSelection } from './debate-setup.js';
+import { chooseDebate, configuredDebate } from './debate-setup.js';
 import { chooseSavedCombo } from './mode-presets.js';
 import { chatHelp } from './terminal-commands.js';
 import { whoami } from './whoami.js';
 import { updateInstallation } from './update.js';
+import { retireTelegram } from './migrations.js';
+import { backendCommand } from '@bzzy/core/engine/entry.js';
+import { activateCLIHost, coreHostStatus, stopCoreHost } from '@bzzy/core/engine/host-service.js';
+import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, newConversation, startConversationGoal,
+  prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
 const HELP = `bzzy 0.2.0 · a persistent coding agent
 
@@ -66,7 +62,7 @@ Usage:
   bzzy debate "question" --artifact FILE --participant claude --participant deepseek
   bzzy parallel "objective" --agents codex,claude,deepseek
   bzzy besties "objective" --agents codex:MODEL,claude:MODEL
-  bzzy service start|status|stop|web     Manage the local background runtime
+  bzzy service start|status|stop|restart|web  Manage the local background runtime
   bzzy recover [session]                Reconcile interrupted work without replaying it
   bzzy memory list|search TEXT|add FILE|invalidate ID REASON
   bzzy project                          Inspect this directory's .bzzy context
@@ -74,16 +70,19 @@ Usage:
   bzzy traffic [session]                Watch recorded outbound HTTP requests
   bzzy integration                      Explain API, live events and client integration
   bzzy service token SESSION            Create a session-scoped observer token
-  bzzy sessions                         Browse saved sessions; Enter attaches, v opens a view
+  bzzy service grants                   List session grants without token values
+  bzzy service revoke GRANT_ID          Revoke a session token and its input lease
+  bzzy service grant SESSION RECIPIENT PERMISSIONS [SECONDS]
+                                       Grant explicit session actions to a client
+  bzzy sessions                         Open named terminal chats; ↑/↓ select, Enter open
   bzzy export [FILE.zip]                Export this directory and all saved project context
-  bzzy --import FILE.zip               Restore a project and its sessions into this directory
+  bzzy --import FILE.zip|CODE          Restore a project ZIP or Relay terminal copy here
   bzzy setup                            Choose a backend and authenticate
+  bzzy settings                         API key, default folder, Pair iPhone and Core controls
   bzzy auth [codex|claude|deepseek|name]  Log in or save an API key
   bzzy providers                        List providers
   bzzy provider use NAME                 Set the default provider
   bzzy provider add NAME --base-url URL --model MODEL --env-key KEY_NAME
-  bzzy telegram setup|status|off|on|test  Pair a bot and control goal notifications
-  bzzy telegram attach SESSION|detach   Mirror new messages through Telegram
   bzzy notifications [list|retry]        Inspect the delivery outbox
   bzzy doctor [--live]                   Verify CLI, subscription login and connection; --live tests replies
 
@@ -92,7 +91,7 @@ Options:
   --model MODEL         Select a model (provider default otherwise)
   --cwd DIRECTORY       Working directory
   --alias NAME          Name a session; restore it later with --attach NAME or --resume NAME
-  --import FILE.zip     Restore a complete project bundle into --cwd (current directory by default)
+  --import FILE.zip|CODE Restore a project ZIP or expiring Relay terminal copy into --cwd; never starts work
   --goal OBJECTIVE      Start a persistent goal; quoted positional text is sent first as context
   --context-file FILE   UTF-8 task instructions (up to 1 MiB), relative to --cwd; no initialization chat
   --token-budget N      Optional goal token budget
@@ -100,7 +99,7 @@ Options:
   --runtime N           Total active runtime limit in seconds
   --max-retries N       Bounded acceptance follow-ups (default 2)
   --contract FILE       Task JSON: constraints, criteria, artifacts, checks and limits
-  --read-only           Enforce read-only tools (requires Linux bubblewrap)
+  --read-only           Enforce read-only tools (requires a working OS sandbox)
   --detach              Leave execution running after this terminal exits
   --follow              Keep a noninteractive view connected
   --mode MODE           solo, delegate, besties, debate or parallel
@@ -133,7 +132,7 @@ Options:
   -v, --version         Show version
 
 Chat commands: /goal <objective>, /goal status|pause|resume|clear,
-/new, /alias [name], /export [FILE.zip], /skill_that [name], /providers [name], /models [name|default], /default, /usage, /help, /exit
+/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skill_that [name], /providers [name], /models [name|default], /default, /usage, /settings, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
@@ -153,12 +152,6 @@ Use /goal <objective> to start one shared persistent goal. Peers exchange findin
 Completion requires both peers' acceptance checks and supported cross-reviews; disagreements remain visible.
 Use Tab / Shift+Tab to switch peer chats, or --view / --attach with the group session ID.
 Besties SHARED ROOM (/room) shows actual messages and evidence reviews exchanged by the peers.
-/telegram opens the Telegram tab, with separate goal-alert and chat-attachment checkboxes.
-/telegram setup or pair asks for a hidden bot token, then detects the chat ID from BZZY CODE.
-/telegram attach|detach mirrors only new messages; chat from either terminal or Telegram.
-/telegram on|off toggles goal alerts independently. /telegram manual accepts a known chat ID.
-/telegram status shows settings. Goals notify on achievement or stall.
-Telegram bot menu: /providers and /models show buttons; model selection includes effort.
 /debate [objective] opens a participant checklist for the latest reply.
 Debate: independent analysis and permitted tests, then read-only evidence rounds.
 Type / for command suggestions: ↑/↓ chooses, Tab completes, Enter confirms.
@@ -265,8 +258,7 @@ async function authenticate(provider, ui, options, { reuseExisting = false } = {
   }
   if (reuseExisting && subscriptionStatus(provider).available) { ui.event('info', { message: `Using the existing ${provider.backend === 'codex' ? 'Codex / ChatGPT' : 'Claude Code'} subscription login.` }); return 0; }
   if (ui.tui) { ui.tui.close(); ui.tui = null; }
-  if (provider.backend === 'claude') return inherited('claude', ['auth', 'login'], claudeEnvironment());
-  return inherited('codex', ['login', ...(options.device ? ['--device-auth'] : [])], subscriptionEnvironment('codex'));
+  return authenticateSubscription(provider, options);
 }
 
 export async function setup(ui, options, explicitProvider) {
@@ -315,25 +307,6 @@ export async function setup(ui, options, explicitProvider) {
   return provider;
 }
 
-function selectedProvider(options) { return getProvider(options.provider || config().defaultProvider || 'codex'); }
-
-function applyLaunchDefault(options) {
-  const saved = defaultSelection(options.provider);
-  if (!saved) return;
-  if (!options.provider) options.provider = saved.provider;
-  const sameModel = options.model == null;
-  if (sameModel) options.model = saved.model;
-  if (options.effort == null && sameModel && saved.effort !== 'default') options.effort = saved.effort;
-  options.launchDefault = { ...saved, capabilities: sameModel ? saved.capabilities : null, effort: sameModel ? options.effort || saved.effort : options.effort || 'default' };
-}
-
-function applyLaunchSelection(session, options) {
-  const saved = options.launchDefault;
-  if (session.selectedEffort == null) session.selectedEffort = options.effort || (saved && saved.provider === session.provider && saved.model === session.model ? saved.effort : undefined);
-  if (!session.modelCapabilities && saved?.provider === session.provider && saved.model === session.model) session.modelCapabilities = saved.capabilities;
-  return session;
-}
-
 function saveCurrentDefault(session, ui) {
   const selected = saveSessionDefaultSelection(session);
   ui.event('info', { message: savedDefaultMessage(selected) });
@@ -344,47 +317,16 @@ async function goalControl(action, id, options, ui) {
   if (!session.goal) throw new Error('This session has no goal.');
   if (action === 'status') { ui.event('session', { session, message: JSON.stringify(session.goal, null, 2) }); return 0; }
   if (action === 'resume') return resume(session, options, ui, true);
-  const run = getRecord('run', session.id);
-  if (run && identityAlive(run.runner) && ['running', 'waiting_for_input', 'verifying'].includes(session.executionState)) {
-    if (action === 'clear') throw new Error('Pause or cancel the running goal before clearing it.');
-    await controlSession(session, action === 'cancel' ? 'cancel' : 'pause', options);
-    ui.event('info', { message: `Goal ${action} requested for ${session.id}.` }); return 0;
-  }
-  const unlock = lockSession(session);
-  try {
-    if (session.backend === 'codex' && session.engineThreadId) {
-      const engine = new CodexEngine(getProvider(session.provider), session, options, ui);
-      try { await engine.setGoalStatus(action === 'clear' ? 'clear' : 'paused'); }
-      finally { await engine.close(); }
-    }
-    if (action === 'clear') { putRecord('goal-history', session.goal.id, { sessionId: session.id, ...session.goal, clearedAt: new Date().toISOString() }); session.goal = null; }
-    else session.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
-    saveSession(session);
-    ui.event('info', { message: `Goal ${action === 'clear' ? 'cleared' : action === 'cancel' ? 'cancelled' : 'paused'}.` });
-  } finally { unlock(); }
+  const result = await controlSavedGoal(session, action, options, ui);
+  ui.event('info', { message: result.requested ? `Goal ${action} requested for ${session.id}.`
+    : `Goal ${action === 'clear' ? 'cleared' : action === 'cancel' ? 'cancelled' : 'paused'}.` });
   return 0;
 }
 
 async function resume(session, options, ui, requireGoal = false) {
-  if (options.alias != null) Object.assign(session, setSessionAlias(session.id, options.alias));
+  const { recovery, goal } = prepareResume(session, options, requireGoal);
   options = { ...options, cwd: session.cwd };
-  if (options.provider && options.provider !== session.provider) throw new Error('A session keeps its provider. Start a new session to switch backends.');
-  if (requireGoal && !session.goal) throw new Error('This session has no goal.');
-  if (requireGoal && session.goal.status === 'complete') throw new Error('This goal is already complete. Start a new goal to request more work.');
-  const recovered = reconcileSession(session.id); Object.assign(session, loadSession(session.id));
-  if (recovered.live) return ui.interactive ? attachSession(session, options, ui) : viewSession(session, options, ui);
-  if (recovered.state === 'cleanup_required') throw new Error(recovered.reason);
-  if (options.model) session.model = options.model;
-  const goal = session.goal && session.goal.status !== 'complete';
-  if (goal) {
-    session.goal.notificationEpoch = (session.goal.notificationEpoch || 0) + 1;
-    session.goal.noActivityTurns = 0;
-    session.goal.blockerStreak = 0;
-    session.goal.lastBlocker = null;
-    delete session.goal.reason;
-    if (options.tokenBudget) session.goal.tokenBudget = options.tokenBudget;
-    if (session.goal.tokenBudget != null && session.goal.tokensUsed >= session.goal.tokenBudget) throw new Error('Goal budget is exhausted. Resume with a larger total --token-budget.');
-  }
+  if (recovery.live) return ui.interactive ? attachSession(session, options, ui) : viewSession(session, options, ui);
   if (!goal) {
     if (ui.interactive) return chat(getProvider(session.provider), { ...options, cwd: session.cwd }, ui, session);
     ui.event('session', { session, message: `Session restored: ${session.id}. ${session.goal?.status === 'complete' ? 'Goal already complete.' : 'Open bzzy resume in a terminal to continue chatting.'}` });
@@ -395,6 +337,8 @@ async function resume(session, options, ui, requireGoal = false) {
 
 async function executeFromCommand(provider, session, options, ui, prompt, flags) {
   const code = await executeManaged(provider, session, options, ui, prompt, flags);
+  if (ui.coreLifecycleInterrupted) return 0;
+  if (ui.nextSession) { const selected = ui.nextSession; ui.nextSession = null; return await attachSession(selected, options, ui); }
   if (!options.inChat && flags.goal && [0, 2].includes(code) && ui.interactive && !options.detach && !ui.detached) {
     return chat(getProvider(session.provider), { ...options, requestId: undefined }, ui, session);
   }
@@ -404,16 +348,10 @@ async function executeFromCommand(provider, session, options, ui, prompt, flags)
 async function chat(provider, options, ui, existingSession) {
   if (!ui.interactive) throw new Error('Use bzzy run "task" or bzzy goal "objective" when stdin is not a terminal.');
   const pet = new Pet(ui, options.pet);
-  let session = existingSession || createSession(provider, options.cwd, options.model, options.alias);
-  if (!existingSession && options.delegationSelection) { applyDelegationSelection(session, options.delegationSelection); saveSession(session); }
-  if (!existingSession && options.bestiesSelection) { applyBestiesSelection(session, options.bestiesSelection); saveSession(session); }
-  if (!existingSession && options.parallelAgents) { applyParallelSelection(session, options.parallelAgents); saveSession(session); }
-  if (!existingSession && options.debateAgents) { applyDebateSelection(session, options.debateAgents); saveSession(session); }
-  if (!existingSession) { applyLaunchSelection(session, options); saveSession(session); }
+  let session = existingSession || createChatSession(provider, options);
   ui.setSession(session.id);
   if (existingSession) await restoreConversation(session, ui);
   ui.updateSession?.(session); pet.greet();
-  await autoAttachTelegram(session);
   ui.event('info', { message: `${provider.name}\n/goal <objective> · /providers · /models · /debate [objective] · /help`, welcome: true });
   if (options.mode === 'parallel') ui.event('info', { message: 'Parallel mode · chat normally, or use /goal <objective> for independent work by ' + (session.parallelAgents?.map(agent => agent.provider + (agent.model ? ':' + agent.model : '')).join(', ') || options.agents || 'codex,claude,deepseek'), welcome: true });
   if (options.mode === 'debate') ui.event('info', { message: 'Debate mode · get a first response, select the agents, then investigate and debate for up to five rounds.', welcome: true });
@@ -422,22 +360,28 @@ async function chat(provider, options, ui, existingSession) {
   const debateReply = focus => ui.onDebate(session.id, focus);
   while (true) {
     const input = (await conversationInput(session, ui))?.trim();
+    if (ui.nextSession) { const selected = ui.nextSession; ui.nextSession = null; return await attachSession(selected, options, ui); }
     Object.assign(session, loadSession(session.id)); provider = getProvider(session.provider);
     if (input == null || input === '/quit' || input === '/exit') return 0;
     if (!input) continue;
+    if (await ui.settingsCommand(input)) continue;
     try {
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
+      if (input === '/sessions') { const selected = await chooseSavedSession(ui); if (selected) return await attachSession(selected.session, options, ui); continue; }
       if (input === '/doctor') { await checkConnections(ui, { providerId: session.provider, live: true, model: session.model, effort: session.selectedEffort, session }); continue; }
       if (input === '/default') { saveCurrentDefault(session, ui); continue; }
       if (/^\/alias(?:\s|$)/.test(input)) { session = await promptSessionAlias(session.id, input.replace(/^\/alias\s*/, ''), ui); continue; }
       if (/^\/export(?:\s|$)/.test(input)) { await exportProject(session, input.replace(/^\/export\s*/, ''), ui); continue; }
+      if (/^\/share(?:\s|$)/.test(input)) {
+        if (input !== '/share') throw new Error('Use /share without arguments.');
+        await shareTerminal(session, ui); continue;
+      }
+      if (/^\/import(?:\s|$)/.test(input)) { forgetPrivateImportInput(ui, input); await importTerminal(input.replace(/^\/import\s*/, ''), session.cwd, ui); continue; }
       if (/^\/skill_that(?:\s|$)/.test(input)) { await skillThat(session, input.replace(/^\/skill_that\s*/, ''), ui); continue; }
-      if (/^\/telegram(?:\s|$)/.test(input)) { await configureTelegram(input.replace(/^\/telegram\s*/, '') || 'panel', ui, { sessionId: session.id }); ui.refreshTelegramState?.(); continue; }
       if (input === '/debate' || input.startsWith('/debate ')) { await debateReply(input.slice(7).trim()); if (ui.detached) return 0; continue; }
       if (input === '/new') {
-        const previous = session; session = createSession(provider, options.cwd, previous.model);
-        Object.assign(session, { selectedEffort: previous.selectedEffort, modelCapabilities: previous.modelCapabilities, mode: previous.mode, executor: previous.executor, besties: previous.besties, parallelAgents: previous.parallelAgents, debateAgents: previous.debateAgents });
-        saveSession(session); ui.setSession(session.id); ui.updateSession(session); await autoAttachTelegram(session); continue;
+        session = newConversation(session, options);
+        ui.setSession(session.id); ui.updateSession(session); continue;
       }
       if (/^\/providers?(?:\s|$)/.test(input)) {
         const selected = await ui.onProvider(session.id, input.replace(/^\/providers?\s*/, ''));
@@ -452,22 +396,18 @@ async function chat(provider, options, ui, existingSession) {
           await goalControl(objective || 'status', session.id, { ...options, provider: session.provider, inChat: true }, ui);
           session = findSession(session.id);
         } else {
-          const previousGoal = session.goal;
-          prepareTask(session, options, objective); session.goal = newGoal(session.contract.objective, options.tokenBudget); saveSession(session);
-          session.acceptance = null; session.summary = null; session.failure = null; session.stopReason = null;
-          if (previousGoal) putRecord('goal-history', previousGoal.id, { sessionId: session.id, ...previousGoal,
-            supersededAt: new Date().toISOString(), supersededBy: session.goal.id });
-          saveSession(session);
+          startConversationGoal(session, options, objective);
           await executeManaged(provider, session, options, ui, session.goal.objective, { goal: true });
         }
       } else if (input.startsWith('/')) throw new Error('Unknown command. Use /help.');
       else {
         const chatOptions = { ...options, mode: 'solo' };
-        if (!session.contract) prepareTask(session, { ...chatOptions, mode: session.mode || options.mode || 'solo' }, input);
+        prepareConversationTurn(session, chatOptions, input);
         await executeManaged(provider, session, chatOptions, ui, input);
+        if (ui.coreLifecycleInterrupted) return 0;
         if (options.mode === 'debate' && !ui.detached && !ui.nextSession) await debateReply(input);
       }
-      if (ui.nextSession) { session = ui.nextSession; ui.nextSession = null; provider = getProvider(session.provider); ui.setSession(session.id); ui.updateSession(session); }
+      if (ui.nextSession) { const selected = ui.nextSession; ui.nextSession = null; return await attachSession(selected, options, ui); }
       provider = getProvider(session.provider);
       if (ui.detached) return 0;
     } catch (error) { ui.event('error', { message: error.message }); }
@@ -487,17 +427,41 @@ async function debateConversation(source, focus, options, ui) {
   }
 }
 
+// After a lifecycle action all old API readers have unwound. Settings stays
+// local while Core is stopped; leaving it opens a fresh observer/attachment,
+// never a paused execution or a queued prompt.
+async function coreServiceSettings(ui, options) {
+  const settingsOnly = ui.settingsOnly;
+  const sessionId = ui.sessionId, readOnly = /VIEW/.test(ui.sessionMode || '');
+  ui.settingsOnly = true; ui.tui.setPanel('settings');
+  try {
+    while (true) {
+      const input = await ui.ask('bzzy settings › ');
+      if (input == null || ['/exit', '/quit', '/detach'].includes(input.trim())) {
+        const status = input == null ? await ui.settings.refreshHost().catch(() => null) : null;
+        ui.coreLifecycleInterrupted = false;
+        if (!settingsOnly && status?.running && !status.operatorStopped && sessionId) {
+          ui.settingsOnly = false; ui.tui.setPanel('chat');
+          const session = loadSession(sessionId);
+          return readOnly ? await viewSession(session, options, ui) : await attachSession(session, options, ui);
+        }
+        return 0;
+      }
+      if (!await ui.settingsCommand(input.trim())) {
+        ui.settings.message = 'Use Settings to control Core. Esc returns when Core is running, or closes when stopped.';
+        ui.settings.changed();
+      }
+    }
+  } finally { ui.settingsOnly = settingsOnly; }
+}
+
 export async function main(argv) {
-  if (argv[0] === 'internal-mcp') { await serveGoalTools(argv[1], argv[2]); return 0; }
-  if (argv[0] === 'internal-tools') { await serveTaskBridge(argv[1], argv[2]); return 0; }
-  if (argv[0] === 'internal-service') return serveRuntime();
-  if (argv[0] === 'internal-telegram') return serveTelegramBridge();
-  if (argv[0] === 'internal-execution') return executeJob(argv[1]);
-  if (argv[0] === 'internal-assignment') return runAssignment(argv[1], Number(argv[2]));
+  if (['internal-mcp', 'internal-tools', 'internal-service', 'internal-execution', 'internal-assignment'].includes(argv[0])) return backendCommand(argv);
   const { options, args } = parseArgs(argv);
   if (options.version) { process.stdout.write('bzzy 0.2.0\n'); return 0; }
   if (options.whoami) { process.stdout.write(whoami(options.cwd)); return 0; }
   if (options.help || args[0] === 'help') { process.stdout.write(HELP); return 0; }
+  if (['telegram', 'internal-telegram'].includes(args[0])) throw new Error('The Telegram integration has been removed. Use the terminal or the scoped integration API.');
   if (options.update) {
     if (argv.length !== 1) throw new Error('Run bzzy --update by itself.');
     return updateInstallation();
@@ -505,14 +469,39 @@ export async function main(argv) {
   try { if (!fs.statSync(options.cwd).isDirectory()) throw new Error('not a directory'); }
   catch { throw new Error(`--cwd must name an existing directory: ${options.cwd}`); }
   options.cwd = fs.realpathSync(options.cwd);
-  const ui = new UI(options);
+  await retireTelegram();
+  const launchCommand = args[0];
+  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth']);
+  if (!staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
+    await activateCLIHost();
+  }
+  const ui = new UI({ ...options, hostMetrics: true });
   ui.accountStatusEnabled = ui.interactive;
-  ui.telegramSupportEnabled = ui.interactive;
   ui.onDebate = (id, focus) => debateConversation(loadSession(id), focus, options, ui);
   ui.onProvider = (id, argument, connection) => changeConversationProvider(loadSession(id), argument, ui, connection);
-  try {
+  ui.onSessions = () => queueSessionBrowser(ui);
+  const launch = async () => {
     const [command, ...rest] = args;
-    if (options.importFile) { await importProject(options.importFile, options.cwd, ui); return 0; }
+    if (command === 'settings') {
+      if (!ui.interactive) throw new Error('Run bzzy settings in a private interactive terminal.');
+      ui.settingsOnly = true; ui.openSettings();
+      while (!ui.coreLifecycleInterrupted) {
+        const input = await ui.ask('bzzy settings › ');
+        if (input == null || ['/exit', '/quit'].includes(input.trim())) return 0;
+        if (input.trim() === '/sessions') {
+          const selected = await chooseSavedSession(ui);
+          if (selected) { ui.settingsOnly = false; return await attachSession(selected.session, options, ui); }
+          ui.openSettings(); continue;
+        }
+        await ui.settingsCommand(input.trim());
+      }
+      return 0;
+    }
+    if (options.importFile) {
+      if (relayImportArgument(options.importFile)) await importTerminal(options.importFile, options.cwd, ui);
+      else await importProject(options.importFile, options.cwd, ui);
+      return 0;
+    }
     if (command === 'export') { await exportProject(options.cwd, rest[0], ui); return 0; }
     if (command === 'integration') {
       const file = path.join(root, 'docs', 'INTEGRATION.md');
@@ -529,19 +518,28 @@ export async function main(argv) {
       return await watchRegistry(findSession(rest[0], options.cwd), options, ui, command === 'traffic' ? 'network.' : 'activity');
     }
     if (command === 'service') {
-      if (rest[0] === 'stop') { await stopTelegramBridge(); const info = runtimeInfo(); if (info && identityAlive(info.identity)) await runtimeRequest(info, 'POST', '/shutdown', {}); ui.event('info', { message: 'Runtime stopped. Existing execution runners retain their records and continue independently.' }); }
-      else if (rest[0] === 'status') { const info = runtimeInfo(); ui.event('info', { message: info && identityAlive(info.identity) ? `Runtime running at ${info.url}` : 'Runtime stopped.' }); }
-      else if (rest[0] === 'web') { const info = await ensureRuntime(); ui.event('info', { message: `${info.url}/#token=${info.token}${rest[1] ? `&session=${findSession(rest[1]).id}` : ''}` }); }
+      if (rest[0] === 'stop') { const status = await stopCoreHost(); ui.event('info', { ...status, message: 'Core stopped. Work is paused; history and accounts are preserved.' }); }
+      else if (rest[0] === 'status') { const status = await coreHostStatus(); ui.event('info', { ...status, message: status.running ? 'Core running.' : 'Core stopped.' }); }
+      else if (rest[0] === 'restart') { await stopCoreHost(); await activateCLIHost(); await ensureRuntime(); ui.event('info', { message: 'Core restarted. Paused work remains paused.' }); }
+      else if (rest[0] === 'web') { const info = await ensureRuntime(); const sessionId = rest[1] ? findSession(rest[1]).id : null;
+        const credential = sessionId ? await runtimeRequest(info, 'POST', '/tokens', { sessionId }) : null;
+        ui.event('info', { message: `${info.url}/#token=${credential?.token || info.token}${sessionId ? `&session=${sessionId}` : ''}` }); }
       else if (rest[0] === 'token' && rest[1]) { const info = await ensureRuntime(), result = await runtimeRequest(info, 'POST', '/tokens', { sessionId: findSession(rest[1]).id }); ui.event('token', { ...result, message: `Observer token (session only, expires in 24h): ${result.token}` }); }
-      else if (!rest[0] || rest[0] === 'start') { const info = await ensureRuntime(); await ensureTelegramBridge(); ui.event('info', { message: `Runtime ready at ${info.url}` }); }
-      else throw new Error('Use bzzy service start|status|stop|web.');
+      else if (rest[0] === 'grant' && rest[1] && rest[2] && rest[3]) {
+        const result = await runtimeRequest(await ensureRuntime(), 'POST', '/tokens', { sessionId: findSession(rest[1]).id, recipient: rest[2], permissions: rest[3].split(','), expiresInSeconds: rest[4] === undefined ? 86400 : Number(rest[4]) });
+        ui.event('token', { ...result, message: `Session token for ${result.recipient} (${result.permissions.join(', ')}): ${result.token}\nGrant ID: ${result.id}` });
+      }
+      else if (rest[0] === 'grants') { const result = await runtimeRequest(await ensureRuntime(), 'GET', '/tokens'); ui.event('grants', { ...result, message: result.items.map(grant => `${grant.id} · ${grant.sessionId} · ${grant.permissions.join(', ')} · ${grant.revokedAt ? 'revoked' : grant.expiresAt <= Date.now() ? 'expired' : 'active'}`).join('\n') || 'No session grants.' }); }
+      else if (rest[0] === 'revoke' && rest[1]) { const grant = await runtimeRequest(await ensureRuntime(), 'DELETE', `/tokens/${rest[1]}`); ui.event('grant.revoked', { ...grant, message: `Session grant revoked: ${grant.id}` }); }
+      else if (!rest[0] || rest[0] === 'start') { const info = await ensureRuntime(); ui.event('info', { message: `Runtime ready at ${info.url}` }); }
+      else throw new Error('Use bzzy service start|status|stop|web|token|grant|grants|revoke.');
       return 0;
     }
     if (command === 'recover') { const result = reconcileSession(findSession(rest[0], options.cwd).id); ui.event('recovery', { ...result, message: JSON.stringify(result, null, 2) }); return 0; }
     if (command === 'project') { ui.event('project', { message: JSON.stringify(projectContext(options.cwd), null, 2) }); return 0; }
     if (command === 'memory') {
       if (rest[0] === 'invalidate') invalidateMemory(rest[1], rest.slice(2).join(' '));
-      else if (rest[0] === 'add') { if (!rest[1]) throw new Error('Use bzzy memory add FILE.json.'); const session = createSession(selectedProvider(options), options.cwd, options.model); prepareTask(session, options, 'Record project knowledge'); initializeProject(session); ui.event('memory', { memory: remember(session, readJson(path.resolve(options.cwd, rest[1]))), message: 'Project memory recorded.' }); }
+      else if (rest[0] === 'add') { if (!rest[1]) throw new Error('Use bzzy memory add FILE.json.'); ui.event('memory', { memory: recordProjectMemory(selectedProvider(options), options, rest[1]), message: 'Project memory recorded.' }); }
       else { const entries = recall(options.cwd, rest[0] === 'search' ? rest.slice(1).join(' ') : '', 50); ui.event('memory', { entries, message: JSON.stringify(entries, null, 2) }); }
       return 0;
     }
@@ -558,7 +556,6 @@ export async function main(argv) {
       ui.event('info', { message: `Provider ${rest[1]} ${rest[0] === 'use' ? 'selected' : 'registered'}.` });
       return 0;
     }
-    if (command === 'telegram') { await configureTelegram(rest[0] || 'status', ui, { sessionId: rest[1] ? findSession(rest[1]).id : undefined }); return 0; }
     if (command === 'notifications') {
       const hub = new NotificationHub({ ui });
       if (rest[0] === 'retry') await hub.retry();
@@ -568,16 +565,19 @@ export async function main(argv) {
     }
     if (command === 'doctor') {
       const checks = await checkConnections(ui, { providerId: options.provider, live: options.live, model: options.model, effort: options.effort });
-      ui.event('info', { message: `Node ${process.version}\nEnforced permissions: ${sandboxSupport() ? 'Linux bubblewrap available' : 'unavailable (strict tasks fail closed)'}\nConfiguration: ${home()}\nDefault provider: ${config().defaultProvider || 'not selected (first-run setup)'}` });
+      ui.event('info', { message: `Node ${process.version} · ${process.platform}/${process.arch}\nEnforced permissions: ${sandboxSupport() ? (process.platform === 'darwin' ? 'macOS sandbox-exec available' : 'Linux bubblewrap available') : 'unavailable (strict tasks fail closed)'}\nConfiguration: ${home()}\nDefault provider: ${config().defaultProvider || 'not selected (first-run setup)'}` });
       return checks.every(check => check.ok) ? 0 : 1;
     }
     if (command === 'sessions') {
       if (ui.interactive) {
-        const selected = await chooseSavedSession(ui);
-        if (!selected) return 0;
-        return selected.action === 'view' ? await viewSession(selected.session, options, ui) : await attachSession(selected.session, options, ui);
+        while (true) {
+          const selected = await chooseSavedSession(ui);
+          if (!selected) return 0;
+          try { return await attachSession(selected.session, options, ui); }
+          catch (error) { ui.event('error', { message: error.message }); }
+        }
       }
-      for (const session of sessions()) ui.event('session', { session, message: `${sessionLabel(session)} · ${session.cwd}` });
+      for (const session of namedTerminalSessions()) ui.event('session', { session, message: sessionLabel(session) });
       return 0;
     }
     if (command === 'resume') return await resume(findSession(rest[0], options.cwd), options, ui);
@@ -649,45 +649,31 @@ export async function main(argv) {
     if (options.goal || ['goal', 'run', 'delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command)) {
       const prompt = options.goal || rest.join(' ');
       if (!prompt.trim()) throw new Error(`Supply a ${command === 'run' ? 'task' : 'goal objective'}.`);
-      // Snapshot file contents only into the contract, not queued execution options.
-      // Long instructions must not overflow the runtime API or require the source on resume.
-      const taskOptions = { ...options, initialContext: positionalContext, contextFileText };
-      let session;
       const goal = Boolean(options.goal || command !== 'run' || ['parallel', 'besties', 'debate'].includes(options.mode));
-      const creationInput = { provider: provider.id, model: options.model || null, cwd: options.cwd, alias: options.alias || null, prompt, initialContext: positionalContext || null,
-        ...(contextFileText == null ? {} : { contextFileDigest: digest(contextFileText) }), goal, mode: options.mode || 'solo',
-        contractDigest: options.contract ? digest(fs.readFileSync(path.resolve(options.contract))) : null,
-        authorization: { yolo: options.yolo, readOnly: options.readOnly || false, tokenBudget: options.tokenBudget || null, runtime: options.runtimeSeconds || null, executor: options.delegationSelection?.executor || options.executor || null,
-          supervisorEffort: options.delegationSelection?.supervisor.effort || options.effort || null, executorModel: options.executorModel || null, agents: options.agents || null, parallelAgents: options.parallelAgents || null, debateAgents: options.debateAgents || null, besties: options.besties || null, participants: options.participants || null } };
-      if (options.requestId) {
-        const reserved = reserveRequest('cli-create', options.requestId, creationInput, db => {
-          const initial = { version: 1, id: randomUUID(), provider: provider.id, backend: provider.backend, cwd: options.cwd, model: options.model || provider.model || null,
-            ...(options.alias == null ? {} : { alias: options.alias }),
-            engineThreadId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), turns: 0, goal: null, executionState: 'idle' };
-          applyDelegationSelection(initial, options.delegationSelection); applyBestiesSelection(initial, options.bestiesSelection); applyParallelSelection(initial, options.parallelAgents); applyDebateSelection(initial, options.debateAgents); applyLaunchSelection(initial, options); prepareTask(initial, taskOptions, prompt, { persist: false });
-          if (goal && !initialContext) initial.goal = newGoal(initial.contract.objective, options.tokenBudget || initial.contract.limits.tokenBudget);
-          putRecord('session', initial.id, initial, db); appendEvent(initial.id, 'session.created', { sessionId: initial.id }, db); return { sessionId: initial.id };
-        });
-        session = loadSession(reserved.sessionId);
-        if (!initialContext && listRecords('execution').some(j => j.sessionId === session.id)) return await viewSession(session, options, ui);
-      } else {
-        session = createSession(provider, options.cwd, options.model, options.alias); applyDelegationSelection(session, options.delegationSelection); applyBestiesSelection(session, options.bestiesSelection); applyParallelSelection(session, options.parallelAgents); applyDebateSelection(session, options.debateAgents); applyLaunchSelection(session, options); prepareTask(session, taskOptions, prompt);
-        if (goal && !initialContext) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget);
-      }
-      saveSession(session);
+      const created = createTaskSession(provider, options, prompt, { goal, initialContext, contextFileText });
+      const session = created.session;
+      if (created.existingExecution) return await viewSession(session, options, ui);
       ui.event('session', { sessionId: session.id, message: `Session ${session.id}` });
       if (initialContext) {
         const contextOptions = { ...options, detach: false, ...(options.requestId ? { requestId: `${options.requestId}:context` } : {}) };
         const contextCode = await executeManaged(provider, session, contextOptions, ui, initialContext, { goal: false, returnAfterExecution: true });
+        if (ui.coreLifecycleInterrupted) return 0;
         if (contextCode !== 0) return contextCode;
-        Object.assign(session, loadSession(session.id));
-        if (!session.goal) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget);
-        else if (session.goal.objective !== session.contract.objective.trim()) throw new Error('The saved goal does not match --goal. Use a new --request-id.');
-        saveSession(session);
+        activateTaskGoal(session, options);
       }
       const executionOptions = initialContext && options.requestId ? { ...options, requestId: `${options.requestId}:goal` } : options;
       return await executeFromCommand(provider, session, executionOptions, ui, prompt, { goal });
     }
     return await chat(provider, options, ui);
-  } finally { ui.close(); }
+  };
+  try {
+    let result;
+    try { result = await launch(); }
+    catch (error) { if (!ui.coreLifecycleInterrupted) throw error; }
+    while (ui.coreLifecycleInterrupted) {
+      try { result = await coreServiceSettings(ui, options); }
+      catch (error) { if (!ui.coreLifecycleInterrupted) throw error; }
+    }
+    return result ?? 0;
+  } finally { await ui.settings?.close(); ui.close(); }
 }

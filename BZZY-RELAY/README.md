@@ -1,0 +1,151 @@
+# BZZY Relay
+
+Small private connectivity service for BZZY. The home host and authorized devices
+make outbound WebSocket connections to a TLS proxy. Relay routes authenticated,
+end-to-end encrypted messages. It runs no models, agents, shell commands, provider
+integrations or Core runtime. All implementation files are in this directory.
+
+Server deployment targets: **Debian 13 and Ubuntu Server 24.04 LTS**, Node >=24.
+Live endpoint: `wss://190.114.255.214/v1/socket`; health:
+`https://190.114.255.214/healthz`. The Debian deployment and public encrypted
+transport were verified, including a full VPS reboot. See
+[deployment guide](deploy/README.md) and [platform support](deploy/PLATFORMS.md).
+Test identities have been revoked; an operator must enroll your actual host's
+public certificate before pairing your devices. No permanent credentials are
+embedded in this package or these addresses.
+
+## Run and verify
+
+Use Node.js **24 or newer**. This README describes the implemented version, 0.1.0.
+
+```sh
+cd BZZY-RELAY
+npm ci --ignore-scripts
+npm run check
+npm test
+npm run demo
+npm run measure
+```
+
+The demo uses disposable identities and an in-memory database on loopback. It
+generates an actual QR SVG, pairs two endpoints with explicit fixture identity
+confirmation, delivers an encrypted event, and revokes access. It never connects
+to the CLI or real accounts. `measure` reports local RSS, CPU and delivery counts;
+it does not establish capacity on the intended 2 GB VPS.
+
+## Implemented
+
+- Ed25519 device authentication using fresh, socket-bound challenges.
+- Separate signed encryption keys and libsodium authenticated public-key boxes.
+- Explicit peer key pinning, signed connection presence, encrypted routing binding,
+  message expiration and bounded replay rejection across reconnects.
+- Versioned QR payloads, SVG/terminal QR rendering, and 256-bit random
+  `BZZY-PAIR-…`, `BZZY-AGENT-…` and `BZZY-TERMINAL-…` codes.
+- Online-sender, single-use atomic claims, confirmation of the exact recipient,
+  denial, expiry and revocation. PAIR and portable/live import purposes differ.
+- Persistent public device records, hashed code lookups and scoped transport
+  grants using SQLite. No payload persistence or offline store-and-forward.
+- Heartbeats, connection status, reconnect with capped jittered backoff,
+  bounded requests/buffers/queues, delivery receipts and uncertain-delivery states.
+- Per-device request limits, bounded handshake rate tracking, connection limits,
+  sanitized audit events, graceful shutdown and non-root deployment templates.
+
+The native iOS pairing/import screens, portable package validation/materialization,
+Core's local gateway and the guided home installer belong to their respective
+products and are **not implemented here**. An encrypted payload is not proof of a
+safe portable package. Relay grants are routing records, not Core permissions.
+No end-user import or remote execution is claimed complete by this transport.
+
+## Endpoint integration
+
+Generate identities on the endpoints, keeping private identity files there:
+
+```sh
+umask 077
+node bin/relay.js identity-create --file /private/device.identity.json > /private/device.public.json
+```
+
+Only the **public** home-host certificate is provisioned on the VPS by its
+operator. No endpoint secret, Core token or provider credential is uploaded.
+
+```sh
+node bin/relay.js host-add --state /var/lib/bzzy-relay --certificate /private/host.public.json
+node bin/relay.js serve --state /var/lib/bzzy-relay --audience wss://YOUR_HOST/v1/socket
+```
+
+Run `serve` as the dedicated service user; it refuses root. See
+[deployment instructions](deploy/README.md) for TLS and service setup.
+
+```js
+import { RelayClient } from './src/client.js';
+import { loadIdentity } from './src/identity.js';
+import { renderInvitationQR } from './src/invitation.js';
+
+const host = new RelayClient({
+  url: 'wss://YOUR_HOST/v1/socket',
+  identity: loadIdentity('/private/host.identity.json')
+});
+await host.connect();
+const invitation = await host.createInvitation({
+  kind: 'PAIR', resource: 'opaque_resource', actions: ['observe']
+});
+const svg = await renderInvitationQR({
+  relay: host.url, code: invitation.code,
+  sender: host.identity.certificate, expiresAt: invitation.expiresAt
+});
+// Display SVG/code only in the sender's private UI. Do not log either.
+```
+
+On the recipient endpoint, decode the QR (or enter the code inside BZZY), confirm
+the sender fingerprint from a trusted display, then call `claim(code)`. The
+sender receives `invite.requested` with the recipient's public certificate and
+requested scope. Compare the recipient fingerprint with its own trusted display;
+only after approval call `host.approve(claimId, confirmedRecipientCertificate)`.
+The recipient calls `trustPeer(confirmedHostCertificate)`. A certificate delivered
+by Relay or present in an unverified QR does not establish trust by itself.
+
+After approval, `send(grantId, payload)` encrypts to the pinned peer. `message`
+emits the decrypted payload at that peer. `grant.list`/`grant.inspect` report
+online status; `revokeGrant` and `revokePeer` stop future routing. The host must
+also revoke the matching local gateway authorization and subscriptions.
+
+Portable shares use `kind: 'AGENT'` or `'TERMINAL'`, `mode: 'portable'` and only
+`actions: ['import']`. They do not pair an administrative client. Live shares use
+`mode: 'live'`, an identified opaque resource and explicit actions, defaulting to
+`['observe']`. Imported behavior stays inactive until the recipient's local
+review and authorization; account bindings remain local to that recipient.
+
+## Existing CLI compatibility
+
+Inspected runtime: `../BZZY-CLI/BZZY-CLI-TERMINAL/src/runtime.js`,
+`session-access.js`, `database.js`, `api-client.js` and `docs/INTEGRATION.md`.
+The actual runtime already supports session-scoped permissions, revocable grants,
+input ownership/takeover, SQLite event cursors and idempotent execution/answer/
+control requests. Its capability response currently advertises `relay: false`.
+No existing source, API, execution lifetime or capability advertisement is changed.
+
+The home gateway should use that API and scoped grants. Keep its owner credential
+on the home host. Never forward arbitrary remote URLs, headers, environment
+overrides or owner tokens. Authorize every remote operation using locally saved
+device/resource/action grants, independent of Relay-supplied metadata. Preserve
+the full event envelope, provenance, session ID and cursor inside the encrypted
+payload; maintain separate processed cursors for each session.
+
+Reconnect restores **transport only**. The SDK never resends application messages
+or uncertain requests. Replay events from Core by processed cursor. Before any
+explicit command retry, inspect Core's durable state and retain the same Core
+idempotency key. `forwarded` and `delivery.received` describe transport; neither
+means a command ran or a goal was verified.
+
+See [protocol and trust boundaries](docs/PROTOCOL.md) and
+[verification record](docs/VALIDATION.md). Security policy is inherited from
+`../SECURITY.md`; its reusable generation preprompt is copied verbatim into
+`assets/generation-security.txt` for future integration. This service does not
+invoke an AI generator or execute imported instructions.
+
+PAIR QR rendering for the configured BZZY Relay also supports the compact
+`BZZY:P:` form: canonical unpadded uppercase RFC 4648 Base32 of the 32-byte
+invitation token followed by the 32-byte pinned host fingerprint. This form
+uses the recipient’s configured Relay, never an invitation URL; normal Relay
+expiry, single-use claiming and both fingerprint confirmations still apply.
+Full v1 JSON invitations, PNG/SVG rendering and sharing remain compatible.

@@ -1,0 +1,21 @@
+{
+  "name": "@bzzy/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BZZY's shared execution engine, host API, scoped tool broker and Relay gateway.",
+  "engines": { "node": ">=24" },
+  "exports": { ".": "./src/index.js", "./client": "./src/client.js", "./relay": "./src/relay/index.js", "./engine/*": "./src/engine/*", "./message-format": "./src/message-format.js", "./workspaces": "./src/workspaces.js", "./metrics": "./src/metrics.js", "./command": "./bin/bzzy-core.js" },
+  "bin": { "bzzy-core": "./bin/bzzy-core.js" },
+  "files": ["bin", "src", "assets", "docs", "scripts/prepare-package.mjs", "README.md", "NOTICE", "LICENSE"],
+  "bundledDependencies": ["@bzzy/relay"],
+  "scripts": {
+    "start": "node bin/bzzy-core.js serve",
+    "check": "node scripts/check.mjs",
+    "test": "node --test test/*.test.js",
+    "relay:smoke": "node scripts/relay-smoke.mjs",
+    "prepack": "node scripts/prepare-package.mjs",
+    "postpack": "node scripts/prepare-package.mjs --restore"
+  },
+  "dependencies": { "@bzzy/relay": "file:../BZZY-RELAY" }
+}

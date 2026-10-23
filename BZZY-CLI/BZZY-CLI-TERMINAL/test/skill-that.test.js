@@ -58,7 +58,9 @@ test('/skill_that preserves all recorded steps and evidence without changing the
   assert.match(prompt, /Initial filter guessed wrong/); assert.match(prompt, /python3 verify.py/); assert.match(prompt, /Worker independently/);
   assert.ok(!prompt.includes('UNRELATED_TASK_MUST_NOT_APPEAR'));
   assert.deepEqual(loadSession(session.id).goal, before.goal); assert.deepEqual(loadSession(session.id).acceptance, before.acceptance);
-  assert.equal(fs.readFileSync(skill.path, 'utf8'), markdown('verify-controls'));
+  const generated = fs.readFileSync(skill.path, 'utf8');
+  assert.ok(generated.startsWith(markdown('verify-controls')));
+  assert.match(generated, /Build reusable behavior separately from all private identity/);
   const refs = path.join(path.dirname(skill.path), 'references'), index = JSON.parse(fs.readFileSync(path.join(refs, 'evidence.json'), 'utf8'));
   assert.ok(fs.readFileSync(path.join(refs, 'run-records.jsonl'), 'utf8').includes('controls matched'));
   assert.equal(index[0].id, evidence.id); assert.equal(fs.readFileSync(path.join(refs, index[0].path), 'utf8'), 'positive and negative control outputs');

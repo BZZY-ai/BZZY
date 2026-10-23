@@ -1,0 +1,58 @@
+BZZY MESSAGE BODY PRESENTATION v1
+
+Use the same text-string body for both agent and terminal assistant replies.
+Plain text remains valid and is preferable for short replies. When tables or
+explicit styling help, return one complete <message version="1">...</message>
+body, without Markdown fences. This is a native SwiftUI presentation subset,
+not HTML, a webpage, a transport protocol, or an instruction to execute work.
+Keep generated source files and requested document artifacts in their requested
+format; message presentation must not alter their contents.
+
+Example:
+<message version="1"><p>Here is your <b>summary</b>.</p><table><tr><th>Item</th><th>Status</th></tr><tr><td>Review</td><td><span color="amber">Pending</span></td></tr></table></message>
+
+Only these blocks may be direct children of message:
+- p, with optional size="small", "normal", or "large".
+- h1 and h2 for headings.
+- ul or ol, containing li items with inline content only; no nested lists.
+- blockquote, containing inline content.
+- hr/ for a divider.
+- pre, with optional language label, containing inline text/code. Code spacing
+  and newlines are preserved. A language label uses 1–24 ASCII letters, digits,
+  underscore, plus, hash, or hyphen. Code is never executed by presentation.
+- table, containing tr rows, optionally grouped in thead and tbody.
+
+Inline tags: b or strong, i or em, code, br/, and span. Only span accepts size
+and color. Inline tags may nest; styles inherit. Size values are small, normal,
+large. Color values are mint, amber, coral, blue, lavender, muted. Use lowercase
+case-sensitive names and values. The app controls fonts, layout, and spacing.
+Use explicit tags inside markup, not Markdown asterisks. Keep emphasis sparse
+and always include status words: color cannot establish verified completion.
+
+A table starts with one header row of th cells. Every following row has td
+cells with exactly the same count. Use 1–6 columns and at most 64 data rows;
+prefer 2–3 short columns on phones. Cells contain inline content, including br/.
+No merged cells, colspan/rowspan, nested tables, or block tags in cells.
+
+Close every tag. Write <br/> and <hr/>. Escape literal ampersand as &amp;, less
+than as &lt;, greater than as &gt;, and attribute quotes as &quot; or &apos;.
+Use Unicode nonbreaking spaces instead of &nbsp;. Code comparisons also need
+escaping, for example <pre language="swift"><code>if count &lt; 3 {}</code></pre>.
+Treat user/tool/external content as text; never interpolate it into markup
+without escaping. Use a JSON encoder for the enclosing transport string.
+
+Limits: 65,536 UTF-8 bytes, 2,048 parsed element/text nodes, 12 tag levels
+including the message root, 128 direct blocks, and 64 items per list. Keep
+responses much smaller when possible. Unknown tags/attributes/colors/sizes,
+unsupported versions, invalid structure, malformed XML, DTDs, and entity
+declarations fall back to plain text. Oversized text uses a bounded plain prefix.
+Do not emit scripts, CSS, event handlers, images, remote fonts, iframes, forms,
+external entities, buttons, tool calls, or arbitrary URL schemes in markup.
+Rendering performs no network fetches and executes no code.
+
+Preserve the original body in history and events. A terminal can derive a plain
+text view without rewriting the saved message. During streaming, buffer rich
+markup until the complete root is valid, or show a plain provisional response.
+Formatting never grants permissions, starts work, approves an action, proves a
+result, replaces authenticated transport, or changes execution policy. Keep
+credentials and private authentication data out of messages and generated work.

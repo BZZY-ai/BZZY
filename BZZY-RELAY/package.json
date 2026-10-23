@@ -1,0 +1,32 @@
+{
+  "name": "@bzzy/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "description": "Private, bounded BZZY device relay. No model runtime or account credentials.",
+  "files": ["bin", "src", "README.md", "LICENSE", "NOTICE"],
+  "bin": {
+    "bzzy-relay": "bin/relay.js"
+  },
+  "exports": {
+    ".": "./src/client.js",
+    "./identity": "./src/identity.js",
+    "./invitation": "./src/invitation.js",
+    "./server": "./src/server.js"
+  },
+  "scripts": {
+    "start": "node bin/relay.js serve",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.js",
+    "demo": "node examples/local-demo.js",
+    "measure": "node scripts/measure.js"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "0.8.4",
+    "qrcode": "1.5.4",
+    "ws": "8.22.0"
+  }
+}

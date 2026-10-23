@@ -1,19 +1,9 @@
+import { configuredParallel, applyParallelSelection } from '@bzzy/core/engine/parallel-setup.js';
+export { configuredParallel, applyParallelSelection };
 import { chooseProvider } from './providers.js';
 import { chooseSavedCombo } from './mode-presets.js';
 import { chooseModel } from './models.js';
 import { agentChoice } from './delegation.js';
-
-export function configuredParallel(options = {}) {
-  const selections = options.parallelAgents;
-  if (selections) {
-    if (!Array.isArray(selections) || selections.length < 2 || selections.length > 3) throw new Error('Parallel mode needs 2 or 3 agents.');
-    return selections.map(selection => ({ ...agentChoice(selection.provider, selection.model), ...selection }));
-  }
-  const names = options.agents ? String(options.agents).split(',').map(value => value.trim()).filter(Boolean) : ['codex', 'claude', 'deepseek'].slice(0, options.parallelCount || 3);
-  if (names.length < 2 || names.length > 3) throw new Error('Parallel mode needs 2 or 3 agents. Use --parallel 2, --parallel 3, or --agents A,B[,C].');
-  if (options.parallelCount != null && names.length !== options.parallelCount) throw new Error('--parallel count must match the number of entries in --agents.');
-  return names.map((name, index) => ({ ...agentChoice(name, index === 0 ? options.model : undefined), effort: index === 0 ? options.effort || 'default' : 'default' }));
-}
 
 export async function chooseParallelWithDefault(options, ui) {
   const saved = options.agents ? false : await chooseSavedCombo('parallel', options, ui);
@@ -63,11 +53,4 @@ export async function chooseParallelGoal(selections, ui, { name = 'Parallel', de
     if (objective) return objective;
     ui.event('info', { message: 'Enter a goal to start parallel work, or press Esc to cancel.' });
   }
-}
-
-export function applyParallelSelection(session, selections) {
-  if (!selections) return session;
-  session.mode = 'parallel'; session.parallelAgents = configuredParallel({ parallelAgents: selections });
-  session.selectedEffort = session.parallelAgents[0].effort || 'default'; session.modelCapabilities = session.parallelAgents[0].capabilities;
-  return session;
 }

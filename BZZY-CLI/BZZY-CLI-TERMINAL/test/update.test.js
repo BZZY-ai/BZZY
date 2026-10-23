@@ -8,7 +8,7 @@ import { parseArgs } from '../src/cli.js';
 
 const updater = new URL('../src/update.js', import.meta.url).href;
 
-function fixture(t) {
+function fixture(t, { workspace = false } = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-update-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const remote = path.join(temporary, 'remote.git'), author = path.join(temporary, 'author');
@@ -25,7 +25,14 @@ function fixture(t) {
   }
   git(temporary, 'init', '--bare', '--initial-branch=main', remote);
   git(temporary, 'clone', remote, author);
-  fs.writeFileSync(path.join(author, 'install.sh'), '#!/bin/sh\nprintf "%s\\n%s\\n" "$PWD" "$BZZY_BIN_DIR" >> "$BZZY_UPDATE_TEST_LOG"\n');
+  const relativeInstallation = workspace ? path.join('BZZY-CLI', 'BZZY-CLI-TERMINAL') : '';
+  const installation = path.join(checkout, relativeInstallation);
+  fs.mkdirSync(path.join(author, relativeInstallation), { recursive: true });
+  if (workspace) for (const product of ['BZZY-CORE', 'BZZY-RELAY']) {
+    fs.mkdirSync(path.join(author, product));
+    fs.writeFileSync(path.join(author, product, 'package.json'), '{}');
+  }
+  fs.writeFileSync(path.join(author, relativeInstallation, 'install.sh'), '#!/bin/sh\nprintf "%s\\n%s\\n" "$PWD" "$BZZY_BIN_DIR" >> "$BZZY_UPDATE_TEST_LOG"\n');
   fs.writeFileSync(path.join(author, 'version.txt'), 'old');
   git(author, 'add', '.'); git(author, 'commit', '-m', 'Initial installation'); git(author, 'push', 'origin', 'main');
   git(temporary, 'clone', remote, checkout);
@@ -33,12 +40,12 @@ function fixture(t) {
     fs.writeFileSync(path.join(author, 'version.txt'), contents);
     git(author, 'add', '.'); git(author, 'commit', '-m', 'Update installation'); git(author, 'push', 'origin', 'main');
   }
-  function update(directory = checkout) {
+  function update(directory = installation) {
     return spawnSync(process.execPath, ['--input-type=module', '-e',
       `import { updateInstallation } from ${JSON.stringify(updater)}; try { process.exitCode = updateInstallation(process.argv[1]); } catch (error) { console.error(error.message); process.exitCode = 1; }`, directory],
     { cwd: temporary, env, encoding: 'utf8', timeout: 15000 });
   }
-  return { temporary, checkout, author, log, env, git, publish, update };
+  return { temporary, checkout, installation, author, log, env, git, publish, update };
 }
 
 test('--update parses and cannot accidentally launch a task', () => {
@@ -61,8 +68,28 @@ test('updates the installation from another directory, preserves the launcher pa
     [f.checkout, f.env.BZZY_LAUNCHER_BIN_DIR, f.checkout, f.env.BZZY_LAUNCHER_BIN_DIR]);
 });
 
-test('updating a differently owned installation scopes Git trust to that command without changing global config', t => {
-  const f = fixture(t); f.publish();
+test('updates the complete BZZY repository and runs its nested CLI installer', t => {
+  const f = fixture(t, { workspace: true }); f.publish();
+  const result = f.update();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(path.join(f.checkout, 'version.txt'), 'utf8'), 'new');
+  assert.deepEqual(fs.readFileSync(f.log, 'utf8').trim().split('\n'), [f.installation, f.env.BZZY_LAUNCHER_BIN_DIR]);
+  assert.equal(f.git(f.checkout, 'status', '--porcelain'), '');
+});
+
+test('workspace updates preserve edits outside the CLI directory', t => {
+  const f = fixture(t, { workspace: true }); f.publish();
+  const file = path.join(f.checkout, 'BZZY-CORE', 'package.json');
+  fs.writeFileSync(file, '{"local":true}');
+  const before = f.git(f.checkout, 'rev-parse', 'HEAD'), result = f.update();
+  assert.equal(result.status, 1); assert.match(result.stderr, /uncommitted changes/);
+  assert.equal(f.git(f.checkout, 'rev-parse', 'HEAD'), before);
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"local":true}');
+  assert.equal(fs.existsSync(f.log), false);
+});
+
+for (const workspace of [false, true]) test(`updating a differently owned ${workspace ? 'workspace' : 'installation'} scopes Git trust to that command without changing global config`, t => {
+  const f = fixture(t, { workspace }); f.publish();
   // Only the client checkout should simulate a different owner. A real remote
   // server doesn't inherit this Git test variable from its connecting client.
   f.git(f.checkout, 'config', 'remote.origin.uploadpack', 'env -u GIT_TEST_ASSUME_DIFFERENT_OWNER git-upload-pack');

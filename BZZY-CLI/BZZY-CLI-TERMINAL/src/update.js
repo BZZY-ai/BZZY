@@ -7,12 +7,16 @@ const installationRoot = fileURLToPath(new URL('../', import.meta.url));
 
 export function updateInstallation(directory = installationRoot) {
   const cwd = fs.realpathSync(directory);
+  const workspace = path.resolve(cwd, '../..');
+  const isWorkspace = cwd === path.join(workspace, 'BZZY-CLI', 'BZZY-CLI-TERMINAL')
+    && ['BZZY-CORE', 'BZZY-RELAY'].every(product => fs.existsSync(path.join(workspace, product, 'package.json')));
+  const trust = [cwd, ...(isWorkspace ? [workspace] : [])].flatMap(directory => ['-c', `safe.directory=${directory}`]);
   const env = { ...process.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH || ''}` };
   function git(args, failure) {
     // The launcher may be shared by users (e.g. a root shell using an install
     // owned by another user). Trust only this already-running installation for
     // this Git invocation; never add a global safe.directory exception.
-    const result = spawnSync('git', ['-c', `safe.directory=${cwd}`, ...args], { cwd, env, encoding: 'utf8', timeout: 120000 });
+    const result = spawnSync('git', [...trust, ...args], { cwd, env, encoding: 'utf8', timeout: 120000 });
     if (result.error || result.status !== 0) {
       throw new Error(`${failure}${result.error ? `: ${result.error.message}` : result.stderr.trim() ? `: ${result.stderr.trim()}` : '.'}`);
     }
@@ -20,7 +24,10 @@ export function updateInstallation(directory = installationRoot) {
   }
 
   const top = git(['rev-parse', '--show-toplevel'], 'Updating requires a Git checkout. Install bzzy with git clone and ./install.sh');
-  if (fs.realpathSync(top) !== cwd) throw new Error('The bzzy installation must be its own Git checkout. Install with git clone and ./install.sh.');
+  const repository = fs.realpathSync(top);
+  if (repository !== cwd && !(isWorkspace && repository === workspace)) {
+    throw new Error('The bzzy installation must be its own Git checkout or part of the complete BZZY workspace. Install with git clone and ./install.sh.');
+  }
   git(['symbolic-ref', '--quiet', '--short', 'HEAD'], 'Cannot update a detached checkout. Switch to your tracked branch first');
   if (git(['status', '--porcelain', '--untracked-files=normal'], 'Could not inspect the installation')) {
     throw new Error('The bzzy installation has uncommitted changes. Commit or stash them before running bzzy --update.');

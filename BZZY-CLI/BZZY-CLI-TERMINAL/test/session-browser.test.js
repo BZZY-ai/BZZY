@@ -4,9 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { PassThrough } from 'node:stream';
 import { createSession, saveSession, loadSession, sessions, findSession, setSessionAlias, sessionPath } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
-import { chooseSavedSession, promptSessionAlias } from '../src/session-browser.js';
+import { chooseSavedSession, namedTerminalSessions, promptSessionAlias, queueSessionBrowser } from '../src/session-browser.js';
+import { attachSession, viewSession, watchRegistry } from '../src/runtime-client.js';
+import { UI } from '../src/ui.js';
 import { parseArgs } from '../src/cli.js';
 import { appendEvent, events, listRecords } from '../src/database.js';
 import { root } from '../src/process.js';
@@ -69,20 +72,184 @@ test('/alias prompts, supports an inline name, and cancels without renaming', as
   assert.equal(loadSession(session.id).alias, 'trabajo_02');
 });
 
-test('session picker shows names and saved directories, with direct attach, view and cancel', async () => {
+test('session picker shows only aliases, excludes unnamed/internal sessions and opens the exact ID', async () => {
   const session = createSession(BUILTINS.codex, work, null, 'trabajo_01');
-  const child = createSession(BUILTINS.codex, work); child.parentSessionId = session.id; saveSession(child);
+  createSession(BUILTINS.codex, work);
+  const child = createSession(BUILTINS.codex, work, null, 'Hidden child'); child.parentSessionId = session.id; saveSession(child);
+  const agent = createSession(BUILTINS.codex, work, null, 'Hidden Agent'); agent.purpose = 'agent'; saveSession(agent);
   let answer = session.id;
   const ui = { event() {}, async chooseOne(title, picker) {
-    assert.equal(title, 'Saved sessions'); assert.equal(picker.choices.length, 1);
-    assert.match(picker.choices[0].label, /trabajo_01/); assert.ok(picker.choices[0].description.includes(work));
-    assert.deepEqual(picker.shortcuts, { a: 'attach', v: 'view' }); return answer;
+    assert.equal(title, 'Sessions'); assert.deepEqual(picker.choices, [{ value: session.id, label: 'trabajo_01' }]);
+    assert.equal(picker.shortcuts, undefined); return answer;
   } };
   assert.equal((await chooseSavedSession(ui)).action, 'attach');
-  answer = { value: session.id, action: 'view' };
-  const selected = await chooseSavedSession(ui);
-  assert.equal(selected.action, 'view'); assert.equal(selected.session.cwd, work);
+  assert.equal((await chooseSavedSession(ui)).session.cwd, work);
   answer = null; assert.equal(await chooseSavedSession(ui), null);
+  const duplicate = createSession(BUILTINS.codex, elsewhere, null, 'trabajo_01');
+  ui.chooseOne = async (_title, picker) => {
+    assert.ok(picker.choices.every(item => item.label === 'trabajo_01'));
+    assert.deepEqual(new Set(picker.choices.map(item => item.description)), new Set([work, elsewhere]));
+    return duplicate.id;
+  };
+  assert.equal((await chooseSavedSession(ui)).session.id, duplicate.id);
+});
+
+test('named terminals sort newest saved activity first with creation fallback and deterministic ties', () => {
+  const base = { cwd: work, provider: 'codex', alias: 'Only alias' };
+  const row = (id, fields) => ({ ...base, id, ...fields });
+  const source = [row('z', { updatedAt: '2026-10-23T01:00:00Z' }), row('a', { updatedAt: '2026-10-23T01:00:00Z' }),
+    row('new', { updatedAt: Date.parse('2026-10-24T01:00:00Z') }), row('fallback', { updatedAt: 'invalid', createdAt: '2026-10-22T01:00:00Z' }),
+    row('blank', { alias: '  ' }), row('missing', { alias: undefined }), row('coordinator', { purpose: 'assistant' }), row('child', { parentSessionId: 'a' })];
+  assert.deepEqual(namedTerminalSessions(source).map(item => item.id), ['new', 'a', 'z', 'fallback']);
+  assert.equal(source[0].id, 'z', 'sorting does not mutate the catalog');
+});
+
+function terminal() {
+  const input = new PassThrough(); Object.assign(input, { isTTY: true, isRaw: false, setRawMode(value) { this.isRaw = value; } });
+  const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 32, columns: 100 }); output.resume();
+  const ui = new UI({ input, output, error: output }); ui.openTerminal();
+  return ui;
+}
+
+test('real arrow keys and Enter open the chosen alias without leaking directories into the picker', async () => {
+  const original = createSession(BUILTINS.codex, work, null, 'First alias');
+  const latest = createSession(BUILTINS.codex, elsewhere, null, 'Latest alias');
+  const ui = terminal();
+  try {
+    const picking = chooseSavedSession(ui); await Promise.resolve();
+    assert.deepEqual(ui.tui.selection.choices.map(item => item.label), namedTerminalSessions().map(item => item.alias));
+    assert.ok(ui.tui.selection.choices.every(item => !item.description));
+    ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'return' });
+    const selected = await picking;
+    assert.equal(selected.session.id, namedTerminalSessions()[1].id);
+    assert.equal(selected.session.cwd, selected.session.id === original.id ? work : elsewhere);
+    assert.equal(ui.tui.panel, 'chat'); assert.equal(listRecords('execution').length, 0);
+  } finally { ui.close(); }
+});
+
+test('Sessions navigation is local, queues once during a reply and never interrupts private input', async () => {
+  const ui = terminal(); ui.setSession('saved-terminal');
+  try {
+    ui.onSessions = () => queueSessionBrowser(ui);
+    const waiting = ui.ask('bzzy › '); await Promise.resolve();
+    ui.tui.setPanel('sessions'); assert.equal(await waiting, '/sessions');
+    queueSessionBrowser(ui); queueSessionBrowser(ui);
+    assert.deepEqual(ui.tui.inputQueue, [{ sessionId: 'saved-terminal', text: '/sessions' }]);
+    assert.equal(await ui.ask('bzzy › '), '/sessions');
+    ui.privateView = { title: 'Private invitation' }; assert.equal(queueSessionBrowser(ui), false); ui.privateView = null;
+    const privateInput = ui.ask('Source fingerprint: '); await Promise.resolve();
+    assert.equal(queueSessionBrowser(ui), false); ui.tui.finish(null); await privateInput;
+    assert.equal(listRecords('execution').length, 0);
+  } finally { ui.close(); }
+});
+
+test('mouse/keyboard Sessions navigation preserves the unsent draft, history and event cursor on cancel', async () => {
+  const session = createSession(BUILTINS.codex, work, null, 'Saved chat');
+  const ui = terminal(); ui.setSession(session.id); ui.onSessions = () => queueSessionBrowser(ui);
+  try {
+    ui.event('text', { text: 'Visible previous answer', itemId: 'answer' }); ui.cursors.set(session.id, 73);
+    const before = [...ui.tui.entries];
+    const waiting = ui.ask('bzzy › '); await Promise.resolve();
+    ui.tui.value = 'Keep this unsent thought'; ui.tui.cursor = 7;
+    ui.tui.setPanel('http'); ui.tui.key('', { name: 'g', ctrl: true });
+    assert.equal(await waiting, '/sessions');
+    const choosing = chooseSavedSession(ui); await Promise.resolve();
+    ui.tui.key('', { name: 'escape' }); assert.equal(await choosing, null);
+    assert.equal(ui.tui.panel, 'chat'); assert.equal(ui.tui.value, 'Keep this unsent thought'); assert.equal(ui.tui.cursor, 7);
+    assert.deepEqual(ui.tui.entries, before); assert.equal(ui.cursors.get(session.id), 73);
+    assert.equal(ui.tui.inputQueue.length, 0); assert.equal(listRecords('execution').length, 0);
+  } finally { ui.close(); }
+});
+
+test('queued Sessions navigation keeps separate drafts when the active group child changes', async () => {
+  const session = createSession(BUILTINS.codex, work, null, 'Saved group'), ui = terminal();
+  try {
+    ui.setSession(session.id); ui.setTabs(session.id, [{ id: 'child-a', agent: 'A' }, { id: 'child-b', agent: 'B' }], 'child-a');
+    ui.tui.value = 'Draft A'; ui.tui.cursor = 2; queueSessionBrowser(ui);
+    ui.tui.drafts.set('child-b', { value: 'Draft B', cursor: 4 });
+    ui.setTabs(session.id, [{ id: 'child-a', agent: 'A' }, { id: 'child-b', agent: 'B' }], 'child-b');
+    const waiting = ui.ask('bzzy › '); await Promise.resolve(); queueSessionBrowser(ui); assert.equal(await waiting, '/sessions');
+    const choosing = chooseSavedSession(ui); await Promise.resolve(); ui.tui.key('', { name: 'escape' }); await choosing;
+    assert.equal(ui.tui.value, 'Draft B'); assert.equal(ui.tui.cursor, 4);
+    assert.deepEqual(ui.sessionBrowserDrafts.get('child-a'), { value: 'Draft A', cursor: 2 });
+    assert.deepEqual(ui.tui.inputQueue, [{ sessionId: 'child-a', text: '/sessions' }]);
+  } finally { ui.close(); }
+});
+
+for (const mode of ['solo', 'parallel']) test(`/sessions opens existing ${mode} chat history in its original directory without resuming work`, { timeout: 15000 }, async () => {
+  const source = createSession(BUILTINS.codex, elsewhere, null, 'Source'); source.mode = mode; saveSession(source);
+  const target = createSession(BUILTINS.codex, work, 'saved-model', 'Target');
+  target.goal = { status: 'paused', objective: 'Do not resume this goal' }; target.executionState = 'paused'; saveSession(target);
+  appendEvent(target.id, 'message.user', { text: 'Original saved question' });
+  appendEvent(target.id, 'text', { text: 'Original saved answer', itemId: 'saved-answer' });
+  const inputs = ['/sessions', '/exit'], histories = [], selected = [];
+  let history = [];
+  const ui = { interactive: true, cursors: new Map([[target.id, 999]]),
+    event(type, data) { history.push({ type, ...data }); },
+    setSession(id) { this.sessionId = id; selected.push(id); }, updateSession() {},
+    clearHistory() { history = []; histories.push(history); },
+    async ask() { assert.ok(inputs.length, 'unexpected chat/model prompt'); return inputs.shift(); },
+    async chooseOne() { return target.id; }, async settingsCommand() { return false; } };
+  assert.equal(await attachSession(source, { cwd: elsewhere, mode: 'solo' }, ui), 0);
+  assert.equal(ui.sessionId, target.id); assert.ok(selected.includes(source.id));
+  assert.ok(history.some(item => item.type === 'message.user' && item.text === 'Original saved question'));
+  assert.ok(history.some(item => item.type === 'text' && item.text === 'Original saved answer'));
+  assert.equal(loadSession(target.id).cwd, work); assert.equal(loadSession(target.id).goal.status, 'paused');
+  assert.equal(listRecords('execution').length, 0); assert.equal(sessions().length, 2);
+  assert.ok(!fs.existsSync(process.env.BZZY_TEST_LOG), 'opening history never invokes a model');
+});
+
+for (const mode of ['view', 'activity']) test(`Sessions opens the selected chat from a read-only ${mode} screen`, { timeout: 15000 }, async () => {
+  const source = createSession(BUILTINS.codex, elsewhere, null, 'Source');
+  const target = createSession(BUILTINS.codex, work, null, 'Target');
+  appendEvent(target.id, 'text', { text: 'Selected history', itemId: 'saved-answer' });
+  const inputs = ['/sessions', '/exit'], rendered = [];
+  const ui = { interactive: true, cursors: new Map(), event(type, data) { rendered.push({ type, ...data }); },
+    setSession(id) { this.sessionId = id; }, updateSession() {}, clearHistory() { rendered.length = 0; },
+    async ask() { assert.ok(inputs.length, 'unexpected input'); return inputs.shift(); },
+    async chooseOne() { return target.id; }, async settingsCommand() { return false; } };
+  assert.equal(await (mode === 'view' ? viewSession(source, {}, ui) : watchRegistry(source, {}, ui, 'activity')), 0);
+  assert.equal(ui.sessionId, target.id); assert.ok(rendered.some(item => item.text === 'Selected history'));
+  assert.equal(listRecords('execution').length, 0); assert.equal(sessions().length, 2);
+});
+
+for (const reopening of [false, true]) test(`opening a saved parallel target ${reopening ? 'again' : 'from another chat'} restores only its selected child history and draft`, { timeout: 15000 }, async () => {
+  const source = createSession(BUILTINS.codex, elsewhere);
+  const group = createSession(BUILTINS.codex, work, 'group-model', 'Saved parallel');
+  group.mode = 'parallel'; group.goal = { id: 'saved-group-goal', status: 'paused', objective: 'Stay paused' }; saveSession(group);
+  const children = [createSession(BUILTINS.codex, work, 'first-model'), createSession(BUILTINS.codex, work, 'second-model')];
+  children.forEach((child, index) => {
+    Object.assign(child, { parentSessionId: group.id, createdAt: `2026-10-2${index + 1}T00:00:00Z`, agentNamespace: `peer-${index}`, executionState: 'paused' });
+    saveSession(child); appendEvent(child.id, 'text', { text: `Child ${index} saved answer`, itemId: `child-${index}-answer` });
+  });
+  appendEvent(group.id, 'text', { text: 'Parent overview answer must stay in overview', itemId: 'parent-answer' });
+  const expected = children[reopening ? 1 : 0], ui = terminal();
+  try {
+    ui.setSession(reopening ? group.id : source.id);
+    if (reopening) ui.setTabs(group.id, children.map(child => ({ id: child.id, agent: child.agentNamespace })), expected.id);
+    ui.tui.value = reopening ? 'Current child draft' : 'Source draft'; ui.tui.cursor = 6;
+    ui.tui.drafts.set(group.id, { value: 'Root draft must not become child draft', cursor: 3 });
+    if (!reopening) ui.tui.drafts.set(expected.id, { value: 'Saved child draft', cursor: 4 });
+    ui.event('text', { text: 'Old visible history must be cleared', itemId: 'old-answer' });
+    children.forEach(child => ui.cursors.set(child.id, 999));
+    ui.chooseOne = async () => group.id;
+    const selected = await chooseSavedSession(ui); assert.equal(selected.session.id, group.id);
+    ui.ask = async () => {
+      assert.equal(ui.sessionId, group.id); assert.equal(ui.activeTab, expected.id);
+      const history = ui.tui.entries.map(entry => entry.text || '').join('\n');
+      assert.match(history, new RegExp(`Child ${reopening ? 1 : 0} saved answer`));
+      assert.doesNotMatch(history, /Parent overview answer|Old visible history/);
+      assert.ok(!history.includes(`Child ${reopening ? 0 : 1} saved answer`));
+      assert.equal(ui.tui.value, reopening ? 'Current child draft' : 'Saved child draft');
+      assert.equal(ui.tui.cursor, reopening ? 6 : 4);
+      assert.equal(ui.tui.model, expected.model);
+      return '/exit';
+    };
+    assert.equal(await attachSession(selected.session, { cwd: elsewhere }, ui), 0);
+    assert.equal(ui.tui.drafts.get(group.id).value, 'Root draft must not become child draft');
+    assert.equal(loadSession(group.id).goal.status, 'paused');
+    assert.equal(listRecords('execution').length, 0); assert.ok(!fs.existsSync(process.env.BZZY_TEST_LOG));
+  } finally { ui.close(); }
 });
 
 test('noninteractive sessions output includes the alias and saved directory', () => {
@@ -91,7 +258,7 @@ test('noninteractive sessions output includes the alias and saved directory', ()
   assert.equal(result.status, 0, result.stderr);
   const item = result.stdout.trim().split('\n').map(JSON.parse).find(item => item.session?.id === session.id);
   assert.equal(item.session.alias, 'trabajo_01'); assert.equal(item.session.cwd, work);
-  assert.match(item.message, /trabajo_01/);
+  assert.equal(item.message, 'trabajo_01');
 });
 
 test('--alias persists on the direct task creation path, including request IDs', () => {
@@ -114,7 +281,7 @@ for (const action of ['attach', 'view', 'new']) {
       saveSession(latest);
       appendEvent(latest.id, 'text', { text: 'other-history-marker', itemId: 'other-answer' });
     }
-    const command = [process.execPath, path.join(root, 'bin/bzzy.js'), ...(action === 'new' ? ['--provider', 'codex', '--alias', 'trabajo_01'] : ['sessions']), '--no-pet'];
+    const command = [process.execPath, path.join(root, 'bin/bzzy.js'), ...(action === 'new' ? ['--provider', 'codex', '--alias', 'trabajo_01'] : action === 'view' ? ['--view', original.id] : ['sessions']), '--no-pet'];
     const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
     const child = spawn('script', ['-qefc', command.map(quote).join(' '), '/dev/null'], { cwd: action === 'new' ? work : elsewhere,
       env: { ...process.env, TERM: 'xterm-256color' }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -129,8 +296,10 @@ for (const action of ['attach', 'view', 'new']) {
     }
     try {
       if (action !== 'new') {
-        await until(() => output.includes('Saved sessions') && output.includes('another-session') && output.includes('trabajo_01'));
-        child.stdin.write('\x1b[B' + (action === 'view' ? 'v' : '\r'));
+        if (action === 'attach') {
+          await until(() => output.includes('Sessions') && output.includes('another-session') && output.includes('trabajo_01'));
+          child.stdin.write('\x1b[B\r');
+        }
         await until(() => output.includes('saved-history-marker'));
         assert.ok(!output.includes('other-history-marker'));
       } else await until(() => output.includes('Your next goal starts here.'));

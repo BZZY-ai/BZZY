@@ -185,7 +185,7 @@ context-window limit still applies.
 
 `--contract FILE` loads task JSON. The shipped task guide documents its schema
 and examples. Persistent project constraints and inherited worker boundaries
-remain effective. `--read-only` enforces a read-only policy using Linux bubblewrap
+remain effective. `--read-only` enforces a read-only policy using Linux bubblewrap or macOS sandbox-exec
 and conflicts with `--yolo`. `--yolo` disables Codex approvals/sandbox or bypasses
 Claude permission checks; it is an explicit execution setting, not an effect of
 reading this reference. Tool roles and contracts do not grant wider target scope.
@@ -200,7 +200,7 @@ state files. This reference does not create them.
 ```text
 BZZY_HOME/                         default ~/.bzzy; private local state
   config.json                     providers, normal/mode presets, notification preferences
-  credentials.json                API keys and Telegram bot token; never public configuration
+  credentials.json                Provider API keys; never public configuration
   bzzy.sqlite                     authoritative sessions, events, executions and task records
   bzzy.sqlite-wal, bzzy.sqlite-shm  SQLite journal companions while the database is open
   sessions/SESSION_UUID.json       compatibility exports; SQLite is authoritative
@@ -244,7 +244,6 @@ INSTALLATION/
   src/evidence.js, verification.js hashed evidence and host completion checks
   src/database.js, store.js        SQLite state, event log and compatibility exports
   src/tools.js                    role-scoped task tools and local tool bridge
-  src/telegram*.js                 pairing, durable chat relay and bot controls
   src/notifications.js            notification delivery and retries
   src/api-client.js               exported JavaScript integration client
   assets/                         web view, event schema, backend instruction assets
@@ -255,7 +254,7 @@ INSTALLATION/
 SQLite stores records by kind/ID and durable events by increasing sequence.
 Important record kinds include session, execution, run, question, input-owner,
 artifact, snapshot, checkpoint, assessment, goal-history, assignment and round;
-group state uses parallel, besties and debate records. Outbox and Telegram records
+group state uses parallel, besties and debate records. Outbox records
 separate accepted work from external delivery. JSON exports can lag after a crash;
 prefer the runtime API and SQLite-backed reads to editing exports directly.
 Do not rewrite the database, native backend stores or lock files to steer a run.
@@ -283,7 +282,7 @@ option reference; `bzzy integration` prints the public integration guide.
 It works noninteractively, including before setup, with no inference or network.
 
 Chat commands include `/goal`, `/default`, `/models`, `/providers`, `/new`,
-`/debate`, `/usage`, `/telegram`, `/chat`, `/room`, `/activity`, `/http`, `/copy`,
+`/debate`, `/usage`, `/chat`, `/room`, `/activity`, `/http`, `/copy`,
 `/tabs`, `/tab NUMBER|NAME`, `/pause`, `/cancel`, `/detach`, `/help` and `/exit`.
 `/provider`, `/model` and `/quit` are aliases. Group views also accept `/pause all`
 and `/cancel all`. Tab/Shift+Tab switches chats; Ctrl+G cycles views; Ctrl+O toggles
@@ -313,14 +312,11 @@ bzzy service status
 bzzy service stop
 bzzy service web SESSION_UUID
 bzzy service token SESSION_UUID --json
-bzzy telegram setup
-bzzy telegram status
 bzzy notifications list
 bzzy notifications retry
 ```
 
-The goal subcommands also include pause, cancel, clear and resume. Telegram also
-has attach/detach controls. `bzzy provider add NAME --base-url URL --model MODEL
+The goal subcommands also include pause, cancel, clear and resume. `bzzy provider add NAME --base-url URL --model MODEL
 --env-key KEY_NAME` registers a custom provider. `bzzy memory search "query"`,
 `bzzy memory add FILE` and `bzzy memory invalidate ID "reason"` manage project
 knowledge. Run `bzzy --help` for exact option syntax and other supported flags.
@@ -382,22 +378,10 @@ launch delegate assignments; executors/reviewers cannot accept parent requiremen
 or widen their inherited policy. A native thread may retain schemas needed by a
 future goal, while the host continues to enforce whether each call is authorized.
 
-## Telegram, notifications, usage and recovery
+## Notifications, usage and recovery
 
-Telegram setup accepts a bot token privately and discovers the private chat ID
-through a pairing phrase. Credentials are stored separately from config.
-Notification enablement and chat attachment are independent settings. Saved
-autoAttach reconnects new/resumed conversations using the same bot and matching
-chat ID; detach disables automatic attachment. Group overviews are not attached
-as ordinary chats; an individual agent conversation can be attached.
-
-The relay mirrors new readable chat messages, not old full transcripts. Bot
-commands include provider/model/effort menus, `/default`, `/goal`, `/status`,
-`/pause`, `/cancel`, `/resume` and `/detach`. A new `/goal` stops and replaces active
-work. Replies to questions answer the originating pending question. Messages,
-dispatch, polling cursors and delivery state persist; uncertain deliveries are
-not automatically treated as safely repeatable. Terminal and Telegram input use
-the same one-execution-per-session rule and authorization boundaries.
+The versioned goal-event stream and generic notification outbox remain available
+for platform integrations. No third-party chat transport is bundled.
 
 Completed/stalled summaries show elapsed time as HH:MM:SS and reported tokens.
 Delegate output distinguishes BRAIN, HANDS / EXECUTOR, and TOTAL. Zero assignments
@@ -421,5 +405,5 @@ rules, idempotency behavior, capture coverage and JavaScript client examples.
 There is no public API route that creates an arbitrary new session/contract;
 create it through the CLI, then use its UUID. Sending the literal text `/goal ...`
 to the generic execute endpoint is not terminal-command parsing. To replace a goal
-use the terminal/Telegram command flow, or stop/control and establish the new task
+use the terminal command flow, or stop/control and establish the new task
 through supported CLI operations. `goal: true` executes an existing saved goal.

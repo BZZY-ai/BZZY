@@ -1,3 +1,5 @@
+import { applyDelegationSelection } from '@bzzy/core/engine/delegation-setup.js';
+export { applyDelegationSelection };
 import { config, chooseProvider } from './providers.js';
 import { chooseModel } from './models.js';
 import { agentChoice } from './delegation.js';
@@ -23,15 +25,6 @@ export async function chooseDelegation(options, ui) {
     choices.push({ provider: provider.id, ...model, effort: model.effort || 'default' });
   }
   return { supervisor: choices[0], executor: choices[1] };
-}
-
-export function applyDelegationSelection(session, selection) {
-  if (!selection) return session;
-  session.mode = 'delegate';
-  session.selectedEffort = selection.supervisor.effort;
-  session.modelCapabilities = selection.supervisor.capabilities;
-  session.executor = { ...selection.executor };
-  return session;
 }
 
 export function describeDelegation(session) {

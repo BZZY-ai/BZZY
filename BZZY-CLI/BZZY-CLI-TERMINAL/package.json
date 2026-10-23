@@ -1,25 +1,53 @@
 {
   "name": "bzzy-cli",
   "version": "0.2.0",
-  "description": "A persistent coding agent with Codex goals, subscription backends, and API providers.",
+  "description": "The BZZY terminal frontend, bundled with the shared BZZY Core execution engine.",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/m4ke-a-wish/bzzy-cli.git"
+    "url": "git+https://github.com/BZZY-ai/BZZY.git",
+    "directory": "BZZY-CLI/BZZY-CLI-TERMINAL"
   },
-  "homepage": "https://github.com/m4ke-a-wish/bzzy-cli#readme",
+  "homepage": "https://github.com/BZZY-ai/BZZY/tree/main/BZZY-CLI/BZZY-CLI-TERMINAL",
   "bugs": {
-    "url": "https://github.com/m4ke-a-wish/bzzy-cli/issues"
+    "url": "https://github.com/BZZY-ai/BZZY/issues"
   },
-  "engines": { "node": ">=24" },
-  "bin": { "bzzy": "bin/bzzy.js" },
-  "exports": { ".": "./src/api-client.js" },
-  "files": ["bin", "src", "assets", "docs", "references", "README.md", "NOTICE", "LICENSE"],
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "bzzy": "bin/bzzy.js",
+    "bzzy-core": "bin/bzzy-core.js"
+  },
+  "exports": {
+    ".": "./src/api-client.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "assets",
+    "docs",
+    "references",
+    "scripts/install-launcher.mjs",
+    "scripts/prepare-package.mjs",
+    "install.sh",
+    "README.md",
+    "NOTICE",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@bzzy/core": "file:../../BZZY-CORE"
+  },
+  "bundledDependencies": [
+    "@bzzy/core"
+  ],
   "scripts": {
     "start": "node bin/bzzy.js",
-    "test": "node --test test/*.test.js",
+    "test": "node scripts/test.mjs",
     "check": "node scripts/check.mjs",
-    "smoke": "node scripts/smoke-engines.mjs"
+    "smoke": "node scripts/smoke-engines.mjs",
+    "prepack": "node scripts/prepare-package.mjs",
+    "postpack": "node scripts/prepare-package.mjs --restore"
   }
 }

@@ -2,23 +2,15 @@ import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defa
 import { randomUUID } from 'node:crypto';
 import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
 import { delay } from './delegation.js';
-import { loadSession, saveSession, sessionPath, writeJson } from './store.js';
-import { prepareTask } from './task.js';
-import { newGoal } from './goals.js';
-import { getProvider } from './providers.js';
-import { chooseModel, assertModelIdle, assertSessionIdle } from './models.js';
-import { transaction, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
-import { configureTelegram, autoAttachTelegram } from './telegram.js';
-import { conversationCursor } from './conversation.js';
-import { enqueueExecution } from './execution-queue.js';
-import { normalizeContract } from './contracts.js';
-import { budgetUsage } from './delegation-usage.js';
-import { reconcileSession } from './recovery.js';
+import { loadSession } from './store.js';
+import { chooseModel, assertModelIdle } from './models.js';
 import { chatHelp } from './terminal-commands.js';
-import { promptSessionAlias } from './session-browser.js';
+import { chooseSavedSession, promptSessionAlias } from './session-browser.js';
 import { exportProject } from './project-bundle.js';
+import { shareTerminal, importTerminal, forgetPrivateImportInput } from './share-ui.js';
 import { skillThat } from './skill-that.js';
 import { checkConnections } from './connection-check.js';
+import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider, executionRecord } from '@bzzy/core/engine/session-operations.js';
 
 const groupMode = session => ['parallel', 'besties'].includes(session.mode);
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
@@ -27,75 +19,6 @@ function saveSessionDefault(sessionId, ui) {
   const selected = saveSessionDefaultSelection(loadSession(sessionId));
   ui.event('info', { message: savedDefaultMessage(selected) });
   return selected;
-}
-
-async function enqueueGoalTurn(sessionId, owner, options, { resume = false, objective, requestId = randomUUID(), info }) {
-  if (!resume) {
-    if (!objective?.trim()) throw new Error('Use /goal <objective> to start persistent work.');
-    const api = client(info || await ensureRuntime(), sessionId, owner);
-    const busy = snapshot => {
-      if (executionActive(snapshot.execution)) return true;
-      if (!snapshot.capabilities.chatTabs) return false;
-      const children = new Set(snapshot.children.map(child => child.id));
-      return listRecords('execution').some(job => children.has(job.sessionId) && executionActive(job));
-    };
-    let snapshot = await api('GET');
-    if (busy(snapshot)) {
-      await api('POST', 'control', { action: 'cancel' }, randomUUID());
-      const deadline = Date.now() + 15000;
-      do {
-        if (Date.now() >= deadline) throw new Error('The previous run is still stopping. Send /goal again once it stops.');
-        await delay(50); snapshot = await api('GET');
-      } while (busy(snapshot));
-    }
-  }
-  if (resume) {
-    requireOwner(sessionId, owner);
-    const recovery = reconcileSession(sessionId);
-    if (recovery.state === 'cleanup_required') throw new Error(recovery.reason);
-    if (recovery.live) throw new Error('This goal is already running. Watch its current execution instead of starting another.');
-  }
-  const prompt = resume ? 'Continue the saved goal from its verified checkpoint and assignment history.' : objective;
-  return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume }, requestId, {
-    authorize: () => requireOwner(sessionId, owner),
-    prepare: (fresh, db) => {
-      if (resume) {
-        if (!fresh.goal || fresh.goal.status === 'complete') throw new Error('There is no unfinished goal to resume.');
-        if (options.tokenBudget) fresh.goal.tokenBudget = options.tokenBudget;
-        if (fresh.goal.tokenBudget != null && budgetUsage(fresh) >= fresh.goal.tokenBudget) throw new Error('Goal budget is exhausted. Increase the total --token-budget before resuming.');
-        Object.assign(fresh.goal, { notificationEpoch: (fresh.goal.notificationEpoch || 0) + 1, noActivityTurns: 0, blockerStreak: 0, lastBlocker: null });
-        delete fresh.goal.reason;
-      } else {
-        if (!objective?.trim()) throw new Error('Use /goal <objective> to start persistent work.');
-        const previousGoal = fresh.goal;
-        const boundary = fresh.contract, strict = fresh.strictPolicy;
-        prepareTask(fresh, options, objective, { persist: false });
-        if (boundary && !options.contract) {
-          fresh.contract = normalizeContract({ ...fresh.contract, constraints: [...new Set([...boundary.constraints, ...fresh.contract.constraints])],
-            scope: { ...fresh.contract.scope, ...boundary.scope }, policy: options.readOnly ? { ...boundary.policy, mode: 'read-only', writablePaths: [] } : boundary.policy,
-            limits: { ...boundary.limits, ...fresh.contract.limits } }, objective);
-          fresh.policy = fresh.contract.policy; fresh.strictPolicy ||= strict;
-        }
-        fresh.goal = newGoal(objective, options.tokenBudget || fresh.contract.limits.tokenBudget);
-        fresh.acceptance = null; fresh.summary = null; fresh.failure = null; fresh.stopReason = null;
-        if (previousGoal) putRecord('goal-history', previousGoal.id, { sessionId: fresh.id, ...previousGoal,
-          supersededAt: now(), supersededBy: fresh.goal.id }, db);
-      }
-      fresh.updatedAt = now(); putRecord('session', fresh.id, fresh, db);
-    },
-  });
-}
-
-function updateIdleGoal(sessionId, owner, action) {
-  const changed = transaction(db => {
-    requireOwner(sessionId, owner); const fresh = loadSession(sessionId); assertSessionIdle(fresh);
-    if (!fresh.goal) throw new Error('This session has no goal.');
-    if (action === 'clear') { putRecord('goal-history', fresh.goal.id, { sessionId: fresh.id, ...fresh.goal, clearedAt: now() }, db); fresh.goal = null; }
-    else fresh.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
-    fresh.updatedAt = now(); putRecord('session', fresh.id, fresh, db);
-    appendEvent(fresh.id, 'lifecycle', { status: fresh.goal?.status || null, executionState: fresh.executionState, reason: 'user_' + action }, db); return fresh;
-  });
-  writeJson(sessionPath(changed.id), changed); return changed;
 }
 
 function client(info, sessionId, owner) {
@@ -135,53 +58,24 @@ async function editConversation(sessionId, ui, connection, choose, apply) {
     const current = (await api('GET')).session; assertModelIdle(current);
     const selected = await choose(current);
     if (!selected) return current;
-    const session = transaction(db => {
-      requireOwner(sessionId, owner); connection?.authorize?.();
-      const session = loadSession(sessionId); assertModelIdle(session);
-      apply(session, selected, db); session.updatedAt = now();
-      putRecord('session', sessionId, session, db);
-      return session;
-    });
-    writeJson(sessionPath(sessionId), session);
+    const session = apply(sessionId, owner, selected, { authorize: () => connection?.authorize?.() });
     ui.updateSession?.(await api('GET'));
     ui.event('info', { message: `${session.provider} · ${session.model || 'provider default'}${session.selectedEffort ? ' · effort ' + session.selectedEffort : ''} · conversation retained · applies to the next message.` });
     return session;
   } finally { clearInterval(heartbeat); if (!connection) await api('POST', 'release', {}).catch(() => {}); }
 }
 export async function changeSessionModel(sessionId, argument, ui, connection) {
-  return editConversation(sessionId, ui, connection, current => chooseModel(current, argument, ui), applyModelSelection);
-}
-function applyModelSelection(session, selected, db) {
-    const previous = session.model;
-    Object.assign(session, { model: selected.model, resolvedModel: null, modelCapabilities: selected.capabilities, selectedEffort: selected.effort, reasoningEffort: null });
-    appendEvent(session.id, 'model.changed', { provider: session.provider, previousModel: previous, model: session.model, effort: session.selectedEffort, appliesTo: 'next_turn' }, db);
+  return editConversation(sessionId, ui, connection, current => chooseModel(current, argument, ui), setSessionModel);
 }
 export async function changeSessionSelection(sessionId, selected, ui, connection) {
-  return editConversation(sessionId, ui, connection, () => selected, applyModelSelection);
+  return editConversation(sessionId, ui, connection, () => selected, setSessionModel);
 }
 export async function changeSessionProvider(source, provider, selected, ui, connection) {
-  return editConversation(source.id, ui, connection, () => selected, (session, selected, db) => {
-    if (session.provider !== source.provider) throw new Error('The provider changed while the picker was open. Open /providers again.');
-    const previous = { provider: session.provider, model: session.model, threadId: session.engineThreadId };
-    Object.assign(session, {
-      provider: provider.id, backend: provider.backend, model: selected.model, modelCapabilities: selected.capabilities, selectedEffort: selected.effort,
-      engineThreadId: null, engineSessionId: provider.backend === 'claude' ? randomUUID() : null, engineHome: null,
-      resolvedModel: null, reasoningEffort: null, failure: null, executionState: 'idle',
-      engineTokenOffset: session.usage?.tokens || 0,
-      conversationHandoff: { throughSeq: conversationCursor(session.id, db), pending: true },
-    });
-    if (session.goal) {
-      const ownTokens = session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? Math.max(0, (session.goal.tokensUsed || 0) - (session.goal.delegatedTokensUsed || 0));
-      session.goal.supervisorTokensUsed = ownTokens; session.goal.nativeTokenOffset = ownTokens;
-      delete session.goal.nativeTokensUsed; delete session.goal.nativeGoalId; delete session.goal.nativeStatus;
-    }
-    appendEvent(session.id, 'provider.changed', { previousProvider: previous.provider, previousModel: previous.model, previousThreadId: previous.threadId,
-      provider: session.provider, model: session.model, effort: session.selectedEffort, conversationThrough: session.conversationHandoff.throughSeq, appliesTo: 'next_turn' }, db);
-  });
+  return editConversation(source.id, ui, connection, () => selected,
+    (sessionId, owner, selection, authorization) => setSessionProvider(sessionId, owner, source.provider, provider.id, selection, authorization));
 }
 export async function executeManaged(provider, session, options, ui, prompt, flags = {}) {
   ui.setSession?.(session.id);
-  if (ui.interactive) await autoAttachTelegram(session);
   const { returnAfterExecution = false, ...executionFlags } = flags;
   if (process.env.BZZY_DIRECT === '1') { const { runSession } = await import('./controller.js'); return runSession(provider, session, options, ui, prompt, executionFlags); }
   const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
@@ -200,7 +94,18 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   let tabs = [{ id: sessionId, agent: 'Overview' }, ...children], activeId = ui.activeTab && tabs.some(t => t.id === ui.activeTab) ? ui.activeTab
     : ui.interactive && initial.session.mode === 'parallel' && children.length ? children[0].id : sessionId;
   const seenQuestions = new Set();
-  if (children.length) ui.setTabs?.(sessionId, children, activeId);
+  if (options.restoreInitial) {
+    const selected = activeId === sessionId ? initial : await client(info, activeId, owner)('GET');
+    ui.openTerminal?.();
+    if (children.length && ui.setTabs) ui.setTabs(sessionId, children, activeId);
+    else { ui.tui?.selectTab(ui.activeTab || ui.sessionId, sessionId); ui.setSession?.(sessionId); }
+    ui.sessionMode = options.activeControl ? 'CONTROL' : 'VIEW';
+    ui.clearHistory?.(); ui.cursors?.set(activeId, 0);
+    if (roomSessionId) ui.cursors?.set(`${roomSessionId}:shared-room`, 0);
+    ui.updateSession?.(selected);
+    await replay(client(info, activeId, owner), activeId, ui);
+    if (roomApi && activeId !== roomSessionId) await replayRoom(roomApi, roomSessionId, ui);
+  } else if (children.length) ui.setTabs?.(sessionId, children, activeId);
   const showTabs = () => ui.event('info', { message: tabs.map((t, i) => `${i}. ${t.agent} · ${t.id}`).join('\n') + '\nUse /tab NUMBER or /tab NAME. Tab / Shift+Tab also switches chats.' });
   const selectTab = value => {
     const selected = /^\d+$/.test(value) ? tabs[Number(value)] : tabs.find(t => t.agent === value || t.agent.startsWith(value + '-') || t.id.startsWith(value));
@@ -220,7 +125,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   };
   process.on('SIGINT', interrupt);
   const inputLoop = ui.interactive ? (async () => {
-    while (!inputStopped && !detached && !ui.nextSession) {
+    while (!inputStopped && !detached && !ui.nextSession && !ui.coreLifecycleInterrupted) {
       const input = await ui.ask(`bzzy ${children.length ? '(' + (tabs.find(t => t.id === activeId)?.agent || 'Overview') + ')' : '(running)'} › `);
       if (inputStopped) { if (input != null) (ui.pendingChatInputs ||= []).push(input); break; }
       if (input == null) { if (!paused) detached = true; break; }
@@ -230,6 +135,18 @@ async function watch(info, sessionId, owner, ui, options = {}) {
         if (['/detach', '/quit', '/exit'].includes(text)) { detached = true; ui.detached = true; break; }
         if (text === '/tabs') { showTabs(); continue; }
         if (text === '/help') { ui.event('info', { message: chatHelp }); continue; }
+        if (text === '/sessions') {
+          modalTask = true;
+          try { const selected = await chooseSavedSession(ui); if (selected) ui.nextSession = selected.session; }
+          catch (error) { ui.event('error', { message: error.message }); }
+          finally { modalTask = false; }
+          continue;
+        }
+        if (/^\/settings(?:\s|$)/.test(text)) {
+          modalTask = true;
+          try { await ui.settingsCommand(text); } finally { modalTask = false; }
+          continue;
+        }
         if (text === '/doctor') {
           modalTask = true;
           try { const selected = loadSession(activeId); await checkConnections(ui, { providerId: selected.provider, live: true, model: selected.model, effort: selected.selectedEffort, session: selected }); }
@@ -240,6 +157,18 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           modalTask = true;
           try { await exportProject(loadSession(sessionId), text.replace(/^\/export\s*/, ''), ui); }
           finally { modalTask = false; }
+          continue;
+        }
+        if (/^\/(?:share|import)(?:\s|$)/.test(text)) {
+          forgetPrivateImportInput(ui, text);
+          if (!options.activeControl || ownershipLost) throw new Error('Attach with control before sharing or importing from this terminal.');
+          modalTask = true;
+          try {
+            if (/^\/share(?:\s|$)/.test(text)) {
+              if (text !== '/share') throw new Error('Use /share without arguments.');
+              await shareTerminal(loadSession(sessionId), ui);
+            } else await importTerminal(text.replace(/^\/import\s*/, ''), loadSession(sessionId).cwd, ui);
+          } finally { modalTask = false; }
           continue;
         }
         if (text.startsWith('/tab ')) { selectTab(text.slice(5).trim()); continue; }
@@ -254,12 +183,6 @@ async function watch(info, sessionId, owner, ui, options = {}) {
         if (/^\/alias(?:\s|$)/.test(text)) {
           modalTask = true;
           try { await promptSessionAlias(sessionId, text.replace(/^\/alias\s*/, ''), ui, () => requireOwner(sessionId, owner)); }
-          finally { modalTask = false; }
-          continue;
-        }
-        if (/^\/telegram(?:\s|$)/.test(text)) {
-          modalTask = true;
-          try { await configureTelegram(text.replace(/^\/telegram\s*/, '') || 'panel', ui, { sessionId: activeId, connection: { info, owner } }); ui.refreshTelegramState?.(); }
           finally { modalTask = false; }
           continue;
         }
@@ -324,6 +247,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           continue;
         }
         const snapshot = await selectedApi('GET'), question = snapshot.questions[0];
+        if (text.startsWith('/')) { ui.event('info', { message: 'Unknown command. Use /help.' }); continue; }
         if (question) await selectedApi('POST', 'answer', { questionId: question.id, answer: text }, randomUUID());
         else if (children.length && activeId === sessionId) ui.event('info', { message: 'Choose an agent with /tab before sending a chat message.' });
         else if (snapshot.execution && ['queued', 'launching', 'running'].includes(snapshot.execution.state)) {
@@ -338,13 +262,13 @@ async function watch(info, sessionId, owner, ui, options = {}) {
     }
   })() : null;
   const heartbeat = options.activeControl ? setInterval(async () => {
-    if (renewing || ownershipLost) return; renewing = true;
+    if (renewing || ownershipLost || ui.coreLifecycleInterrupted) return; renewing = true;
     try { await api('POST', 'claim', {}); }
-    catch (error) { ownershipLost = true; ui.event('info', { message: 'Input ownership transferred to another client. This terminal is now a viewer.' }); ui.setSession?.(sessionId, 'VIEW'); }
+    catch (error) { if (!ui.coreLifecycleInterrupted) { ownershipLost = true; ui.event('info', { message: 'Input ownership transferred to another client. This terminal is now a viewer.' }); ui.setSession?.(sessionId, 'VIEW'); } }
     finally { renewing = false; }
   }, 10000) : null;
   try {
-    while (!detached && !ui.nextSession) {
+    while (!detached && !ui.nextSession && !ui.coreLifecycleInterrupted) {
       if (modalTask) { await delay(100); continue; }
       const renderingId = activeId, selectedApi = client(info, renderingId, owner);
       await replay(selectedApi, renderingId, ui, () => activeId === renderingId && !modalTask);
@@ -369,7 +293,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
         const answer = ui.interactive ? await ui.ask(`${question.question} `) : '';
         if (!detached && !ownershipLost && answer != null) await api('POST', 'answer', { questionId: question.id, answer }, randomUUID()).catch(error => ui.event('error', { message: error.message }));
       }
-      const execution = options.executionId ? snapshot.execution?.id === options.executionId ? snapshot.execution : getRecord('execution', options.executionId) : snapshot.execution;
+      const execution = options.executionId ? snapshot.execution?.id === options.executionId ? snapshot.execution : executionRecord(options.executionId) : snapshot.execution;
       const active = execution && ['queued', 'launching', 'running'].includes(execution.state);
       if (options.executionId && execution && !active && !processingInput) { await replay(api, sessionId, ui); return execution.exitCode ?? 1; }
       if (ownershipLost && options.executionId && !active) return 0;
@@ -385,17 +309,23 @@ export async function viewSession(session, options, ui) {
   options = { ...options, cwd: session.cwd };
   const info = await ensureRuntime(); ui.setSession?.(session.id, 'VIEW');
   ui.event('info', { message: `Read-only session view. Attach to chat: bzzy --attach ${session.id}` });
-  return watch(info, session.id, randomUUID(), ui, { follow: options.follow || ui.interactive, activeControl: false });
+  const result = await watch(info, session.id, randomUUID(), ui, { follow: options.follow || ui.interactive, activeControl: false });
+  if (!ui.nextSession) return result;
+  const selected = ui.nextSession; ui.nextSession = null;
+  return attachSession(selected, options, ui);
 }
-export async function restoreConversation(session, ui) {
-  const info = await ensureRuntime(), api = client(info, session.id, randomUUID());
-  ui.setSession(session.id); ui.clearHistory(); ui.cursors.set(session.id, 0);
-  ui.updateSession?.(await api('GET')); await replay(api, session.id, ui);
+export async function restoreConversation(session, ui, connectionInfo) {
+  const info = connectionInfo || await ensureRuntime(), api = client(info, session.id, randomUUID());
+  const snapshot = await api('GET');
+  ui.tui?.selectTab(ui.activeTab || ui.sessionId, session.id);
+  ui.setSession?.(session.id); ui.clearHistory?.(); ui.cursors?.set(session.id, 0);
+  ui.updateSession?.(snapshot); await replay(api, session.id, ui);
 }
 export async function conversationInput(session, ui, connection) {
   let info = connection?.info;
   const owner = connection?.owner || randomUUID();
   while (!ui.detached) {
+    if (ui.coreLifecycleInterrupted) return null;
     if (ui.pendingChatInputs?.length) return ui.pendingChatInputs.shift();
     let waiting = true, active;
     const input = ui.ask('bzzy › ').then(answer => { waiting = false; return answer; });
@@ -427,18 +357,21 @@ export async function conversationInput(session, ui, connection) {
   return null;
 }
 export async function attachSession(session, options, ui) {
-  options = { ...options, cwd: session.cwd };
+  options = { ...options, cwd: session.cwd, mode: session.mode || 'solo', provider: session.provider, model: session.model, effort: session.selectedEffort };
   const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
-  await api('POST', 'claim', { takeover: true }); ui.setSession?.(session.id, 'CONTROL');
+  await api('POST', 'claim', { takeover: true });
   let renewing = false, lost = false, redirect;
   const heartbeat = setInterval(async () => {
-    if (renewing || lost) return; renewing = true;
+    if (renewing || lost || ui.coreLifecycleInterrupted) return; renewing = true;
     try { await api('POST', 'claim', {}); } catch { lost = true; ui.reader?.close(); } finally { renewing = false; }
   }, 10000);
   try {
-    if (ui.interactive) await autoAttachTelegram(session, { connection: { info, owner } });
-    if (groupMode(session)) return await watch(info, session.id, owner, ui, { activeControl: true, follow: ui.interactive || options.follow });
-    while (!lost) {
+    if (groupMode(session)) {
+      await watch(info, session.id, owner, ui, { activeControl: true, follow: ui.interactive || options.follow, restoreInitial: true });
+      if (!ui.nextSession) return 0;
+      redirect = ui.nextSession; ui.nextSession = null;
+    } else await restoreConversation(session, ui, info);
+    while (!lost && !redirect && !ui.coreLifecycleInterrupted) {
       await replay(api, session.id, ui);
       const snapshot = await api('GET');
       ui.updateSession?.(snapshot);
@@ -448,9 +381,16 @@ export async function attachSession(session, options, ui) {
       if (!ui.interactive || lost || ui.detached) return 0;
       const input = (await conversationInput(session, ui, { info, owner }))?.trim();
       Object.assign(session, loadSession(session.id));
+      if (ui.nextSession) { redirect = ui.nextSession; ui.nextSession = null; break; }
       if (input == null || ['/quit', '/exit', '/detach'].includes(input)) return 0;
       if (!input) continue;
+      if (await ui.settingsCommand?.(input)) continue;
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
+      if (input === '/sessions') {
+        try { const selected = await chooseSavedSession(ui); if (selected) { redirect = selected.session; break; } }
+        catch (error) { ui.event('error', { message: error.message }); }
+        continue;
+      }
       if (input === '/doctor') { await checkConnections(ui, { providerId: session.provider, live: true, model: session.model, effort: session.selectedEffort, session }); continue; }
       if ((await api('GET')).inputOwner?.owner !== owner) return 0;
       if (input === '/default') { saveSessionDefault(session.id, ui); continue; }
@@ -464,13 +404,18 @@ export async function attachSession(session, options, ui) {
         catch (error) { ui.event('error', { message: error.message }); }
         continue;
       }
-      if (/^\/alias(?:\s|$)/.test(input)) {
-        try { Object.assign(session, await promptSessionAlias(session.id, input.replace(/^\/alias\s*/, ''), ui, () => requireOwner(session.id, owner))); }
-        catch (error) { ui.event('error', { message: error.message }); }
+      if (/^\/(?:share|import)(?:\s|$)/.test(input)) {
+        forgetPrivateImportInput(ui, input);
+        try {
+          if (/^\/share(?:\s|$)/.test(input)) {
+            if (input !== '/share') throw new Error('Use /share without arguments.');
+            await shareTerminal(session, ui);
+          } else await importTerminal(input.replace(/^\/import\s*/, ''), session.cwd, ui);
+        } catch (error) { ui.event('error', { message: error.message }); }
         continue;
       }
-      if (/^\/telegram(?:\s|$)/.test(input)) {
-        try { await configureTelegram(input.replace(/^\/telegram\s*/, '') || 'panel', ui, { sessionId: session.id, connection: { info, owner } }); ui.refreshTelegramState?.(); }
+      if (/^\/alias(?:\s|$)/.test(input)) {
+        try { Object.assign(session, await promptSessionAlias(session.id, input.replace(/^\/alias\s*/, ''), ui, () => requireOwner(session.id, owner))); }
         catch (error) { ui.event('error', { message: error.message }); }
         continue;
       }
@@ -506,7 +451,7 @@ export async function attachSession(session, options, ui) {
         const resumeGoal = goalCommand && action === 'resume', newTask = goalCommand && !resumeGoal;
         if (resumeGoal || newTask) {
           result = await enqueueGoalTurn(session.id, owner, options, resumeGoal ? { resume: true, info } : { objective: action, info });
-        } else if (input.startsWith('/')) { ui.event('info', { message: 'Attached chat: send text, /alias, /export, /skill_that, /providers, /models, /default, /telegram, /goal <objective>, /goal status|pause|resume|clear, /debate or /detach.' }); continue; }
+        } else if (input.startsWith('/')) { ui.event('info', { message: 'Attached chat: send text, /alias, /export, /share, /import, /skill_that, /providers, /models, /default, /goal <objective>, /goal status|pause|resume|clear, /debate or /detach.' }); continue; }
         else result = await api('POST', 'execute', { prompt: input, options, goal: false }, randomUUID());
       } catch (error) { ui.event('error', { message: error.message }); continue; }
       await watch(info, session.id, owner, ui, { executionId: result.executionId, activeControl: true });
@@ -521,12 +466,30 @@ export async function controlSession(session, action, options = {}) {
   finally { await api('POST', 'release', {}).catch(() => {}); }
 }
 export async function watchRegistry(session, options, ui, kind) {
-  const info = await ensureRuntime(), api = client(info, session.id, randomUUID()); let after = 0, stopped = false;
+  const info = await ensureRuntime(), api = client(info, session.id, randomUUID()); let after = 0, stopped = false, modalTask = false, selected;
   ui.setSession(session.id, kind === 'activity' ? 'ACTIVITY VIEW' : 'TRAFFIC VIEW');
   if (ui.tui) ui.tui.panel = kind === 'activity' ? 'activity' : 'http';
   const stop = () => { stopped = true; }; process.on('SIGINT', stop);
+  const inputLoop = ui.interactive ? (async () => {
+    while (!stopped && !ui.coreLifecycleInterrupted) {
+      const input = await ui.ask('bzzy (view) › ');
+      if (stopped) break;
+      if (input == null || ['/exit', '/quit', '/detach'].includes(input.trim())) { stopped = true; break; }
+      if (input.trim() === '/sessions') {
+        modalTask = true;
+        try { const choice = await chooseSavedSession(ui); if (choice) { selected = choice.session; stopped = true; } }
+        catch (error) { ui.event('error', { message: error.message }); }
+        finally { modalTask = false; }
+      } else {
+        modalTask = true;
+        try { await ui.settingsCommand?.(input.trim()); } finally { modalTask = false; }
+      }
+    }
+  })().catch(error => { ui.event('error', { message: error.message }); stopped = true; }) : null;
   try {
     do {
+      if (ui.coreLifecycleInterrupted) break;
+      if (modalTask) { await delay(100); continue; }
       const batch = await api('GET', `events?after=${after}&limit=500`);
       for (const event of batch.events) {
         after = event.seq;
@@ -538,6 +501,6 @@ export async function watchRegistry(session, options, ui, kind) {
       if (!options.follow && !ui.interactive) break;
       await delay(150);
     } while (!stopped);
-    return 0;
-  } finally { process.removeListener('SIGINT', stop); }
+  } finally { stopped = true; ui.reader?.close(); await inputLoop; process.removeListener('SIGINT', stop); }
+  return selected ? attachSession(selected, options, ui) : 0;
 }

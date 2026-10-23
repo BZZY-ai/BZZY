@@ -8,11 +8,11 @@ import { createSession, saveSession } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
 import { normalizeContract } from '../src/contracts.js';
 import { newGoal } from '../src/goals.js';
-import { now, putRecord, getRecord, reserveRequest } from '../src/database.js';
+import { now, putRecord, getRecord, reserveRequest, listRecords } from '../src/database.js';
 import { snapshotWorkspace, inspectWorkspace, captureEvidence } from '../src/evidence.js';
 import { startAssignment, assignmentStatus, followupAssignment, cancelAssignment, reviewAssignment, applyAssignment } from '../src/delegation.js';
 import { assignmentsFor, delegationUsage, budgetUsage } from '../src/delegation-usage.js';
-import { processIdentity } from '../src/recovery.js';
+import { processIdentity, identityAlive, signalProcess } from '../src/recovery.js';
 import { assessCompletion, assessRequirement } from '../src/verification.js';
 import { ClaudeEngine } from '../src/engines/claude.js';
 import { runSession } from '../src/controller.js';
@@ -22,11 +22,15 @@ let directory, saved;
 test.beforeEach(() => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-delegation-'));
   saved = { BZZY_HOME: process.env.BZZY_HOME, BZZY_CODEX_BIN: process.env.BZZY_CODEX_BIN };
-  process.env.BZZY_HOME = path.join(directory, 'private'); process.env.BZZY_CODEX_BIN = '/bin/false';
+  process.env.BZZY_HOME = path.join(directory, 'private'); process.env.BZZY_CODEX_BIN = '/usr/bin/false';
 });
-test.afterEach(() => {
+test.afterEach(async () => {
+  const children = listRecords('round').flatMap(round => [round.launcher, round.runner]).filter(identity => identity && identity.pid !== process.pid);
+  for (const identity of children) signalProcess(identity, 'SIGTERM');
+  for (let attempt = 0; attempt < 100 && children.some(identityAlive); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+  for (const identity of children) if (identityAlive(identity)) signalProcess(identity, 'SIGKILL');
   for (const [key, value] of Object.entries(saved)) if (value == null) delete process.env[key]; else process.env[key] = value;
-  fs.rmSync(directory, { recursive: true, force: true });
+  fs.rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 function parent(limits = {}) {
   const project = path.join(directory, 'project'); fs.mkdirSync(project, { recursive: true });

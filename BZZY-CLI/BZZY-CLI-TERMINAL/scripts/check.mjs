@@ -7,6 +7,7 @@ for (const dir of ['bin', 'src', 'scripts', 'test', 'assets']) {
   if (!fs.existsSync(dir)) continue;
   for (const entry of fs.readdirSync(dir, { recursive: true })) {
     const file = path.join(dir, entry);
+    if (entry.split(path.sep).some(part => part.startsWith('._'))) continue;
     if (!/\.(m?js)$/.test(file)) continue;
     const result = spawnSync(process.execPath, ['--check', file], { stdio: 'inherit' });
     failed ||= result.status !== 0;

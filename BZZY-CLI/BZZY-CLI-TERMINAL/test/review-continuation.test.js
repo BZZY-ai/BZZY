@@ -18,7 +18,7 @@ import { sandboxSupport } from '../src/policy.js';
 
 let directory, previous;
 test.beforeEach(() => {
-  directory = fs.mkdtempSync('/tmp/bz-rc-'); previous = process.env.BZZY_HOME;
+  directory = fs.realpathSync(fs.mkdtempSync('/tmp/bz-rc-')); previous = process.env.BZZY_HOME;
   process.env.BZZY_HOME = path.join(directory, 'state');
   fs.mkdirSync(path.join(directory, 'project'));
 });

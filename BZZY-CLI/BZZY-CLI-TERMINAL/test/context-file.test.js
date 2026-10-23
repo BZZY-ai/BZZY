@@ -147,9 +147,9 @@ for (const provider of ['codex', 'deepseek', 'claude']) {
 
 test('request IDs reject changed context and reuse identical contents without launching twice', async () => {
   const args = ['--context-file', 'bzzy_init.txt', '--goal', objective, '--codex', '--json', '--request-id', 'context-idempotency'];
-  assert.equal((await run(args)).code, 0);
+  const first = await run(args); assert.equal(first.code, 0, first.stderr);
   const before = records().length;
-  assert.equal((await run(args)).code, 0);
+  const repeated = await run(args); assert.equal(repeated.code, 0, repeated.stderr);
   assert.equal(records().length, before);
   fs.appendFileSync(path.join(directory, 'bzzy_init.txt'), '\nChanged scope and submission instructions.');
   const changed = await run(args);
@@ -165,10 +165,13 @@ for (const provider of ['codex', 'claude']) {
       extraEnv: { BZZY_DIRECT: '1', BZZY_TEST_PREPARATION_GATE: gate },
     });
     try {
-      await until(() => records().some(record => record.preparing), 'backend preparation');
+      await until(() => {
+        if (active.child.exitCode != null) assert.fail(`CLI exited before backend preparation: ${active.stderr}`);
+        return records().some(record => record.preparing);
+      }, 'backend preparation');
       const [session] = sessions(); assert.equal(session.goal.objective, objective);
       const status = await run(['goal', 'status', session.id, '--json']);
-      assert.equal(status.code, 0); assert.match(status.stdout, /find a new XSS/);
+      assert.equal(status.code, 0, status.stderr); assert.match(status.stdout, /find a new XSS/);
       active.child.kill('SIGINT');
       const paused = await active.done; assert.equal(paused.code, 130, paused.stderr);
       assert.equal(sessions()[0].goal.status, 'paused'); assert.equal(sessions()[0].goal.objective, objective);

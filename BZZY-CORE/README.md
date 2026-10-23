@@ -1,0 +1,345 @@
+# BZZY Core
+
+Core is BZZY's single source of execution state: persistent conversations, runs,
+goals, evidence, permissions and replayable events. Persistent agents can remain
+idle between interactions; schedules are optional. Clients attach to this state
+without owning an execution's lifetime.
+
+The shared Node engine lives in `src/engine/` in this package. The terminal
+depends on Core and retains its commands and presentation; Core can run without
+the terminal source tree. Its existing host API and encrypted Relay gateway use
+the same engine and private state.
+
+Implemented:
+
+- Sample host CPU/RAM and Core process usage once per second in the daemon.
+  CLI and paired iOS display this shared cached telemetry; see
+  [host metrics](docs/METRICS.md) for definitions and scoped access.
+- Set a managed root with `bzzy-core workspace set /absolute/BZZY` or CLI Settings
+  → Default BZZY folder.
+  Agents use that root; CLI terminals keep their original project cwd.
+- Manage persistent on-demand agents through the iPhone client and Core APIs.
+  Agent sessions, providers, tools and history reuse the same execution engine.
+- Explicit host-wide terminal discovery with separate resource histories, scoped
+  control and independent project-sharing/agent-management pairing permissions.
+- Transfer complete terminal and Agent projects/context through Relay as typed
+  encrypted ZIP chunks. Terminals import into recipient CLI cwd; iPhone receives
+  Agents into fresh recipient Core-managed directories with its own selected
+  provider/model/effort. IDs are new and work stays inactive. See
+  [project sharing](docs/PROJECT-SHARING.md) for scope, bounds and Relay upgrade needs.
+- Enforce the persistent Agent v1 tool boundary: bounded safe project/context
+  reads and durable Core tools, with no native shell/write, unapproved HTTP,
+  delegation, account tools or schedules. Native provider configuration and
+  permissions are restricted separately from ordinary terminal execution; see
+  [Agent execution](docs/AGENT-EXECUTION.md).
+- Send generic goal alerts from the daemon's durable outbox through APNs after
+  private Apple setup and encrypted device registration; see [push setup](docs/PUSH.md).
+
+- Configure Core's independent coordinator provider/model/effort from the host
+  API or `bzzy-core assistant`; create independent task contexts.
+  CLI chat presets do not automatically select or change Core's coordinator.
+- Own provider authentication/configuration and dynamic model discovery; terminal
+  selectors consume the same Core registry without duplicating backend adapters.
+- Submit background tasks through scoped Relay resources and inspect their
+  durable state without making a terminal chat the primary interface.
+- Start/discover the existing daemon, inspect sessions, claim/release input,
+  execute, answer, control and manage scoped session grants.
+- Create an idle conversation atomically in the existing SQLite database with
+  a stable request ID and the terminal's compatible session format.
+- Process durable events and save a separate cursor per consumer and session
+  only after the handler succeeds.
+- Declare integrations and read-only tool schemas; authorize tool calls against
+  explicit user/workspace/agent grants with expiry, revocation and rate limits.
+- Bind account operations to opaque private IDs and trusted host adapters.
+- Read bounded project-file slices with path checks, credential-store exclusions
+  and host-recorded hashes and timestamps.
+- Connect outbound to deployed Relay v1 using its authenticated encrypted SDK;
+  explicitly pair a pinned device to one session and enforce local permissions.
+- Bridge bounded session/event/ownership/command messages with durable command
+  reconciliation, processed event acknowledgments and local-first revocation.
+- Own solo, debate, parallel, delegate and besties execution, including goal
+  setup, verification, evidence, recovery and durable session mutations.
+- Apply the shared iOS/CLI message-body instructions and bounded safe parser;
+  retain original formatted bodies for replay and derive client display views.
+
+The connection boundary is `CLI <-> Core <-> Relay <-> iOS`. Core never imports
+the terminal frontend. `bin/bzzy-engine.js` starts its daemon, execution runners,
+assignment workers and MCP bridges; these do not load CLI parsing or rendering.
+Terminal compatibility modules re-export Core implementations for existing
+integrations. They are not a second runtime or database.
+
+Live home-host use requires operator enrollment of its public certificate.
+Native iOS integration, on-demand Agent CRUD, typed Agent/Terminal sharing,
+Agent receive jobs and APNs registration/provider delivery code are implemented
+and tested locally. Scheduled triggers, production email/account connectors,
+public Relay rollout/enrollment, TestFlight distribution and physical Apple
+push/device verification remain separate work. The existing execution dispatcher
+is reused. Persistent Agents use a restricted native provider/tool path plus the
+scoped filesystem broker; ordinary owner terminal execution retains its existing
+permissions and is not automatically confined by a broker grant. See [Core's default AI and tasks](docs/ASSISTANT.md),
+[Relay setup](docs/RELAY.md), the
+[encrypted application protocol](docs/RELAY-PROTOCOL.md), and
+[architecture and gaps](docs/ARCHITECTURE.md).
+
+## Host platforms
+
+Core targets **Debian, Ubuntu and macOS as execution hosts**. A Mac can host the
+same background engine and private state as a Linux home server.
+
+| Host target | Initial baseline | CPU targets | User service supervision |
+| --- | --- | --- | --- |
+| Debian | 12+ | x86_64, ARM64 | systemd |
+| Ubuntu | 24.04+ | x86_64, ARM64 | systemd |
+| macOS | 13.5+ | Intel, Apple Silicon | launchd |
+
+All targets use Node.js 24+. These are support requirements, not a claim that
+every listed release/architecture has been tested. Native macOS Core tests pass;
+Debian/Ubuntu and Intel Mac runs still need platform evidence. The terminal
+installer prepares Core and CLI together. Explicit user-level systemd/launchd
+registration is implemented; native Linux and reboot/logout validation remain
+separate checks. See [host installation and supervision](docs/HOST-SERVICE.md).
+
+Ordinary managed execution, storage, replay and broker operations share the same
+implementation. The native runtime probes Linux bubblewrap or macOS sandbox-exec
+and rejects enforced policies if isolation is unavailable. Core's tests do not
+establish strict native policy parity on every target. Persistent Agent v1 has
+its own restricted provider/tool boundary, with local fixture and native-profile
+evidence; this is not a blanket sandbox guarantee for arbitrary host programs.
+See [Agent execution](docs/AGENT-EXECUTION.md) and the
+[platform contract and CI matrix](docs/PLATFORMS.md).
+
+## Run
+
+Use **Node.js 24 or newer**. Source development keeps `BZZY-CORE` beside
+`BZZY-RELAY`; Core depends on its existing SDK through a locked local package.
+Core has no dependency on the terminal source. The tracked `.npmrc` contains
+only the non-secret `install-links=true` setting. Distribution packages bundle
+the Relay SDK and its dependencies, so an installed package needs no sibling
+source directories.
+
+```sh
+cd BZZY-CORE
+npm ci --ignore-scripts
+node bin/bzzy-core.js status
+node bin/bzzy-core.js doctor
+node bin/bzzy-core.js start
+node bin/bzzy-core.js serve
+node bin/bzzy-core.js workspace set /absolute/BZZY
+```
+
+`status` reports engine and service without starting one. `start` prepares and
+starts the user service; `stop` verifies all work is paused and disables it;
+`restart` reopens Core without resuming models. `serve` runs the same engine in the foreground
+for a process supervisor; it refuses a duplicate service. The default private
+directory is `~/.bzzy`; `BZZY_HOME` selects another private host directory.
+Daemon runners are owned by Core. Status output omits owner
+credentials. Use the same `BZZY_HOME` for every lifecycle command. Programmatic
+`BzzyCore.start()` retains the existing facade; explicit `bzzy-core restart` can
+safely migrate a development daemon to supervision.
+
+The CLI installer provides both `bzzy` and `bzzy-core` launchers. Prepare the
+public host identity with `bzzy-core relay init` for operator enrollment. Create
+at least one CLI terminal with `bzzy`, then open CLI Settings → Pair iPhone to
+display its QR or temporary code automatically, without choosing a terminal, and complete fingerprint
+comparison. This own-phone flow automatically requests full session control,
+terminal catalog access, project sharing and Agent management, with no access-mode
+or scope picker. Fingerprint confirmation, expiry and revocation remain on the
+secondary screen. Existing grants gain no new permissions automatically. The
+main Settings menu contains only DeepSeek API key, Default BZZY folder and Pair
+iPhone; lifecycle/coordinator commands and APIs remain available separately.
+The daemon keeps an explicitly enabled gateway connected after CLI closes and
+restores it after a daemon restart. Installation prepares a disabled user manifest;
+plain `bzzy` or `bzzy-core start` activates it. After explicit stop, background
+client polling cannot resurrect Core. macOS login/sleep and Linux lingering limits are
+described in [host service setup](docs/HOST-SERVICE.md).
+
+For source development of both products, install Core first, then create the
+CLI's local package link with `npm ci --ignore-scripts` in
+`BZZY-CLI/BZZY-CLI-TERMINAL`. Core edits are then available to both products.
+The CLI's `install.sh` and `npm pack` prepare both dependency trees in that order.
+Packaging stages a disposable physical copy and restores the development link.
+They do not install or update Codex/Claude backends. A CLI release tarball bundles
+Core, the Relay SDK and their locked dependencies; it can be installed without
+the source workspace.
+
+To build a standalone Core release, run `npm ci --ignore-scripts` followed by
+`npm pack` in this directory. The release includes its Relay SDK and needs no
+CLI source. Core's pack hooks temporarily substitute a sanitized dependency
+copy and then restore the original directory, preserving original files and
+macOS metadata. Source notes, account files, `.npmrc` and AppleDouble files stay
+out of the archive. If packaging is interrupted before restoration, run
+`npm run postpack` before retrying. The CLI's packaging regression test exercises
+this flow in a temporary workspace and installs both releases offline.
+
+On a machine whose default Node is older, a temporary Node 24 environment can
+validate the package without changing the system installation:
+
+```sh
+npx --yes --package=node@24 -c 'npm ci --ignore-scripts && npm run check && npm test'
+```
+
+## Host API
+
+`BzzyCore` is a privileged **local host API**. Keep the instance and its module
+away from model tools, imported scripts, Relay and remote clients. Trusted local
+integrators can use `BzzyClient` with a narrower session token. Phone/Relay clients
+use the encrypted gateway protocol and receive no Core bearer credential. The
+local HTTP API remains the existing engine's API v1; the gateway does not publish
+that listener or turn the VPS into an HTTP session API.
+
+```js
+import { randomUUID } from 'node:crypto';
+import { BzzyCore } from './src/index.js';
+
+const core = new BzzyCore();
+const session = core.createConversation({
+  provider: 'codex',
+  cwd: process.cwd(),
+  alias: 'Project assistant',
+}, { requestId: randomUUID() });
+
+// Creating a conversation does not start inference or grant tool permissions.
+const owner = randomUUID();
+await core.claim(session.id, owner);
+const accepted = await core.execute(session.id, {
+  owner,
+  prompt: 'Summarize the requested project work.',
+  requestId: randomUUID(),
+});
+await core.release(session.id, owner);
+// accepted.executionId identifies queued work. Inspect the eventual result.
+```
+
+Ordinary owner terminal execution uses the terminal's existing permissions and
+platform limits. A tool-broker grant does not constrain arbitrary native execution.
+Persistent registered Agents and their validated descendants use the separate
+[bounded Agent policy](docs/AGENT-EXECUTION.md); an imported purpose tag or request
+cannot convert ordinary owner execution into a safe Agent sandbox.
+
+| Method | Behavior |
+| --- | --- |
+| `start()` / `status()` | Start/discover or inspect the shared engine |
+| `createConversation(input, { requestId })` | Persist an idle session; retry with identical input/key |
+| `sessions()` / `session(id)` / `usage(id)` | Observe the existing runtime |
+| `events(id, after, limit)` | Read an event page using a per-session sequence cursor |
+| `claim(id, owner, takeover)` / `release(id, owner)` | Existing input-ownership leases |
+| `execute(id, input)` | Existing execution queue; requires a stable `requestId` |
+| `answer(id, input)` / `control(id, input)` | Existing answers/controls with stable request IDs |
+| `grantSession(input)` / `revokeSession(grantId)` | Existing scoped session credentials and revocation |
+| `processedCursor(consumerId, sessionId)` | Last successfully processed event sequence |
+| `processEvents(sessionId, options)` | Handle a page and durably acknowledge each successful callback |
+
+`createConversation` accepts `provider`, an absolute `cwd`, and optional `model`,
+`alias` and `effort`. It rejects unknown fields and private Core directories.
+Reasoning effort is validated against the actual model by the existing runner.
+It does not configure agents, attach accounts, create goals or start schedules.
+Goal contracts are still created using the existing terminal workflow; executing
+an unconfigured goal remains rejected by the engine.
+
+```js
+await core.processEvents(session.id, {
+  consumerId: 'paired-phone',
+  async handle(event) {
+    await saveEventIdempotently(event.id, event);
+  },
+});
+```
+
+Use one active processor per consumer/session. A failed handler leaves its event
+unacknowledged. A crash after a handler's side effect but before cursor storage
+can deliver that event again; the consumer must deduplicate by event ID. A
+concurrent cursor update is rejected rather than overwritten. Unknown event
+types retain their envelope and may be ignored by the handler. This method
+processes one page; call again while `hasMore`, then wait or use the existing SSE
+client to observe new work. No model call is made by replay.
+
+## Scoped tool broker
+
+The host owns `admin`. A model-facing transport receives only the result of
+`admin.scope(...)`. It cannot change identity, register integrations, grant
+permissions, attach accounts or revoke another principal's resources.
+
+```js
+import { createToolBroker } from './src/index.js';
+
+const { admin } = createToolBroker();
+const principal = {
+  userId: 'local-owner',
+  workspaceId: 'project-workspace',
+  agentId: 'project-assistant',
+};
+
+// Call only after the host has obtained the user's explicit authorization.
+admin.grant({
+  principal,
+  integrationId: 'filesystem',
+  capabilities: ['filesystem.read'],
+  roots: [{ id: 'project', path: process.cwd() }],
+  expiresAt: Date.now() + 60 * 60 * 1000,
+});
+
+const tools = admin.scope({ principal, sessionId: session.id });
+const result = await tools.invoke('filesystem.read_file', {
+  root: 'project', path: 'README.md', limit: 4096,
+});
+```
+
+`tools.catalog()` returns currently authorized, allowlisted schemas. `tools.instructions`
+contains the exact reusable security preprompt from `SECURITY.md`, reused from
+Core's instruction asset. Include it in effective generated workflow and
+agent instructions. A preprompt does not authorize access.
+
+Private-account integrations declare an ID, description, capabilities,
+authentication/scopes, rate limit, error behavior and read-only tools with strict
+input/output schemas. The host calls `admin.bind(definition, adapter)` after
+secure account setup. The definition contains only `principal`, `integrationId`,
+`capabilities` and `expiresAt`; an opaque binding ID is generated. A later grant
+must name that binding and cannot exceed its identity, capabilities or expiry.
+
+The trusted adapter performs the account operation; it can close over a secure
+host credential provider. The broker never requests raw credentials or exposes a
+credential lookup method. Bindings persist only private scope metadata. Adapters
+are deliberately not serialized: after restart the host must securely reconnect
+with `admin.attachBinding(id, adapter)`. No OAuth login, token vault, refresh
+worker or production email integration is claimed by this implementation.
+
+Tool calls revalidate grants and bindings before execution and before releasing
+results. A caller abort or 30-second deadline stops waiting for an adapter; trusted
+adapters must honor the supplied cancellation signal to stop their underlying I/O.
+Audit events record declared tool ID, decision and safe error code, without
+arguments, account contents, adapter errors or results. Only schema-allowed
+results reach the caller. Adapters are trusted host code and must return only
+the intended account data; schemas cannot prove arbitrary text free of secrets.
+
+## Security and platform limits
+
+The filesystem tool rejects traversal, absolute paths, symbolic links, hardlinks,
+changed roots, known authentication paths, private Core storage and runtime
+databases. Reads are limited to regular files of 1 MiB and slices of 16 KiB.
+The hash covers the returned **byte slice**, not the whole file. File contents
+remain private execution data. They can enter an explicitly reviewed full-context
+copy only through the strict sharing policy; account credentials and bindings are
+never included.
+
+On Linux, reads pin directory descriptors and traverse via `/proc/self/fd` with
+`O_NOFOLLOW`. Other supported hosts use synchronous ancestry/inode revalidation;
+this does not establish confinement against adversarial concurrent directory
+swaps. The broker is not an OS sandbox. Run untrusted code only after a restricted
+process/container boundary prevents access to host storage, broker administration
+and unauthorized networks. Persistent Agent v1 supplies a separate restricted
+provider/tool path; ordinary terminal native permissions are broader. See
+[Agent execution](docs/AGENT-EXECUTION.md) and [the assessment](docs/ARCHITECTURE.md).
+
+The scoped broker supplies no shell or generic network tool. Registration accepts only tools
+declaring read effects; trusted adapters must uphold that declaration. It cannot
+validate the behavior of arbitrary imported code. Side-effecting tools require
+enforceable isolation, destination policies and durable uncertain-operation
+handling before exposure.
+
+## Validation
+
+Run `npm run check` and `npm test` with Node 24+. Tests use temporary private data
+and an offline backend fixture, never production provider accounts. They exercise
+the actual shared daemon, execution queue, scoped tokens, restart/replay and
+the deterministic broker boundaries. [VALIDATION.md](docs/VALIDATION.md) records
+the checks performed for this implementation.

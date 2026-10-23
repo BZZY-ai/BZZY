@@ -23,12 +23,12 @@ import { normalizeContract } from '../src/contracts.js';
 import { assessGroupCompletion, runCheck } from '../src/verification.js';
 import { collectProjectState } from '../src/project-bundle.js';
 import { goalEvent } from '../src/lifecycle.js';
-import { formatTelegram } from '../src/notifications.js';
+import { sandboxSupport } from '../src/policy.js';
 
 let directory, previous;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 test.beforeEach(() => {
-  directory = fs.mkdtempSync('/tmp/bz-rv-'); previous = process.env.BZZY_HOME;
+  directory = fs.realpathSync(fs.mkdtempSync('/tmp/bz-rv-')); previous = process.env.BZZY_HOME;
   process.env.BZZY_HOME = path.join(directory, 'state');
 });
 test.afterEach(() => {
@@ -104,7 +104,7 @@ test('waiting notifications carry a unique question and an attach path', () => {
   const question = { id: randomUUID(), question: 'Allow command?', kind: 'approval' };
   const event = goalEvent(s, { question });
   assert.equal(event.type, 'goal.waiting_for_input'); assert.ok(String(event.epoch).includes(question.id));
-  assert.match(formatTelegram(event), new RegExp(`bzzy --attach ${s.id}`));
+  assert.equal(event.sessionId, s.id); assert.equal(event.question.id, question.id);
 });
 
 test('tool socket requests and responses preserve UTF-8 split inside a character', async () => {
@@ -191,7 +191,7 @@ test('verification output preserves characters written in separate byte chunks',
   assert.equal(JSON.parse(evidence.content).stdout, 'Configuración 🐝');
 });
 
-test('unsupported multi-agent isolation fails before launching a backend', () => {
+test('unsupported multi-agent isolation fails before launching a backend', { skip: process.platform === 'darwin' && sandboxSupport() ? 'macOS sandbox is available independently of PATH' : false }, () => {
   const controller = new URL('../src/controller.js', import.meta.url).href;
   const store = new URL('../src/store.js', import.meta.url).href;
   const provider = new URL('../src/providers.js', import.meta.url).href;
