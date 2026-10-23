@@ -1,3 +1,4 @@
+import { chooseEffort } from './model-controls.js';
 import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
 import { randomUUID } from 'node:crypto';
 import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
@@ -65,7 +66,7 @@ async function editConversation(sessionId, ui, connection, choose, apply) {
   } finally { clearInterval(heartbeat); if (!connection) await api('POST', 'release', {}).catch(() => {}); }
 }
 export async function changeSessionModel(sessionId, argument, ui, connection) {
-  return editConversation(sessionId, ui, connection, current => chooseModel(current, argument, ui), setSessionModel);
+  return editConversation(sessionId, ui, connection, current => argument === '@effort' ? chooseEffort(current, ui) : chooseModel(current, argument, ui), setSessionModel);
 }
 export async function changeSessionSelection(sessionId, selected, ui, connection) {
   return editConversation(sessionId, ui, connection, () => selected, setSessionModel);
@@ -135,6 +136,11 @@ async function watch(info, sessionId, owner, ui, options = {}) {
         if (['/detach', '/quit', '/exit'].includes(text)) { detached = true; ui.detached = true; break; }
         if (text === '/tabs') { showTabs(); continue; }
         if (text === '/help') { ui.event('info', { message: chatHelp }); continue; }
+        if (text.startsWith('/open-session ')) {
+          const chosen = (await import('./session-browser.js')).namedTerminalSessions().find(item => item.id === text.slice(14).trim());
+          if (chosen) ui.nextSession = chosen;
+          continue;
+        }
         if (text === '/sessions') {
           modalTask = true;
           try { const selected = await chooseSavedSession(ui); if (selected) ui.nextSession = selected.session; }
@@ -344,7 +350,15 @@ export async function conversationInput(session, ui, connection) {
       await delay(100);
     }
     const answer = await input;
-    if (!active) return answer;
+    if (!active) {
+      if (/^\/open-session /.test(answer || '')) {
+        const id = answer.slice(14).trim();
+        const chosen = (await import('./session-browser.js')).namedTerminalSessions().find(item => item.id === id);
+        if (chosen) { ui.nextSession = chosen; return ''; }
+        ui.event('error', { message: 'This named session is no longer available.' }); continue;
+      }
+      return answer;
+    }
     let claimed = false, controlling = Boolean(connection);
     if (!connection) {
       try { await api('POST', 'claim', {}); claimed = true; controlling = true; }

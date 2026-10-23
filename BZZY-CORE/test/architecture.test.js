@@ -12,7 +12,11 @@ const regularFiles = directory => fs.readdirSync(directory, { recursive: true })
 test('Core production modules resolve without any terminal source dependency', () => {
   for (const folder of ['src', 'bin']) for (const entry of regularFiles(path.join(root, folder)).filter(entry => /\.m?js$/.test(entry))) {
     const file = path.join(root, folder, entry), source = fs.readFileSync(file, 'utf8');
-    assert.doesNotMatch(source, /BZZY-CLI(?:-TERMINAL)?/, `${folder}/${entry} references the terminal package.`);
+    // Deployment/update code locates the terminal installer to update both
+    // products. It may name that installation path, but cannot import frontend
+    // code. Ordinary execution remains independently checked by the copy test.
+    const installer = folder === 'src' && ['engine/installation-update.js', 'engine/update-check.js', 'engine/source-update.js'].includes(entry);
+    if (!installer) assert.doesNotMatch(source, /BZZY-CLI(?:-TERMINAL)?/, `${folder}/${entry} references the terminal package.`);
     for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)['"](\.[^'"]+)['"]/g)) {
       const dependency = path.resolve(path.dirname(file), match[1]);
       assert.ok(dependency.startsWith(root), `${folder}/${entry} imports outside Core: ${match[1]}`);

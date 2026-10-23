@@ -9,6 +9,7 @@ const installedCore = path.join(root, 'node_modules/@bzzy/core/package.json');
 const installedDirectory = path.dirname(installedCore);
 
 if (process.argv.includes('--restore')) {
+  fs.rmSync(path.join(root, 'assets', 'release.json'), { force: true });
   if (fs.existsSync(siblingCore)) {
     fs.rmSync(installedDirectory, { recursive: true, force: true });
     fs.symlinkSync(path.relative(path.dirname(installedDirectory), path.dirname(siblingCore)), installedDirectory, 'dir');
@@ -49,3 +50,7 @@ if (fs.existsSync(siblingCore)) {
 }
 if (!fs.existsSync(installedCore)) throw new Error('Missing BZZY Core. Keep the BZZY workspace layout and run npm ci --ignore-scripts before packing.');
 if (fs.lstatSync(installedDirectory).isSymbolicLink()) throw new Error('Core must be staged as a physical package for distribution. Run npm pack with its prepack script enabled.');
+
+// Packages carry provenance so their updater can compare GitHub revisions.
+const revision = spawnSync('git', ['-c', `safe.directory=${path.resolve(root, '../..')}`, 'rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+if (revision.status === 0 && /^[a-f0-9]{40,64}$/.test(revision.stdout.trim())) fs.writeFileSync(path.join(root, 'assets', 'release.json'), JSON.stringify({ repository: 'https://github.com/BZZY-ai/BZZY.git', revision: revision.stdout.trim() }) + '\n');

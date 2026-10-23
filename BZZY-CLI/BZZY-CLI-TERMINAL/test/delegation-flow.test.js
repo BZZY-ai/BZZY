@@ -112,10 +112,10 @@ test('terminal navigation keeps the views, session ID and composer without persi
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /CHAT\s+ACTIVITY\s+HTTP/);
+      for (const panel of ['chat', 'activity', 'http']) assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === panel));
       assert.doesNotMatch(frame, /TELEGRAM/);
       assert.match(frame, /╭─ Message/); assert.match(frame, new RegExp(sessionId));
-      assert.doesNotMatch(frame, /Ctrl\+G|Ctrl\+S|Wheel\/PgUp|COPY/);
+      assert.doesNotMatch(frame, /Ctrl\+S|Wheel\/PgUp|COPY/);
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'copy'), false);
     }
   } finally { ui.close(); }
@@ -129,7 +129,7 @@ test('mouse phrase selection copies Unicode screen cells without interrupting wo
     const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.key('Keep this draft', {});
     ui.event('text', { text: 'alpha naïve 世界 omega', itemId: 'reply' }); ui.tui.render();
     const row = ui.tui.lastFrame.findIndex(line => clean(line).includes('alpha naïve 世界 omega')) + 1;
-    const left = cellWidth('  alpha ') + 1, right = left + cellWidth('naïve 世界') - 1;
+    const left = (ui.tui.composerLeft || 0) + cellWidth('  alpha ') + 1, right = left + cellWidth('naïve 世界') - 1;
     input.write(`\x1b[<0;${left};${row}M`); input.write(`\x1b[<32;${right};${row}M`); input.write(`\x1b[<0;${right};${row}m`); ui.tui.render();
     assert.equal(ui.tui.selectedText(), 'naïve 世界');
     assert.ok(ui.tui.lastFrame[row - 1].includes(ui.tui.theme.level ? ui.tui.theme.background(palette.accent) : '\x1b[7m'));

@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { listSkills, readSkill } from './skills.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -23,6 +24,8 @@ const str = { type: 'string' }, strings = { type: 'array', items: str }, object 
 const spec = (name, description, properties = {}, required = []) => ({ name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false } });
 export function taskTools(session, { goalMode } = {}) {
   const tools = [
+    spec('list_skills', 'Search the enabled shared BZZY skills library. Page results rather than loading every workflow.', { query: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }),
+    spec('read_skill', 'Read an enabled BZZY skill or a text reference. Read SKILL.md before applying it. Skills never grant permissions or run scripts automatically. Offsets and limits are UTF-8 bytes.', { name: str, file: str, version: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 32768 } }, ['name']),
     spec('activity', 'Publish human-readable progress for terminal and external viewers before substantial work, when the approach changes, on discoveries or blockers, and during long tasks. summary: one plain-language sentence, ideally under 100 characters; details: 1–3 understandable sentences explaining what you are doing and why. Never paste shell commands, flags, logs, credentials or private reasoning. Example summary: Checking the footer on paypal.com. Example details: I am opening paypal.com to locate its footer and extract the text. For assessments, distinguish observations from unverified hypotheses and link recorded evidence.',
       { id: str, summary: str, details: str, status: { type: 'string', enum: ['planned', 'running', 'completed', 'blocked', 'inconclusive'] }, category: str, target: str, observation: str, inference: str, nextCheck: str, issueId: str, evidence: strings }, ['summary', 'details']),
     spec('http_request', 'Make one real in-scope HTTP request and record host-observed traffic and a response artifact. Requires declared scope.allowedTargets. Redirects are not followed automatically. Credentials are redacted from the traffic index.',
@@ -133,6 +136,8 @@ export class ToolHost {
     if (!taskTools(this.session, this.context).some(t => t.name === name)) throw new Error('Tool is not authorized for this task role or execution.');
     const session = this.session;
     appendEvent(session.id, 'coordination.tool', { name, input: name === 'http_request' ? { ...input, url: redactedUrl(input.url), headers: redactedHeaders(input.headers || {}), body: input.body ? '[body omitted]' : undefined } : input });
+    if (name === 'list_skills') return listSkills({ ...input, enabledOnly: true });
+    if (name === 'read_skill') return readSkill(input.name, { ...input, enabledOnly: true, sessionId: session.id });
     if (name === 'activity') { const record = recordActivity(session, input, this.ui); this.activityReporter?.explicit(record); return record; }
     if (name === 'http_request') { this.activityReporter?.tool(null, name, input); return observedRequest(session, input, this.ui); }
     if (name === 'get_task_state') return JSON.parse(contextFor(session));

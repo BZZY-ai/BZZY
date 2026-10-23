@@ -1,3 +1,5 @@
+import { updateCommand } from './update-checker.js';
+import { skillsCommand } from './skills-ui.js';
 import readline from 'node:readline';
 import { TerminalChat } from './tui.js';
 import { clean, cellWidth, clip } from './terminal-format.js';
@@ -60,6 +62,8 @@ export class UI {
   showAccountStatus() { this.event('info', { message: accountStatusDetails(this.accountStatus) }); }
   openSettings() { this.openTerminal(); this.settings ||= new ClientSettings(this); this.tui?.setPanel('settings'); }
   async settingsCommand(input) {
+    if (input.trim() === '/update') { await updateCommand(this); return true; }
+    if (await skillsCommand(input, this)) return true;
     if (!/^\/settings(?:\s|$)/.test(input)) return false;
     this.openSettings();
     const action = input.slice(9).trim();

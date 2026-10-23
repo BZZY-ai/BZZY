@@ -6,6 +6,7 @@ DerivedData/
 previews/
 coverage/
 artifacts/
+/BZZY-CLI/BZZY-CLI-TERMINAL/assets/release.json
 .bzzy-runtime/
 .bzzy-package/
 *.tgz

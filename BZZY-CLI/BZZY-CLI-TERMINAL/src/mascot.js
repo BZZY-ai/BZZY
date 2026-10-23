@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { inflateSync } from 'node:zlib';
 import { palette, createTerminalTheme } from './terminal-theme.js';
 
-// Cyan light samples from the user's bzzy_img.jpeg, rather than a substitute face.
+// Cyan light samples from the user's new-eyes.jpeg, rather than a substitute face.
 // Each Braille cell holds a 2×4 pixel grid, keeping the antennae and compound-eye texture.
 const reference = JSON.parse(fs.readFileSync(new URL('../assets/bzzy-eyes.json', import.meta.url), 'utf8'));
 const pixels = inflateSync(Buffer.from(reference.cyan, 'base64'));
@@ -39,7 +39,7 @@ function light(x, y, motion) {
 export function mascotCells(seconds = 0, { columns = 44, rows = 12, compact = false } = {}) {
   const motion = eyeMotion(seconds), lines = [];
   if (compact) motion.open = Math.max(rows >= 5 ? 0.1 : 0.24, motion.open);
-  const crop = compact ? { x: 0.14, y: 0.30, width: 0.72, height: 0.54 } : { x: 0, y: 0, width: 1, height: 1 };
+  const crop = compact ? { x: 0.18, y: 0.10, width: 0.64, height: 0.79 } : { x: 0, y: 0, width: 1, height: 1 };
   for (let row = 0; row < rows; row++) {
     const line = [];
     for (let column = 0; column < columns; column++) {

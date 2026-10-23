@@ -9,7 +9,7 @@ import { parseArgs } from '../src/cli.js';
 const updater = new URL('../src/update.js', import.meta.url).href;
 
 function fixture(t, { workspace = false } = {}) {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-update-'));
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-update-')));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const remote = path.join(temporary, 'remote.git'), author = path.join(temporary, 'author');
   const checkout = path.join(temporary, "installed bzzy's checkout");
@@ -150,4 +150,15 @@ test('reports installer failure with a retry command after downloading the updat
   assert.match(result.stderr, /Run \.\/install.sh/);
   assert.equal(fs.readFileSync(path.join(f.checkout, 'version.txt'), 'utf8'), 'new');
   assert.doesNotMatch(result.stdout, /bzzy is up to date/);
+});
+
+test('the checked revision updates Core and CLI together without following a later remote commit', t => {
+ const f = fixture(t, { workspace: true });
+ fs.writeFileSync(path.join(f.author, 'BZZY-CORE/package.json'), '{"version":"1.0.1"}'); f.publish('checked');
+ const checked = f.git(f.author, 'rev-parse', 'HEAD');
+ f.publish('later'); f.env.BZZY_UPDATE_TARGET = checked;
+ const result = f.update(); assert.equal(result.status, 0, result.stderr);
+ assert.equal(f.git(f.checkout, 'rev-parse', 'HEAD'), checked);
+ assert.equal(fs.readFileSync(path.join(f.checkout, 'version.txt'), 'utf8'), 'checked');
+ assert.equal(JSON.parse(fs.readFileSync(path.join(f.checkout, 'BZZY-CORE/package.json'))).version, '1.0.1');
 });

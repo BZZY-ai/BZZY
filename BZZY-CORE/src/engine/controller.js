@@ -45,6 +45,7 @@ export function printGoalSummary(session, ui) {
     message: `${result} · ${elapsed}${delegated ? '' : ` · ${usage.complete ? '' : 'at least '}${usage.totalTokens.toLocaleString()} tokens${usage.complete ? '' : ' (some usage unavailable)'}`}${breakdown}\nSession: ${session.id}${session.goal.reason ? `\nReason: ${session.goal.reason}` : ''}` });
 }
 export async function runSession(provider, session, options, ui, prompt, { goal = false, resumeGoal = false } = {}) {
+  if (session.modelSelectionRequired) throw new Error('Select a model before sending a message.');
   const agentScope = agentExecutionScope(session);
   if (agentScope) {
     if (session.contract?.verification?.length || session.contract?.artifacts?.length) throw Object.assign(new Error('Persistent Agent acceptance commands and file assertions need an authorized isolated integration; no host command was started.'), { code: 'UNSUPPORTED_POLICY' });

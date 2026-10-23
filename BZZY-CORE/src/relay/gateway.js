@@ -1,3 +1,4 @@
+import { coreUpdates } from '../engine/updates.js';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -589,6 +590,8 @@ export class RelayGateway extends EventEmitter {
     return { state: 'accepted', ...result };
   }
   async #read(row, request) {
+    if (request.op === 'updates.status') return coreUpdates().status(row);
+    if (request.op === 'updates.check') return coreUpdates().checkNow(row);
     if (request.op.startsWith('agents.')) return this.#agentRead(row, request);
     const client = await this.#clientFor(row), params = request.params;
     switch (request.op) {
@@ -681,6 +684,8 @@ export class RelayGateway extends EventEmitter {
   }
 
   async #command(row, request) {
+    if (request.op === 'updates.configure') return coreUpdates().configure(row, request.params);
+    if (request.op === 'updates.install') return coreUpdates().requestInstall(row, request.params, request.id);
     if (request.op.startsWith('agents.')) return this.#agentCommand(row, request);
     if (request.op === 'sessions.open') return this.#catalogOpen(row, request);
     if (request.op.startsWith('share.')) return this.#shareCommand(row, request);

@@ -197,6 +197,9 @@ struct WorkspaceView: View {
             showConnection = false
             store.selectedTab = route == .agents ? .agents : .terminal
             navigationID = UUID()
+        case .updates:
+            showConnection = false
+            showSettings = true
         case .connection:
             if showSettings {
                 pendingConnectionFromNotification = true

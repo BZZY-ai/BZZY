@@ -1,3 +1,6 @@
+import { notificationDeliveryStatus } from '@bzzy/core/engine/push-status.js';
+import { CoreAssistant } from '@bzzy/core';
+import { chooseUnifiedModel, chooseEffort } from './model-controls.js';
 import { randomUUID } from 'node:crypto';
 import { terminalSession } from '@bzzy/core';
 import { sessionPermissions } from '@bzzy/core/engine/session-access.js';
@@ -95,7 +98,15 @@ export class ClientSettings {
       put('Start', 'accent', 'core-start');
       put('Stop', 'warning', 'core-stop');
       put('Restart', 'accent', 'core-restart');
+      const assistant = (this.assistant ||= new CoreAssistant()).settings();
+      if (!Object.hasOwn(this, 'coreSelection')) { this.coreSelection = assistant.selection; this.coreRevision = assistant.revision; }
+      put(); put('Default Core model · ' + (this.coreSelection ? `${this.coreSelection.provider} · ${this.coreSelection.model || 'provider default'} ▾` : 'Select model ▾'), 'accent', 'core-model');
+      put('Effort · ' + (this.coreSelection?.effort || 'default') + ' ▾', 'accent', 'core-effort');
+      put('Save Core default', 'accent', 'core-save');
+      put('Independent from the CLI chat default.', 'muted');
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
+      const push = notificationDeliveryStatus();
+      put(); put(push.message, push.configured && push.compatibleDevices ? 'muted' : 'warning');
       put(); put('Back', 'muted', 'back');
       return rows;
     }
@@ -262,7 +273,24 @@ export class ClientSettings {
     try {
       if (action === 'workspace-root') await this.configureWorkspace();
       else if (action === 'deepseek') await this.saveDeepseek();
-      else if (action === 'core') { this.page = 'core'; this.focus = 0; await this.refreshHost(); }
+      else if (action === 'core') { delete this.coreSelection; delete this.coreRevision; this.page = 'core'; this.focus = 0; await this.refreshHost(); }
+      else if (action === 'core-model') {
+        const shown = (this.assistant ||= new CoreAssistant()).settings();
+        this.coreRevision = shown.revision;
+        const selected = await chooseUnifiedModel({ ...this.coreSelection, cwd: this.ui.tui.cwd || process.cwd() }, this.ui, { title: 'BZZY Core default model' });
+        if (selected) this.coreSelection = selected;
+      } else if (action === 'core-effort') {
+        if (!this.coreSelection) throw Object.assign(new Error('Select a Core model first.'), { code: 'ASSISTANT_SETUP_REQUIRED' });
+        const selected = await chooseEffort({ ...this.coreSelection, selectedEffort: this.coreSelection.effort, modelCapabilities: this.coreSelection.capabilities, cwd: this.ui.tui.cwd || process.cwd() }, this.ui);
+        if (selected) this.coreSelection = { ...this.coreSelection, ...selected };
+      } else if (action === 'core-save') {
+        if (!this.coreSelection) throw Object.assign(new Error('Select a Core model first.'), { code: 'ASSISTANT_SETUP_REQUIRED' });
+        const assistant = this.assistant ||= new CoreAssistant();
+        const { provider, model, effort } = this.coreSelection;
+        assistant.configure({ source: 'core', provider, model, effort }, { expectedRevision: this.coreRevision ?? assistant.settings().revision, requestId: randomUUID() });
+        this.coreRevision = assistant.settings().revision;
+        this.message = 'Core default saved. CLI default is independent.';
+      }
       else if (action === 'core-status') await this.refreshHost();
       else if (['core-start', 'core-stop', 'core-restart'].includes(action)) await this.controlHost(action);
       else if (action === 'pair') { this.page = 'pair'; this.focus = 0; await this.pair(); }

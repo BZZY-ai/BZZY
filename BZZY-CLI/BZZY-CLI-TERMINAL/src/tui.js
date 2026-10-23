@@ -1,3 +1,5 @@
+import { skillRows } from './skills-ui.js';
+import { namedTerminalSessions } from './session-browser.js';
 import readline from 'node:readline';
 import { clean, cellWidth, clip, wrap, duration } from './terminal-format.js';
 import { mascotCells, mascotLine } from './mascot.js';
@@ -29,7 +31,7 @@ export class TerminalChat {
     readline.emitKeypressEvents(this.input, { escapeCodeTimeout: 50 }); this.input.setRawMode?.(true); this.input.resume();
     this.onKey = (text, key) => this.key(text, key || {});
     this.input.on('keypress', this.onKey);
-    this.onResize = () => { this.textSelection = null; if (this.copyMode) this.setCopyMode(false); this.lastFrame = []; this.render(); };
+    this.onResize = () => { this.textSelection = null; if (this.copyMode) this.setCopyMode(false); this.lastFrame = []; this.dashboardFrame = null; this.render(); };
     this.output.on?.('resize', this.onResize);
     this.onDrain = () => { this.outputBlocked = false; this.lastFrame = []; this.schedule(); };
     this.output.on?.('drain', this.onDrain);
@@ -59,7 +61,7 @@ export class TerminalChat {
   paintEyes() {
     const region = this.eyeRegion;
     if (!region || this.copyMode || this.textSelection || this.outputBlocked || this.closed) return;
-    const next = mascotCells(this.animationTime, { columns: region.columns, rows: region.rows, compact: true });
+    const next = mascotCells(this.animationTime, { columns: region.columns, rows: region.rows, compact: region.compact ?? true });
     let output = '';
     for (let row = 0; row < next.length; row++) {
       const changed = column => next[row][column].text !== this.eyeCells[row][column].text || next[row][column].tone !== this.eyeCells[row][column].tone;
@@ -85,7 +87,8 @@ export class TerminalChat {
   update(snapshot) {
     const session = snapshot.session || snapshot;
     this.provider = session.provider || this.provider;
-    this.model = session.resolvedModel || session.model || 'default';
+    this.modelSelectionRequired = Boolean(session.modelSelectionRequired);
+    this.model = this.modelSelectionRequired ? 'Select model' : session.resolvedModel || session.model || 'Provider default';
     this.effort = session.selectedEffort === 'default' ? 'effort default' : session.selectedEffort || session.reasoningEffort || '';
     this.cwd = session.projectRoot || session.cwd || this.cwd;
     this.alias = session.alias || '';
@@ -265,13 +268,13 @@ export class TerminalChat {
   chooseOne(title, choices) {
     this.textSelection = null;
     return new Promise(resolve => {
-      const picker = { title, choices: [], focus: 0, resolve, single: true, loading: true };
+      const picker = { title, loadingLabel: /updates/i.test(title) ? 'Checking GitHub…' : /model/i.test(title) ? 'Loading available models…' : 'Loading choices…', choices: [], focus: 0, resolve, single: true, loading: true };
       this.selection = picker; this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule();
       Promise.resolve(choices).then(result => {
         if (this.selection !== picker) return;
         picker.choices = Array.isArray(result) ? result : result.choices;
         picker.description = result.description || '';
-        picker.descriptionRows = Math.min(4, result.descriptionRows || 2);
+        picker.descriptionRows = Math.min(16, result.descriptionRows || 2);
         picker.selectEffort = Boolean(result.selectEffort);
         picker.shortcuts = result.shortcuts;
         picker.hint = result.hint;
@@ -293,7 +296,7 @@ export class TerminalChat {
     else if (answer != null) { this.value = ''; this.cursor = 0; }
     this.hidden = false; resolve(answer); this.schedule();
   }
-  canCompose() { return this.panel === 'settings' && !this.promptDraft ? false : Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.selection && !this.promptDraft); }
+  canCompose() { return ['settings', 'skills'].includes(this.panel) && !this.promptDraft ? false : Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.selection && !this.promptDraft); }
   submitMessage() {
     if (this.resolveInput) { this.finish(this.value); return; }
     if (!this.value.trim()) return;
@@ -303,13 +306,13 @@ export class TerminalChat {
     this.value = ''; this.cursor = 0; this.schedule();
   }
   completions() {
-    if (this.panel === 'settings') return [];
+    if (['settings', 'skills'].includes(this.panel)) return [];
     if (!this.resolveInput || this.hidden || this.selection || this.pasting || !/^bzzy\b/.test(this.question || '')) return [];
     if (this.completionQuery !== this.value) { this.completionQuery = this.value; this.completionFocus = 0; this.completionDismissed = false; }
     return this.completionDismissed ? [] : commandSuggestions(this.value);
   }
   completeCommand(choice) { this.value = choice.command + ' '; this.cursor = [...this.value].length; this.schedule(); }
-  panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'settings']; }
+  panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'settings']; }
   setPanel(panel) {
     if (this.ui.coreLifecycleInterrupted && panel !== 'settings') return;
     if (this.promptDraft || this.selection) return;
@@ -319,7 +322,13 @@ export class TerminalChat {
     if (this.settingsDraft && panel !== 'settings' && !this.promptDraft) { Object.assign(this, this.settingsDraft); this.settingsDraft = null; }
     if (panel === 'settings' && this.panel !== 'settings') { this.settingsDraft = { value: this.value, cursor: this.cursor }; this.value = ''; this.cursor = 0; }
     this.settingsEnsureFocus = panel === 'settings';
+    if (panel === 'skills') this.skillTopRequested = true;
     this.textSelection = null; this.panel = panel; this.scroll = 0; this.schedule();
+  }
+  localCommand(command) {
+    if (this.selection || this.promptDraft || this.hidden || this.aliasEdit || this.ui.privateView || this.ui.coreLifecycleInterrupted || this.resolveInput && !/^bzzy\b/.test(this.question || '')) return;
+    if (this.resolveInput) { const draft = { value: this.value, cursor: this.cursor }; this.finish(command); Object.assign(this, draft); }
+    else this.inputQueue.push({ sessionId: this.ui.activeTab || this.ui.sessionId, text: command });
   }
   settingsAction(action) {
     if (!this.resolveInput || this.ui.settings?.busy || this.promptDraft || this.selection) return;
@@ -425,6 +434,14 @@ export class TerminalChat {
     }
     const hit = this.hitTargets?.findLast(target => y === target.row && x >= target.left && x <= target.right);
     if (hit?.type === 'panel') this.setPanel(hit.panel);
+    else if (hit?.type === 'model-control') this.localCommand(hit.command);
+    else if (hit?.type === 'skill-action') this.localCommand('/skills ' + hit.action);
+    else if (hit?.type === 'saved-session') this.localCommand('/open-session ' + hit.id);
+    else if (hit?.type === 'alias') {
+      const time = Date.now();
+      if (time - (this.aliasClickedAt || 0) < 450 && !this.selection && !this.promptDraft && this.resolveInput && /^bzzy\b/.test(this.question || '') && this.ui.sessionMode !== 'VIEW') this.aliasEdit = { value: this.alias || '', cursor: [...(this.alias || '')].length };
+      this.aliasClickedAt = time; this.schedule();
+    }
     else if (hit?.type === 'settings') this.settingsAction(hit.action);
     else if (hit?.type === 'copy-response') { this.clipboardTask = this.copySelection(clean(messageBodyToPlainText(hit.entry.text))); }
     else if (hit?.type === 'tab') this.ui.onSelectTab?.(hit.id);
@@ -440,7 +457,7 @@ export class TerminalChat {
     else if (hit?.type === 'confirm') this.key('', { name: 'return' });
     else if (hit?.type === 'cancel') this.key('', { name: 'escape' });
     else if (this.resolveInput && !this.selection && y === this.composerRow) {
-      const cells = Math.max(0, x - 3) + (this.composerOffset || 0), chars = [...this.value];
+      const cells = Math.max(0, x - 3 - (this.composerLeft || 0)) + (this.composerOffset || 0), chars = [...this.value];
       let used = 0, index = 0;
       for (; index < chars.length; index++) { const size = this.hidden ? 1 : chars[index] === '\n' ? 3 : cellWidth(chars[index]); if (used + size > cells) break; used += size; }
       this.cursor = index; this.schedule();
@@ -467,6 +484,20 @@ export class TerminalChat {
         if (report) this.mouse(Number(report[1]), Number(report[2]), Number(report[3]), report[4] === 'm');
       } else if (this.mouseReport.length > 64 || /[^\d;]/.test(this.mouseReport)) this.mouseReport = null;
       return;
+    }
+    if (this.aliasEdit) {
+      key.bzzyHandled = true;
+      const edit = this.aliasEdit, chars = [...edit.value];
+      if (key.name === 'escape' || key.ctrl && key.name === 'c') this.aliasEdit = null;
+      else if (key.name === 'return') { this.aliasEdit = null; if (edit.value.trim()) this.localCommand('/alias ' + edit.value.trim()); }
+      else if (key.name === 'left') edit.cursor = Math.max(0, edit.cursor - 1);
+      else if (key.name === 'right') edit.cursor = Math.min(chars.length, edit.cursor + 1);
+      else if (key.name === 'backspace' && edit.cursor) { chars.splice(--edit.cursor, 1); edit.value = chars.join(''); }
+      else if (key.name === 'delete') { chars.splice(edit.cursor, 1); edit.value = chars.join(''); }
+      else if (key.ctrl && key.name === 'a') edit.cursor = 0;
+      else if (key.ctrl && key.name === 'e') edit.cursor = chars.length;
+      else if (text && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(text)) { chars.splice(edit.cursor, 0, ...text); edit.cursor += [...text].length; edit.value = chars.join('').slice(0, 80); }
+      this.schedule(); return;
     }
     if (this.copyMode) { if (key.name === 'escape' || key.ctrl && key.name === 's') this.setCopyMode(false); return; }
     if (this.panel === 'settings' && this.ui.settings?.qrView && !this.promptDraft) {
@@ -516,7 +547,7 @@ export class TerminalChat {
     }
     if (key.ctrl && key.name === 'g') { const panels = this.panels(); this.setPanel(panels[(panels.indexOf(this.panel) + 1) % panels.length]); return; }
     if (key.ctrl && key.name === 'o') { this.showTools = !this.showTools; this.schedule(); return; }
-    if (key.ctrl && key.name === 'l') { this.lastFrame = []; this.schedule(); return; }
+    if (key.ctrl && key.name === 'l') { this.lastFrame = []; this.dashboardFrame = null; this.schedule(); return; }
     if (key.ctrl && key.name === 'c') {
       if (!this.promptDraft && process.listenerCount('SIGINT')) process.emit('SIGINT'); else this.finish(null);
       return;
@@ -532,6 +563,12 @@ export class TerminalChat {
         this.ui.settings.focus = (this.ui.settings.focus + direction + actions.length) % actions.length; this.settingsEnsureFocus = true; this.schedule();
       } else if (key.name === 'return') this.settingsAction(actions[this.ui.settings.focus]?.action);
       return;
+    }
+    if (this.panel === 'skills' && !this.promptDraft) {
+      if (key.name === 'escape') { this.setPanel('chat'); return; }
+      const rows = skillRows(this.ui).filter(row => row.action);
+      if (key.name === 'up' || key.name === 'down') { this.skillFocus = ((this.skillFocus || 0) + (key.name === 'up' ? rows.length - 1 : 1)) % rows.length; this.skillEnsureFocus = true; this.schedule(); return; }
+      if (key.name === 'return') { this.localCommand('/skills ' + rows[this.skillFocus || 0]?.action); return; }
     }
     if (!this.canCompose()) return;
 
@@ -588,7 +625,7 @@ export class TerminalChat {
       if (!compact) put('');
       put('  ' + picker.title + (picker.choices.length ? ` · ${picker.focus + 1}/${picker.choices.length}` : ''), palette.accent, true);
       put(picker.hint ? '  ' + picker.hint : picker.single ? picker.selectEffort ? '  ↑/↓ model · ←/→ effort · Enter confirms · Esc cancels' : '  ↑/↓ chooses · Enter confirms · Esc cancels' : '  Space selects · ↑/↓ moves · Enter starts · Esc cancels', palette.muted);
-      if (picker.loading) put('  ' + spinner[this.frame % spinner.length] + ' Loading available models…', palette.accent);
+      if (picker.loading) put('  ' + spinner[this.frame % spinner.length] + ' ' + (picker.loadingLabel || 'Loading choices…'), palette.accent);
       const warning = picker.warning ? wrap(picker.warning, width - 5).slice(0, compact ? 1 : 2) : [];
       for (const line of warning) put('  ' + line, palette.warning);
       const focused = picker.choices[picker.focus];
@@ -626,6 +663,15 @@ export class TerminalChat {
           index++;
         }
         for (const line of wrapped) put('  ' + line, palette[row.tone], Boolean(focused));
+      }
+    } else if (this.panel === 'skills') {
+      let index = 0;
+      for (const row of skillRows(this.ui)) {
+        const focused = row.action && index++ === (this.skillFocus || 0);
+        if (focused) this.skillFocusRow = lines.length;
+        const wrapped = wrap((focused ? '› ' : '  ') + row.text, width - 4);
+        if (row.action) for (let offset = 0; offset < wrapped.length; offset++) this.contentHits.push({ type: 'skill-action', action: row.action, row: lines.length + offset, left: 2, right: width });
+        for (const line of wrapped) put('  ' + line, row.tone === 'muted' ? palette.muted : palette.accent, focused);
       }
     } else if (this.panel === 'room') {
       for (const item of this.sharedRoom) {
@@ -727,7 +773,35 @@ export class TerminalChat {
     const elapsed = this.startedAt ? duration(Math.max(0, ((this.finishedAt ? Date.parse(this.finishedAt) : Date.now()) - Date.parse(this.startedAt)) / 1000)) : '';
     return [status, this.goal ? 'goal ' + this.goal.status : '', elapsed, this.tokenLabel(), this.effort].filter(Boolean).join('  ·  ');
   }
+  modelHeader(width) {
+    const color = this.theme.color, lines = [];
+    const effort = '[ effort ' + (this.effort || 'default').replace(/^effort /, '') + ' ▾ ]';
+    const model = '[ ' + clip(this.model, Math.max(1, width - cellWidth(effort) - 20)) + ' ▾ ]';
+    let column = 3;
+    const controls = [[model, '/providers'], [effort, '/models @effort'], ['[ Save ]', '/default']];
+    let line = '  ';
+    for (const [label, command] of controls) {
+      if (column + cellWidth(label) > width) break;
+      this.hitTargets.push({ type: 'model-control', command, row: 0, left: column, right: column + cellWidth(label) - 1 });
+      column += cellWidth(label) + 1; line += color(label, palette.accent, true) + ' ';
+    }
+    lines.push(line); return lines;
+  }
   persistentHeader(width, height, { compact = false, controls = '' } = {}) {
+    if (this.dashboardRendering && !compact) {
+      const color = this.theme.color, title = this.aliasEdit ? [...this.aliasEdit.value].slice(0, this.aliasEdit.cursor).join('') + '▏' + [...this.aliasEdit.value].slice(this.aliasEdit.cursor).join('') : this.alias || 'Untitled project';
+      const header = [color('  ▱ ' + clip(title, width - 18) + '  · ' + this.state, palette.text, true), color('  ' + clip(this.cwd || '', width - 3), palette.muted)];
+      this.hitTargets.push({ type: 'alias', row: 1, left: 3, right: Math.min(width - 1, 5 + cellWidth(title)) });
+      const modelRow = header.length + 1; header.push(...this.modelHeader(width));
+      for (const hit of this.hitTargets) if (hit.type === 'model-control' && hit.row === 0) hit.row = modelRow;
+      if (this.ui.accountStatusEnabled) header.push(color('  ' + clip(accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width - 3), palette.accent));
+      header.push(color('  ' + clip(this.counters() + ' · ' + hostMetricsLabel(this.ui.hostMetrics, width - 4), width - 3), palette.muted));
+      if (this.ui.tabs?.length > 1) {
+        let column = 1; header.push(this.ui.tabs.map((tab, index) => { const label = ` [${index} ${agentLabel(tab.agent)}] `; this.hitTargets.push({ type: 'tab', id: tab.id, row: header.length + 1, left: column, right: column + cellWidth(label) - 1 }); column += cellWidth(label); return color(label, tab.id === this.ui.activeTab ? palette.accent : palette.muted); }).join(''));
+      }
+      header.push(color('─'.repeat(width), palette.border));
+      this.eyeRegion = null; return header;
+    }
     const { color } = this.theme, muted = text => color(text, palette.muted), accent = text => color(text, palette.accent, true);
     const rows = compact ? 2 : height >= 36 ? 8 : height >= 30 ? 7 : height >= 24 ? 5 : 2;
     const eyeRows = this.ui.pet === false ? 0 : rows;
@@ -761,6 +835,7 @@ export class TerminalChat {
         header.push(' '.repeat(left) + mascotLine(cells[row], this.theme) + suffixes[row]);
       }
     } else header.push(...text.slice(0, 2).map(line => ' '.repeat(left) + line));
+    if (!compact) { const row = header.length + 1; header.push(...this.modelHeader(width)); for (const hit of this.hitTargets) if (hit.type === 'model-control' && hit.row === 0) hit.row = row; }
     if (compact) return header.map(line => cellWidth(line) > width ? color(clip(line, width), palette.text) : line);
     if (height >= 24) header.push('');
     if (this.ui.accountStatusEnabled) for (const line of wrap(accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width - 4)) header.push(color('  ' + line, palette.accent));
@@ -893,8 +968,52 @@ export class TerminalChat {
     if (this.resolveInput) frame += `\x1b[${height - 1};${Math.min(width, 5 + cellWidth(value))}H\x1b[?25h`;
     this.writeFrame(frame);
   }
+  renderDashboard(width, height) {
+    const output = this.output, sidebarWidth = 25, contentWidth = width - sidebarWidth;
+    const oldWrite = this.writeFrame;
+    this.dashboardRendering = true; this.dashboardActive = true;
+    this.output = { columns: contentWidth + 1, rows: height };
+    this.writeFrame = () => {};
+    try { this.render({ force: true }); } finally { this.output = output; this.writeFrame = oldWrite; this.dashboardRendering = false; }
+    const { color } = this.theme, muted = text => color(text, palette.muted), accent = text => color(text, palette.accent, true), edge = text => color(text, palette.border);
+    const side = Array(height).fill(''), put = (row, text) => { if (row >= 0 && row < height) side[row] = text; };
+    put(0, accent(' ● bzzy ~'));
+    const eyes = mascotCells(this.animationTime, { columns: 19, rows: 5, compact: false });
+    if (this.ui.pet !== false) for (let row = 0; row < eyes.length; row++) put(row + 2, '  ' + mascotLine(eyes[row], this.theme));
+    put(8, accent('  B Z Z Y')); put(9, muted('  your AI workspace'));
+    let row = 11;
+    for (const panel of this.panels()) {
+      const label = panel === 'http' ? 'Network' : panel === 'room' ? 'SHARED ROOM' : panel[0].toUpperCase() + panel.slice(1);
+      put(row, (panel === this.panel ? accent : muted)(` ${panel === this.panel ? '▎' : ' '} ${label}`));
+      this.hitTargets.push({ type: 'sidebar-panel', panel, row: ++row, left: 1, right: sidebarWidth - 1 });
+    }
+    row++; put(row++, edge('  ────────────────────')); put(row++, accent('  RECENT SESSIONS'));
+    if (!this.recentCache || Date.now() - this.recentCache.at > 2000) this.recentCache = { at: Date.now(), sessions: namedTerminalSessions().slice(0, 5) };
+    for (const session of this.recentCache.sessions.slice(0, Math.max(0, Math.min(5, height - row - 5)))) {
+      put(row, muted('  › ' + clip(session.alias, 19)));
+      this.hitTargets.push({ type: 'sidebar-session', id: session.id, row: ++row, left: 1, right: sidebarWidth - 1 });
+    }
+    put(height - 4, accent('  ' + (this.ui.updateStatus || 'Check for updates')));
+    this.hitTargets.push({ type: 'sidebar-update', command: '/update', row: height - 3, left: 1, right: sidebarWidth - 1 });
+    put(height - 2, muted('  Ctrl+G · switch view')); put(height - 1, muted('  / commands · ? help'));
+    const raw = this.lastFrame.slice();
+    const mainHits = this.hitTargets.filter(hit => !hit.type.startsWith('sidebar-'));
+    this.hitTargets = [...mainHits.map(hit => ({ ...hit, left: hit.left + sidebarWidth, right: hit.right + sidebarWidth })), ...this.hitTargets.filter(hit => hit.type.startsWith('sidebar-')).map(hit => ({ ...hit, type: hit.type === 'sidebar-panel' ? 'panel' : hit.type === 'sidebar-update' ? 'model-control' : 'saved-session' }))];
+    if (this.scrollbar) this.scrollbar.column += sidebarWidth;
+    if (this.textRegion) { this.textRegion.left += sidebarWidth; this.textRegion.right += sidebarWidth; }
+    this.composerLeft = sidebarWidth;
+    const lines = raw.map((line, index) => side[index] + ' '.repeat(Math.max(0, sidebarWidth - 1 - cellWidth(side[index]))) + edge('│') + line);
+    let frame = '\x1b[?25l';
+    for (let index = 0; index < height; index++) if (lines[index] !== this.dashboardFrame?.[index]) frame += `\x1b[${index + 1};1H${this.theme.background(palette.background)}\x1b[2K${lines[index] || ''}\x1b[0m`;
+    this.dashboardFrame = lines; this.lastFrame = lines;
+    if (this.ui.pet !== false) { this.eyeCells = eyes; this.eyeRegion = { top: 3, left: 3, columns: 19, rows: 5, compact: false, suffixes: eyes.map((_, row) => ' '.repeat(sidebarWidth - 21 - 1) + edge('│') + (raw[row + 2] || '')) }; }
+    if (this.canCompose() && !this.aliasEdit) frame += `\x1b[${this.composerRow};${sidebarWidth + Math.min(contentWidth - 1, 3 + cellWidth(this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ')) - (this.composerOffset || 0))}H\x1b[?25h`;
+    this.writeFrame(frame);
+  }
   render({ force = false } = {}) {
     if (this.closed || this.outputBlocked || this.copyMode && !force) return;
+    if (!this.dashboardRendering && !this.ui.privateView && !this.ui.settings?.qrView && (this.output.columns || 80) >= 100 && (this.output.rows || 24) >= 28 && !this.textSelection) { this.renderDashboard((this.output.columns || 80) - 1, this.output.rows || 24); return; }
+    if (!this.dashboardRendering) { this.dashboardActive = false; this.composerLeft = 0; this.dashboardFrame = null; }
     this.privateFrame = false; this.hitTargets = [];
     if (this.ui.privateView) {
       this.renderPrivateView(Math.max(16, (this.output.columns || 80) - 1), Math.max(8, this.output.rows || 24));
@@ -959,7 +1078,7 @@ export class TerminalChat {
     this.selectionHeight = bodyHeight;
     const contentWidth = width - 2;
     const roomLabels = this.panel === 'room' ? JSON.stringify([this.peers.map(peer => [peer.sessionId || peer.id, peer.namespace || peer.agent]), this.ui.tabs?.map(tab => [tab.id, tab.agent])]) : '';
-    const contentKey = `${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
+    const contentKey = `${this.panel === 'skills' ? Date.now() : ''}:${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
     let body;
     if (!this.selection && this.panel !== 'settings' && this.bodyCache?.key === contentKey) body = this.bodyCache.lines;
     else { body = this.content(contentWidth); if (!this.selection) this.bodyCache = { key: contentKey, lines: body }; }
@@ -978,6 +1097,15 @@ export class TerminalChat {
       else if (focus >= start + bodyHeight) this.scroll = Math.max(0, body.length - focus - 1);
       this.settingsEnsureFocus = false;
     }
+    if (this.panel === 'skills' && !this.selection) {
+      if (this.skillTopRequested) { this.scroll = Math.max(0, body.length - bodyHeight); this.skillTopRequested = false; }
+      if (this.skillEnsureFocus) {
+        const start = Math.max(0, body.length - this.scroll - bodyHeight), focus = this.skillFocusRow || 0;
+        if (focus < start) this.scroll = Math.max(0, body.length - bodyHeight - focus);
+        else if (focus >= start + bodyHeight) this.scroll = Math.max(0, body.length - focus - 1);
+        this.skillEnsureFocus = false;
+      }
+    }
     this.scroll = Math.min(this.scroll, Math.max(0, body.length - bodyHeight));
     const end = this.selection ? Math.min(body.length, bodyHeight) : Math.max(0, body.length - this.scroll), start = Math.max(0, end - bodyHeight);
     const visibleBody = body.slice(start, end);
@@ -990,7 +1118,7 @@ export class TerminalChat {
       if (cellWidth(line) > contentWidth) line = color(clip(line, contentWidth), palette.text);
       visibleBody[index] = line + ' '.repeat(Math.max(0, width - 1 - cellWidth(line))) + (this.selection ? ' ' : maximum && index >= thumbOffset && index < thumbOffset + thumbHeight ? color('┃', palette.accent) : edge('│'));
     }
-    if (['chat', 'room', 'settings'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
+    if (['chat', 'room', 'skills', 'settings'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
     for (const hit of bottomHits) this.hitTargets.push({ ...hit, row: header.length + bodyHeight + hit.row + 1 });
     this.composerRow = header.length + bodyHeight + inputIndex + 1; this.composerOffset = offset;
     this.textRegion = !this.selection && bodyHeight ? { top: header.length + 1, bottom: header.length + bodyHeight, left: 1, right: width - 1 } : null;

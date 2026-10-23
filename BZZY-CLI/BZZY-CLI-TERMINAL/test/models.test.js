@@ -175,11 +175,11 @@ test('choosing another provider opens its model and effort picker and retains th
   const ui = { interactive: true, event() {}, updateSession() {}, async chooseOne(title, choices) {
     titles.push(title); const picker = await choices;
     if (Array.isArray(picker)) return 'claude';
-    assert.equal(picker.selectEffort, true); assert.ok(picker.choices.some(choice => choice.value === 'sonnet'));
-    return { value: 'sonnet', effort: 'high' };
+    assert.equal(picker.selectEffort, true); assert.ok(picker.choices.some(choice => choice.value === JSON.stringify(['claude', 'sonnet'])));
+    return { value: JSON.stringify(['claude', 'sonnet']), effort: 'high' };
   } };
   const next = await changeConversationProvider(source, '', ui);
-  assert.deepEqual(titles, ['Choose provider', 'Choose model · claude']);
+  assert.deepEqual(titles, ['Choose model']);
   assert.equal(next.id, source.id); assert.equal(next.provider, 'claude'); assert.equal(next.model, 'sonnet'); assert.equal(next.selectedEffort, 'high');
   assert.equal(next.engineThreadId, null); assert.notEqual(next.engineSessionId, source.id);
   assert.deepEqual(next.contract.constraints, source.contract.constraints); assert.equal(loadSession(source.id).provider, 'claude');
@@ -191,7 +191,7 @@ test('choosing another provider opens its model and effort picker and retains th
 test('changing a provider inside another mode preserves the normal chat preset', async () => {
   const normal = saveDefaultSelection({ provider: 'codex', model: 'normal-chat', selectedEffort: 'high' });
   const ui = { interactive: true, event() {}, updateSession() {}, async chooseOne(_title, choices) {
-    return Array.isArray(await choices) ? 'claude' : { value: 'sonnet', effort: 'high' };
+    return Array.isArray(await choices) ? 'claude' : { value: JSON.stringify(['claude', 'sonnet']), effort: 'high' };
   } };
   for (const mode of ['delegate', 'debate', 'besties']) {
     const source = createSession(BUILTINS.codex, directory); source.mode = mode; saveSession(source);

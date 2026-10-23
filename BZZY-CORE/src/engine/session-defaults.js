@@ -3,6 +3,7 @@ import { getRecord } from './database.js';
 import { saveDefaultSelection, saveParallelDefault, saveModeDefault, selectionFromSession } from './providers.js';
 
 export function saveSessionDefaultSelection(session) {
+  if (session.modelSelectionRequired) throw new Error('Select a model before saving a default.');
   const parentId = session.parallelSessionId || session.parentSessionId;
   const parent = ['parallel', 'besties', 'debate'].includes(session.mode) ? session : parentId && loadSession(parentId);
   if (parent?.mode === 'debate') {

@@ -28,6 +28,10 @@ export class NotificationHub {
     }
     writeJson(file, record);
     await this.deliver(file, record);
+    if (this.ui) {
+      const status = (await import('../push/status.js')).notificationDeliveryStatus();
+      if (status.registeredDevices && (!status.configured || !status.compatibleDevices)) this.ui.event('info', { message: 'Goal saved to the notification outbox. ' + status.message });
+    }
     return record.event;
   }
 

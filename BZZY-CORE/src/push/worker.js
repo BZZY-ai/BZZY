@@ -1,19 +1,29 @@
+import { authorizedUpdateGrant, updateDevicePreferences } from '../engine/update-access.js';
 import { randomUUID } from 'node:crypto';
 import { home } from '../engine/files.js';
-import { getRecord, putRecord, listRecords, digest, now } from '../engine/database.js';
+import { database, getRecord, putRecord, listRecords, digest, now } from '../engine/database.js';
 import { loadRelayIdentity } from '../relay/identity.js';
 import { authorizedPushRegistration } from './registration.js';
+import { assertShareText, sharedSecrets } from '../engine/share-bundle-policy.js';
 import { APNsClient, loadAPNsConfiguration } from './apns.js';
 
-const types = new Set(['goal.completed', 'goal.stalled', 'goal.waiting_for_input']);
-const message = type => type === 'goal.completed' ? 'A goal completed. Open BZZY for details.'
-  : type === 'goal.waiting_for_input' ? 'A goal needs your input. Open BZZY for details.' : 'A goal needs attention. Open BZZY for details.';
-const title = type => type === 'goal.completed' ? 'Goal complete' : type === 'goal.waiting_for_input' ? 'Input needed' : 'Goal needs attention';
+const types = new Set(['goal.completed', 'goal.stalled', 'goal.waiting_for_input', 'system.update_available']);
+export function goalAlert(event, session, secrets = []) {
+  const safe = (value, maximum) => {
+    if (typeof value !== 'string') return '';
+    try { assertShareText(value, secrets); } catch { return ''; }
+    if (/password|secret|token|credential|api[_ -]?key|authorization|cookie/i.test(value)) return '';
+    return [...value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()].slice(0, maximum).join('');
+  };
+  const state = event.type === 'goal.completed' ? 'Goal achieved' : event.type === 'goal.waiting_for_input' ? 'Input needed' : 'Goal stalled';
+  const alias = safe(session?.alias, 48);
+  return { title: alias ? `${state} · ${alias}` : state, body: safe(event.objective, 140) || 'Open BZZY for details.' };
+}
 
 // Reuses durable goal outbox records written by the existing engine. This worker
 // belongs to the same Core daemon and continues after the phone socket closes.
 export class CorePushWorker {
-  #home = home(); #timer; #busy = false; #client; #configuration; #abort = new AbortController();
+  #home = home(); #timer; #busy = false; #client; #configuration; #cursor = ''; #abort = new AbortController();
   constructor({ configurationLoader = loadAPNsConfiguration, clientFactory = options => new APNsClient(options),
     hostID = () => { try { return loadRelayIdentity().certificate.id; } catch { return null; } }, clock = Date.now } = {}) {
     this.configurationLoader = configurationLoader; this.clientFactory = clientFactory; this.hostID = hostID; this.clock = clock;
@@ -27,43 +37,57 @@ export class CorePushWorker {
     this.#busy = true;
     try {
       const configuration = this.configurationLoader();
-      if (!configuration) return;
-      if (!this.#client || this.#configuration !== configuration.fingerprint) {
+      if (!configuration && this.#client) { this.#client.close(); this.#client = null; this.#configuration = null; }
+      if (configuration && (!this.#client || this.#configuration !== configuration.fingerprint)) {
         this.#client?.close(); this.#client = this.clientFactory({ configuration }); this.#configuration = configuration.fingerprint;
       }
       const hostId = this.hostID();
       if (!hostId) return;
-      const registrations = listRecords('core.push.registration').filter(row => row.hostId === hostId && row.enabled && !row.revokedAt && row.environment === configuration.environment);
+      const registrations = listRecords('core.push.registration').filter(row => row.hostId === hostId && row.enabled && !row.revokedAt);
       let sent = 0;
-      for (const record of listRecords('outbox', { limit: 1000 })) {
-        const event = record.event, occurred = Date.parse(event?.occurredAt);
+      let records = database().prepare("SELECT id,data FROM records WHERE kind='outbox' AND id>? ORDER BY id LIMIT 200").all(this.#cursor);
+      if (!records.length) { this.#cursor = ''; records = database().prepare("SELECT id,data FROM records WHERE kind='outbox' ORDER BY id LIMIT 200").all(); }
+      const secrets = sharedSecrets();
+      for (const row of records) {
+        this.#cursor = row.id;
+        const record = JSON.parse(row.data);
+        const event = record.event, isUpdate = event?.type === 'system.update_available', occurred = Date.parse(event?.occurredAt);
         if (!event || typeof event.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(event.id) ||
-          typeof event.sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(event.sessionId) ||
+          (!isUpdate && (typeof event.sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(event.sessionId))) ||
           !types.has(event.type) || !Number.isFinite(occurred) || occurred < this.clock() - 24 * 3600_000) continue;
+        if (isUpdate) {
+          const update = getRecord('core.update.status', 'default');
+          if (update?.phase !== 'ready' || update.available !== true || update.blocked || update.target !== event.target) continue;
+        }
         for (const registration of registrations) {
           if (sent >= 8 || this.#abort.signal.aborted) return;
-          if (occurred < registration.enabledSince || !authorizedPushRegistration(registration, event.sessionId)) continue;
+          if (occurred < registration.enabledSince || !authorizedPushRegistration(registration, isUpdate ? undefined : event.sessionId)) continue;
+          if (isUpdate && (!authorizedUpdateGrant(registration.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(registration.relayGrantId)).notificationsEnabled === false)) continue;
           const id = digest({ hostId, peer: registration.peerId, token: registration.tokenDigest, event: event.id });
           let delivery = getRecord('core.push.delivery', id);
+          if (!configuration || registration.environment !== configuration.environment) {
+            if (!delivery || delivery.state === 'waiting_for_configuration' && delivery.code !== (!configuration ? 'APNS_SETUP_REQUIRED' : 'APNS_ENVIRONMENT_MISMATCH')) putRecord('core.push.delivery', id, { id, registrationId: registration.id, eventId: event.id, sessionId: event.sessionId || null, state: 'waiting_for_configuration', attempts: 0, code: !configuration ? 'APNS_SETUP_REQUIRED' : 'APNS_ENVIRONMENT_MISMATCH', updatedAt: now() });
+            continue;
+          }
           if (delivery && (['sent', 'failed', 'uncertain'].includes(delivery.state) || delivery.nextAttemptAt > this.clock())) continue;
           if (delivery?.state === 'dispatching') {
             // A crash after APNs acceptance has an uncertain outcome. Preserve
             // that fact; never blindly repeat a potentially delivered alert.
             putRecord('core.push.delivery', id, { ...delivery, state: 'uncertain', updatedAt: now() }); continue;
           }
-          delivery = { ...delivery, id, registrationId: registration.id, eventId: event.id, sessionId: event.sessionId,
+          delivery = { ...delivery, id, registrationId: registration.id, eventId: event.id, sessionId: event.sessionId || null,
             state: 'dispatching', attempts: (delivery?.attempts || 0) + 1, apnsId: delivery?.apnsId || randomUUID(), updatedAt: now() };
           putRecord('core.push.delivery', id, delivery); sent++;
           try {
             const current = getRecord('core.push.registration', registration.id);
-            if (!current?.enabled || current.tokenDigest !== registration.tokenDigest || !authorizedPushRegistration(current, event.sessionId)) {
+            if (!current?.enabled || current.tokenDigest !== registration.tokenDigest || !authorizedPushRegistration(current, isUpdate ? undefined : event.sessionId) || isUpdate && (!authorizedUpdateGrant(current.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(current.relayGrantId)).notificationsEnabled === false)) {
               putRecord('core.push.delivery', id, { ...delivery, state: 'failed', code: 'FORBIDDEN', updatedAt: now() }); continue;
             }
-            const session = getRecord('session', event.sessionId), isAgent = session?.purpose === 'agent';
+            const session = isUpdate ? null : getRecord('session', event.sessionId), isAgent = session?.purpose === 'agent';
             const receipt = await this.#client.send({ token: current.deviceToken, id: delivery.apnsId, collapseID: id, signal: this.#abort.signal,
-              payload: { aps: { alert: { title: title(event.type), body: message(event.type) }, sound: 'default', category: 'BZZY_UPDATE',
+              payload: { aps: { alert: isUpdate ? { title: 'BZZY update available', body: 'Update CLI and Core from Settings on your iPhone.' } : goalAlert(event, session, secrets), sound: 'default', category: 'BZZY_UPDATE',
                   'thread-id': digest({ hostId, resource: current.resource, sessionId: event.sessionId }) },
-                bzzy: { v: 1, eventId: id, destination: isAgent ? 'agents' : 'terminal', resource: current.resource, sessionId: event.sessionId,
+                bzzy: isUpdate ? { v: 1, eventId: id, destination: 'updates' } : { v: 1, eventId: id, destination: isAgent ? 'agents' : 'terminal', resource: current.resource, sessionId: event.sessionId,
                   ...(isAgent ? { agentId: session.agentId } : {}) } } });
             putRecord('core.push.delivery', id, { ...delivery, state: 'sent', receipt: { accepted: receipt.accepted === true, apnsId: receipt.apnsId }, updatedAt: now() });
           } catch (error) {

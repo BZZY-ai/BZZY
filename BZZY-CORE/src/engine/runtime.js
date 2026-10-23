@@ -1,3 +1,4 @@
+import { coreUpdates } from './updates.js';
 import { guardedInterval } from './interval.js';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -265,6 +266,7 @@ export async function serveRuntime() {
   writeJson(listenerFile, { port: server.address().port, token });
   writeJson(runtimeFile(), { version: 1, url: `http://127.0.0.1:${server.address().port}`, token, identity, runtimeBuild, environment, startedAt: now() });
   const pushWorker = new CorePushWorker().start();
+  const updateWatcher = coreUpdates().start();
   // Optional saved connectivity is restored only after the listener is ready;
   // RelayGateway.start() discovers this same engine instead of spawning another.
   void relay().then(service => service.restore()).catch(() => {});
@@ -307,7 +309,7 @@ export async function serveRuntime() {
   }, 100, { label: 'Runtime scheduler' });
   const shutdown = () => {
     if (stopping) return; stopping = true; clearInterval(scheduler);
-    pushWorker.close();
+    pushWorker.close(); updateWatcher.close();
     metrics.close();
     if (runtimeInfo()?.token === token) fs.rmSync(runtimeFile(), { force: true });
     for (const response of streams) response.end();

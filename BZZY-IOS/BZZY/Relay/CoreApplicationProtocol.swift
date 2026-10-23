@@ -111,8 +111,9 @@ public struct CoreEventBatch: Sendable {
 enum CoreApplicationProtocol {
     static let payloadBytes = 28 * 1024
     static let promptBytes = 16 * 1024
-    static let commands: Set<String> = ["execution.execute", "task.submit", "question.answer", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
+    static let commands: Set<String> = ["updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
     static let fields: [String: Set<String>] = [
+        "updates.status": [], "updates.check": [], "updates.configure": ["monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"], "updates.install": ["target"],
         "host.metrics": [],
         "agents.status": [], "agents.providers": [], "agents.models": ["provider", "after", "limit"], "agents.list": ["after", "limit"], "agents.get": ["agentId"],
         "agents.create": ["name", "instructions", "provider", "model", "effort"], "agents.update": ["agentId", "expectedRevision", "name", "instructions", "provider", "model", "effort"],
@@ -136,20 +137,24 @@ enum CoreApplicationProtocol {
     static func request(op: String, params: [String: CoreJSONValue], id: String, resource: String) throws -> CoreJSONValue {
         try opaque(id); try opaque(resource)
         guard let allowed = fields[op], Set(params.keys).isSubset(of: allowed) else { throw CoreApplicationError("OPERATION_DENIED") }
-        var optional: Set<String> = ["after", "limit", "takeover", "goal", "resumeGoal", "text", "scope", "model", "effort"]
+        var optional: Set<String> = ["after", "limit", "takeover", "goal", "resumeGoal", "text", "scope", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
         if op == "agents.update" { optional.formUnion(["name", "instructions", "provider"]) }
         if op == "agents.import" { optional.insert("name"); optional.subtract(["model", "effort"]) }
         guard allowed.subtracting(optional).isSubset(of: Set(params.keys)) else { throw CoreApplicationError("INVALID_REQUEST") }
         for key in ["owner", "consumerId", "subscriptionId", "requestId", "taskId", "claimId", "confirmedFingerprint"] where params[key] != nil {
             guard let text = params[key]?.string else { throw CoreApplicationError("INVALID_REQUEST") }; try opaque(text)
         }
-        for key in ["takeover", "goal", "resumeGoal", "enabled"] where params[key] != nil {
+        for key in ["takeover", "goal", "resumeGoal", "enabled", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
             guard params[key]?.bool != nil else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         for key in ["prompt", "instruction", "answer", "text"] where params[key] != nil {
             guard let text = params[key]?.string, text.utf8.count <= promptBytes,
                   !["prompt", "instruction"].contains(key) || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CoreApplicationError("INVALID_REQUEST") }
         }
+        if op == "updates.install" {
+            guard let target = params["target"]?.string, target.range(of: "^[a-f0-9]{40,64}$", options: .regularExpression) != nil else { throw CoreApplicationError("INVALID_REQUEST") }
+        }
+        if op == "updates.configure", params.isEmpty { throw CoreApplicationError("INVALID_REQUEST") }
         if op == "sessions.open" { _ = try uuid(params["sessionId"]?.string) }
         if params["agentId"] != nil { _ = try uuid(params["agentId"]?.string) }
         if params["expectedRevision"] != nil {

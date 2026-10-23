@@ -26,6 +26,8 @@ bzzy doctor        Check both installed backends; add --live to test actual repl
 Tab / Shift+Tab switch agent chats. bzzy --help lists options; bzzy --whoami explains the full system.`;
 
 export const chatCommands = [
+  { command: '/update', description: 'Check GitHub and update CLI and Core together' },
+  { command: '/skills', description: 'View, create, import and enable shared Core skills' },
   { command: '/goal', description: 'Work until an objective is resolved', argument: true },
   { command: '/debate', description: 'Choose agents to challenge the latest reply' },
   { command: '/models', description: 'Choose a model and reasoning effort' },

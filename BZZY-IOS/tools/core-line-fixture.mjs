@@ -13,7 +13,7 @@ import { CoreRelayClient } from '../../BZZY-CORE/src/relay/client.js';
 import { BzzyCore } from '../../BZZY-CORE/src/core.js';
 import { CoreAssistant } from '../../BZZY-CORE/src/assistant.js';
 import { CoreWorkspaces } from '../../BZZY-CORE/src/workspaces.js';
-import { appendEvent, listRecords, getRecord } from '../../BZZY-CORE/src/engine.js';
+import { appendEvent, listRecords, getRecord, putRecord } from '../../BZZY-CORE/src/engine.js';
 import { runtimeInfo, runtimeRequest, clearOperatorStopIntent } from '../../BZZY-CORE/src/engine/runtime.js';
 import { identityAlive } from '../../BZZY-CORE/src/engine/process-identity.js';
 import { renderMessageBody } from '../../BZZY-CLI/BZZY-CLI-TERMINAL/src/message-renderer.js';
@@ -29,6 +29,7 @@ fs.mkdirSync(workspace, { mode: 0o700 });
 Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_HOME: path.join(directory, 'codex'),
   BZZY_CLAUDE_HOME: path.join(directory, 'claude'), BZZY_CODEX_BIN: path.join(root, 'BZZY-IOS/tools/core-line-model.mjs') });
 fs.mkdirSync(process.env.BZZY_HOME, { mode: 0o700 });
+putRecord('core.update.preferences', 'default', { monitoringEnabled: false });
 fs.mkdirSync(process.env.BZZY_CODEX_HOME, { mode: 0o700 });
 // Synthetic test marker only; the offline backend never authenticates or reads
 // real account files. The production isolation path still requires a private file.

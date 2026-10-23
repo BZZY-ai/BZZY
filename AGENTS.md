@@ -1,5 +1,11 @@
 # BZZY workspace instructions for coding AI
 
+- After implementing and validating authorized changes, commit and push them to
+  this repository so users receive Core and CLI changes through the CLI updater.
+  Publish only the intended product changes; keep private bindings, generated
+  artifacts and user reference checkouts out of commits. Do not update the user's
+  running installation automatically unless requested; an updater compatibility
+  repair may be prepared when necessary to make the authorized update flow work.
 - Read `README.md`, `SECURITY.md`, and each affected product's README before
   designing or changing it. Core architecture and execution contracts are in
   `BZZY-CORE/docs/`; product documentation distinguishes implemented behavior

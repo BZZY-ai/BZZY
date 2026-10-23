@@ -1,6 +1,6 @@
 # BZZY native iOS
 
-Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen centers the fly eyes. The mascot is drawn in Canvas from spherical facets, pupil cutouts, lens lighting and curved antennae; no reference bitmap is loaded or bundled. It blinks, glances, hovers and follows touch. Motion pauses in the background and respects Reduce Motion.
+Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen centers the fly eyes. The updated mascot follows `new changes/new-eyes.jpeg`, drawn in Canvas with close cyan lenses, inward pupils, highlights and swept antennae; no reference bitmap is loaded or bundled. It blinks, glances, hovers and follows touch. Motion pauses in the background and respects Reduce Motion.
 
 ## Run
 
@@ -23,7 +23,7 @@ First launch offers **Pair** before the main interface. Successful host approval
 
 For the current manual setup, create at least one CLI terminal with `bzzy`, then open **CLI Settings → Pair iPhone** on the Mac. Its QR/code appears automatically without choosing a terminal. It requests full session control, terminal catalog access, project sharing and Agent management; there are no permission/scope choices. Scan the compact QR directly from the 80x24 TUI or enter the expiring code on iPhone. Confirm the host on iPhone, then choose **Compare and approve iPhone…** on the Mac, compare **This iPhone** with the displayed fingerprint, and choose **Fingerprints match · Pair iPhone**. Expiry and revocation remain available on the secondary pairing screen. The user performs these steps.
 
-After pairing, **Core offline** or **Connecting to Core** locks Agents, Terminal, open chats, Activity and Core actions. Relay connectivity alone does not unlock them. Authorized foreground heartbeats confirm Core readiness; outages and backgrounding clear live usage and disable sending, control, agent changes and sharing. Pairing, cached history and uncertain command IDs remain saved. Reconnect only reads state and restores observation.
+After pairing, **Core offline** or **Connecting to Core** locks Agents, Terminal, open chats, Activity and Core actions. Relay connectivity alone does not unlock them. Authorized foreground heartbeats confirm Core readiness; brief inactive overlays such as Notification Center keep a healthy authenticated subscription; actual outages and backgrounding clear live usage and disable sending, control, agent changes and sharing. Pairing, cached history and uncertain command IDs remain saved. Reconnect only reads state and restores observation.
 
 Terminal lists show only sessions with a nonblank `/alias`, ordered by most recent saved activity. Unnamed sessions remain in Core. A failed CPU/RAM read checks an authorized session heartbeat before reporting Core offline; closing CLI only releases its input lease.
 
@@ -60,6 +60,10 @@ With explicit `shareAccess`, a live terminal's Share action asks Core to package
 For terminals, the recipient uses `bzzy --import CODE` or `/import` in CLI to restore into that CLI's current directory. For Agents, iPhone's **Import agent** scans/pastes the invitation, requires complete sender fingerprint comparison, and selects the receiving Core's own provider/model/effort. Core receives and validates project files, full chats, notes, memory, goals, nested relationships and evidence, then restores a fresh idle Agent beneath its managed Agents root. Imported work is paused, account bindings/permissions remain separate, and opening it never starts inference. The phone shows the temporary recipient fingerprint for the sender's explicit approval; refresh/cancel and saved job-ID reconciliation survive ordinary outages. Codes and bundle bytes are never persisted on iPhone. A completed Core `importId` receipt can recover a transfer after helper restart without receiving it twice.
 
 Both Cores must stay online during transfer. Imported identities/paths are remapped, credentials excluded and existing files protected. The public Relay must support the transfer quotas/lifetime; see [project sharing](../BZZY-CORE/docs/PROJECT-SHARING.md). Mobile terminal import and scheduled Agent activation remain unsupported. Legacy demo import is preview/test behavior and cannot substitute for live production import.
+
+## Host updates
+
+Settings → BZZY Updates shows the authoritative Core update status. The fully approved own phone can enable monitoring, update notifications and remote installation, check GitHub, and explicitly confirm the displayed CLI/Core revision. An update notification only opens Settings. Installation uses a durable Core helper; work is paused and the phone reconnects to inspect the result. Remote installation starts disabled and cannot be enabled by scoped friends or Agent/session contexts. Unknown acceptance retains its request ID for an explicit same-request retry. These controls require the updated iOS binary; they do not install the phone app itself.
 
 ## Notifications and voice
 

@@ -33,7 +33,7 @@ import { chooseDebate, configuredDebate } from './debate-setup.js';
 import { chooseSavedCombo } from './mode-presets.js';
 import { chatHelp } from './terminal-commands.js';
 import { whoami } from './whoami.js';
-import { updateInstallation } from './update.js';
+import { updateCoreAndCLI } from './update.js';
 import { retireTelegram } from './migrations.js';
 import { backendCommand } from '@bzzy/core/engine/entry.js';
 import { activateCLIHost, coreHostStatus, stopCoreHost } from '@bzzy/core/engine/host-service.js';
@@ -389,6 +389,7 @@ async function chat(provider, options, ui, existingSession) {
         continue;
       }
       if (/^\/models?(?:\s|$)/.test(input)) { Object.assign(session, await changeSessionModel(session.id, input.replace(/^\/models?\s*/, ''), ui)); continue; }
+      if (session.modelSelectionRequired) throw new Error('Select a model using the model dropdown before sending a message.');
       if (input === '/goal' || input.startsWith('/goal ')) {
         const objective = input.slice(5).trim();
         if (!objective || ['status', 'pause', 'cancel', 'clear', 'resume'].includes(objective)) {
@@ -464,7 +465,7 @@ export async function main(argv) {
   if (['telegram', 'internal-telegram'].includes(args[0])) throw new Error('The Telegram integration has been removed. Use the terminal or the scoped integration API.');
   if (options.update) {
     if (argv.length !== 1) throw new Error('Run bzzy --update by itself.');
-    return updateInstallation();
+    return updateCoreAndCLI();
   }
   try { if (!fs.statSync(options.cwd).isDirectory()) throw new Error('not a directory'); }
   catch { throw new Error(`--cwd must name an existing directory: ${options.cwd}`); }
@@ -557,10 +558,11 @@ export async function main(argv) {
       return 0;
     }
     if (command === 'notifications') {
+      if (rest[0] === 'status') { const status = (await import('@bzzy/core/engine/push-status.js')).notificationDeliveryStatus(); ui.event('info', { ...status, message: status.message + '\n' + JSON.stringify(status, null, 2) }); return 0; }
       const hub = new NotificationHub({ ui });
       if (rest[0] === 'retry') await hub.retry();
       else if (!rest[0] || rest[0] === 'list') for (const { event, deliveries } of hub.records()) ui.event('notification', { event, deliveries, message: `${event.type} · ${event.sessionId.slice(0, 8)} · ${JSON.stringify(deliveries)}` });
-      else throw new Error('Use bzzy notifications list|retry.');
+      else throw new Error('Use bzzy notifications status|list|retry.');
       return 0;
     }
     if (command === 'doctor') {
@@ -643,9 +645,12 @@ export async function main(argv) {
       }
     }
     let provider;
-    if (!config().defaultProvider && !options.provider && ui.interactive) provider = await setup(ui, options);
+    if (!config().defaultProvider && !options.provider && !options.model && ui.interactive && !options.goal && (!command || command === 'chat') && !options.mode) {
+      options.modelSelectionRequired = true;
+      provider = selectedProvider(options);
+    }
     else provider = selectedProvider(options);
-    if (provider.auth === 'api-key') await ensureApiKey(provider, ui);
+    if (provider.auth === 'api-key' && !options.modelSelectionRequired) await ensureApiKey(provider, ui);
     if (options.goal || ['goal', 'run', 'delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command)) {
       const prompt = options.goal || rest.join(' ');
       if (!prompt.trim()) throw new Error(`Supply a ${command === 'run' ? 'task' : 'goal objective'}.`);

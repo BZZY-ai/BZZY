@@ -120,6 +120,13 @@ export class CodexEngine {
 
   async open() {
     if (this.rpc && !this.rpc.closed) return;
+    if (this.options.toolHost && this.session.coreSkillsProtocol !== 1) {
+      if (this.session.engineThreadId) {
+        this.session.engineThreadId = null;
+        this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
+      }
+      this.session.coreSkillsProtocol = 1;
+    }
     const installed = version('codex');
     assertCodexVersion(installed);
     const launchConfig = codexLaunch(this.provider, this.session, this.options);

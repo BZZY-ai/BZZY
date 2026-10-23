@@ -2,6 +2,14 @@ import XCTest
 @testable import RelayKit
 
 final class PairingConnectionTests: XCTestCase {
+    @MainActor func testNotificationCenterRoundtripKeepsAuthorizedCoreOnline() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, overlayResume: true)
+    }
+
+    @MainActor func testOwnPhoneCanConfigureHostUpdatesWithoutStartingInstallation() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, updatePreferences: true)
+    }
+
     @MainActor func testOwnPhonePairingUnlocksWithoutConfiguredCoordinator() async throws {
         try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false)
     }
@@ -23,7 +31,7 @@ final class PairingConnectionTests: XCTestCase {
     }
 
     @MainActor private func checkPairing(ignoreDecisionEvent: Bool, backgroundBeforeApproval: Bool,
-                                        closeCLI: Bool = false, failMetrics: Bool = false) async throws {
+                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false) async throws {
         let fixture = try PairingConnectionFixture()
         defer { fixture.shutdown() }
         let identity = try RelayIdentity.generate()
@@ -76,6 +84,23 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertFalse(connection.coreIsAssistant, "A terminal pair must not depend on coordinator setup")
         XCTAssertEqual(connection.corePermissions, Set(["observe", "claim", "takeover", "execute", "answer", "pause", "cancel", "steer"]))
         XCTAssertTrue(availabilityFailures.isEmpty, "Approval must not cancel its own initial Core read: \(availabilityFailures)")
+        if updatePreferences {
+            await connection.refreshCoreUpdates()
+            XCTAssertEqual(connection.coreUpdateSnapshot?["remoteUpdatesEnabled"].bool, false)
+            await connection.configureCoreUpdates(["remoteUpdatesEnabled": .bool(true), "notificationsEnabled": .bool(false), "monitoringEnabled": .bool(false)])
+            XCTAssertEqual(connection.coreUpdateSnapshot?["remoteUpdatesEnabled"].bool, true)
+            XCTAssertEqual(connection.coreUpdateSnapshot?["notificationsEnabled"].bool, false)
+            await connection.refreshCoreUpdates()
+            XCTAssertEqual(connection.coreUpdateSnapshot?["remoteUpdatesEnabled"].bool, true)
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["executionCount"].integer, 0)
+        }
+        if overlayResume {
+            var outages: [String] = []
+            connection.onCoreAvailability = { available, message in if !available { outages.append(message) } }
+            for _ in 0..<3 { await connection.resume(); XCTAssertTrue(connection.coreActionsAvailable) }
+            XCTAssertTrue(outages.isEmpty, "Inactive overlays must preserve the healthy scoped connection")
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["subscriptions"].integer, 1)
+        }
         if closeCLI || failMetrics {
             var outages: [String] = []
             connection.onCoreAvailability = { available, message in if !available { outages.append(message) } }

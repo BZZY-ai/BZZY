@@ -108,7 +108,7 @@ function editSession(sessionId, owner, apply, authorize) {
 export function setSessionModel(sessionId, owner, selected, { authorize } = {}) {
   return editSession(sessionId, owner, (session, db) => {
     const previous = session.model;
-    Object.assign(session, { model: selected.model, resolvedModel: null, modelCapabilities: selected.capabilities, selectedEffort: selected.effort, reasoningEffort: null });
+    Object.assign(session, { modelSelectionRequired: false, model: selected.model, resolvedModel: null, modelCapabilities: selected.capabilities, selectedEffort: selected.effort, reasoningEffort: null });
     appendEvent(session.id, 'model.changed', { provider: session.provider, previousModel: previous, model: session.model, effort: session.selectedEffort, appliesTo: 'next_turn' }, db);
   }, authorize);
 }
@@ -119,7 +119,7 @@ export function setSessionProvider(sessionId, owner, expectedProvider, providerI
     if (session.provider !== expectedProvider) throw new Error('The provider changed while selection was open. Choose it again.');
     const previous = { provider: session.provider, model: session.model, threadId: session.engineThreadId };
     Object.assign(session, {
-      provider: provider.id, backend: provider.backend, model: selected.model, modelCapabilities: selected.capabilities, selectedEffort: selected.effort,
+      modelSelectionRequired: false, provider: provider.id, backend: provider.backend, model: selected.model, modelCapabilities: selected.capabilities, selectedEffort: selected.effort,
       engineThreadId: null, engineSessionId: provider.backend === 'claude' ? randomUUID() : null, engineHome: null,
       resolvedModel: null, reasoningEffort: null, failure: null, executionState: 'idle',
       engineTokenOffset: session.usage?.tokens || 0,

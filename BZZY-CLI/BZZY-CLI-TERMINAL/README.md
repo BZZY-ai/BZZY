@@ -111,7 +111,11 @@ hints map to terminal emphasis/dim. Raw history/JSON events remain unchanged and
 clipboard copies are readable text. Invalid or incomplete markup falls back to
 literal safe text; markup never executes actions or grants permissions.
 
-Update:
+The TUI follows the reference sidebar layout on wide terminals, with Chat, Activity, Network, Sessions, Skills and Settings. Smaller terminals retain a compact layout and the complete pairing QR. Click the header model dropdown for all Core-discovered providers/models, click effort beside it, and use Save to keep the CLI default. Double-click the project alias to rename it inline; Enter saves and Esc cancels. Core's own model default remains independent in Settings → BZZY Core.
+
+Open **Skills** or `/skills` to view, create, import folders/ZIPs and explicitly enable shared workflows for every model. See [Core skills](../../BZZY-CORE/docs/SKILLS.md).
+
+Use **Check for updates** or `/update` to check GitHub and update CLI and Core together. See [update behavior and limits](docs/UPDATES.md). The existing command remains:
 
 ```bash
 bzzy --update
@@ -125,7 +129,7 @@ bzzy doctor --live
 bzzy doctor --live --provider codex --model gpt-5.6-sol --effort high
 ```
 
-`doctor` checks the installed CLI, subscription login and backend connection separately. `--live` also requests a short reply and reports token usage when the backend supplies it. Live checks use subscription tokens, disable tools and time out after 45 seconds waiting for a reply. Run `/doctor` inside chat to test its current subscription model, including while a reply is stuck. First-run setup checks both connections and tests the chosen subscription model before saving your default.
+`doctor` checks the installed CLI, subscription login and backend connection separately. `--live` also requests a short reply and reports token usage when the backend supplies it. Live checks use subscription tokens, disable tools and time out after 45 seconds waiting for a reply. Run `/doctor` inside chat to test its current subscription model, including while a reply is stuck. A plain first launch opens chat without model selection or authentication prompts. Sending is rejected until a model is selected from the header. Explicit `bzzy setup` still offers guided authentication and default setup.
 
 Claude login, model discovery, chat and diagnostics preserve the same credential settings on macOS and Linux. On macOS, leaving `CLAUDE_CONFIG_DIR` unset is significant: explicitly setting it to `~/.claude` can select a different Keychain entry ([upstream report](https://github.com/anthropics/claude-code/issues/92252)).
 
@@ -141,7 +145,7 @@ Open **Settings** in the terminal, use `/settings`, or run `bzzy settings`
 directly. It includes hidden DeepSeek API-key save/replacement and device
 pairing using the bundled Core Relay gateway. The main menu has four entries:
 **DeepSeek API key**, **Default BZZY folder**, **Pair iPhone**, and **BZZY Core**.
-Open BZZY Core for status, Start, Stop and Restart. Stop leaves Settings usable;
+Open BZZY Core for status, Start, Stop, Restart and its independent model/effort default. Stop leaves Settings usable;
 Start/Restart preserve paused work. Leaving Settings reconnects an existing chat
 without replaying a goal; leaving while Core is stopped closes the CLI.
 Pair iPhone offers a QR and a random code for the same expiring request, then
@@ -150,7 +154,7 @@ permissions (observe, claim, takeover, execute, answer, pause, cancel, steer),
 terminal catalog access, project sharing and Agent management. Its secondary
 screen retains fingerprint confirmation, access expiry and grant revocation;
 there are no observe-only/control or scope-selection choices. Core service
-commands remain available directly; coordinator settings remain outside this menu.
+commands remain available directly; Core's independent model/effort/Save controls live inside the BZZY Core secondary screen.
 Core and its Relay dependencies are packaged with this CLI, and the Relay
 operator must enroll the public host certificate first.
 The daemon keeps the gateway connected after CLI closes. Native local full-line

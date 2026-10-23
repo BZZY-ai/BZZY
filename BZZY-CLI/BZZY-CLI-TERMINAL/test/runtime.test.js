@@ -121,7 +121,7 @@ test('model changes preserve the goal and native thread, reject active or unowne
   const changed = await changeSessionModel(session.id, 'next-model', ui, launched);
   assert.equal(changed.engineThreadId, before.engineThreadId); assert.equal(changed.goal.id, before.goal.id);
   assert.equal(changed.model, 'next-model'); assert.equal(changed.resolvedModel, null);
-  ui.chooseOne = async (_title, choices) => Array.isArray(await choices) ? 'codex' : { value: 'fixture-brain', effort: 'xhigh' };
+  ui.chooseOne = async (_title, choices) => Array.isArray(await choices) ? 'codex' : { value: JSON.stringify(['codex', 'fixture-brain']), effort: 'xhigh' };
   const tuned = await changeConversationProvider(loadSession(session.id), '', ui, launched);
   assert.equal(tuned.id, session.id, 'reselecting Codex edits the current conversation');
   assert.equal((await runtimeRequest(launched.info, 'GET', `/sessions/${session.id}`)).inputOwner.owner, launched.owner);

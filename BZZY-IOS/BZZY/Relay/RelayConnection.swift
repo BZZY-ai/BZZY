@@ -97,7 +97,15 @@ private struct AgentImportReference: Codable {
     var importID: String?
 }
 
+private struct PendingCoreUpdate: Codable {
+    let hostID: String
+    let grantID: String
+    let requestID: String
+    let target: String
+}
+
 private struct SavedRelayState: Codable {
+    var pendingUpdate: PendingCoreUpdate?
     var host: HostBinding?
     var pending: PendingPair?
     var pendingCoreCommand: PendingCoreCommand?
@@ -141,6 +149,11 @@ public final class RelayConnection {
     @ObservationIgnored public var onCoreSessions: ((Data) -> Void)?
     @ObservationIgnored public var onCoreAgents: ((Data) -> Void)?
     @ObservationIgnored public var onCoreAgentStatus: ((Data) -> Void)?
+    public private(set) var coreUpdateSnapshot: CoreJSONValue?
+    public private(set) var coreUpdateStatus = "Connect to Core to check updates."
+    public private(set) var coreUpdateBusy = false
+    public var coreUpdatePending: Bool { state.pendingUpdate != nil }
+    public var coreUpdatePendingTarget: String? { state.pendingUpdate?.target }
     public private(set) var coreAgentsAvailable = false
     public private(set) var coreAgentsConfigured = false
     public private(set) var coreIsAgent = false
@@ -261,7 +274,14 @@ public final class RelayConnection {
     public func resume() async {
         guard networkingEnabled, !authorizing, !fatalAuthorizationLoss else { return }
         suspended = false
-        if transport?.online == true { await reconcile(); return }
+        if transport?.online == true {
+            if coreConnected && coreHealth.isOnline() {
+                // Inactive overlays do not suspend the app. Keep the existing
+                // scoped subscription; its heartbeat continues to prove readiness.
+                scheduleCoreMonitor(); scheduleHostMetrics(); return
+            }
+            await reconcile(); return
+        }
         await connect()
     }
 
@@ -714,6 +734,67 @@ public final class RelayConnection {
         }
     }
 
+    /// Host updates always use the approved base pairing, never a selected
+    /// terminal/Agent context or notification payload. Reconnect only reads status.
+    public func refreshCoreUpdates(checkNow: Bool = false) async {
+        guard coreActionsAvailable, !suspended, !coreUpdateBusy, let client = catalogClient else { return }
+        coreUpdateBusy = true; defer { coreUpdateBusy = false }
+        do {
+            let result = try await client.request(checkNow ? "updates.check" : "updates.status")
+            guard catalogClient === client, !suspended else { return }
+            coreUpdateSnapshot = result
+            if let pending = state.pendingUpdate, pending.hostID == client.hostID, pending.grantID == client.grantID,
+               result["job"]["requestId"].string == pending.requestID {
+                state.pendingUpdate = nil; try save()
+            }
+            switch result["job"]["state"].string {
+            case "queued", "installing": coreUpdateStatus = "Updating CLI and Core. The host will reconnect."
+            case "failed": coreUpdateStatus = "Update failed. Check the host before retrying."
+            case "uncertain": coreUpdateStatus = "Update interrupted. Check the host before retrying."
+            default:
+                coreUpdateStatus = result["available"].bool == true ? "A new BZZY version is available." : result["phase"].string == "ready" ? "CLI and Core are up to date." : result["blocked"].string ?? "Check GitHub for updates."
+            }
+        } catch {
+            coreUpdateStatus = (error as? CoreApplicationError)?.code == "FORBIDDEN" ? "Host updates require your fully approved phone pairing." : "Update status unavailable. Reconnect to Core and retry."
+        }
+    }
+
+    public func configureCoreUpdates(_ preferences: [String: CoreJSONValue]) async {
+        guard coreActionsAvailable, !suspended, !coreUpdateBusy, let client = catalogClient else { return }
+        coreUpdateBusy = true; defer { coreUpdateBusy = false }
+        do {
+            let result = try await client.request("updates.configure", params: preferences)
+            guard catalogClient === client, !suspended else { return }
+            coreUpdateSnapshot = result; coreUpdateStatus = "Update preferences saved on Core."
+        } catch { coreUpdateStatus = "Update preferences were not confirmed. Refresh before retrying." }
+    }
+
+    public func installCoreUpdate(expectedTarget: String? = nil) async {
+        guard coreActionsAvailable, !suspended, !coreUpdateBusy, let client = catalogClient else { return }
+        coreUpdateBusy = true; defer { coreUpdateBusy = false }
+        do {
+            let pending: PendingCoreUpdate
+            if let saved = state.pendingUpdate {
+                guard saved.hostID == client.hostID, saved.grantID == client.grantID else { throw CoreApplicationError("FORBIDDEN") }
+                pending = saved
+            } else {
+                guard coreUpdateSnapshot?["canInstall"].bool == true, let target = coreUpdateSnapshot?["target"].string, expectedTarget == nil || expectedTarget == target else {
+                    coreUpdateStatus = "The available version changed. Review it before updating."; return
+                }
+                pending = PendingCoreUpdate(hostID: client.hostID, grantID: client.grantID, requestID: CoreRelayClient.commandID(), target: target)
+                state.pendingUpdate = pending; try save()
+            }
+            _ = try await client.request("updates.install", params: ["target": .string(pending.target)], id: pending.requestID)
+            guard catalogClient === client else { return }
+            state.pendingUpdate = nil; try save()
+            coreUpdateStatus = "Update accepted. CLI and Core will restart; saved goals remain paused."
+        } catch {
+            if let code = (error as? CoreApplicationError)?.code, ["FORBIDDEN", "INVALID_REQUEST", "CONFLICT"].contains(code) {
+                state.pendingUpdate = nil; try? save(); coreUpdateStatus = "Update rejected. Refresh the version and permissions before retrying."
+            } else { coreUpdateStatus = "Update acceptance is uncertain. Refresh status or explicitly retry the same request." }
+        }
+    }
+
     /// Registers only this paired device and locally approved notification
     /// scope. Token contents never enter durable client history or event streams.
     public func synchronizeCoreNotifications(token: String?, environment: String?, enabled: Bool) async -> String {
@@ -1076,6 +1157,7 @@ public final class RelayConnection {
     }
 
     private func stopCore(purge: Bool, preserveCatalog: Bool = false) {
+        if purge { coreUpdateSnapshot = nil; state.pendingUpdate = nil }
         coreHealth.disconnect()
         metricsEpoch = UUID(); metricsPolling?.cancel(); metricsPolling = nil
         hostMetrics = nil; hostMetricsStatus = "Waiting for Core"

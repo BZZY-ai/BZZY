@@ -105,7 +105,8 @@ test('Settings retains the host header and all four choices fit normal terminal 
     for (const label of ['DeepSeek API key', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
     assert.match(frame, /fixture-model-banner/); assert.match(frame, /fixture-project-path/);
     assert.match(frame, /987,654 tokens/); assert.match(frame, /effort default/);
-    assert.match(frame, /CHAT.*ACTIVITY.*HTTP.*SESSIONS.*SETTINGS/);
+    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === 'settings'));
+    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === 'skills'));
     assert.doesNotMatch(frame, /Core service/);
     assert.equal(frame.includes(ui.sessionId), false); assert.ok(ui.tui.lastFrame.length <= rows);
   }
@@ -139,7 +140,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'core-model', 'core-effort', 'core-save', 'back']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');
@@ -148,7 +149,9 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   assert.equal(ui.coreLifecycleInterrupted, true);
   Object.assign(output, { rows: 24, columns: 80 }); ui.tui.render();
   const frame = ui.tui.lastFrame.map(clean).join('\n');
-  for (const label of ['BZZY Core', 'Status · Running', 'Start', 'Stop', 'Restart', 'Back']) assert.ok(frame.includes(label));
+  for (const label of ['BZZY Core', 'Status · Running', 'Start', 'Stop', 'Restart']) assert.ok(frame.includes(label));
+  ui.settings.focusAction('back'); ui.tui.settingsEnsureFocus = true; ui.tui.render();
+  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Back/);
   assert.equal(listRecords('execution').length, 0);
   assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
   ui.settings.back(); assert.equal(ui.settings.rows().filter(row => row.action)[ui.settings.focus].action, 'core');

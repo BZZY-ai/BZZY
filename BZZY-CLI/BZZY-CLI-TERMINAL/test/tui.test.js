@@ -152,7 +152,7 @@ test('the same eyes, model, tokens and host metrics remain above Settings, panel
       for (const panel of ['chat', 'activity', 'http', 'settings']) {
         ui.tui.setPanel(panel); ui.tui.render();
         const frame = ui.tui.lastFrame.map(clean);
-        const boundary = frame.findIndex(line => /^─+$/.test(line));
+        const boundary = frame.findIndex(line => /(?:^|│)─+$/.test(line));
         const header = frame.slice(0, boundary + 1);
         if (expected) assert.deepEqual(header, expected, 'screen changes only replace the lower region'); else expected = header;
         assert.match(header.join('\n'), /chosen-model/); assert.match(header.join('\n'), /1,234 tokens/);
@@ -406,9 +406,9 @@ test('eye animation paints only changed mascot cells, respects spacing and stops
     ui.event('message.user', { text: 'Keep this prompt visible while the mascot moves' });
     ui.event('text', { text: 'The chat text must stay still.' }); ui.tui.render();
     const before = [...ui.tui.lastFrame], region = ui.tui.eyeRegion, written = term.written.length;
-    assert.ok(region.columns >= 30 && region.rows >= 6);
-    assert.ok(region.suffixes.every(suffix => suffix.startsWith('      ')), 'text is separated from the mascot by a six-column gutter');
-    assert.equal(clean(before[0]), '', 'a spacious terminal has padding above the eyes');
+    assert.ok(region.columns >= 19 && region.rows >= 5);
+    assert.ok(region.suffixes.every(suffix => suffix.startsWith('   ')), 'the sidebar keeps a gutter beside the mascot');
+    assert.ok(region.top >= 2, 'the sidebar keeps padding above the eyes');
     ui.tui.animationTime = 2.2; ui.tui.paintEyes();
     assert.deepEqual(ui.tui.lastFrame.slice(region.top + region.rows - 1), before.slice(region.top + region.rows - 1));
     const painted = term.written.slice(written); assert.ok(painted.length > 0); assert.doesNotMatch(painted, /The chat text|YOU ASKED/);
@@ -435,7 +435,7 @@ test('copy mode gives selection to the terminal, freezes rendering, and resumes 
     ui.event('text', { text: 'A reply arrived during selection.' }); ui.tui.animationTime = 4.1; ui.tui.paintEyes(); ui.tui.render();
     input.write('ignored while selecting'); assert.equal(term.written.length, frozenAt); assert.equal(ui.tui.value, 'keep this draft');
     ui.tui.key('', { name: 'escape' }); ui.tui.render();
-    assert.equal(ui.tui.copyMode, false); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /A reply arrived during selection/);
+    assert.equal(ui.tui.copyMode, false); assert.match(ui.tui.entries.at(-1).text, /A reply arrived during selection/); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /A reply arrived/);
     input.write('\x13'); assert.equal(ui.tui.copyMode, true); input.write('\x13'); assert.equal(ui.tui.copyMode, false);
     ui.reader.close(); await answer;
   } finally { ui.close(); }

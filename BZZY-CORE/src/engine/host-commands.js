@@ -55,13 +55,15 @@ function applySelections(session, options) {
 
 export function createChatSession(provider, options) {
   const session = createSession(provider, options.cwd, options.model, options.alias);
-  applySelections(session, options); saveSession(session);
+  applySelections(session, options);
+  if (options.modelSelectionRequired) { session.modelSelectionRequired = true; session.model = null; }
+  saveSession(session);
   return session;
 }
 
 export function newConversation(previous, options) {
   const session = createSession(getProvider(previous.provider), options.cwd, previous.model);
-  Object.assign(session, { selectedEffort: previous.selectedEffort, modelCapabilities: previous.modelCapabilities, mode: previous.mode,
+  Object.assign(session, { selectedEffort: previous.selectedEffort, modelCapabilities: previous.modelCapabilities, modelSelectionRequired: previous.modelSelectionRequired, mode: previous.mode,
     executor: previous.executor, besties: previous.besties, parallelAgents: previous.parallelAgents, debateAgents: previous.debateAgents });
   saveSession(session); return session;
 }

@@ -6,7 +6,7 @@ import UIKit
 #endif
 
 // A notification is only a navigation hint. It never authorizes or executes work.
-enum NotificationDestination: String { case agents, terminal, connection }
+enum NotificationDestination: String { case agents, terminal, connection, updates }
 
 struct NotificationHint {
     let eventID: String

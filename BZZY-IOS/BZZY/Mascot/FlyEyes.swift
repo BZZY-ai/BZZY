@@ -62,7 +62,7 @@ struct FlyEyes: View {
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false; gazeMotion.pause() }
         .onChange(of: scenePhase) { _, _ in gazeMotion.pause() }
-        .aspectRatio(1.6, contentMode: .fit)
+        .aspectRatio(2, contentMode: .fit)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("BZZY, your fly companion")
         .accessibilityValue(mood.label)
@@ -125,127 +125,83 @@ private func smooth(_ value: Double, _ start: Double, _ end: Double) -> Double {
 }
 
 private enum FlyDrawing {
-    private struct Facet {
-        let x: Double
-        let y: Double
-        let z: Double
-    }
-
-    // Angular spacing wraps the dotted surface around each spherical lens.
-    private static let facets: [Facet] = {
-        var result: [Facet] = []
-        for row in -18...18 {
-            let latitude = Double(row) / 19 * Double.pi / 2
-            for column in -20...20 {
-                let longitude = (Double(column) + (row.isMultiple(of: 2) ? 0 : 0.5)) / 21 * Double.pi / 2
-                result.append(Facet(x: sin(longitude) * cos(latitude), y: sin(latitude),
-                                    z: cos(longitude) * cos(latitude)))
-            }
-        }
-        return result
-    }()
-
-    private static let palette: [Color] = (0..<12).map { index in
-        let light = Double(index) / 11
-        return Color(.sRGB, red: 0.02 + pow(light, 4) * 0.47,
-                     green: 0.20 + light * 0.80, blue: 0.17 + light * 0.73, opacity: 1)
-    }
+    private static let cyan = Color(hex: 0x00EEFF)
 
     static func draw(in context: inout GraphicsContext, size: CGSize, pose: FlyPose) {
-        let scale = min(size.width / 480, size.height / 300)
-        context.translateBy(x: (size.width - 480 * scale) / 2, y: (size.height - 300 * scale) / 2)
+        // Geometry follows new-eyes.jpeg: close, inward-facing lenses and long
+        // swept antennae. Keep the mascot resolution-independent and interactive.
+        let scale = min(size.width / 600, size.height / 300)
+        context.translateBy(x: (size.width - 600 * scale) / 2, y: (size.height - 300 * scale) / 2 + pose.hover)
         context.scaleBy(x: scale, y: scale)
-        context.translateBy(x: 0, y: pose.hover)
-
         for side in [-1.0, 1.0] {
+            antenna(in: &context, side: side, pose: pose)
             var eye = context
-            eye.translateBy(x: 240 + side * 99, y: 177)
-            eye.rotate(by: .radians(side * 0.13 - side * pose.delight * 0.035))
-            drawEye(in: &eye, side: side, pose: pose)
-            drawAntenna(in: &context, side: side, pose: pose)
+            eye.translateBy(x: 300 + side * 94, y: 180)
+            eye.rotate(by: .radians(-side * 0.20))
+            lens(in: &eye, side: side, pose: pose)
         }
-
         var bridge = Path()
-        bridge.move(to: CGPoint(x: 220, y: 250))
-        bridge.addCurve(to: CGPoint(x: 260, y: 250),
-                        control1: CGPoint(x: 238, y: 225), control2: CGPoint(x: 242, y: 225))
-        context.stroke(bridge, with: .linearGradient(Gradient(colors: [.clear, BZZYTheme.accent.opacity(0.55), .clear]),
-                                                     startPoint: CGPoint(x: 217, y: 245), endPoint: CGPoint(x: 263, y: 245)),
-                       style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
+        bridge.move(to: CGPoint(x: 270, y: 246))
+        bridge.addCurve(to: CGPoint(x: 330, y: 246), control1: CGPoint(x: 297, y: 213), control2: CGPoint(x: 303, y: 213))
+        context.stroke(bridge, with: .color(cyan.opacity(0.65)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+        var crown = Path()
+        crown.move(to: CGPoint(x: 275, y: 123))
+        crown.addQuadCurve(to: CGPoint(x: 325, y: 123), control: CGPoint(x: 300, y: 103))
+        context.stroke(crown, with: .linearGradient(Gradient(colors: [.clear, cyan, .clear]), startPoint: CGPoint(x: 275, y: 118), endPoint: CGPoint(x: 325, y: 118)), lineWidth: 3)
     }
 
-    private static func drawEye(in context: inout GraphicsContext, side: Double, pose: FlyPose) {
-        let rx = 90.0, ry = 101.0
-        let open = pose.openness(side: side)
+    private static func lens(in context: inout GraphicsContext, side: Double, pose: FlyPose) {
+        let rx = 74.0, ry = 75.0, open = pose.openness(side: side)
         let lens = Path(ellipseIn: CGRect(x: -rx, y: -ry, width: rx * 2, height: ry * 2))
         var halo = context
-        halo.addFilter(.blur(radius: 15))
-        halo.fill(lens, with: .color(BZZYTheme.accent.opacity(0.075 + pose.delight * 0.04)))
-
-        var clipped = context
-        let opening = Path(ellipseIn: CGRect(x: -rx - 2, y: 10 - ry * open,
-                                             width: rx * 2 + 4, height: ry * 2 * open))
-        clipped.clip(to: opening)
-        clipped.fill(lens, with: .radialGradient(Gradient(colors: [Color(hex: 0x05251F), Color(hex: 0x010C0A), .clear]),
-                                                center: CGPoint(x: side * 35, y: -15), startRadius: 0, endRadius: 113))
-
-        let pupilX = -side * 0.13 + pose.gaze.x * 0.28
-        let pupilY = 0.25 + pose.gaze.y * 0.21
-        let angle = side * 0.34
-        let cosine = cos(angle), sine = sin(angle)
-        let pupilWidth = pose.mood == .listening ? 0.39 : 0.33
-        var buckets = [Path](repeating: Path(), count: palette.count)
-        for facet in facets {
-            let dx = facet.x - pupilX, dy = facet.y - pupilY
-            let px = (dx * cosine + dy * sine) / pupilWidth
-            let py = (-dx * sine + dy * cosine) / 0.54
-            let pupilDistance = sqrt(px * px + py * py)
-            if pupilDistance < 0.94 { continue }
-            let pupil = smooth(pupilDistance, 0.88, 1.16)
-            let surface = max(0, side * facet.x * 0.72 + facet.z * 0.65)
-            let sheen = exp(-pow((facet.x - side * 0.53) / 0.48, 2) - pow((facet.y + 0.18) / 0.7, 2))
-            let catchlight = exp(-pow((facet.x - pupilX + 0.1) / 0.13, 2) - pow((facet.y - pupilY + 0.47) / 0.12, 2))
-            let pupilRim = exp(-pow((pupilDistance - 1.16) / 0.16, 2)) * smooth(-py, -0.1, 0.7)
-            let light = min(1, (0.10 + surface * 0.35 + sheen * 0.48 + catchlight * 0.5 + pupilRim * 0.38) * (0.045 + pupil * 0.955))
-            let index = min(palette.count - 1, Int(light * Double(palette.count - 1)))
-            let radius = 0.5 + pow(max(0, facet.z), 0.65) * 1.35
-            let width = radius * (0.45 + facet.z * 0.55)
-            buckets[index].addEllipse(in: CGRect(x: facet.x * rx - width, y: facet.y * ry - radius,
-                                                  width: width * 2, height: radius * 2))
+        halo.addFilter(.blur(radius: 11))
+        halo.fill(lens, with: .color(cyan.opacity(0.25)))
+        var face = context
+        face.clip(to: Path(ellipseIn: CGRect(x: -rx - 2, y: 8 - ry * open, width: rx * 2 + 4, height: ry * 2 * open)))
+        face.fill(lens, with: .radialGradient(Gradient(colors: [Color(hex: 0x001015), Color(hex: 0x004853), cyan, Color(hex: 0x98FFFF)]), center: CGPoint(x: -side * 35, y: -38), startRadius: 4, endRadius: 133))
+        // Recessed upper/inner edge creates the reference's pointed expression.
+        var shadow = Path()
+        shadow.move(to: CGPoint(x: -side * 72, y: 50))
+        shadow.addCurve(to: CGPoint(x: side * 45, y: -69), control1: CGPoint(x: -side * 52, y: -39), control2: CGPoint(x: side * 10, y: -91))
+        shadow.addLine(to: CGPoint(x: -side * 80, y: -94))
+        shadow.closeSubpath()
+        face.fill(shadow, with: .linearGradient(Gradient(colors: [.black, .black.opacity(0.2)]), startPoint: CGPoint(x: 0, y: -52), endPoint: CGPoint(x: side * 45, y: 45)))
+        var facets = Path()
+        for row in -18...18 {
+            for column in -18...18 {
+                let x = Double(column) * 4 + (row.isMultiple(of: 2) ? 0 : 2), y = Double(row) * 4
+                let distance = x * x / (rx * rx) + y * y / (ry * ry)
+                if distance < 0.94 { facets.addEllipse(in: CGRect(x: x, y: y, width: 1.1, height: 1.4)) }
+            }
         }
-
-        // Batch the facets into twelve paths, rather than thousands of views.
-        clipped.drawLayer { layer in
-            for index in buckets.indices { layer.fill(buckets[index], with: .color(palette[index])) }
-        }
-        var glow = clipped
-        glow.opacity = 0.25
-        glow.addFilter(.blur(radius: 2.6))
-        glow.drawLayer { layer in
-            for index in 6..<buckets.count { layer.fill(buckets[index], with: .color(palette[index])) }
-        }
-
-        var rim = Path()
-        rim.addArc(center: .zero, radius: 1, startAngle: .degrees(side < 0 ? 125 : -65),
-                   endAngle: .degrees(side < 0 ? 235 : 65), clockwise: false)
-        let scaledRim = rim.applying(CGAffineTransform(scaleX: rx, y: ry))
-        clipped.stroke(scaledRim, with: .color(BZZYTheme.accent.opacity(0.24)), lineWidth: 0.7)
+        face.fill(facets, with: .color(Color(hex: 0x002B35).opacity(0.30)))
+        face.stroke(lens, with: .linearGradient(Gradient(colors: [cyan.opacity(0.15), Color(hex: 0xB8FFFF), cyan]), startPoint: CGPoint(x: -side * 60, y: -70), endPoint: CGPoint(x: side * 65, y: 65)), lineWidth: 1.5)
+        var pupil = face
+        pupil.translateBy(x: -side * 16 + pose.gaze.x * 16, y: 24 + pose.gaze.y * 12)
+        pupil.rotate(by: .radians(side * 0.22))
+        pupil.fill(Path(ellipseIn: CGRect(x: -17, y: -32, width: 34, height: 66)), with: .color(Color(hex: 0x00080C)))
+        let glint = Path(ellipseIn: CGRect(x: -side * 9 - 6, y: -36, width: 12, height: 16))
+        var glow = pupil
+        glow.addFilter(.blur(radius: 4))
+        glow.fill(glint, with: .color(cyan))
+        pupil.fill(glint, with: .color(Color(hex: 0xD0FFFF)))
+        pupil.fill(Path(ellipseIn: CGRect(x: 3, y: -18, width: 3, height: 5)), with: .color(cyan))
     }
 
-    private static func drawAntenna(in context: inout GraphicsContext, side: Double, pose: FlyPose) {
-        let flutter = pose.still ? 0 : sin(pose.time * 2.1 + side) * 2.2 + sin(pose.time * 7) * pose.delight * 5
-        func point(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: 240 + side * x, y: y) }
-        var path = Path()
-        path.move(to: point(17, 108))
-        path.addCurve(to: point(192, 25 + flutter),
-                      control1: point(62, 46), control2: point(139, 8 + flutter))
-        let gradient = GraphicsContext.Shading.linearGradient(
-            Gradient(colors: [BZZYTheme.accent.opacity(0.12), BZZYTheme.accent.opacity(0.8), BZZYTheme.accent.opacity(0.2)]),
-            startPoint: point(15, 105), endPoint: point(194, 23))
+    private static func antenna(in context: inout GraphicsContext, side: Double, pose: FlyPose) {
+        let flutter = pose.still ? 0 : sin(pose.time * 1.5 + side) * 1.6
+        func point(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: 300 + side * x, y: y) }
+        var stem = Path()
+        stem.move(to: point(19, 158))
+        stem.addCurve(to: point(157, 48 + flutter), control1: point(51, 78), control2: point(114, 39 + flutter))
+        let shade = GraphicsContext.Shading.linearGradient(Gradient(colors: [cyan.opacity(0.2), cyan, Color(hex: 0xA8FFFF)]), startPoint: point(19, 158), endPoint: point(157, 48))
         var glow = context
-        glow.addFilter(.blur(radius: 3))
-        glow.opacity = 0.4
-        glow.stroke(path, with: gradient, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-        context.stroke(path, with: gradient, style: StrokeStyle(lineWidth: 1.15, lineCap: .round))
+        glow.addFilter(.blur(radius: 4))
+        glow.stroke(stem, with: shade, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+        context.stroke(stem, with: shade, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        var tip = Path()
+        tip.move(to: point(128, 48 + flutter))
+        tip.addQuadCurve(to: point(157, 48 + flutter), control: point(153, 43 + flutter))
+        context.stroke(tip, with: .color(cyan), style: StrokeStyle(lineWidth: 7, lineCap: .round))
     }
 }

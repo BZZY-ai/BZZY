@@ -8,11 +8,16 @@ try {
   else if (command === 'assistant') (await import('../src/assistant-cli.js')).assistantCommand(extra);
   else if (command === 'workspace') (await import('../src/workspaces-cli.js')).workspaceCommand(extra);
   else if (command === 'service') await (await import('../src/host-service-cli.js')).hostServiceCommand(extra);
+  else if (command === 'update') {
+    if (extra.length) throw new Error('Unexpected update arguments.');
+    try { await (await import('../src/engine/source-update.js')).updateCoreAndCLI(); }
+    catch { console.error('BZZY update failed. Check GitHub access and installation status, then run bzzy --update to retry. Saved work remains paused if installation stopped Core.'); process.exitCode = 1; }
+  }
   else if (command === 'doctor') (await import('../src/host-service-cli.js')).doctorCommand(extra);
   else if (['start', 'status', 'stop', 'restart'].includes(command)) await (await import('../src/host-service-cli.js')).coreLifecycleCommand(command, extra);
   else if (extra.length) throw new Error('Unexpected arguments. Run bzzy-core help.');
   else if (command === 'serve') await (await import('../src/engine/entry.js')).backendCommand(['internal-service']);
-  else if (command === 'help') console.log('Usage: bzzy-core <start|status|stop|restart|doctor|service|serve|assistant|workspace|relay>\nstart prepares and starts the user service; stop pauses work; restart reopens Core without resuming models.\nUses the existing BZZY engine and BZZY_HOME. Node.js >=24 is required.\nRun doctor for installation prerequisites, service help for startup details, assistant help for the default AI, workspace help for the managed project root, or relay help for encrypted Relay connectivity.');
+  else if (command === 'help') console.log('Usage: bzzy-core <start|status|stop|restart|update|doctor|service|serve|assistant|workspace|relay>\nstart prepares and starts the user service; stop pauses work; restart reopens Core without resuming models.\nupdate installs the checked GitHub revision of both CLI and Core.\nUses the existing BZZY engine and BZZY_HOME. Node.js >=24 is required.\nRun doctor for installation prerequisites, service help for startup details, assistant help for the default AI, workspace help for the managed project root, or relay help for encrypted Relay connectivity.');
   else throw new Error('Unknown command. Run bzzy-core help.');
 } catch (error) {
   const safeCodes = new Set(['HOST_ENROLLMENT_REQUIRED', 'PRIVATE_TERMINAL_REQUIRED', 'PRIVATE_DIRECTORY_REQUIRED', 'PRIVATE_FILE_REQUIRED',

@@ -7,6 +7,8 @@ struct SettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showConnection = false
     @State private var showNotifications = false
+    @State private var confirmUpdate = false
+    @State private var updateTarget: String?
     @Environment(NotificationStore.self) private var notifications
 
     var body: some View {
@@ -35,6 +37,26 @@ struct SettingsView: View {
                             Image(systemName: "chevron.right").bzzyFont(11)
                         }.panel()
                     }.buttonStyle(.plain).accessibilityIdentifier("notification-settings")
+                    Eyebrow(text: "BZZY Updates")
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(relay.coreUpdateStatus).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+                        if let snapshot = relay.coreUpdateSnapshot {
+                            if let target = snapshot["target"].string, snapshot["available"].bool == true {
+                                Text("Version " + String(target.prefix(8))).bzzyFont(11, design: .monospaced).foregroundStyle(BZZYTheme.accent)
+                            }
+                            Toggle("Monitor updates", isOn: updatePreference("monitoringEnabled")).bzzyFont(12)
+                            Toggle("Notify this iPhone", isOn: updatePreference("notificationsEnabled")).bzzyFont(12)
+                            Toggle("Allow updates from this iPhone", isOn: updatePreference("remoteUpdatesEnabled")).bzzyFont(12)
+                            if let blocked = snapshot["blocked"].string { Text(blocked).bzzyFont(11).foregroundStyle(BZZYTheme.secondary) }
+                        }
+                        Button("Check for updates") { Task { await relay.refreshCoreUpdates(checkNow: true) } }
+                            .bzzyFont(13).accessibilityIdentifier("check-bzzy-updates")
+                        Button(relay.coreUpdatePending ? "Retry accepted update request" : "Update CLI and Core") { updateTarget = relay.coreUpdatePendingTarget ?? relay.coreUpdateSnapshot?["target"].string; confirmUpdate = true }
+                            .bzzyFont(13, weight: .medium).foregroundStyle(BZZYTheme.accent)
+                            .disabled(!relay.coreUpdatePending && relay.coreUpdateSnapshot?["canInstall"].bool != true)
+                            .accessibilityIdentifier("install-bzzy-update")
+                        Text("Updating pauses running work. Core reconnects when installation finishes.").bzzyFont(10).foregroundStyle(BZZYTheme.muted)
+                    }.panel().disabled(!relay.coreActionsAvailable || relay.coreUpdateBusy)
                     Eyebrow(text: "Privacy")
                     VStack(alignment: .leading, spacing: 22) {
                         setting("lock.shield", "Credentials", "Credentials stay on your host.")
@@ -46,9 +68,24 @@ struct SettingsView: View {
                         .bzzyFont(9, design: .monospaced).foregroundStyle(BZZYTheme.muted).lineSpacing(5).padding(.top, 12)
                 }.padding(25)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+                .task {
+                    while !Task.isCancelled {
+                        await relay.refreshCoreUpdates()
+                        do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                    }
+                }
+                .confirmationDialog("Update CLI and Core to " + String((updateTarget ?? "checked version").prefix(16)) + "? Running work will be paused.", isPresented: $confirmUpdate, titleVisibility: .visible) {
+                    Button("Update CLI and Core") { Task { await relay.installCoreUpdate(expectedTarget: updateTarget) } }
+                    Button("Cancel", role: .cancel) {}
+                }
                 .sheet(isPresented: $showConnection) { ConnectView() }
                 .sheet(isPresented: $showNotifications) { NotificationsView() }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
+    }
+    private func updatePreference(_ key: String) -> Binding<Bool> {
+        Binding(get: { relay.coreUpdateSnapshot?[key].bool ?? false }, set: { value in
+            Task { await relay.configureCoreUpdates([key: .bool(value)]) }
+        })
     }
     private func setting(_ icon: String, _ title: String, _ text: String) -> some View {
         HStack(alignment: .top, spacing: 14) {

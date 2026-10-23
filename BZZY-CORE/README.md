@@ -12,6 +12,10 @@ the same engine and private state.
 
 Implemented:
 
+- Core-owned GitHub update discovery, durable update alerts and explicit full-phone remote update jobs. CLI and iOS use the same updater; see [combined updates](../BZZY-CLI/BZZY-CLI-TERMINAL/docs/UPDATES.md).
+
+- One versioned shared skills library with explicit enable/disable, folder/ZIP import, creation, bounded discovery/resource reads and provider-independent tools. See [skills](docs/SKILLS.md).
+
 - Sample host CPU/RAM and Core process usage once per second in the daemon.
   CLI and paired iOS display this shared cached telemetry; see
   [host metrics](docs/METRICS.md) for definitions and scoped access.

@@ -32,6 +32,8 @@ struct ModelChecks {
         let legacy = Data("{\"id\":\"00000000-0000-4000-8000-000000000009\",\"name\":\"Legacy\",\"subtitle\":\"\",\"purpose\":\"Task\",\"symbol\":\"leaf\",\"isSample\":false}".utf8)
         let migrated = try JSONDecoder().decode(AgentProfile.self, from: legacy)
         require(migrated.mode == .onDemand, "Existing drafts migrate to On demand")
+        require(NotificationHint(["bzzy": ["v": 1, "eventId": "new-version", "destination": "updates"]])?.destination == .updates, "Update notifications open Settings without executing")
+        require(NotificationHint(["bzzy": ["v": 1, "eventId": "new-version", "destination": "updates", "command": "install"]]) == nil, "Update notifications cannot carry an install command")
         require(NotificationHint(["bzzy": ["v": 1, "eventId": "test-event", "destination": "terminal"]])?.destination == .terminal, "Push hints may select an allowlisted screen")
         require(NotificationHint(["bzzy": ["v": 1, "eventId": "event", "destination": "https://example.com"]]) == nil, "Push must reject arbitrary destinations")
         require(NotificationHint(["bzzy": ["v": 1, "eventId": "event", "destination": "terminal", "command": "run"]]) == nil, "Push cannot carry commands")

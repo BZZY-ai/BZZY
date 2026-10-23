@@ -2,11 +2,15 @@
 // imported by a daemon, execution runner, assignment worker, or MCP bridge.
 export const BACKEND_COMMANDS = Object.freeze([
   'internal-service', 'internal-execution', 'internal-assignment',
-  'internal-tools', 'internal-mcp',
+  'internal-tools', 'internal-mcp', 'internal-update',
 ]);
 
 export async function backendCommand(argv) {
   const [command, ...args] = argv;
+  if (command === 'internal-update') {
+    if (args.length !== 1) throw new Error('An approved update job is required.');
+    return (await import('./updates.js')).runUpdateJob(args[0]);
+  }
   if (command === 'internal-service') {
     if (args.length) throw new Error('The Core service accepts no arguments.');
     await (await import('./migrations.js')).retireTelegram();

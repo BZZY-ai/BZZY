@@ -7,6 +7,7 @@ export const LIMITS = Object.freeze({ payloadBytes: 28 * 1024, promptBytes: 16 *
   requests: 16, requestsPerPeer: 4, requestsPerMinute: 60, metricsPerMinute: 30, acknowledgmentsPerMinute: 240, ackTimeoutMs: 30000 });
 
 const fields = Object.freeze({
+  'updates.status': [], 'updates.check': [], 'updates.configure': ['monitoringEnabled', 'notificationsEnabled', 'remoteUpdatesEnabled'], 'updates.install': ['target'],
   'session.get': [], 'session.usage': [], 'host.metrics': [],
   'notifications.register': ['deviceToken', 'environment', 'enabled', 'scope'],
   'notifications.update': ['enabled'], 'notifications.revoke': [],
@@ -26,7 +27,7 @@ const fields = Object.freeze({
   'question.answer': ['owner', 'questionId', 'answer'],
   'control.request': ['owner', 'action', 'text'], 'command.status': ['requestId'],
 });
-export const COMMANDS = new Set(['execution.execute', 'task.submit', 'question.answer', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
+export const COMMANDS = new Set(['updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
   'agents.create', 'agents.update', 'agents.archive', 'agents.open', 'agents.import', 'agents.import.cancel']);
 export const OPERATIONS = Object.freeze(Object.keys(fields));
 
@@ -46,6 +47,7 @@ export function validateRequest(value) {
 }
 
 export function permissionFor(request) {
+  if (['updates.install', 'updates.configure'].includes(request.op)) return 'execute';
   if (request.op === 'input.claim') return request.params.takeover === true ? 'takeover' : 'claim';
   if (request.op === 'input.release') return 'claim';
   if (['execution.execute', 'task.submit'].includes(request.op)) return 'execute';

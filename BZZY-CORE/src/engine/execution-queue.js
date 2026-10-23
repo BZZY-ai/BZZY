@@ -14,6 +14,7 @@ export function enqueueExecution(sessionId, input, requestId, { authorize, prepa
   try { return reserveRequest(`execute:${sessionId}`, requestId, { prompt: input.prompt, options: input.options, goal: input.goal, resumeGoal: input.resumeGoal, environment }, db => {
     authorize();
     const session = loadSession(sessionId);
+    if (session.modelSelectionRequired) throw new Error('Select a model before sending a message.');
     if (listRecords('execution', { sessionId, states: ['queued', 'launching', 'running'], limit: 1 }).length > 0) throw Object.assign(new Error('Session is already executing.'), { code: 'CONFLICT' });
     if (identityAlive(getRecord('run', sessionId)?.runner) && ['running', 'waiting_for_input', 'verifying'].includes(session.executionState)) throw Object.assign(new Error('The session already has a live runner.'), { code: 'CONFLICT' });
     if (typeof input.prompt !== 'string') throw new Error('Execution needs a prompt.');

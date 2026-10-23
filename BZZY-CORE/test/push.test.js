@@ -124,7 +124,7 @@ test('catalog notifications cover future CLI goals while socket-free, exclude in
   try {
     await worker.tick(); await worker.tick();
     assert.equal(sends.length, 1); const serialized = JSON.stringify(sends[0].payload);
-    assert.ok(!serialized.includes('PRIVATE GOAL TEXT')); assert.ok(!serialized.includes('/private/workspace'));
+    assert.equal(sends[0].payload.aps.alert.body, 'PRIVATE GOAL TEXT'); assert.ok(!serialized.includes('/private/workspace'));
     assert.equal(sends[0].payload.bzzy.resource, row.resource);
     assert.equal(sends[0].payload.bzzy.sessionId, futureTerminal.id);
     assert.equal(listRecords('core.push.delivery')[0].state, 'sent');
@@ -165,11 +165,65 @@ test('authorized notifications include only explicitly approved live agent defin
     await worker.tick(); assert.equal(sends.length, 1);
     assert.equal(sends[0].payload.bzzy.destination, 'agents'); assert.equal(sends[0].payload.bzzy.agentId, agent.id);
     assert.equal(sends[0].payload.bzzy.sessionId, agent.sessionId);
-    assert.equal(sends[0].payload.aps.alert.title, 'Goal complete');
+    assert.equal(sends[0].payload.aps.alert.title, 'Goal achieved');
     assert.match(sends[0].payload.aps['thread-id'], /^[a-f0-9]{64}$/);
     assert.ok(!JSON.stringify(sends[0].payload).includes(agent.name));
     agents.archive({ agentId: agent.id, expectedRevision: 1 }, { requestId: randomUUID() });
     outbox(getRecord('session', agent.sessionId), 'goal.stalled');
     await worker.tick(); assert.equal(sends.length, 1, 'Archived agents no longer authorize background notifications');
   } finally { worker.close(); }
+});
+
+test('missing Apple configuration has a durable waiting state and dispatches after secure host setup', async () => {
+  const row = grant(); register(row); const selected = getRecord('session', row.sessionId); outbox(selected);
+  let cfg = null, sends = 0;
+  const worker = new CorePushWorker({ configurationLoader: () => cfg, hostID: () => hostId,
+    clientFactory: () => ({ send: async value => { sends++; return { accepted: true, apnsId: value.id }; }, close() {} }) });
+  try {
+    await worker.tick(); const waiting = listRecords('core.push.delivery')[0];
+    assert.equal(waiting.state, 'waiting_for_configuration'); assert.equal(waiting.code, 'APNS_SETUP_REQUIRED'); assert.equal(sends, 0);
+    cfg = configuration(); await worker.tick(); await worker.tick();
+    assert.equal(sends, 1); assert.equal(listRecords('core.push.delivery')[0].state, 'sent');
+  } finally { worker.close(); }
+});
+
+test('a rotating bounded scan cannot starve a goal behind more than one thousand outbox records', async () => {
+  const row = grant(); register(row); const cfg = configuration(), selected = getRecord('session', row.sessionId);
+  const event = { id: randomUUID(), sessionId: selected.id, type: 'goal.completed', occurredAt: new Date(Date.now() + 10).toISOString(), objective: 'Age check' };
+  putRecord('outbox', 'zz-last-sorted', { event, deliveries: {} });
+  for (let index = 0; index < 1100; index++) putRecord('outbox', 'aa-' + String(index).padStart(5, '0'), { event: { ...event, type: 'ignored' }, deliveries: {} });
+  const sends = [], worker = new CorePushWorker({ configurationLoader: () => cfg, hostID: () => hostId,
+    clientFactory: () => ({ send: async value => { sends.push(value); return { accepted: true, apnsId: value.id }; }, close() {} }) });
+  try { for (let tick = 0; tick < 8; tick++) await worker.tick(); assert.equal(sends.length, 1); }
+  finally { worker.close(); }
+});
+
+test('minimal alerts contain the requested alias/objective, bound their size and omit credential-like text', async () => {
+  const { goalAlert } = await import('../src/push/worker.js');
+  assert.deepEqual(goalAlert({ type: 'goal.completed', objective: 'Tell me Elon Musk age' }, { alias: 'Research' }), { title: 'Goal achieved · Research', body: 'Tell me Elon Musk age' });
+  const alert = goalAlert({ type: 'goal.stalled', objective: 'Use API_KEY=private-value' }, { alias: 'My token' });
+  assert.equal(alert.title, 'Goal stalled'); assert.equal(alert.body, 'Open BZZY for details.');
+  assert.equal(goalAlert({ type: 'goal.completed', objective: 'a'.repeat(500) }, {}).body.length, 140);
+});
+
+test('new-version push alerts route to Settings only for the full own-phone grant and honor its notification toggle', async () => {
+ const { sessionPermissions } = await import('../src/engine/session-access.js');
+ const { updateDeviceKey } = await import('../src/engine/update-access.js');
+ const row = grant({ catalog: true, agentAccess: true }), cfg = configuration(), sends = [];
+ Object.assign(row, { shareAccess: true, permissions: [...sessionPermissions] }); putRecord('core.relay.grant', row.id, row);
+ const access = getRecord('access-token', digest(row.token)); putRecord('access-token', digest(row.token), { ...access, permissions: [...sessionPermissions] }); register(row, { scope: 'authorized' });
+ const event = { id: randomUUID(), type: 'system.update_available', occurredAt: new Date(Date.now() + 20).toISOString(), target: 'b'.repeat(40) };
+ putRecord('core.update.status', 'default', { phase: 'ready', available: true, target: event.target });
+ putRecord('outbox', 'system-update-test', { event, deliveries: {} });
+ const worker = new CorePushWorker({ configurationLoader: () => cfg, hostID: () => hostId, clientFactory: () => ({ send: async value => { sends.push(value); return { accepted: true, apnsId: value.id }; }, close() {} }) });
+ try {
+  await worker.tick(); await worker.tick(); assert.equal(sends.length, 1);
+  assert.equal(sends[0].payload.aps.alert.title, 'BZZY update available'); assert.equal(sends[0].payload.bzzy.destination, 'updates');
+  assert.equal(sends[0].payload.bzzy.sessionId, undefined); assert.equal(sends[0].payload.bzzy.resource, undefined);
+  putRecord('core.update.device', updateDeviceKey(row), { notificationsEnabled: false });
+  putRecord('outbox', 'system-update-next', { event: { ...event, id: randomUUID() }, deliveries: {} }); await worker.tick(); assert.equal(sends.length, 1);
+  putRecord('core.update.device', updateDeviceKey(row), { notificationsEnabled: true });
+  putRecord('core.update.status', 'default', { phase: 'ready', available: false, current: event.target, target: event.target });
+  await worker.tick(); assert.equal(sends.length, 1, 'an installed update must not generate a stale availability alert');
+ } finally { worker.close(); }
 });

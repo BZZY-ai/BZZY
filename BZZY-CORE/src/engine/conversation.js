@@ -1,3 +1,4 @@
+import { listSkills, skillCatalogInstructions } from './skills.js';
 import { database } from './database.js';
 import { saveSession } from './store.js';
 
@@ -44,6 +45,10 @@ export function conversationMessages(sessionId, throughSeq, { maxMessages = Infi
 }
 
 export function conversationPrompt(session, prompt) {
+  if (session.role !== 'skill-writer' && (session.bzzySkillsSeen || listSkills({ enabledOnly: true, limit: 1 }).total)) {
+    session.bzzySkillsSeen = true;
+    prompt = `${skillCatalogInstructions()}\n\nCURRENT REQUEST:\n${prompt}`;
+  }
   if (!session.conversationHandoff?.pending) return prompt;
   const messages = conversationMessages(session.id, session.conversationHandoff.throughSeq, { maxMessages: 30, maxBytes: 96 * 1024 });
   if (!messages.length) return prompt;

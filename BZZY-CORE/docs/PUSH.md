@@ -7,9 +7,7 @@ provider authorization. Closing/backgrounding iOS does not remove registration.
 
 Implemented events are `goal.completed`, `goal.stalled` and
 `goal.waiting_for_input`. An execution merely ending does not create a verified
-goal-completion alert. The payload contains generic text and opaque navigation
-identifiers, never the objective, conversations, files, email, provider keys or
-invitation codes. Tapping an alert only opens/reconciles an authorized view.
+goal-completion alert. The requested compact alert uses `Goal achieved`, `Goal stalled` or `Input needed`, an optional terminal alias and a bounded objective preview. Recognized credential-like text is omitted. Navigation uses opaque identifiers; conversations, file contents, provider keys and invitation codes are excluded. Tapping an alert only opens/reconciles an authorized view.
 
 ## Host setup
 
@@ -78,8 +76,7 @@ returns `providerConfigured: false`; it must not appear as working host delivery
 
 ## Delivery and limits
 
-The worker runs in the existing Core daemon, scans at most 1,000 recent goal
-outbox entries, sends at most eight per pass, and ignores events older than one
+The worker runs in the existing Core daemon, rotates through bounded pages of 200 goal outbox records, sends at most eight per pass, and ignores events older than one
 day or before the user enabled that registration. Device/event deliveries are
 durably deduplicated, including overlapping session/catalog subscriptions. The
 same opaque collapse ID and APNs request ID are retained across explicit APNs
@@ -90,8 +87,7 @@ Expired/revoked grants, revoked device pins or narrower Core tokens, disabled
 preferences, private authentication directories and internal contexts stop
 future sends. APNs `410`/invalid-device-token responses disable the matching
 token registration, respecting a newer device registration timestamp. Already
-accepted notifications cannot be recalled. Alerts are generic even on the lock
-screen; opaque session/agent IDs only guide navigation, and the app rechecks
+accepted notifications cannot be recalled. Alias and objective previews can appear on the lock screen; use iOS notification-preview settings to hide them. Other metadata remains private; opaque session/agent IDs only guide navigation, and the app rechecks
 permission through authoritative discovery before loading details. Generic alert
 titles distinguish completion, waiting for input and attention; opaque thread
 identifiers group updates without exposing project names or paths.
@@ -102,3 +98,31 @@ scopes, future-terminal coverage without a phone socket, durable deduplication,
 revocation, retry/uncertainty and token invalidation. Actual background delivery
 on a provisioned physical iPhone remains unverified until tested with the
 owner's Apple configuration and permission.
+
+## Diagnosing delivery
+
+Run `bzzy notifications status`, or open CLI Settings → BZZY Core, for safe
+configuration/registration/delivery status. Missing or mismatched Apple setup
+creates `waiting_for_configuration` records with a fixed reason code, rather
+than appearing sent. The daemon retries eligible queued goals after private
+configuration becomes valid; it never fabricates an Apple receipt. Goals are
+recorded transactionally with saved lifecycle state even when Apple setup is
+missing. Completing a goal with a paired phone but missing setup also displays
+the setup requirement in the terminal.
+
+Tests cover waiting/setup recovery, rotating scans beyond 1,000 records and
+compact alias/objective previews in addition to the existing APNs, authorization
+and retry checks. Real background delivery still requires the owner's Apple
+configuration and an authorized physical-device verification.
+
+## Update availability alerts
+
+The Core update watcher uses the same durable outbox and APNs delivery worker for
+`system.update_available`. It emits one generic alert per GitHub target revision:
+**BZZY update available**. The notification opens iOS Settings and never carries
+an install command, source URL, private account binding or executable arguments.
+Only the fully approved own-phone base grant can receive these host-wide alerts;
+scoped session/friend/Agent grants do not inherit update administration. The
+phone's Updates notification toggle and its normal iOS notification permission
+must both allow delivery. Queued alerts are skipped once their revision is no
+longer the available update. Missing Apple setup remains a visible waiting state.
