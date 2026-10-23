@@ -1,12 +1,12 @@
 # BZZY native iOS
 
-Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen centers the fly eyes. The updated mascot follows `new changes/new-eyes.jpeg`, drawn in Canvas with close cyan lenses, inward pupils, highlights and swept antennae; no reference bitmap is loaded or bundled. It blinks, glances, hovers and follows touch. Motion pauses in the background and respects Reduce Motion.
+Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a cropped single-eye app icon and celeste controls. Gentle touch/idle motion moves the complete mark, pauses in the background and respects Reduce Motion.
 
 ## Run
 
 Open [BZZY.xcodeproj](BZZY.xcodeproj), select **BZZY** and an iPhone simulator, then Run. Simulator runs use Xcode’s local signing; do not disable signing when testing Keychain. For a physical iPhone, select your Apple development team. Push notifications require a push-enabled App ID and a matching provisioning profile. Debug uses the development APNs environment; Release uses production.
 
-The current device test uses **Debug 0.1.0 (4)**, installed directly through Xcode tooling on the connected iPhone 15 Pro Max and launched normally, preserving app data and pairing. TestFlight is deferred and is not required for this test. Installation/launch alone does not verify microphone recognition or real APNs delivery.
+The current device test uses **Debug 0.1.0 (5)**, installed directly through Xcode tooling on the connected iPhone 15 Pro Max and launched normally, preserving app data and pairing. TestFlight is deferred and is not required for this test. Installation/launch alone does not verify microphone recognition or real APNs delivery. Build 5 includes the supplied eye artwork, single-eye icon, celeste theme and host-update Settings controls. The CLI updater installs host CLI/Core updates; iPhone app changes require a separately built and installed iOS binary.
 
 The local `RelayKit` Swift package pins [swift-sodium](https://github.com/jedisct1/swift-sodium) at `cfd195c76882aa9b997560ca7cb95d72fbf5db00`. Xcode resolves it automatically. No provider SDK or second agent runtime is added.
 
