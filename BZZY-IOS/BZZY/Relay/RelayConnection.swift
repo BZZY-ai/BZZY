@@ -1483,7 +1483,10 @@ public final class RelayConnection {
             }
             var params: [String: CoreJSONValue] = ["prompt": .string(objective), "goal": .bool(true)]
             if let replaceGoalID { params["replaceGoalId"] = .string(replaceGoalID) }
-            return await mutateCore("execution.execute", params: params)
+            // The replacement confirmation is the explicit control handoff.
+            // Core still requires this device's existing takeover grant.
+            return await mutateCore("execution.execute", params: params,
+                takeover: replaceGoalID != nil && corePermissions.contains("takeover"))
         }
         return await mutateCore(coreIsAssistant ? "task.submit" : "execution.execute",
             params: [coreIsAssistant ? "instruction" : "prompt": .string(text)])
@@ -1521,13 +1524,13 @@ public final class RelayConnection {
         return await mutateCore("execution.execute", params: ["prompt": .string("Continue the existing goal."), "goal": .bool(true), "resumeGoal": .bool(true)])
     }
 
-    private func mutateCore(_ op: String, params: [String: CoreJSONValue]) async -> Bool {
+    private func mutateCore(_ op: String, params: [String: CoreJSONValue], takeover: Bool = false) async -> Bool {
         guard !coreBusy, coreActionsAvailable, !coreCommandUncertain, state.pendingCoreCommand == nil,
               let client = coreClient, let projection = coreProjection, let hostID = state.host?.certificate.id else { return false }
         let resource = coreResource
         coreBusy = true; coreError = nil; lastCommandAccepted = false
         defer { coreBusy = false }
-        if !coreOwnsInput, !(await claimCoreInput()) { return false }
+        if takeover || !coreOwnsInput, !(await claimCoreInput(takeover: takeover)) { return false }
         guard coreClient === client, coreProjection === projection, state.host?.certificate.id == hostID,
               coreResource == resource, coreActionsAvailable, !suspended else { return false }
         var params = params; params["owner"] = .string(projection.ownerID)

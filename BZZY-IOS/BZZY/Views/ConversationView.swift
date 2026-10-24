@@ -160,7 +160,7 @@ struct ConversationCanvas: View {
                 replacementDraft = nil; goalToReplace = nil
             }
         } message: {
-            Text("Stop pursuing the current goal and start the new objective?")
+            Text("Take control of this session and replace the current goal with the new objective?")
         }
         .sheet(isPresented: $showDetails) {
             if isLive { LiveSessionDetailsView(store: store).coreAvailabilityGate() }

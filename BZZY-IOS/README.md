@@ -6,11 +6,13 @@ Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen
 
 Open [BZZY.xcodeproj](BZZY.xcodeproj), select **BZZY** and an iPhone simulator, then Run. Simulator runs use Xcode’s local signing; do not disable signing when testing Keychain. For a physical iPhone, select your Apple development team. Push notifications require a push-enabled App ID and a matching provisioning profile. Debug uses the development APNs environment; Release uses production.
 
-The current verified device installation is **Debug 0.1.0 (9)**, installed in place
-and launched on the connected iPhone 15 Pro Max. The device reports build 9;
+The current verified device installation is **Debug 0.1.0 (10)**, installed in place
+and launched on the connected iPhone 15 Pro Max. The device reports build 10;
 development APNs metadata, privacy declarations and the signed artifact passed
-validation. No uninstall or data reset was performed. Build 9 adds canonical goal dispatch,
-the green command chip and replacement confirmation alongside build 8’s chat
+validation. No uninstall or data reset was performed. Build 10 fixes input handoff
+when confirming a goal replacement while CLI still owns the session. Build 9
+added canonical goal dispatch, the green command chip and replacement
+confirmation alongside build 8’s chat
 permission controls. Update the host separately through CLI before goal
 submission or YOLO is available. The actual phone approval interaction remains a manual
 check. TestFlight is deferred. The CLI updater installs host CLI/Core updates;
@@ -49,11 +51,15 @@ Build 9 displays `/goal` as a separate green command chip while composing;
 the objective remains editable and removing the chip preserves its text.
 Sending `/goal <objective>` enters Core's goal lifecycle and notification path.
 If another goal is active, verifying or paused, **Replace current goal?** offers
-No/Yes before submission. Confirmation names the exact goal ID; a newer goal or
-changed input ownership cannot be silently overwritten. Resume uses Core's saved
+No/Yes before submission. Confirmation is bound to the exact goal ID; a newer
+goal cannot be silently overwritten. Build 10 uses this same confirmation to
+transfer session input to the iPhone using its existing host-approved takeover
+permission, so CLI can remain open. There is no second permission dialog. No
+keeps the existing goal and input owner; a grant without takeover permission
+cannot take control from another client. Resume uses Core's saved
 checkpoint operation. Update the host through CLI first; older Core versions
 reject goal submission locally with an update message instead of sending chat.
-Validation covers 54 passing native Swift tests and a passing simulator UI test
+Validation covers 55 passing native Swift tests and a passing simulator UI test
 for continued typing and chip removal. The signed development app and privacy/
 APNs metadata also passed artifact checks; no production push delivery is claimed
 by these isolated fixtures.

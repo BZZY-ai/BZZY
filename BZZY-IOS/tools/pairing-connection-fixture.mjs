@@ -13,7 +13,7 @@ import { RelayGateway } from '../../BZZY-CORE/src/relay/gateway.js';
 import { BzzyCore } from '../../BZZY-CORE/src/core.js';
 import { CoreAssistant } from '../../BZZY-CORE/src/assistant.js';
 import { CoreWorkspaces } from '../../BZZY-CORE/src/workspaces.js';
-import { listRecords, putRecord } from '../../BZZY-CORE/src/engine.js';
+import { getRecord, listRecords, putRecord } from '../../BZZY-CORE/src/engine.js';
 import { prepareTask } from '../../BZZY-CORE/src/engine/task.js';
 import { newGoal } from '../../BZZY-CORE/src/engine/goals.js';
 import { runtimeInfo, runtimeRequest } from '../../BZZY-CORE/src/engine/runtime.js';
@@ -47,11 +47,12 @@ const gateway = new RelayGateway({ identity: host, url: relay.audience, allowIns
     return client;
   } });
 const core = new BzzyCore();
-let phone, session, stopping = false, cliTask, closeCLI, cliReady = false;
+let phone, session, stopping = false, cliTask, closeCLI, cliOwner, cliReady = false, cliClosed = false;
 
 async function stop() {
   if (stopping) return;
   stopping = true;
+  cliClosed = true;
   closeCLI?.(null);
   await cliTask?.catch(() => {});
   await gateway.close().catch(() => {});
@@ -69,7 +70,7 @@ async function handle(input) {
       await gateway.start();
       session = core.createConversation({ provider: 'codex', model: 'pair-fixture', cwd: path.join(directory, 'project') }, { requestId: randomUUID() });
       const pairing = await gateway.createPairing({ sessionId: session.id,
-        permissions: ['observe', 'claim', 'takeover', 'execute', 'answer', 'pause', 'cancel', 'steer'],
+        permissions: ['observe', 'claim', 'takeover', 'execute', 'answer', 'pause', 'cancel', 'steer'].filter(permission => input.allowTakeover !== false || permission !== 'takeover'),
         sessionAccess: true, shareAccess: true, agentAccess: true });
       // Only the test transport is redirected to loopback. Exercise the exact
       // production compact codec without connecting to its configured endpoint.
@@ -98,6 +99,7 @@ async function handle(input) {
       const current = listRecords('session').find(row => row.id === session.id), jobs = listRecords('execution');
       return { goalID: current.goal?.id, objective: current.goal?.objective, status: current.goal?.status,
         goalExecution: jobs[0]?.goal, executionCount: jobs.length,
+        inputHeldByCLI: Boolean(cliOwner && getRecord('input-owner', session.id)?.owner === cliOwner),
         notificationCount: listRecords('outbox').filter(row => row.event.type === 'goal.completed').length };
     }
     case 'cli-attach': {
@@ -105,14 +107,20 @@ async function handle(input) {
       let signalReady;
       const ready = new Promise(resolve => { signalReady = resolve; });
       const ui = { interactive: true, cursors: new Map(), setSession() {}, updateSession() {}, event() {},
-        ask() { cliReady = true; signalReady(); return new Promise(resolve => { closeCLI = resolve; }); } };
+        ask() {
+          if (cliClosed) return Promise.resolve(null);
+          cliReady = true; signalReady();
+          return new Promise(resolve => { closeCLI = resolve; ui.reader = { close: () => resolve(null) }; });
+        } };
       cliTask = attachSession(session, {}, ui);
       await Promise.race([ready, cliTask.then(() => { throw new Error('CLI_DID_NOT_ATTACH'); })]);
       const snapshot = await runtimeRequest(runtimeInfo(), 'GET', `/sessions/${session.id}`);
+      cliOwner = snapshot.inputOwner?.owner;
       return { attached: cliReady, ownsInput: snapshot.inputOwner != null };
     }
     case 'cli-close': {
       if (!closeCLI) throw new Error('CLI_NOT_ATTACHED');
+      cliClosed = true;
       closeCLI(null); await cliTask;
       const snapshot = await runtimeRequest(runtimeInfo(), 'GET', `/sessions/${session.id}`);
       return { closed: true, ownsInput: snapshot.inputOwner != null };
