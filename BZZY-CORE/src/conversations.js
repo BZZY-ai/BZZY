@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { home, normalizeSessionAlias, getProvider, providers, putRecord, appendEvent, now, loadSession, writeJson, sessionPath } from './engine.js';
 import { fail, object } from './validation.js';
 import { canonicalPath, contains } from './paths.js';
+import { providerModelCapabilities } from './engine/providers.js';
 
 export function workspaceDirectory(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value)) fail('INVALID_REQUEST', 'Choose an absolute local workspace directory.');
@@ -20,7 +21,8 @@ export function providerSelection(input) {
   const model = input.model ?? provider.model ?? null, effort = input.effort ?? 'default';
   if (model !== null && (typeof model !== 'string' || !/^[^\s\x00-\x1f\x7f-\x9f]{1,200}$/u.test(model))) fail('INVALID_REQUEST', 'Invalid model name.');
   if (typeof effort !== 'string' || !/^(?:default|[a-z][a-z0-9_-]{0,23})$/.test(effort)) fail('INVALID_REQUEST', 'Invalid reasoning effort.');
-  if (effort !== 'default' && provider.supportedEfforts?.length && !provider.supportedEfforts.includes(effort)) fail('INVALID_REQUEST', 'This provider does not support the selected reasoning effort.');
+  const supported = providerModelCapabilities(provider, model).supportedEfforts;
+  if (effort !== 'default' && supported?.length && !supported.includes(effort)) fail('INVALID_REQUEST', 'This model does not support the selected reasoning effort.');
   return { provider: provider.id, model, effort };
 }
 

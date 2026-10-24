@@ -10,6 +10,7 @@ import { assertSessionIdle, availableModels } from './engine/models.js';
 import { writeJson } from './engine/files.js';
 import { canonicalPath, contains } from './paths.js';
 import { directoryIdentity, matchesDirectoryIdentity } from './engine/directory-identity.js';
+import { providerModelCapabilities } from './engine/providers.js';
 
 const summary = row => {
   const session = getRecord('session', row.sessionId);
@@ -42,7 +43,7 @@ export class CoreAgents {
     this.#check();
     return Object.entries(providers()).filter(([id]) => /^[a-z][a-z0-9_-]{0,39}$/.test(id)).map(([id, provider]) => ({
       id, name: String(provider.name || id).slice(0, 160), backend: provider.backend, model: provider.model || null,
-      supportedEfforts: (provider.supportedEfforts || []).slice(0, 12),
+      supportedEfforts: (providerModelCapabilities(provider, provider.model).supportedEfforts || []).slice(0, 12),
     }));
   }
   async models(provider, { after, limit = 25 } = {}) {

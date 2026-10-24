@@ -241,7 +241,7 @@ export function parseArgs(argv) {
   if (options.yolo && options.readOnly) throw new Error('--yolo conflicts with --read-only.');
   if (options.useDefault && (options.agents || options.participants)) throw new Error('Use either --default or explicit --agents/--participant selections.');
   if (options.rounds > 5 || options.concurrency > 8) throw new Error('Maximum 5 debate rounds and 8 concurrent workers.');
-  if (options.effort && !['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.effort)) throw new Error('Invalid reasoning effort.');
+  if (options.effort && !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.effort)) throw new Error('Invalid reasoning effort.');
   if (options.alias != null) options.alias = normalizeSessionAlias(options.alias);
   options.cwd = path.resolve(options.cwd);
   return { options, args };

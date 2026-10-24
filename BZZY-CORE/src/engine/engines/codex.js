@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { launch, root, version, assertCodexVersion, backendCommand } from '../process.js';
 import { home, privateDir, writeJson, saveSession } from '../store.js';
-import { apiKey } from '../providers.js';
+import { apiKey, providerModelCapabilities } from '../providers.js';
 import { Rpc } from '../rpc.js';
 import { backendIsolation } from '../policy.js';
 import { taskTools } from '../tools.js';
@@ -79,7 +79,7 @@ export function codexLaunch(provider, session, options = {}) {
       auto_review_model_override: null, use_responses_lite: false,
       model_messages: { instructions_template: fs.readFileSync(path.join(root, 'assets', 'agent-instructions.md'), 'utf8') },
     });
-    const capabilities = session.modelCapabilities;
+    const capabilities = providerModelCapabilities(provider, session.model, session.modelCapabilities);
     if (capabilities?.defaultEffort) catalog.default_reasoning_level = capabilities.defaultEffort;
     const supported = capabilities?.supportedEfforts || provider.supportedEfforts;
     if (supported?.length) {

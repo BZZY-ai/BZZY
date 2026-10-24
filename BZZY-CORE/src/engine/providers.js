@@ -10,7 +10,35 @@ export const BUILTINS = {
     model: 'deepseek-flash', contextWindow: 1048576,
     reasoningEffort: 'high', supportedEfforts: ['low', 'high', 'max'],
   },
+  abliteration: {
+    id: 'abliteration', name: 'Abliteration', backend: 'codex', auth: 'api-key',
+    baseUrl: 'https://api.abliteration.ai/v1', envKey: 'ABLITERATION_API_KEY',
+    model: 'abliterated-model', contextWindow: 262144,
+    // Responses-specific defaults, also used for manually entered model IDs.
+    // Discovery can override these public capabilities as the API evolves.
+    modelCapabilities: {
+      'abliterated-model': { contextWindow: 262144, inputModalities: ['text', 'image'],
+        supportedEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+      'abliterated-model-large-flash': { contextWindow: 1048576, inputModalities: ['text', 'image'],
+        supportedEfforts: ['none', 'low', 'high', 'max'], defaultEffort: 'high' },
+      'abliterated-model-large-v2': { contextWindow: 1000000, inputModalities: ['text'],
+        supportedEfforts: ['low', 'high', 'max'], defaultEffort: 'max' },
+      'abliterated-model-large': { contextWindow: 1000000, inputModalities: ['text'],
+        supportedEfforts: ['none', 'high', 'max'], defaultEffort: 'high' },
+    },
+  },
 };
+
+export function providerModelCapabilities(provider, model, discovered) {
+  const result = { ...(provider.supportedEfforts ? { supportedEfforts: provider.supportedEfforts } : {}),
+    ...(provider.contextWindow ? { contextWindow: provider.contextWindow } : {}),
+    ...provider.modelCapabilities?.[model || provider.model],
+    ...Object.fromEntries(Object.entries(discovered || {}).filter(([, value]) => value !== undefined)) };
+  // Callers may normalize a live catalog; never mutate the provider defaults.
+  if (result.supportedEfforts) result.supportedEfforts = [...result.supportedEfforts];
+  if (result.inputModalities) result.inputModalities = [...result.inputModalities];
+  return result;
+}
 
 export function config() {
   return readJson(path.join(home(), 'config.json'), { version: 1, defaultProvider: null, providers: {} });

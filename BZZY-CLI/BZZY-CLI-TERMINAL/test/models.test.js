@@ -22,8 +22,9 @@ import { prepareTask } from '../src/task.js';
 let directory, previous;
 test.beforeEach(() => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-models-'));
-  previous = Object.fromEntries(['BZZY_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_MODEL_MODE', 'BZZY_TEST_LOG', 'BZZY_FIXTURE_MODELS_KEY', 'DEEPSEEK_API_KEY'].map(key => [key, process.env[key]]));
+  previous = Object.fromEntries(['BZZY_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_MODEL_MODE', 'BZZY_TEST_LOG', 'BZZY_FIXTURE_MODELS_KEY', 'DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY'].map(key => [key, process.env[key]]));
   delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.ABLITERATION_API_KEY;
   Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_BIN: path.join(root, 'test/fixtures/models.mjs'), BZZY_CLAUDE_BIN: path.join(root, 'test/fixtures/models.mjs'), BZZY_TEST_LOG: path.join(directory, 'backend.jsonl') });
 });
 test.afterEach(async () => {
@@ -140,7 +141,7 @@ test('provider selection prompts once for a missing DeepSeek key and keeps crede
   let prompts = 0, choices;
   const ui = { interactive: true, event() {}, async secret() { prompts++; return 'fixture-deepseek-key'; }, async chooseOne(_title, items) { choices = items; return 'deepseek'; } };
   assert.equal((await chooseProvider('codex', '', ui)).id, 'deepseek');
-  assert.deepEqual(choices.map(choice => choice.value), ['codex', 'claude', 'deepseek']);
+  assert.deepEqual(choices.map(choice => choice.value), ['codex', 'claude', 'deepseek', 'abliteration']);
   assert.equal(prompts, 1); assert.equal(apiKey(BUILTINS.deepseek), 'fixture-deepseek-key');
   assert.doesNotMatch(JSON.stringify(choices), /fixture-deepseek-key/);
   assert.equal(fs.statSync(path.join(directory, 'private', 'credentials.json')).mode & 0o777, 0o600);
@@ -148,6 +149,17 @@ test('provider selection prompts once for a missing DeepSeek key and keeps crede
   assert.equal(reasoningEffort(session('deepseek')), 'low');
   assert.equal(reasoningEffort(session('deepseek'), { goalMode: true }), undefined);
   assert.throws(() => reasoningEffort(session('deepseek'), { effort: 'medium' }), /does not support/);
+});
+test('Abliteration appears in the existing provider picker and uses hidden key setup', async () => {
+  let prompts = 0, choices;
+  const ui = { interactive: true, event() {}, async secret() { prompts++; return 'synthetic-abliteration-key'; },
+    async chooseOne(_title, items) { choices = items; return 'abliteration'; } };
+  const provider = await chooseProvider('codex', '', ui);
+  assert.equal(provider.id, 'abliteration'); assert.ok(choices.some(choice => choice.value === provider.id));
+  assert.equal(prompts, 1); assert.equal(apiKey(provider), 'synthetic-abliteration-key');
+  assert.doesNotMatch(JSON.stringify(choices), /synthetic-abliteration-key/);
+  assert.equal((await chooseModel({ ...session('abliteration') }, 'default', ui)).model, 'abliterated-model');
+  await ensureApiKey(provider, ui); assert.equal(prompts, 1);
 });
 test('model effort choices retain the current setting, reject unsupported levels and configure both execution backends', async () => {
   const current = { ...session('codex'), model: 'fixture-brain', selectedEffort: 'high' };

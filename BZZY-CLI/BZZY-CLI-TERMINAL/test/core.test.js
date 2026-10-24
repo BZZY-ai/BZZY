@@ -31,6 +31,7 @@ test('provider and workflow shortcuts select chat backends and bounded modes dir
   assert.equal(parseArgs(['--delegate']).options.delegationSetup, true);
   for (const provider of ['codex', 'claude', 'deepseek']) assert.equal(parseArgs(['--' + provider]).options.provider, provider);
   assert.equal(parseArgs(['--parallel', '--claude']).options.mode, 'parallel');
+  for (const effort of ['none', 'minimal']) assert.equal(parseArgs(['--provider', 'abliteration', '--effort', effort]).options.effort, effort);
   assert.equal(parseArgs(['--debate', '--rounds', '5']).options.mode, 'debate');
   assert.throws(() => parseArgs(['--debate', '--rounds', '6']), /Maximum 5/);
 });

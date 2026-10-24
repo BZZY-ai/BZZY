@@ -12,6 +12,10 @@ the same engine and private state.
 
 Implemented:
 
+- Built-in Abliteration API support through the existing Responses adapter,
+  dynamic model discovery and model-specific effort/context metadata. See
+  [Abliteration setup](docs/ABLITERATION.md).
+
 - Central session input admission for CLI and iOS, with authenticated handoff,
   durable request deduplication and uninterrupted reply observation. Clients
   submit explicit input without preclaiming a lease; see [shared input](docs/SESSION-INPUT.md).

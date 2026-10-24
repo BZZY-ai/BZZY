@@ -1,7 +1,7 @@
 import { messageFormatInstructions } from '../message-format.js';
 import { contextFor } from './recovery.js';
 import { getRecord } from './database.js';
-import { BUILTINS } from './providers.js';
+import { providers, providerModelCapabilities } from './providers.js';
 import { supervisorProtocol, executorProtocol } from './delegation-protocol.js';
 import { bestieProtocol } from './besties-protocol.js';
 import fs from 'node:fs';
@@ -12,7 +12,8 @@ export function structuredWork(session, options = {}) {
   return Boolean(options.goalMode || options.contract || ['executor', 'reviewer'].includes(session.role));
 }
 export function reasoningEffort(session, options = {}) {
-  const supported = session.modelCapabilities?.supportedEfforts || (session.provider === 'deepseek' ? BUILTINS.deepseek.supportedEfforts : null);
+  const capabilities = providerModelCapabilities(providers()[session.provider] || {}, session.model, session.modelCapabilities);
+  const supported = capabilities.supportedEfforts;
   if (session.selectedEffort === 'default') return undefined;
   const selected = session.selectedEffort || options.effort;
   if (selected) {

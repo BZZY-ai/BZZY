@@ -55,6 +55,12 @@ CLI selectors without hardcoded model lists. Current custom API providers must
 support the execution adapter's actual protocol; an arbitrary local LLM server
 is not automatically compatible.
 
+Abliteration is built in: run `bzzy auth abliteration` for hidden API-key entry,
+then choose it from the model dropdown or use
+`bzzy --provider abliteration --model abliterated-model`. Model discovery and
+per-model reasoning choices come from Core. It uses the installed Codex CLI
+with the provider's Responses API. See [setup and model support](../../BZZY-CORE/docs/ABLITERATION.md).
+
 CLI stays terminal-oriented; persistent Agent management lives in iPhone.
 The terminal header shows Core host CPU and used/total RAM, refreshed roughly
 once per second. Wider terminals also show Core's own resident memory. These

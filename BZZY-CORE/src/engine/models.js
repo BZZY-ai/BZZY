@@ -3,7 +3,7 @@ import { launch } from './process.js';
 import { Rpc } from './rpc.js';
 import { stopProcess } from './policy.js';
 import { subscriptionEnvironment } from './auth.js';
-import { apiKey, getProvider } from './providers.js';
+import { apiKey, getProvider, providerModelCapabilities } from './providers.js';
 import { getRecord, listRecords } from './database.js';
 import { identityAlive } from './recovery.js';
 
@@ -101,8 +101,17 @@ async function apiModels(provider, signal) {
   }
   const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!Array.isArray(result.data)) throw new Error('No model catalog returned.');
-  return result.data.map(model => ({ id: model.id, name: model.name || model.id, description: model.description || [model.context_window ? model.context_window.toLocaleString() + ' context tokens' : '', model.input_modalities?.join(' + ')].filter(Boolean).join(' · '),
-      capabilities: { supportedEfforts: model.effort?.supported_levels, defaultEffort: model.effort?.default_level, contextWindow: model.context_window, inputModalities: model.input_modalities } }));
+  return result.data.filter(model => model && typeof model === 'object' && model.access?.available !== false && model.access?.locked !== true && model.is_ready !== false).map(model => {
+    const context = model.context_window ?? model.context_length;
+    const capabilities = providerModelCapabilities(provider, model.id, {
+      supportedEfforts: Array.isArray(model.effort?.supported_levels) ? model.effort.supported_levels : undefined,
+      defaultEffort: typeof model.effort?.default_level === 'string' ? model.effort.default_level : undefined,
+      contextWindow: Number.isSafeInteger(context) && context > 0 ? context : undefined,
+      inputModalities: Array.isArray(model.input_modalities) ? model.input_modalities.filter(value => ['text', 'image'].includes(value)) : undefined,
+    });
+    return { id: model.id, name: model.display_name || model.name || model.id,
+      description: model.description || [capabilities.contextWindow ? capabilities.contextWindow.toLocaleString() + ' context tokens' : '', capabilities.inputModalities?.join(' + ')].filter(Boolean).join(' · '), capabilities };
+  });
 }
 
 export async function availableModels(session, { signal, timeoutMs = 8000 } = {}) {
