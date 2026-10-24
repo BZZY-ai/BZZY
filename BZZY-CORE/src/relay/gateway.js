@@ -55,7 +55,10 @@ export class RelayGateway extends EventEmitter {
   #rates = new Map();
   #metricsRates = new Map();
   #ackRates = new Map();
+  #chunkRates = new Map();
+  #eventTransfers = new Map();
   #pollIntervalMs;
+  #subscriptionLeaseMs;
   #maintenanceTimer;
   #maintenanceBusy = false;
   #transfers;
@@ -64,13 +67,14 @@ export class RelayGateway extends EventEmitter {
   #voice;
 
   constructor({ identity = loadRelayIdentity(), url = DEFAULT_RELAY_URL, allowInsecureLocal = false,
-    autoReconnect = true, requestTimeoutMs = 10000, pollIntervalMs = 500, clientFactory = options => new RelayClient(options) } = {}) {
+    autoReconnect = true, requestTimeoutMs = 10000, pollIntervalMs = 500, subscriptionLeaseMs = 60000, clientFactory = options => new RelayClient(options) } = {}) {
     super(); verifyCertificate(identity.certificate);
     this.#home = home(); this.#identity = structuredClone(identity); this.#core = new BzzyCore();
     this.#agents = new CoreAgents();
     this.#voice = new CoreVoiceChat({ client: context => this.#clientFor(context) });
     this.#agentImports = new CoreAgentImports({ agents: this.#agents, url, allowInsecureLocal });
     this.#pollIntervalMs = boundedInteger(pollIntervalMs, 100, 5000);
+    this.#subscriptionLeaseMs = boundedInteger(subscriptionLeaseMs, 200, 120000);
     this.#relay = clientFactory({ identity: this.#identity, url, allowInsecureLocal, autoReconnect, requestTimeoutMs });
     this.#transfers = new ProjectTransferService({ client: this.#relay });
     const route = this.#relay.route.bind(this.#relay);
@@ -321,8 +325,8 @@ export class RelayGateway extends EventEmitter {
     return this.#relay.send(row.id, clean);
   }
   #takeRate(peerId, kind = 'requests') {
-    const rates = kind === 'metrics' ? this.#metricsRates : kind === 'ack' ? this.#ackRates : this.#rates;
-    const maximum = kind === 'metrics' ? LIMITS.metricsPerMinute : kind === 'ack' ? LIMITS.acknowledgmentsPerMinute : LIMITS.requestsPerMinute;
+    const rates = kind === 'metrics' ? this.#metricsRates : kind === 'ack' ? this.#ackRates : kind === 'chunks' ? this.#chunkRates : this.#rates;
+    const maximum = kind === 'metrics' ? LIMITS.metricsPerMinute : kind === 'ack' ? LIMITS.acknowledgmentsPerMinute : kind === 'chunks' ? LIMITS.chunksPerMinute : LIMITS.requestsPerMinute;
     const timestamp = Date.now();
     for (const [key, value] of rates) if (value.until <= timestamp) rates.delete(key);
     const bucket = rates.get(peerId) || { until: timestamp + 60000, count: 0 };
@@ -344,13 +348,22 @@ export class RelayGateway extends EventEmitter {
         // Only an actual delivered/current-cursor acknowledgment gets the data
         // budget. Guessed subscriptions and invalid cursors retain normal limits.
         if (request.op === 'events.ack') this.#ackTarget(row, request.params);
+        if (request.op === 'events.chunk') this.#chunkTarget(row, request.params);
       } catch (error) { this.#takeRate(message.from); throw error; }
-      this.#takeRate(message.from, request.op === 'host.metrics' ? 'metrics' : request.op === 'events.ack' ? 'ack' : 'requests');
+      this.#takeRate(message.from, request.op === 'host.metrics' ? 'metrics' : request.op === 'events.ack' ? 'ack' : request.op === 'events.chunk' ? 'chunks' : 'requests');
       const total = [...this.#inflight.values()].reduce((a, b) => a + b, 0), peers = this.#inflight.get(message.from) || 0;
       if (total >= LIMITS.requests || peers >= LIMITS.requestsPerPeer) fail('CAPACITY', 'Gateway concurrency reached.');
       this.#inflight.set(message.from, peers + 1); counted = true;
       const result = COMMANDS.has(request.op) ? await this.#command(row, request) : await this.#read(row, request);
+      if (['session.get', 'host.metrics', 'events.subscribe', 'events.ack', 'events.chunk'].includes(request.op)) this.#renewSubscriptions(row);
       await this.#send(row, response(request.id, result));
+      if (request.op === 'events.ack') {
+        const subscription = this.#subscriptionFor(row, request.params.subscriptionId);
+        if (!subscription.pending) {
+          clearTimeout(subscription.timer);
+          subscription.timer = setTimeout(() => { void this.#pump(subscription); }, 0);
+        }
+      }
     } catch (error) {
       const code = errorCode(error);
       if (row) {
@@ -649,12 +662,13 @@ export class RelayGateway extends EventEmitter {
             yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
             inputOwnedByDevice: snapshot.inputOwner?.principal === `grant:${row.coreGrantId}`,
             inputActor: digest(`grant:${row.coreGrantId}`),
-            durableEvents: true, permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
+            durableEvents: true, historyPaging: true, eventChunks: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)), permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
             relay: true, portableSharing: row.shareAccess === true, shareKind: row.kind === 'agent' ? 'AGENT' : 'TERMINAL' } };
       }
       case 'session.usage': return client.usage(row.sessionId);
-      case 'events.list': return this.#eventPage(row, params.after ?? 0, params.limit ?? LIMITS.pageLimit, client);
-      case 'events.subscribe': return this.#subscribe(row, opaque(params.consumerId));
+      case 'events.list': return this.#eventList(row, params, client);
+      case 'events.chunk': return this.#eventChunk(row, params);
+      case 'events.subscribe': return this.#subscribe(row, opaque(params.consumerId), params);
       case 'events.ack': return this.#ack(row, params);
       case 'events.unsubscribe': {
         const subscription = this.#subscriptionFor(row, opaque(params.subscriptionId));
@@ -814,35 +828,151 @@ export class RelayGateway extends EventEmitter {
     }
   }
 
-  async #eventPage(row, after, limit, client) {
+  #chunkTarget(row, params) {
+    boundedInteger(params.seq, 1, Number.MAX_SAFE_INTEGER);
+    boundedInteger(params.offset, 0, LIMITS.eventBytes - 1);
+    boundedInteger(params.limit, 1, LIMITS.chunkBytes);
+    const event = database().prepare('SELECT seq FROM events WHERE session_id=? AND seq=?').get(row.sessionId, params.seq);
+    if (!event) fail('INVALID_CURSOR', 'The scoped event is unavailable.');
+  }
+  async #eventChunk(row, params) {
+    this.#chunkTarget(row, params);
+    const key = digest({ grant: row.id, peer: row.peerId, resource: row.resource, session: row.sessionId, seq: params.seq });
+    let transfer = this.#eventTransfers.get(key);
+    if (transfer?.expiresAt <= Date.now()) { this.#eventTransfers.delete(key); transfer = null; }
+    if (!transfer) {
+      const raw = database().prepare('SELECT * FROM events WHERE session_id=? AND seq=?').get(row.sessionId, params.seq);
+      const clean = await this.#clean({ version: 1, id: `${row.sessionId}:${raw.seq}`, seq: raw.seq,
+      sessionId: row.sessionId, type: raw.type, data: JSON.parse(raw.data), createdAt: raw.created_at });
+      this.#eventDescriptor(row, clean); transfer = this.#eventTransfers.get(key);
+    }
+    const { bytes, sha256 } = transfer;
+    if (bytes.length > LIMITS.eventBytes || params.offset >= bytes.length) fail('RESULT_TOO_LARGE', 'The event exceeds the bounded transfer.');
+    const part = bytes.subarray(params.offset, params.offset + params.limit);
+    return { seq: params.seq, offset: params.offset, bytes: bytes.length, sha256, data: part.toString('base64'), nextOffset: params.offset + part.length };
+  }
+  #eventDescriptor(row, event) {
+    const bytes = Buffer.from(JSON.stringify(event));
+    if (bytes.length > LIMITS.eventBytes) fail('RESULT_TOO_LARGE', 'The event exceeds the bounded transfer.');
+    const key = digest({ grant: row.id, peer: row.peerId, resource: row.resource, session: row.sessionId, seq: event.seq });
+    const timestamp = Date.now();
+    for (const [id, value] of this.#eventTransfers) if (value.expiresAt <= timestamp) this.#eventTransfers.delete(id);
+    let used = [...this.#eventTransfers.values()].reduce((total, value) => total + value.bytes.length, 0);
+    for (const [id, value] of this.#eventTransfers) {
+      if (used + bytes.length <= LIMITS.eventBytes * 2 && this.#eventTransfers.size < 16) break;
+      this.#eventTransfers.delete(id); used -= value.bytes.length;
+    }
+    const sha256 = digest(bytes);
+    this.#eventTransfers.set(key, { bytes, sha256, expiresAt: timestamp + LIMITS.chunkAckTimeoutMs });
+    return { chunked: true, id: event.id, seq: event.seq, sessionId: event.sessionId, bytes: bytes.length, sha256 };
+  }
+  async #eventList(row, params, client) {
+    if (params.eventChunks !== undefined && typeof params.eventChunks !== 'boolean' || params.latest !== undefined && typeof params.latest !== 'boolean') fail('INVALID_REQUEST', 'History options must be boolean.');
+    const backwards = params.latest === true || params.before !== undefined;
+    if (backwards && params.after !== undefined || params.latest === true && params.before !== undefined) fail('INVALID_REQUEST', 'Choose a single history direction.');
+    if (!backwards) return this.#eventPage(row, params.after ?? 0, params.limit ?? LIMITS.pageLimit, client, params.eventChunks === true);
+    const before = boundedInteger(params.before ?? Number.MAX_SAFE_INTEGER, 1, Number.MAX_SAFE_INTEGER);
+    const limit = boundedInteger(params.limit ?? LIMITS.pageLimit, 1, LIMITS.pageLimit);
+    const page = await client.eventHistory(row.sessionId, before, limit), selected = [];
+    let expandedBytes = 0;
+    // Select from newest backwards, then restore chronological order. The page
+    // boundary always describes a contiguous suffix, including huge envelopes.
+    for (const event of [...page.events].reverse()) {
+      if (event.sessionId !== row.sessionId || event.version !== 1 || event.id !== `${row.sessionId}:${event.seq}` || !Number.isSafeInteger(event.seq) || event.seq >= (selected[0]?.seq ?? before)) fail('GATEWAY_UNAVAILABLE', 'The Core event envelope was invalid.');
+      const clean = await this.#clean(event);
+      const bytes = Buffer.byteLength(JSON.stringify(clean));
+      if (selected.length && expandedBytes + bytes > LIMITS.eventBytes) break;
+      const value = Buffer.byteLength(JSON.stringify(clean)) > LIMITS.payloadBytes - 2048
+        ? params.eventChunks === true ? this.#eventDescriptor(row, clean) : fail('RESULT_TOO_LARGE', 'This event requires chunked transfer.') : clean;
+      if (Buffer.byteLength(JSON.stringify([value, ...selected])) > LIMITS.payloadBytes - 2048) break;
+      selected.unshift(value); expandedBytes += bytes;
+    }
+    const oldestCursor = selected[0]?.seq ?? 0, nextCursor = selected.at(-1)?.seq ?? 0;
+    const result = { events: selected, nextCursor, hasMore: false, oldestCursor, hasOlder: page.hasOlder || selected.length < page.events.length };
+    if (params.latest === true) {
+      // A scoped short-lived proof that this exact tail was disclosed. A later
+      // subscribe commits only the replay baseline after durable client storage.
+      const token = randomUUID();
+      const key = digest({ host: row.hostId, peer: row.peerId, resource: row.resource });
+      putRecord('core.relay.bootstrap', key, { token, grantId: row.id, peerId: row.peerId, resource: row.resource,
+        sessionId: row.sessionId, cursor: nextCursor, expiresAt: Date.now() + 300000 });
+      result.bootstrapToken = token;
+    }
+    return result;
+  }
+  async #eventPage(row, after, limit, client, chunks = false) {
     boundedInteger(after, 0, Number.MAX_SAFE_INTEGER); boundedInteger(limit, 1, LIMITS.pageLimit);
     const page = await client.events(row.sessionId, after, limit), selected = [];
+    let expandedBytes = 0;
     for (const event of page.events) {
       if (event.sessionId !== row.sessionId || event.version !== 1 || event.id !== `${row.sessionId}:${event.seq}` || !Number.isSafeInteger(event.seq) || event.seq <= (selected.at(-1)?.seq ?? after)) fail('GATEWAY_UNAVAILABLE', 'The Core event envelope was invalid.');
       const clean = await this.#clean(event);
-      if (Buffer.byteLength(JSON.stringify([...selected, clean])) > LIMITS.payloadBytes - 2048) {
-        if (!selected.length) fail('RESULT_TOO_LARGE', 'This event requires a future chunked transfer.');
-        break;
-      }
-      selected.push(clean);
+      const bytes = Buffer.byteLength(JSON.stringify(clean));
+      if (selected.length && expandedBytes + bytes > LIMITS.eventBytes) break;
+      if (!chunks && selected.length && Buffer.byteLength(JSON.stringify(clean)) > LIMITS.payloadBytes - 2048) break;
+      const value = Buffer.byteLength(JSON.stringify(clean)) > LIMITS.payloadBytes - 2048
+        ? chunks ? this.#eventDescriptor(row, clean) : fail('RESULT_TOO_LARGE', 'This event requires chunked transfer.') : clean;
+      if (Buffer.byteLength(JSON.stringify([...selected, value])) > LIMITS.payloadBytes - 2048) break;
+      selected.push(value); expandedBytes += bytes;
     }
     return { events: selected, nextCursor: selected.at(-1)?.seq ?? after, hasMore: page.hasMore || selected.length < page.events.length };
   }
   #cursorKey(row, consumerId) { return digest({ hostId: row.hostId, peerId: row.peerId, resource: row.resource, sessionId: row.sessionId, consumerId }); }
-  #subscribe(row, consumerId) {
+  #renewSubscriptions(row) {
+    for (const subscription of this.#subscriptions.values()) {
+      if (subscription.grantId === row.id && subscription.peerId === row.peerId && subscription.resource === row.resource) subscription.expiresAt = Date.now() + this.#subscriptionLeaseMs;
+    }
+  }
+  #retireSubscription(subscription, code) {
+    this.#stopSubscription(subscription);
+    try {
+      const row = this.#authorize(subscription.grantId, subscription.peerId, subscription.resource);
+      void this.#send(row, { v: VERSION, protocol: PROTOCOL, type: 'subscription.closed', subscriptionId: subscription.id,
+        resource: subscription.resource, code }).catch(() => {});
+    } catch { /* Revoked peers cannot receive a final disclosure. */ }
+  }
+  #subscribe(row, consumerId, params = {}) {
+    if (params.singleView !== undefined && typeof params.singleView !== 'boolean') fail('INVALID_REQUEST', 'Single-view support must be boolean.');
+    if (params.eventChunks !== undefined && typeof params.eventChunks !== 'boolean') fail('INVALID_REQUEST', 'Chunk support must be boolean.');
+    let baseline;
+    if (params.bootstrapToken !== undefined) {
+      opaque(params.bootstrapToken);
+      const proof = getRecord('core.relay.bootstrap', digest({ host: row.hostId, peer: row.peerId, resource: row.resource }));
+      if (!proof || proof.token !== params.bootstrapToken || proof.grantId !== row.id || proof.peerId !== row.peerId
+        || proof.resource !== row.resource || proof.sessionId !== row.sessionId || proof.expiresAt <= Date.now()) fail('INVALID_CURSOR', 'The history baseline is unavailable.');
+      baseline = proof.cursor;
+    }
+    if (params.singleView === true) {
+      const ownPhone = authorizedOwnPhone(row.relayGrantId || row.id);
+      if (!ownPhone || ownPhone.peerId !== row.peerId) fail('FORBIDDEN', 'Single-view handoff requires the fully approved phone.', 403);
+      for (const subscription of this.#subscriptions.values()) {
+        if (subscription.peerId === row.peerId && subscription.grantId === ownPhone.id
+          && (subscription.resource !== row.resource || subscription.consumerId !== consumerId)) this.#retireSubscription(subscription, 'SUBSCRIPTION_REPLACED');
+      }
+    }
+    for (const subscription of this.#subscriptions.values()) if (subscription.expiresAt <= Date.now()) this.#retireSubscription(subscription, 'SUBSCRIPTION_EXPIRED');
     const key = this.#cursorKey(row, consumerId), existing = [...this.#subscriptions.values()].find(item => item.key === key);
     if (existing) {
+      // Updating the phone can add chunk support while its durable observation
+      // consumer remains the same. Upgrade this live subscription in place.
+      existing.chunks ||= params.eventChunks === true;
       // A reconnected client may have persisted a frame whose ACK was lost.
       // Replay that exact pending frame instead of waiting for its timeout.
-      if (existing.pending) { existing.pending.replay = true; existing.pending.until = Date.now() + LIMITS.ackTimeoutMs; }
+      if (existing.pending) { existing.pending.replay = true; existing.pending.until = Date.now() + (existing.pending.page.events.some(event => event.chunked) ? LIMITS.chunkAckTimeoutMs : LIMITS.ackTimeoutMs); }
       clearTimeout(existing.timer);
       existing.timer = setTimeout(() => { void this.#pump(existing); }, this.#pollIntervalMs);
       return { subscriptionId: existing.id, consumerId, processedCursor: existing.cursor };
     }
     if (this.#subscriptions.size >= LIMITS.subscriptions || [...this.#subscriptions.values()].filter(item => item.peerId === row.peerId).length >= LIMITS.subscriptionsPerPeer) fail('CAPACITY', 'Subscription capacity reached.');
-    const cursor = getRecord('core.relay.cursor', key)?.seq || 0;
+    const savedCursor = getRecord('core.relay.cursor', key);
+    // Baselines are explicit new-consumer tail views, never acknowledgments of
+    // undisclosed older events or a way to advance an existing consumer.
+    if (baseline !== undefined && savedCursor && savedCursor.seq !== baseline) fail('INVALID_CURSOR', 'An existing consumer cannot skip events.');
+    const cursor = savedCursor?.seq ?? baseline ?? 0;
+    if (!savedCursor && baseline !== undefined) putRecord('core.relay.cursor', key, { hostId: row.hostId, peerId: row.peerId,
+      resource: row.resource, sessionId: row.sessionId, consumerId, seq: cursor, startCursor: cursor, baseline: 'recent-history', updatedAt: now() });
     const subscription = { id: randomUUID(), key, grantId: row.id, peerId: row.peerId, resource: row.resource, consumerId,
-      sessionId: row.sessionId, cursor, pending: null, closed: false };
+      sessionId: row.sessionId, cursor, expiresAt: Date.now() + this.#subscriptionLeaseMs, chunks: params.eventChunks === true, pending: null, closed: false };
     this.#subscriptions.set(subscription.id, subscription);
     subscription.timer = setTimeout(() => { void this.#pump(subscription); }, this.#pollIntervalMs);
     return { subscriptionId: subscription.id, consumerId, processedCursor: cursor };
@@ -876,6 +1006,7 @@ export class RelayGateway extends EventEmitter {
     subscription.pumping = true;
     try {
       const row = this.#authorize(subscription.grantId, subscription.peerId, subscription.resource);
+      if (subscription.expiresAt <= Date.now()) { this.#retireSubscription(subscription, 'SUBSCRIPTION_EXPIRED'); return; }
       if (subscription.pending) {
         if (subscription.pending.until <= Date.now()) fail('INVALID_CURSOR', 'Subscription acknowledgment timed out.');
         if (subscription.pending.replay) {
@@ -884,10 +1015,10 @@ export class RelayGateway extends EventEmitter {
             resource: row.resource, sessionId: row.sessionId, ...subscription.pending.page });
         }
       } else {
-        const page = await this.#eventPage(row, subscription.cursor, LIMITS.pageLimit, await this.#clientFor(row));
+        const page = await this.#eventPage(row, subscription.cursor, LIMITS.pageLimit, await this.#clientFor(row), subscription.chunks);
         if (subscription.closed) return;
         if (page.events.length) {
-          subscription.pending = { sequences: page.events.map(event => event.seq), until: Date.now() + LIMITS.ackTimeoutMs, page, replay: false };
+          subscription.pending = { sequences: page.events.map(event => event.seq), until: Date.now() + (page.events.some(event => event.chunked) ? LIMITS.chunkAckTimeoutMs : LIMITS.ackTimeoutMs), page, replay: false };
           await this.#send(row, { v: VERSION, protocol: PROTOCOL, type: 'events', subscriptionId: subscription.id,
             resource: row.resource, sessionId: row.sessionId, ...page });
         }
@@ -934,6 +1065,7 @@ export class RelayGateway extends EventEmitter {
     finally { this.#maintenanceBusy = false; }
   }
   async close() {
+    this.#eventTransfers.clear();
     this.#relayHealth?.close();
     this.#check(); this.#started = false; clearInterval(this.#maintenanceTimer); this.#stopSubscriptions();
     await this.#agentImports.close();

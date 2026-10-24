@@ -237,19 +237,10 @@ private struct HostAgentConversationView: View {
     @Environment(RelayConnection.self) private var relay
     @Bindable var store: WorkspaceStore
     let agent: HostAgentRecord
-    @State private var openFailed = false
     var body: some View {
         ConversationCanvas(store: store, conversationID: agent.sessionID, title: agent.name,
             subtitle: "\(agent.provider) · \(agent.model)", assistantName: agent.name, remoteSession: true)
-            .task(id: agent.id) {
-                if !relay.coreActionsAvailable || relay.coreSessionID != agent.sessionID {
-                    openFailed = !(await relay.openCoreAgent(agent.id))
-                }
-            }
-            .alert("Agent unavailable", isPresented: $openFailed) {
-                Button("Retry attachment") { Task { openFailed = !(await relay.openCoreAgent(agent.id)) } }
-                Button("Close", role: .cancel) { }
-            } message: { Text(relay.coreAgentStatus.isEmpty ? "The agent could not be opened. No execution was started." : relay.coreAgentStatus) }
+            .task(id: agent.id) { await relay.observeCoreAgent(agent.id, sessionID: agent.sessionID) }
     }
 }
 
@@ -277,8 +268,8 @@ private struct HostAgentEditorView: View {
             ?? providers.first(where: { $0.id == provider })?.efforts ?? []
     }
     private var valid: Bool {
-        !loading && !saving && relay.coreAgentsAvailable && relay.coreCatalogReady &&
-        (agent != nil || relay.coreAgentsConfigured) && !relay.coreCommandUncertain &&
+        !loading && !saving && relay.coreActionsAvailable && relay.coreAgentsAvailable && relay.coreCatalogReady &&
+        (agent != nil || relay.coreAgentsConfigured) && !relay.coreAgentMutationPending &&
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.utf8.count <= 120 &&
         !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && instructions.utf8.count <= 16000 && !provider.isEmpty
     }

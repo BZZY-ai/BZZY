@@ -12,6 +12,13 @@ the same engine and private state.
 
 Implemented:
 
+- Scoped newest/older event pages for the iPhone's bounded conversation cache,
+  with an explicit persisted-tail bootstrap and delivered-only live ACKs.
+  Optional exact-event chunk transfer preserves large messages instead of
+  repeatedly closing the stream at the same cursor. See the
+  [encrypted protocol](docs/RELAY-PROTOCOL.md).
+
+
 - Built-in OrcaRouter support with OrcaCyber Zero 1.5 as its provider default,
   authenticated Cyber-first discovery and shared CLI/iPhone model metadata.
   See [OrcaRouter setup](docs/ORCAROUTER.md).

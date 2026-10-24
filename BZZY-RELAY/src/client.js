@@ -8,7 +8,7 @@ export class RelayClient extends EventEmitter {
     super();
     verifyCertificate(identity.certificate);
     Object.assign(this, { url: relayUrl(url, allowInsecureLocal), identity, autoReconnect, requestTimeoutMs, maxPending });
-    this.pending = new Map(); this.trusted = new Map(); this.revoked = new Set();
+    this.pending = new Map(); this.trusted = new Map(); this.revoked = new Set(); this.inspections = new Map();
     this.status = 'offline'; this.stopped = true; this.reconnectAttempt = 0;
   }
   trustPeer(certificate) {
@@ -28,7 +28,7 @@ export class RelayClient extends EventEmitter {
     try { return await this.connecting; } finally { this.connecting = null; }
   }
   async establish() {
-    this.setStatus('connecting'); this.epoch = random(); this.replay = new ReplayGuard(); this.revoked.clear();
+    this.setStatus('connecting'); this.epoch = random(); this.replay = new ReplayGuard(); this.revoked.clear(); this.inspections.clear();
     const epoch = this.epoch;
     const ws = new WebSocket(this.url, 'bzzy-relay.v1', { maxPayload: LIMITS.frameBytes, perMessageDeflate: false, handshakeTimeout: this.requestTimeoutMs, followRedirects: false });
     this.ws = ws;
@@ -74,7 +74,16 @@ export class RelayClient extends EventEmitter {
           }
           if (!ready) fail('AUTH_REQUIRED');
           if (frame.event === 'delivery') {
-            this.receive(frame.data, epoch).catch(error => this.emit('rejected', { code: error instanceof RelayError ? error.code : 'INVALID_MESSAGE' }));
+            this.receive(frame.data, epoch).catch(error => {
+              const code = error instanceof RelayError ? error.code : 'INVALID_MESSAGE';
+              this.emit('rejected', { code });
+              // A failed transport receipt must not silently consume a valid
+              // message while leaving the application apparently online. Restore
+              // transport so Core can replay its processed cursor; never replay
+              // application commands here. Invalid encrypted content stays rejected.
+              if (this.ws === ws && this.epoch === epoch && ['OFFLINE', 'RATE_LIMITED', 'REQUEST_CAPACITY', 'BACKPRESSURE',
+                'DELIVERY_UNAVAILABLE', 'PEER_OFFLINE', 'REQUEST_TIMEOUT_UNCERTAIN', 'SEND_UNCERTAIN', 'DISCONNECTED_UNCERTAIN'].includes(code)) ws.terminate();
+            });
           } else if (frame.event === 'grant.revoked') {
             this.revoked.add(frame.data.grantId); this.emit(frame.event, frame.data);
           } else if (['invite.requested', 'invite.decided', 'delivery.received', 'delivery.uncertain'].includes(frame.event)) this.emit(frame.event, frame.data);
@@ -119,13 +128,23 @@ export class RelayClient extends EventEmitter {
   revokeGrant(grantId) { return this.request('grant.revoke', { grantId }); }
   revokePeer(peerId) { return this.request('peer.revoke', { peerId }); }
   async route(grantId) {
-    const grant = await this.request('grant.inspect', { grantId });
-    const peer = this.trusted.get(grant.peer.id);
-    if (!peer || peer.boxKey !== grant.peer.boxKey || peer.signKey !== grant.peer.signKey) fail('UNTRUSTED_PEER');
-    if (grant.expiresAt <= Date.now() || this.revoked.has(grantId)) fail('GRANT_UNAVAILABLE');
-    if (!grant.online || !grant.presence) fail('PEER_OFFLINE');
-    verifyPresence(peer, grant.presence);
-    return { grant, peer };
+    // Share concurrent inspections only. Keeping presence beyond the in-flight
+    // request would encrypt to an obsolete receiver epoch after peer reconnect.
+    if (this.inspections.has(grantId)) return this.inspections.get(grantId);
+    const epoch = this.epoch;
+    const inspection = (async () => {
+      const grant = await this.request('grant.inspect', { grantId });
+      if (this.epoch !== epoch) fail('CONNECTION_CHANGED');
+      const peer = this.trusted.get(grant.peer.id);
+      if (!peer || peer.boxKey !== grant.peer.boxKey || peer.signKey !== grant.peer.signKey) fail('UNTRUSTED_PEER');
+      if (grant.expiresAt <= Date.now() || this.revoked.has(grantId)) fail('GRANT_UNAVAILABLE');
+      if (!grant.online || !grant.presence) fail('PEER_OFFLINE');
+      verifyPresence(peer, grant.presence);
+      return { grant, peer };
+    })();
+    this.inspections.set(grantId, inspection);
+    try { return await inspection; }
+    finally { if (this.inspections.get(grantId) === inspection) this.inspections.delete(grantId); }
   }
   async send(grantId, payload, { messageId = random() } = {}) {
     opaque(messageId);

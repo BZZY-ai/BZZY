@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import RelayKit
 
 @MainActor private final class CoreHarness {
@@ -6,11 +7,12 @@ import XCTest
     var client: CoreRelayClient!
     var sent: [WireValue] = []
     var result: CoreJSONValue?
+    var resultProvider: ((WireValue) -> CoreJSONValue?)?
     init(timeout: UInt64 = 500_000_000) {
         client = CoreRelayClient(hostID: "host", grantID: "grant", resource: "resource", timeoutNanoseconds: timeout) { [weak self] value in
             guard let self else { return }
             self.sent.append(value)
-            if let result = self.result {
+            if let result = self.resultProvider?(value) ?? self.result {
                 try self.client.receive(from: "host", grantID: "grant", payload: self.response(value["id"].string!, result: result))
             }
         }
@@ -42,6 +44,105 @@ import XCTest
 }
 
 final class CoreApplicationTests: XCTestCase {
+    @MainActor func testLateSupersededSubscriptionClosureCannotInvalidateCurrentStream() async throws {
+        let h = CoreHarness(); try await h.bind(); try await h.subscribe()
+        var closed = false; h.client.onSubscriptionClosed = { _, _ in closed = true }
+        let frame: CoreJSONValue = .object(["v": .number(1), "protocol": .string("bzzy-core"), "type": .string("subscription.closed"), "resource": .string("resource"), "subscriptionId": .string("old-consumer"), "code": .string("SUBSCRIPTION_REPLACED")])
+        try h.client.receive(from: "host", grantID: "grant", payload: frame.wire())
+        XCTAssertFalse(closed)
+        var delivered = false; h.client.onEvents = { _ in delivered = true }
+        try h.client.receive(from: "host", grantID: "grant", payload: h.batch([1]).wire()); XCTAssertTrue(delivered)
+    }
+
+    @MainActor func testNextPageMayOvertakeProcessedAckResponse() async throws {
+        let h = CoreHarness(); try await h.bind(); try await h.subscribe()
+        var delivered: [Int64] = []
+        h.client.onEvents = { delivered.append($0.nextCursor) }
+        try h.client.receive(from: "host", grantID: "grant", payload: h.batch([1]).wire())
+        h.result = nil
+        let ack = Task { try await h.client.request("events.ack", params: ["subscriptionId": .string("subscription"), "seq": .number(1)]) }
+        while h.sent.last?["op"].string != "events.ack" { await Task.yield() }
+        let id = h.sent.last!["id"].string!
+        try h.client.receive(from: "host", grantID: "grant", payload: h.batch([2]).wire())
+        try h.client.receive(from: "host", grantID: "grant", payload: h.response(id, result: .object(["processedCursor": .number(1)])))
+        _ = try await ack.value
+        XCTAssertEqual(delivered, [1, 2])
+        h.result = .object(["processedCursor": .number(2)])
+        _ = try await h.client.request("events.ack", params: ["subscriptionId": .string("subscription"), "seq": .number(2)])
+    }
+
+    @MainActor func testBoundedHistoryMovesBackwardAndLiveTailKeepsAdvancing() async throws {
+        let h = CoreHarness(), directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CoreEventProjectionStore(directory: directory, hostID: "host", resource: "resource", sessionID: h.session)
+        func page(_ lower: Int64, token: String? = nil) throws -> CoreEventHistoryPage {
+            let envelopes = h.batch(Array(lower..<(lower + 50)))["events"]
+            var value: [String: CoreJSONValue] = ["events": envelopes, "nextCursor": .number(Double(lower + 49)), "hasMore": .bool(false), "oldestCursor": .number(Double(lower)), "hasOlder": .bool(lower > 1)]
+            if let token { value["bootstrapToken"] = .string(token) }
+            return try CoreEventHistoryPage(.object(value), sessionID: h.session)
+        }
+        try store.bootstrap(page(5001, token: "tail-proof")); try store.markSubscribed()
+        for lower in stride(from: Int64(4951), through: 951, by: -50) { try store.prepend(page(lower)) }
+        XCTAssertEqual(store.firstCursor, 951); XCTAssertLessThanOrEqual(store.events.count, 4000)
+        XCTAssertEqual(store.cursor, 5050); XCTAssertTrue(store.hasNewerHistory)
+        let first = store.firstCursor
+        try store.apply(CoreEventBatch(h.batch([5051]), resource: "resource", sessionID: h.session, cursor: 5050))
+        XCTAssertEqual(store.firstCursor, first); XCTAssertEqual(store.cursor, 5051)
+        store.showLatestHistory(); XCTAssertEqual(store.events.last?.seq, 5051); XCTAssertFalse(store.hasNewerHistory)
+        let restored = try CoreEventProjectionStore(directory: directory, hostID: "host", resource: "resource", sessionID: h.session)
+        XCTAssertLessThanOrEqual(restored.events.count, 2000); XCTAssertEqual(restored.cursor, 5051); XCTAssertTrue(restored.hasOlderHistory)
+        // A lost ACK can replay an evicted event without reintroducing it.
+        try restored.apply(CoreEventBatch(h.batch([1]), resource: "resource", sessionID: h.session, cursor: 0))
+        XCTAssertEqual(restored.cursor, 5051); XCTAssertFalse(restored.events.contains(where: { $0.seq == 1 }))
+    }
+
+    @MainActor func testChunkedHistoryReassemblesExactEnvelopeAndChecksDigest() async throws {
+        let h = CoreHarness(timeout: 2_000_000_000); try await h.bind()
+        var snapshot = h.result!.object!, capabilities = snapshot["capabilities"]!.object!
+        capabilities["eventChunks"] = .bool(true); snapshot["capabilities"] = .object(capabilities); h.result = .object(snapshot)
+        _ = try await h.client.request("session.get")
+        let event = h.batch([9], body: String(repeating: "🪰 raw &amp; ", count: 4000))["events"].array![0]
+        let bytes = try JSONEncoder().encode(event), hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let descriptor: CoreJSONValue = .object(["chunked": .bool(true), "id": .string("\(h.session):9"), "seq": .number(9), "sessionId": .string(h.session), "bytes": .number(Double(bytes.count)), "sha256": .string(hash)])
+        h.result = nil
+        var corrupt = false
+        h.resultProvider = { request in
+            if request["op"].string == "events.list" { return .object(["events": .array([descriptor]), "nextCursor": .number(9), "hasMore": .bool(false), "oldestCursor": .number(9), "hasOlder": .bool(true), "bootstrapToken": .string("proof")]) }
+            guard request["op"].string == "events.chunk", let offset = request["params"]["offset"].integer else { return nil }
+            let start = Int(offset), end = min(bytes.count, start + 16384)
+            var part = Data(bytes[start..<end]); if corrupt { part[0] ^= 1 }
+            return .object(["seq": .number(9), "offset": .number(Double(start)), "bytes": .number(Double(bytes.count)), "sha256": .string(hash), "data": .string(part.base64EncodedString()), "nextOffset": .number(Double(end))])
+        }
+        let page = try await h.client.request("events.list", params: ["latest": .bool(true)])
+        XCTAssertEqual(page["events"].array, [event]); XCTAssertTrue(h.sent.last?["op"].string == "events.chunk")
+        XCTAssertTrue(h.sent.contains { $0["op"].string == "events.list" && $0["params"]["eventChunks"].bool == true })
+        corrupt = true
+        do { _ = try await h.client.request("events.list", params: ["latest": .bool(true)]); XCTFail("Changed chunk bytes") }
+        catch { XCTAssertEqual((error as? CoreApplicationError)?.code, "CONFLICT") }
+    }
+
+    @MainActor func testBootstrapRefreshPreservesPrivateOutboxAndRotatesOnlyConsumer() async throws {
+        let h = CoreHarness(), directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CoreEventProjectionStore(directory: directory, hostID: "host", resource: "resource", sessionID: h.session)
+        let snapshot: CoreJSONValue = .object(["session": .object(["id": .string(h.session), "alias": .string("Cached title")]), "questions": .array([]), "capabilities": .object([:])])
+        try store.saveSnapshot(snapshot)
+        let outgoing = CoreOutgoingMessage(id: UUID().uuidString, text: "Keep my draft", operation: "execution.execute", params: ["owner": .string(store.ownerID), "prompt": .string("Keep my draft")])
+        try store.putOutgoing(outgoing)
+        func tail(_ seq: Int64, _ token: String) throws -> CoreEventHistoryPage {
+            try CoreEventHistoryPage(.object(["events": h.batch([seq])["events"], "nextCursor": .number(Double(seq)), "hasMore": .bool(false), "oldestCursor": .number(Double(seq)), "hasOlder": .bool(true), "bootstrapToken": .string(token)]), sessionID: h.session)
+        }
+        try store.bootstrap(tail(50, "expired-proof"))
+        let oldConsumer = store.consumerID, owner = store.ownerID
+        try store.refreshBootstrap(tail(60, "fresh-proof"))
+        XCTAssertNotEqual(store.consumerID, oldConsumer); XCTAssertEqual(store.ownerID, owner)
+        XCTAssertEqual(store.outgoing.map(\.id), [outgoing.id]); XCTAssertEqual(store.cachedSnapshot, snapshot)
+        let restored = try CoreEventProjectionStore(directory: directory, hostID: "host", resource: "resource", sessionID: h.session)
+        XCTAssertEqual(restored.cursor, 60); XCTAssertEqual(restored.bootstrapToken, "fresh-proof"); XCTAssertEqual(restored.cachedSnapshot, snapshot)
+        try restored.markSubscribed()
+        XCTAssertThrowsError(try restored.refreshBootstrap(tail(70, "arbitrary-proof")))
+    }
+
     @MainActor func testAuthoritativeAdmissionEventConfirmsLostRPCWithoutRetryAndRejectsOtherActors() async throws {
         let h = CoreHarness(timeout: 2_000_000_000)
         try await h.bind(inputActor: "this-device"); try await h.subscribe()

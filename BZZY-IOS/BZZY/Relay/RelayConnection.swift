@@ -109,7 +109,8 @@ private struct SavedRelayState: Codable {
     var pendingUpdate: PendingCoreUpdate?
     var host: HostBinding?
     var pending: PendingPair?
-    var pendingCoreCommand: PendingCoreCommand?
+    var pendingCoreCommand: PendingCoreCommand? // Legacy single-receipt migration only.
+    var pendingCoreCommands: [PendingCoreCommand]?
     var taskID: String?
     var coreCacheScope: CoreCacheScope?
     var coreCacheScopes: [CoreCacheScope]?
@@ -191,7 +192,7 @@ public final class RelayConnection {
     public private(set) var coreGoalReason: String?
     public private(set) var coreExecutionState: String?
     public var canResumeStalledGoal: Bool {
-        coreActionsAvailable && coreGoalSubmission && coreStalledGoalResume && corePermissions.contains("execute") && coreGoalID != nil
+        isCoreSessionReady(coreSessionID) && coreGoalSubmission && coreStalledGoalResume && corePermissions.contains("execute") && coreGoalID != nil
         && !coreBusy && !coreCommandUncertain && CoreGoalDraft.canResumeStalled(status: coreGoalStatus, reason: coreGoalReason, executionState: coreExecutionState)
     }
     @ObservationIgnored private var recentCoreShares: [String: CoreShareReference] = [:]
@@ -214,7 +215,34 @@ public final class RelayConnection {
     @ObservationIgnored private var coreMonitor: Task<Void, Never>?
     @ObservationIgnored private var coreMonitorEpoch = UUID()
     public var coreActionsAvailable: Bool { coreConnected && coreHealth.isOnline() && corePairAuthorized && !suspended && transport?.online == true && coreClient != nil }
-    public var connectionOnline: Bool { coreActionsAvailable }
+    public var connectionOnline: Bool {
+        guard coreActionsAvailable else { return false }
+        return desiredCoreSessionID.map { isCoreSessionReady($0) } ?? true
+    }
+    public func isCoreSessionReady(_ sessionID: String) -> Bool {
+        coreActionsAvailable && coreSessionID == sessionID && !coreAttaching
+            && (desiredCoreSessionID == nil || desiredCoreSessionID == sessionID)
+    }
+    public func isCoreSessionBusy(_ sessionID: String) -> Bool {
+        coreAttaching || (coreSessionID == sessionID && coreBusy)
+    }
+    public private(set) var coreAttaching = false
+    public private(set) var desiredCoreSessionID: String?
+    public private(set) var coreHistoryHasOlder = false
+    public private(set) var coreHistoryLoading = false
+    public private(set) var coreHistoryHasNewer = false
+    public private(set) var coreHistorySyncing = false
+    @ObservationIgnored private var historySyncTask: Task<Void, Never>?
+    @ObservationIgnored private var historySyncEpoch = UUID()
+    @ObservationIgnored private var historyReadEpoch = UUID()
+    @ObservationIgnored private var encodedCoreEvents: [String: (CoreEvent, Data)] = [:]
+    @ObservationIgnored private var attachmentIntent = UUID()
+    @ObservationIgnored private var cachedPresentationScope: CoreCacheScope?
+    @ObservationIgnored private var catalogRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var catalogRefreshEpoch = UUID()
+    @ObservationIgnored private var catalogReadTask: Task<Void, Error>?
+    @ObservationIgnored private var catalogReadEpoch = UUID()
+    @ObservationIgnored private var catalogReadAgain = false
     public var connectionVerifiedAt: Date? { coreHealth.verifiedAt }
     public private(set) var coreCatalogRefreshing = false
     public var coreConnectionLabel: String {
@@ -238,13 +266,39 @@ public final class RelayConnection {
     public private(set) var coreError: String?
     public private(set) var coreOutgoingMessages: [CoreOutgoingMessage] = []
     public private(set) var coreCommandStatus = ""
-    public private(set) var coreCommandUncertain = false
+    private var commandJournalRevision = UUID()
+    public var coreCommandUncertain: Bool { _ = commandJournalRevision; return pendingCoreCommand != nil }
+    public func hasUncertainCoreCommand(sessionID: String) -> Bool {
+        _ = commandJournalRevision
+        guard sessionID == coreSessionID else { return false }
+        return pendingCoreCommand != nil
+    }
+    private var savedCoreCommands: [PendingCoreCommand] {
+        var commands = state.pendingCoreCommands ?? []
+        if let legacy = state.pendingCoreCommand, !commands.contains(where: { $0.id == legacy.id }) { commands.append(legacy) }
+        return commands
+    }
+    /// One unresolved admission per resource. Other conversations remain usable;
+    /// exact request identities survive navigation, reconnect and old-app migration.
+    private var pendingCoreCommand: PendingCoreCommand? {
+        get { savedCoreCommands.first { $0.hostID == state.host?.certificate.id && $0.resource == coreResource } }
+        set {
+            var commands = savedCoreCommands.filter { !($0.hostID == state.host?.certificate.id && $0.resource == coreResource) }
+            if let newValue { commands.append(newValue) }
+            state.pendingCoreCommands = commands
+            state.pendingCoreCommand = nil
+            commandJournalRevision = UUID()
+        }
+    }
+    @ObservationIgnored private var receiptClients: [String: CoreRelayClient] = [:]
+    @ObservationIgnored private var reconcilingReceipts: Set<String> = []
     public private(set) var coreTaskStatus = ""
     @ObservationIgnored private var coreClient: CoreRelayClient?
     @ObservationIgnored private var coreProjection: CoreEventProjectionStore?
     @ObservationIgnored private var coreResource = ""
     @ObservationIgnored private var coreGrantID = ""
     @ObservationIgnored private var coreSubscriptionID: String?
+    @ObservationIgnored private var coreHistoryPaging = false
     @ObservationIgnored private var coreStarting = false
     @ObservationIgnored private var coreRefresh: Task<Void, Never>?
     @ObservationIgnored private var inputRenewal: Task<Void, Never>?
@@ -363,6 +417,9 @@ public final class RelayConnection {
                         if payload["type"].string == "response" {
                             try self.catalogClient?.receive(from: peer, grantID: grant, payload: payload)
                             if self.coreClient !== self.catalogClient { try self.coreClient?.receive(from: peer, grantID: grant, payload: payload) }
+                            for client in self.receiptClients.values where client !== self.catalogClient && client !== self.coreClient {
+                                try client.receive(from: peer, grantID: grant, payload: payload)
+                            }
                         } else if let resource = payload["resource"].string {
                             if self.coreClient?.resource == resource { try self.coreClient?.receive(from: peer, grantID: grant, payload: payload) }
                             else if self.catalogClient?.resource == resource { try self.catalogClient?.receive(from: peer, grantID: grant, payload: payload) }
@@ -548,7 +605,7 @@ public final class RelayConnection {
     }
 
     private func startCore(grant: WireValue) async {
-        guard !coreStarting, let transport, let host = state.host,
+        guard !coreStarting, !coreAttaching, let transport, let host = state.host,
               grant["id"].string == host.grantID, grant["spec"]["kind"].string == "PAIR",
               grant["spec"]["mode"].string == "pair", let baseResource = grant["spec"]["resource"].string else { return }
         coreStarting = true
@@ -560,61 +617,74 @@ public final class RelayConnection {
                 catalogClient = CoreRelayClient(transport: transport, hostID: host.certificate.id, grantID: host.grantID, resource: baseResource)
             }
             guard let catalog = catalogClient else { return }
-            if !coreConnected { coreHealth.begin(scope: catalog.resource) }
-            startingClient = catalog
-            let baseSnapshot = try await catalog.request("session.get")
-            guard catalogClient === catalog, state.host?.grantID == host.grantID, !suspended else { return }
+            coreOfferedPermissions = Set(grant["spec"]["actions"].array?.compactMap(\.string) ?? [])
+            if coreConnected, coreHealth.isOnline(), coreClient != nil {
+                // A refresh is not a new attachment. Retain observation and its
+                // proof rather than invalidating a healthy chat during catalog IO.
+                await refreshCore()
+                scheduleCatalogRefresh(catalog)
+                return
+            }
+            let selected = state.selectedSession
+            let resource = selected?.resource ?? baseResource
+            let client = resource == baseResource ? catalog : CoreRelayClient(transport: transport,
+                hostID: host.certificate.id, grantID: host.grantID, resource: resource,
+                expectedShareKind: selected?.kind == "agent" ? .agent : .terminal)
+            coreClient = client; startingClient = client
+            coreResource = resource; coreGrantID = host.grantID; coreIsAgent = selected?.kind == "agent"
+            configureCoreCallbacks(client)
+            coreHealth.begin(scope: client.resource)
+            // The saved resource is only a routing hint. Its own session.get is
+            // authorized by Core before any data or capabilities can unlock it.
+            async let baseRead = catalog.request("session.get")
+            var selectedSnapshot: CoreJSONValue?
+            if resource != baseResource {
+                do {
+                    let snapshot = try await client.request("session.get")
+                    guard snapshot["session"]["id"].string == selected?.sessionID else { throw CoreApplicationError("INVALID_RESPONSE") }
+                    selectedSnapshot = snapshot
+                } catch let failure as CoreApplicationError where ["FORBIDDEN", "GRANT_UNAVAILABLE"].contains(failure.code) {
+                    removeSelectedCoreContext()
+                    coreClient = catalog; startingClient = catalog
+                    coreResource = baseResource; coreGrantID = host.grantID; coreIsAgent = false
+                    configureCoreCallbacks(catalog)
+                    coreHealth.begin(scope: catalog.resource)
+                }
+            }
+            let baseSnapshot = try await baseRead
+            guard catalogClient === catalog, state.host?.grantID == host.grantID, !suspended,
+                  transport.online, let active = coreClient else { return }
             coreCatalogAvailable = baseSnapshot["capabilities"]["sessionAccess"].bool == true
             coreAgentsAvailable = baseSnapshot["capabilities"]["agentAccess"].bool == true
             coreCatalogReady = true
-            coreOfferedPermissions = Set(grant["spec"]["actions"].array?.compactMap(\.string) ?? [])
-            if coreCatalogAvailable { try await loadCoreSessions(using: catalog) }
-            else { catalogEntries = []; onCoreSessions?(try JSONEncoder().encode([CoreJSONValue]())) }
-            if coreAgentsAvailable {
-                do { try await loadCoreAgents(using: catalog) }
-                catch { coreAgentsConfigured = false; coreAgentStatus = "Agent management unavailable. Refresh after checking your host." }
-            } else { agentEntries = []; onCoreAgents?(Data("[]".utf8)) }
-            guard catalogClient === catalog, state.host?.grantID == host.grantID, !suspended else { return }
-            var resource = baseResource
-            if let selected = state.selectedSession, selected.resource != baseResource {
-                let permitted: Bool
-                if selected.kind == "agent" {
-                    permitted = coreAgentsAvailable && agentEntries.contains(where: {
-                        $0["id"].string == selected.agentID && $0["sessionId"].string == selected.sessionID && $0["existingResource"].string == selected.resource
-                    })
-                } else {
-                    permitted = coreCatalogAvailable && catalogEntries.contains(where: {
-                        $0["id"].string == selected.sessionID && $0["existingResource"].string == selected.resource
-                    })
-                }
-                if !permitted {
-                    removeSelectedCoreContext()
-                    coreError = "The saved conversation is no longer authorized. Choose another available conversation."
-                } else {
-                    resource = selected.resource
-                }
-            }
-            let client: CoreRelayClient
-            if let current = coreClient, current.resource == resource, current.grantID == host.grantID { client = current }
-            else {
-                stopCore(purge: false, preserveCatalog: true)
-                client = resource == baseResource ? catalog : CoreRelayClient(transport: transport, hostID: host.certificate.id, grantID: host.grantID, resource: resource, expectedShareKind: state.selectedSession?.kind == "agent" ? .agent : .terminal)
-                coreClient = client
-            }
-            startingClient = client
-            coreResource = resource; coreGrantID = host.grantID
-            coreIsAgent = state.selectedSession?.kind == "agent"
-            configureCoreCallbacks(client)
-            coreHealth.begin(scope: client.resource)
-            let snapshot = resource == baseResource ? baseSnapshot : try await client.request("session.get")
-            guard coreClient === client, state.host?.grantID == host.grantID, !suspended, transport.online else { return }
-            try await bindCoreSession(client, snapshot: snapshot)
+            try await bindCoreSession(active, snapshot: selectedSnapshot ?? baseSnapshot)
+            scheduleCatalogRefresh(catalog)
         } catch {
             guard startingClient == nil || coreClient === startingClient || catalogClient === startingClient else { return }
             let code = (error as? CoreApplicationError)?.code
             stopCore(purge: code == "FORBIDDEN" || code == "GRANT_UNAVAILABLE")
-            coreError = "Core session unavailable. Refresh after checking host authorization."
+            coreError = "Core session unavailable. Reconnecting automatically."
             onCoreAvailability?(false, coreError!)
+        }
+    }
+
+    private func scheduleCatalogRefresh(_ catalog: CoreRelayClient) {
+        guard catalogRefreshTask == nil else { return }
+        let epoch = UUID(); catalogRefreshEpoch = epoch
+        catalogRefreshTask = Task { [weak self, weak catalog] in
+            guard let self, let catalog else { return }
+            defer { if self.catalogRefreshEpoch == epoch { self.catalogRefreshTask = nil } }
+            if self.coreCatalogAvailable {
+                do { try await self.loadCoreSessions(using: catalog) }
+                catch { if self.catalogClient === catalog {
+                    self.coreError = "Terminal list could not be refreshed. Existing chats remain available."
+                } }
+            } else { self.catalogEntries = []; self.onCoreSessions?(Data("[]".utf8)) }
+            guard self.catalogClient === catalog, !self.suspended else { return }
+            if self.coreAgentsAvailable {
+                do { try await self.loadCoreAgents(using: catalog) }
+                catch { if self.catalogClient === catalog { self.coreAgentStatus = "Agent list could not be refreshed." } }
+            } else { self.agentEntries = []; self.onCoreAgents?(Data("[]".utf8)) }
         }
     }
 
@@ -631,17 +701,18 @@ public final class RelayConnection {
                     }
                 } catch {
                     guard self.coreClient === client else { return }
-                    self.stopCore(purge: false)
-                    self.coreError = "History could not be saved or acknowledged. Refresh to replay safely."
-                    self.onCoreAvailability?(false, self.coreError!)
+                    self.coreSubscriptionID = nil
+                    self.coreError = "History is reconnecting; unacknowledged messages will replay safely."
                 }
             }
         }
-        client.onSubscriptionClosed = { [weak self, weak client] _, code in
-            guard let self, let client, self.coreClient === client else { return }
-            if ["FORBIDDEN", "GRANT_UNAVAILABLE"].contains(code), client !== self.catalogClient { self.removeSelectedCoreContext() }
-            else { self.stopCore(purge: false) }
-            self.coreError = "Live updates stopped (\(code)). Refresh to reconnect."
+        client.onSubscriptionClosed = { [weak self, weak client] subscriptionID, code in
+            guard let self, let client, self.coreClient === client, self.coreSubscriptionID == subscriptionID else { return }
+            if ["FORBIDDEN", "GRANT_UNAVAILABLE"].contains(code) {
+                if client !== self.catalogClient { self.removeSelectedCoreContext() }
+                else { self.stopCore(purge: true) }
+            } else { self.coreSubscriptionID = nil }
+            self.coreError = "Live history is reconnecting (\(code))."
         }
     }
 
@@ -667,6 +738,7 @@ public final class RelayConnection {
         coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
         coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
         coreStalledGoalResume = snapshot["capabilities"]["stalledGoalResume"].bool == true
+        coreHistoryPaging = snapshot["capabilities"]["historyPaging"].bool == true
         coreInputSubmission = snapshot["capabilities"]["inputSubmission"].bool == true
         coreInputActor = snapshot["capabilities"]["inputActor"].string
         coreGoalID = snapshot["session"]["goal"]["id"].string
@@ -675,20 +747,9 @@ public final class RelayConnection {
         coreExecutionState = snapshot["execution"]["state"].string
         corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
         if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: inputLease.generation) { stopInputRenewal() }
-        onCoreSnapshot?(try JSONEncoder().encode(snapshot)); publishCoreEvents()
-        if coreSubscriptionID == nil, let projection = coreProjection {
-            let subscription = try await client.request("events.subscribe", params: ["consumerId": .string(projection.consumerID)])
-            guard coreClient === client, !suspended else { return }
-            coreSubscriptionID = subscription["subscriptionId"].string
-            do {
-                _ = try await client.request("assistant.status")
-                guard coreClient === client, !suspended else { return }
-                coreIsAssistant = true
-            } catch let failure as CoreApplicationError where failure.code == "OPERATION_DENIED" {
-                guard coreClient === client, !suspended else { return }
-                coreIsAssistant = false
-            }
-        }
+        try coreProjection?.saveSnapshot(snapshot)
+        cachedPresentationScope = CoreCacheScope(hostID: client.hostID, resource: client.resource, sessionID: sessionID)
+        try publishCoreSnapshot(snapshot); publishCoreEvents()
         guard coreClient === client, !suspended,
               coreHealth.confirm(healthGeneration, scope: client.resource) else { return }
         state.corePairValidated = true
@@ -696,12 +757,72 @@ public final class RelayConnection {
         confirmedCorePair = true
         coreConnected = true; coreError = nil
         onCoreAvailability?(true, "Connected to Core")
-        await reconcileCoreCommand()
-        await reconcileCoreAgentCommand()
-        guard coreClient === client else { return }
-        scheduleCoreRefresh()
-        scheduleHostMetrics()
-        scheduleCoreMonitor()
+        // Readiness is established by this exact authorized session.get. History
+        // and optional catalogs must not hold the composer behind large payloads.
+        scheduleCoreHistory(client, sessionID: sessionID, paging: snapshot["capabilities"]["historyPaging"].bool == true)
+        Task { [weak self] in
+            await self?.reconcileCoreCommand()
+            await self?.reconcileCoreAgentCommand()
+            await self?.reconcileOtherCoreCommands()
+        }
+        scheduleCoreRefresh(); scheduleHostMetrics(); scheduleCoreMonitor()
+    }
+
+    private func scheduleCoreHistory(_ client: CoreRelayClient, sessionID: String, paging: Bool) {
+        guard historySyncTask == nil, coreSubscriptionID == nil, let projection = coreProjection else { return }
+        let epoch = UUID(); historySyncEpoch = epoch; coreHistorySyncing = true
+        historySyncTask = Task { [weak self, weak client] in
+            guard let self, let client else { return }
+            defer {
+                if self.historySyncEpoch == epoch { self.historySyncTask = nil; self.coreHistorySyncing = false }
+            }
+            do {
+                if paging, !projection.historyInitialized {
+                    let page = try await client.request("events.list", params: ["latest": .bool(true), "limit": .number(50)])
+                    guard self.coreClient === client, self.coreProjection === projection, !self.suspended else { return }
+                    try projection.bootstrap(CoreEventHistoryPage(page, sessionID: sessionID))
+                    self.publishCoreEvents()
+                }
+                var subscribe: [String: CoreJSONValue] = ["consumerId": .string(projection.consumerID)]
+                if paging, let token = projection.bootstrapToken { subscribe["bootstrapToken"] = .string(token) }
+                let subscription: CoreJSONValue
+                do { subscription = try await client.request("events.subscribe", params: subscribe) }
+                catch let failure as CoreApplicationError where failure.code == "INVALID_CURSOR" && paging && projection.bootstrapToken != nil {
+                    let page = try await client.request("events.list", params: ["latest": .bool(true), "limit": .number(50)])
+                    guard self.coreClient === client, self.coreProjection === projection, !self.suspended else { return }
+                    try projection.refreshBootstrap(CoreEventHistoryPage(page, sessionID: sessionID))
+                    self.publishCoreEvents()
+                    var retry: [String: CoreJSONValue] = ["consumerId": .string(projection.consumerID)]
+                    if let token = projection.bootstrapToken { retry["bootstrapToken"] = .string(token) }
+                    subscription = try await client.request("events.subscribe", params: retry)
+                }
+                guard self.coreClient === client, self.coreProjection === projection, !self.suspended else { return }
+                self.coreSubscriptionID = subscription["subscriptionId"].string
+                try projection.markSubscribed()
+                // Assistant discovery is optional for terminal attachments and
+                // must not block normal chat or a denied terminal capability.
+                do {
+                    _ = try await client.request("assistant.status")
+                    if self.coreClient === client { self.coreIsAssistant = true }
+                } catch {
+                    if self.coreClient === client { self.coreIsAssistant = false }
+                }
+                for _ in 0..<3 {
+                    guard self.coreClient === client, self.coreProjection === projection,
+                          !projection.events.contains(where: { ["text", "message.user", "peer.text", "debate.message", "debate.result"].contains($0.type) }),
+                          projection.hasOlderHistory else { return }
+                    await self.loadOlderCoreHistory(sessionID: sessionID)
+                }
+            } catch {
+                guard self.coreClient === client, !self.suspended else { return }
+                let code = (error as? CoreApplicationError)?.code
+                if ["FORBIDDEN", "GRANT_UNAVAILABLE"].contains(code ?? "") {
+                    if client !== self.catalogClient { self.removeSelectedCoreContext() }
+                    else { self.stopCore(purge: true) }
+                }
+                self.coreError = "History is reconnecting. Saved messages remain available."
+            }
+        }
     }
 
     private static var coreProjectionDirectory: URL {
@@ -710,13 +831,50 @@ public final class RelayConnection {
     }
 
     private func loadCoreSessions(using catalog: CoreRelayClient) async throws {
+        if let current = catalogReadTask {
+            // A refresh arriving during an older read must observe a follow-up
+            // pass, rather than silently inheriting its possibly stale result.
+            catalogReadAgain = true
+            try await current.value
+            return
+        }
+        let epoch = UUID(); catalogReadEpoch = epoch
+        let read = Task { [weak self, weak catalog] in
+            guard let self, let catalog else { return }
+            repeat {
+                self.catalogReadAgain = false
+                try await self.readCoreSessionPages(using: catalog)
+            } while self.catalogReadAgain && self.catalogClient === catalog && !self.suspended && !Task.isCancelled
+        }
+        catalogReadTask = read
+        defer { if catalogReadEpoch == epoch { catalogReadTask = nil } }
+        try await read.value
+    }
+
+    /// Optional catalog reads share a bounded retry window under startup/stream
+    /// pressure. Authorization failures and mutations are never retried here.
+    private func readCoreCatalog(_ op: String, params: [String: CoreJSONValue] = [:], using catalog: CoreRelayClient) async throws -> CoreJSONValue {
+        guard ["sessions.list", "agents.status", "agents.list"].contains(op) else { throw CoreApplicationError("INVALID_REQUEST") }
+        for attempt in 0..<4 {
+            do { return try await catalog.request(op, params: params) }
+            catch let failure as CoreApplicationError where ["CAPACITY", "RATE_LIMITED"].contains(failure.code) && attempt < 3 {
+                guard catalogClient === catalog, !suspended else { throw CoreApplicationError("OFFLINE") }
+                try await Task.sleep(for: .milliseconds(100 * (attempt + 1)))
+            }
+        }
+        throw CoreApplicationError("CAPACITY")
+    }
+
+    private func readCoreSessionPages(using catalog: CoreRelayClient) async throws {
         var entries: [CoreJSONValue] = [], cursor: String?
         repeat {
             var params: [String: CoreJSONValue] = ["limit": .number(25)]
             if let cursor { params["after"] = .string(cursor) }
-            let page = try await catalog.request("sessions.list", params: params)
+            let page = try await readCoreCatalog("sessions.list", params: params, using: catalog)
             guard catalogClient === catalog, !suspended else { return }
             entries += page["sessions"].array ?? []
+            catalogEntries = entries
+            onCoreSessions?(try JSONEncoder().encode(entries))
             guard entries.count <= 500 else { throw CoreApplicationError("CAPACITY") }
             cursor = page["hasMore"].bool == true ? page["nextCursor"].string : nil
         } while cursor != nil
@@ -744,35 +902,112 @@ public final class RelayConnection {
         }
     }
 
+    /// The visible destination is a read intent, independent of command ownership.
+    /// Keep it attached through recovery; never resubmit a message or start work.
+    public func observeCoreSession(_ sessionID: String) async {
+        await observeCoreConversation(sessionID: sessionID, agentID: nil)
+    }
+    public func observeCoreAgent(_ agentID: String, sessionID: String) async {
+        await observeCoreConversation(sessionID: sessionID, agentID: agentID)
+    }
+    private func observeCoreConversation(sessionID: String, agentID: String?) async {
+        guard UUID(uuidString: sessionID) != nil else { return }
+        let intent = UUID(); attachmentIntent = intent; desiredCoreSessionID = sessionID
+        presentCachedCoreSession(sessionID)
+        // An unfinished attachment is an idempotent authorization/read, not work.
+        // Choosing another chat can replace that intent without extra permission.
+        if state.openingSession?.sessionID != sessionID { state.openingSession = nil }
+        if state.openingAgent?.agentID != agentID { state.openingAgent = nil }
+        try? save()
+        defer {
+            if attachmentIntent == intent { desiredCoreSessionID = nil; attachmentIntent = UUID() }
+        }
+        while !Task.isCancelled, attachmentIntent == intent {
+            if !suspended, !isCoreSessionReady(sessionID), !coreBusy, !coreStarting, !coreAttaching {
+                if coreActionsAvailable, coreCatalogReady {
+                    if let agentID { _ = await openCoreAgent(agentID) }
+                    else { _ = await openCoreSession(sessionID) }
+                } else if networkingEnabled { await resume() }
+            }
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+        }
+    }
+
+    /// Saved data is display-only. It cannot refresh the authenticated Core lease,
+    /// permissions or selected resource used to admit a command.
+    private func presentCachedCoreSession(_ sessionID: String) {
+        guard corePairAuthorized, let hostID = state.host?.certificate.id,
+              let scope = (state.coreCacheScopes ?? state.coreCacheScope.map { [$0] } ?? [])
+                .first(where: { $0.hostID == hostID && $0.sessionID == sessionID }),
+              cachedPresentationScope?.hostID != scope.hostID || cachedPresentationScope?.resource != scope.resource || cachedPresentationScope?.sessionID != scope.sessionID else { return }
+        do {
+            let cached = try CoreEventProjectionStore(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory,
+                hostID: scope.hostID, resource: scope.resource, sessionID: scope.sessionID)
+            guard let snapshot = cached.cachedSnapshot else { return }
+            cachedPresentationScope = scope
+            try publishCoreSnapshot(snapshot)
+            coreOutgoingMessages = cached.outgoing
+            coreHistoryHasOlder = cached.hasOlderHistory
+            coreHistoryHasNewer = cached.hasNewerHistory
+            onCoreEvents?(cached.events.compactMap { try? JSONEncoder().encode($0) })
+        } catch { coreError = "Saved history is unavailable; reconnecting to Core." }
+    }
+
+    public func showLatestCoreHistory(sessionID: String) {
+        guard sessionID == coreSessionID, let projection = coreProjection else { return }
+        projection.showLatestHistory()
+        publishCoreEvents()
+    }
+
+    public func loadOlderCoreHistory(sessionID: String) async {
+        guard isCoreSessionReady(sessionID), !coreHistoryLoading, let client = coreClient,
+              let projection = coreProjection, projection.hasOlderHistory, projection.firstCursor > 0 else { return }
+        let epoch = UUID(); historyReadEpoch = epoch
+        coreHistoryLoading = true; defer { if historyReadEpoch == epoch { coreHistoryLoading = false } }
+        do {
+            let page = try await client.request("events.list", params: ["before": .number(Double(projection.firstCursor)), "limit": .number(50)])
+            guard coreClient === client, coreProjection === projection, coreSessionID == sessionID else { return }
+            try projection.prepend(CoreEventHistoryPage(page, sessionID: sessionID))
+            publishCoreEvents()
+        } catch {
+            guard coreClient === client else { return }
+            coreError = "Older history could not be loaded. Pull again to retry."
+        }
+    }
+
     /// Opening is an authorized attachment to an existing CLI session. It never creates or executes a terminal.
     public func openCoreSession(_ sessionID: String) async -> Bool {
         if !coreActionsAvailable { await resume(); await refresh() }
-        guard coreActionsAvailable, !coreBusy, !coreStarting,
+        if isCoreSessionReady(sessionID) { return true }
+        guard coreActionsAvailable, !coreBusy, !coreStarting, !coreAttaching,
               coreCatalogReady, coreCatalogAvailable, let catalog = catalogClient,
-              let transport, let host = state.host, UUID(uuidString: sessionID) != nil,
-              catalogEntries.contains(where: { $0["id"].string == sessionID }) else { coreError = "This terminal is unavailable. Refresh the connection and try again."; return false }
+              let transport, let host = state.host, UUID(uuidString: sessionID) != nil else {
+            let reason = !coreActionsAvailable ? "confirmed Core connection" : coreBusy ? "current request" : coreStarting ? "Core preparation" : !coreCatalogReady ? "terminal catalog" : "terminal catalog entry"
+            coreError = "Waiting for \(reason). Reconnecting automatically."
+            return false
+        }
         if state.openingAgent != nil { coreError = "Resolve or cancel the pending agent attachment first."; return false }
         if coreConnected && coreSessionID == sessionID { return true }
         if let opening = state.openingSession, opening.sessionID != sessionID {
             coreError = "Resolve the previous terminal attachment before choosing another terminal."; return false
         }
-        coreBusy = true; coreError = nil
-        defer { coreBusy = false }
+        coreBusy = true; coreAttaching = true; coreError = nil
+        defer { coreBusy = false; coreAttaching = false }
         do {
             let opening = state.openingSession ?? PendingSessionOpen(sessionID: sessionID, requestID: CoreRelayClient.commandID())
             state.openingSession = opening; try save()
-            let opened = try await catalog.request("sessions.open", params: ["sessionId": .string(sessionID)], id: opening.requestID)
-            guard coreActionsAvailable, catalogClient === catalog, state.host?.grantID == host.grantID, state.openingSession?.requestID == opening.requestID,
-                  !suspended, let resource = opened["resource"].string, opened["sessionId"].string == sessionID else { return false }
-            if coreOwnsInput { await releaseCoreInput() }
-            guard coreActionsAvailable, catalogClient === catalog, state.host?.grantID == host.grantID, !suspended else { return false }
-            if let old = coreClient, let subscription = coreSubscriptionID {
-                // Cleanup is best-effort: a lost unsubscribe receipt must not
-                // permanently prevent attaching to another authorized session.
-                _ = try? await old.request("events.unsubscribe", params: ["subscriptionId": .string(subscription)])
-                guard coreActionsAvailable, catalogClient === catalog, coreClient === old, !suspended else { return false }
-            }
-            stopCore(purge: false, preserveCatalog: true)
+            let hint = sessionID == catalog.sessionID ? catalog.resource
+                : catalogEntries.first(where: { $0["id"].string == sessionID })?["existingResource"].string
+                    ?? (state.coreCacheScopes ?? []).first(where: { $0.hostID == host.certificate.id && $0.sessionID == sessionID })?.resource
+            let opened: CoreJSONValue
+            if let hint { opened = .object(["resource": .string(hint), "sessionId": .string(sessionID)]) }
+            else { opened = try await catalog.request("sessions.open", params: ["sessionId": .string(sessionID)], id: opening.requestID) }
+            guard transport.online, corePairAuthorized, catalogClient === catalog, state.host?.grantID == host.grantID, state.openingSession?.requestID == opening.requestID,
+                  !suspended, !Task.isCancelled, let resource = opened["resource"].string, opened["sessionId"].string == sessionID else { return false }
+            let old = coreClient, oldSubscription = coreSubscriptionID
+            let oldOwner = coreOwnsInput ? coreProjection?.ownerID : nil
+            stopCore(purge: false, preserveCatalog: true, retainCurrentClient: true)
+            if let old { retireCoreClient(old, subscription: oldSubscription, owner: oldOwner) }
             let previousSelection = state.selectedSession
             state.selectedSession = SelectedCoreSession(sessionID: sessionID, resource: resource)
             state.openingSession = nil; state.taskID = nil
@@ -788,7 +1023,8 @@ public final class RelayConnection {
             return coreClient === client && coreConnected && coreSessionID == sessionID
         } catch {
             guard catalogClient === catalog, state.host?.grantID == host.grantID else { return false }
-            coreError = "Terminal attachment was not confirmed. Select the same terminal to retry; no execution was started."
+            let code = (error as? CoreApplicationError)?.code ?? (error as? RelayFailure)?.code ?? "UNAVAILABLE"
+            coreError = "Terminal attachment is reconnecting (\(code)). No execution was started."
             return false
         }
     }
@@ -1031,7 +1267,7 @@ public final class RelayConnection {
     }
 
     private func loadCoreAgents(using catalog: CoreRelayClient) async throws {
-        let status = try await catalog.request("agents.status")
+        let status = try await readCoreCatalog("agents.status", using: catalog)
         guard catalogClient === catalog, !suspended else { return }
         coreAgentsConfigured = status["configured"].bool == true
         onCoreAgentStatus?(try JSONEncoder().encode(status))
@@ -1039,7 +1275,7 @@ public final class RelayConnection {
         repeat {
             var params: [String: CoreJSONValue] = ["limit": .number(25)]
             if let cursor { params["after"] = .string(cursor) }
-            let page = try await catalog.request("agents.list", params: params)
+            let page = try await readCoreCatalog("agents.list", params: params, using: catalog)
             guard catalogClient === catalog, !suspended else { return }
             entries += page["agents"].array ?? []
             guard entries.count <= 200 else { throw CoreApplicationError("CAPACITY") }
@@ -1158,7 +1394,7 @@ public final class RelayConnection {
 
     public func mutateCoreAgent(_ op: String, params: [String: CoreJSONValue]) async -> Bool {
         guard ["agents.create", "agents.update", "agents.archive"].contains(op), coreActionsAvailable, coreAgentsAvailable,
-              coreCatalogReady, !coreBusy, !coreCommandUncertain, state.pendingAgentCommand == nil,
+              coreCatalogReady, !coreBusy, state.pendingAgentCommand == nil,
               let catalog = catalogClient else { return false }
         coreBusy = true; coreAgentStatus = ""
         defer { coreBusy = false }
@@ -1177,12 +1413,12 @@ public final class RelayConnection {
                   state.host?.certificate.id == pending.hostID, catalog.resource == pending.resource else { return false }
             try clearSavedCoreAgentCommand(expectedID: pending.id)
             if pending.op == "agents.archive", pending.params["agentId"]?.string == state.selectedSession?.agentID { removeSelectedCoreContext() }
-            coreCommandUncertain = state.pendingCoreCommand != nil; coreAgentStatus = "Agent saved on Core"
+            coreAgentStatus = "Agent saved on Core"
             try? await loadCoreAgents(using: catalog)
             return true
         } catch {
             guard catalogClient === catalog, state.pendingAgentCommand?.id == pending.id else { return false }
-            coreCommandUncertain = true; coreAgentStatus = "Agent request is uncertain. Check saved status before retrying."
+            coreAgentStatus = "Agent request is uncertain. Check saved status before retrying."
             return await reconcileCoreAgentCommand()
         }
     }
@@ -1202,14 +1438,14 @@ public final class RelayConnection {
             if result["state"].string == "accepted" {
                 try clearSavedCoreAgentCommand(expectedID: pending.id)
                 if pending.op == "agents.archive", pending.params["agentId"]?.string == state.selectedSession?.agentID { removeSelectedCoreContext() }
-                coreCommandUncertain = state.pendingCoreCommand != nil; coreAgentStatus = "Agent saved on Core"
+                coreAgentStatus = "Agent saved on Core"
                 try? await loadCoreAgents(using: catalog)
                 return true
             } else if result["state"].string == "rejected" {
                 try clearSavedCoreAgentCommand(expectedID: pending.id)
-                coreCommandUncertain = state.pendingCoreCommand != nil; coreAgentStatus = "Agent request rejected. Reload before editing."
-            } else { coreCommandUncertain = true; coreAgentStatus = "Agent request \(result["state"].string ?? "uncertain"). No automatic retry." }
-        } catch { if catalogClient === catalog { coreCommandUncertain = true; coreAgentStatus = "Saved agent request status unavailable." } }
+                coreAgentStatus = "Agent request rejected. Reload before editing."
+            } else { coreAgentStatus = "Agent request \(result["state"].string ?? "uncertain"). No automatic retry." }
+        } catch { if catalogClient === catalog { coreAgentStatus = "Saved agent request status unavailable." } }
         return false
     }
 
@@ -1221,29 +1457,30 @@ public final class RelayConnection {
     }
 
     public func openCoreAgent(_ agentID: String) async -> Bool {
-        guard coreActionsAvailable, !coreBusy, !coreStarting,
+        if coreIsAgent, state.selectedSession?.agentID == agentID, isCoreSessionReady(coreSessionID) { return true }
+        guard coreActionsAvailable, !coreBusy, !coreStarting, !coreAttaching,
               coreAgentsAvailable, coreCatalogReady, let catalog = catalogClient, let transport,
               let host = state.host, UUID(uuidString: agentID) != nil,
               let entry = agentEntries.first(where: { $0["id"].string == agentID }) else { return false }
         if coreConnected && coreIsAgent && entry["sessionId"].string == coreSessionID { return true }
         guard state.openingSession == nil else { coreAgentStatus = "Resolve or cancel the terminal attachment first."; return false }
         if let opening = state.openingAgent, opening.agentID != agentID { coreAgentStatus = "Resolve or cancel the previous agent attachment first."; return false }
-        coreBusy = true; coreAgentStatus = ""
-        defer { coreBusy = false }
+        coreBusy = true; coreAttaching = true; coreAgentStatus = ""
+        defer { coreBusy = false; coreAttaching = false }
         do {
             let opening = state.openingAgent ?? PendingAgentOpen(agentID: agentID, requestID: CoreRelayClient.commandID())
             state.openingAgent = opening; try save()
-            let opened = try await catalog.request("agents.open", params: ["agentId": .string(agentID)], id: opening.requestID)
-            guard coreActionsAvailable, catalogClient === catalog, state.host?.grantID == host.grantID, state.openingAgent?.requestID == opening.requestID,
-                  !suspended, let resource = opened["resource"].string, let sessionID = opened["sessionId"].string,
+            let hint = entry["existingResource"].string ?? (state.coreCacheScopes ?? []).first(where: { $0.hostID == host.certificate.id && $0.sessionID == entry["sessionId"].string })?.resource
+            let opened: CoreJSONValue
+            if let hint, let sessionID = entry["sessionId"].string { opened = .object(["resource": .string(hint), "sessionId": .string(sessionID), "agentId": .string(agentID)]) }
+            else { opened = try await catalog.request("agents.open", params: ["agentId": .string(agentID)], id: opening.requestID) }
+            guard transport.online, corePairAuthorized, catalogClient === catalog, state.host?.grantID == host.grantID, state.openingAgent?.requestID == opening.requestID,
+                  !suspended, !Task.isCancelled, let resource = opened["resource"].string, let sessionID = opened["sessionId"].string,
                   opened["agentId"].string == agentID else { return false }
-            if coreOwnsInput { await releaseCoreInput() }
-            guard coreActionsAvailable, catalogClient === catalog, state.host?.grantID == host.grantID, !suspended else { return false }
-            if let old = coreClient, let subscription = coreSubscriptionID {
-                _ = try? await old.request("events.unsubscribe", params: ["subscriptionId": .string(subscription)])
-                guard coreActionsAvailable, catalogClient === catalog, coreClient === old, !suspended else { return false }
-            }
-            stopCore(purge: false, preserveCatalog: true)
+            let old = coreClient, oldSubscription = coreSubscriptionID
+            let oldOwner = coreOwnsInput ? coreProjection?.ownerID : nil
+            stopCore(purge: false, preserveCatalog: true, retainCurrentClient: true)
+            if let old { retireCoreClient(old, subscription: oldSubscription, owner: oldOwner) }
             let previous = state.selectedSession
             state.selectedSession = SelectedCoreSession(sessionID: sessionID, resource: resource, kind: "agent", agentID: agentID)
             state.openingAgent = nil; state.taskID = nil
@@ -1278,7 +1515,8 @@ public final class RelayConnection {
         }
         state.coreCacheScopes = scopes.filter { $0.resource != resource }
         if state.coreCacheScope?.resource == resource { state.coreCacheScope = nil }
-        if state.pendingCoreCommand?.resource == resource { state.pendingCoreCommand = nil }
+        state.pendingCoreCommands = savedCoreCommands.filter { !($0.hostID == state.host?.certificate.id && $0.resource == resource) }
+        state.pendingCoreCommand = nil; commandJournalRevision = UUID()
         state.selectedSession = nil; state.taskID = nil
         stopCore(purge: false, preserveCatalog: true)
         coreProjection = nil; coreSessionID = ""; coreResource = ""
@@ -1287,17 +1525,52 @@ public final class RelayConnection {
         try? save()
     }
 
-    private func publishCoreEvents() {
-        guard let projection = coreProjection else { return }
-        coreOutgoingMessages = projection.outgoing
-        onCoreEvents?(projection.events.compactMap { try? JSONEncoder().encode($0) })
+    private func publishCoreSnapshot(_ snapshot: CoreJSONValue) throws {
+        guard desiredCoreSessionID == nil || desiredCoreSessionID == snapshot["session"]["id"].string else { return }
+        onCoreSnapshot?(try JSONEncoder().encode(snapshot))
     }
 
-    private func stopCore(purge: Bool, preserveCatalog: Bool = false) {
+    private func publishCoreEvents() {
+        guard let projection = coreProjection,
+              desiredCoreSessionID == nil || desiredCoreSessionID == coreSessionID else { return }
+        coreOutgoingMessages = projection.outgoing
+        coreHistoryHasOlder = projection.hasOlderHistory
+        coreHistoryHasNewer = projection.hasNewerHistory
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        var next: [String: (CoreEvent, Data)] = [:]
+        let bytes = projection.events.compactMap { event -> Data? in
+            if let cached = encodedCoreEvents[event.id], cached.0 == event { next[event.id] = cached; return cached.1 }
+            guard let data = try? encoder.encode(event) else { return nil }
+            next[event.id] = (event, data); return data
+        }
+        encodedCoreEvents = next
+        onCoreEvents?(bytes)
+    }
+
+    private func retireCoreClient(_ client: CoreRelayClient, subscription: String?, owner: String?) {
+        let key = "retiring-" + UUID().uuidString
+        // The base catalog already has its own router and must remain alive
+        // across rapid successive attachments while old cleanup is in flight.
+        if client !== catalogClient { receiptClients[key] = client }
+        Task { [weak self, weak client] in
+            guard let self, let client else { return }
+            if let subscription { _ = try? await client.request("events.unsubscribe", params: ["subscriptionId": .string(subscription)], readTimeoutNanoseconds: 1_000_000_000) }
+            if let owner { _ = try? await client.request("input.release", params: ["owner": .string(owner)]) }
+            if self.receiptClients[key] === client { self.receiptClients.removeValue(forKey: key) }
+            if self.coreClient !== client && self.catalogClient !== client { client.disconnected() }
+        }
+    }
+
+    private func stopCore(purge: Bool, preserveCatalog: Bool = false, retainCurrentClient: Bool = false) {
         stopVoiceObservation(); voiceConfigured = false
         if purge { state.pendingVoice = nil; voiceReply = ""; voicePhase = "idle"; voiceErrorCode = nil }
         if purge { coreUpdateSnapshot = nil; state.pendingUpdate = nil }
         coreHealth.disconnect()
+        historySyncEpoch = UUID(); historySyncTask?.cancel(); historySyncTask = nil; coreHistorySyncing = false
+        historyReadEpoch = UUID(); coreHistoryLoading = false
+        encodedCoreEvents.removeAll()
+        for client in receiptClients.values { client.disconnected() }
+        receiptClients.removeAll()
         metricsEpoch = UUID(); metricsPolling?.cancel(); metricsPolling = nil
         hostMetrics = nil; hostMetricsStatus = "Waiting for Core"
         coreAgentImportSnapshot = nil
@@ -1306,11 +1579,15 @@ public final class RelayConnection {
         sessionReadID = nil; sessionReadAgain = false
         stopInputRenewal()
         coreClient?.onEvents = nil; coreClient?.onSubscriptionClosed = nil
-        if coreClient !== catalogClient || !preserveCatalog { coreClient?.disconnected() }
+        if !retainCurrentClient && (coreClient !== catalogClient || !preserveCatalog) { coreClient?.disconnected() }
         coreClient = nil
         if !preserveCatalog { pushRegistrationHash = nil }
-        if !preserveCatalog { catalogClient?.disconnected(); catalogClient = nil; coreCatalogReady = false }
-        coreCommandUncertain = state.pendingCoreCommand != nil || state.pendingAgentCommand != nil
+        if !preserveCatalog {
+            catalogRefreshEpoch = UUID(); catalogRefreshTask?.cancel(); catalogRefreshTask = nil
+            catalogReadEpoch = UUID(); catalogReadTask?.cancel(); catalogReadTask = nil; catalogReadAgain = false
+            catalogClient?.disconnected(); catalogClient = nil; coreCatalogReady = false
+        }
+
         coreConnected = false; inputLease.reset()
         coreSubscriptionID = nil; corePermissions = []; coreIsAssistant = false; coreSharingAllowed = false; coreIsAgent = false
         coreYoloEnabled = false; coreYoloControl = false
@@ -1326,8 +1603,10 @@ public final class RelayConnection {
                 }
                 state.coreCacheScope = nil; state.coreCacheScopes = nil
             } catch { coreError = "Private cache could not be removed. Remove app data on this device." }
-            coreProjection = nil
-            state.pendingCoreCommand = nil; state.taskID = nil
+            coreProjection = nil; cachedPresentationScope = nil
+            desiredCoreSessionID = nil; attachmentIntent = UUID()
+            coreHistoryHasOlder = false; coreHistoryLoading = false; coreHistoryHasNewer = false
+            state.pendingCoreCommands = nil; state.pendingCoreCommand = nil; commandJournalRevision = UUID(); state.taskID = nil
             state.selectedSession = nil; state.openingSession = nil; state.openingAgent = nil; state.pendingAgentCommand = nil
             state.agentImport = nil; agentImportRevision = UUID()
             agentEntries = []; coreAgentsAvailable = false; coreAgentsConfigured = false; coreAgentStatus = ""
@@ -1335,7 +1614,7 @@ public final class RelayConnection {
             catalogEntries = []; coreCatalogAvailable = false; recentCoreShares = [:]; pendingCoreShareRequests = [:]
             onCoreSessions?(Data("[]".utf8))
             coreSessionID = ""; coreResource = ""; coreGrantID = ""
-            coreCommandStatus = ""; coreCommandUncertain = false; coreTaskStatus = ""
+            coreCommandStatus = ""; coreTaskStatus = ""
             onCoreCleared?()
             do { try save() }
             catch { coreError = "Access was removed, but local authorization changes could not be saved securely." }
@@ -1384,6 +1663,9 @@ public final class RelayConnection {
                         }
                     }
                 }
+                if self.coreConnected, self.coreSubscriptionID == nil, let client = self.coreClient {
+                    self.scheduleCoreHistory(client, sessionID: self.coreSessionID, paging: self.coreHistoryPaging)
+                }
                 if !self.coreConnected && !self.coreStarting && !self.coreBusy { await self.reconcile() }
             }
         }
@@ -1412,6 +1694,10 @@ public final class RelayConnection {
                     guard self.metricsEpoch == epoch, self.coreClient === client, !self.suspended else { return }
                     self.hostMetrics = nil; self.hostMetricsStatus = "Host metrics unavailable"
                     let code = (error as? CoreApplicationError)?.code ?? ""
+                    if ["CAPACITY", "RATE_LIMITED"].contains(code), self.coreHealth.isOnline() {
+                        do { try await Task.sleep(for: .seconds(4)) } catch { return }
+                        continue
+                    }
                     if !["CORE_STOPPED", "FORBIDDEN", "GRANT_UNAVAILABLE"].contains(code) {
                         // Telemetry can fail while this authorized session is
                         // healthy. Only a fresh scoped Core response may keep
@@ -1467,10 +1753,12 @@ public final class RelayConnection {
             coreGoalStatus = snapshot["session"]["goal"]["status"].string
             coreGoalReason = snapshot["session"]["goal"]["reason"].string
             coreExecutionState = snapshot["execution"]["state"].string
-            corePermissions.formIntersection(Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []))
-            onCoreSnapshot?(try JSONEncoder().encode(snapshot))
+            corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
+            try coreProjection?.saveSnapshot(snapshot)
+            try publishCoreSnapshot(snapshot)
             if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: leaseGeneration) { stopInputRenewal() }
             await reconcileCoreCommand()
+            Task { [weak self] in await self?.reconcileOtherCoreCommands() }
             guard coreClient === client else { return }
             if let taskID = state.taskID, coreIsAssistant {
                 let task = try await client.request("task.get", params: ["taskId": .string(taskID)])
@@ -1480,6 +1768,11 @@ public final class RelayConnection {
         } catch {
             guard coreClient === client else { return }
             let code = (error as? CoreApplicationError)?.code
+            if ["CAPACITY", "RATE_LIMITED"].contains(code ?? ""), coreHealth.isOnline() {
+                // Local/read queue pressure is not evidence of disconnection.
+                // The dedicated scoped probe retains its bounded online lease.
+                return
+            }
             if (code == "FORBIDDEN" || code == "GRANT_UNAVAILABLE"), client !== catalogClient { removeSelectedCoreContext() }
             else { stopCore(purge: code == "FORBIDDEN" || code == "GRANT_UNAVAILABLE") }
             coreError = "Core refresh unavailable. Last observed state may be stale."
@@ -1609,8 +1902,9 @@ public final class RelayConnection {
     }
 
     private func mutateCore(_ op: String, params: [String: CoreJSONValue], outgoingText: String? = nil) async -> Bool {
-        guard !coreBusy, coreActionsAvailable, !coreCommandUncertain, state.pendingCoreCommand == nil,
+        guard !coreBusy, isCoreSessionReady(coreSessionID), !coreCommandUncertain, pendingCoreCommand == nil,
               let client = coreClient, let projection = coreProjection, let hostID = state.host?.certificate.id else { return false }
+        guard savedCoreCommands.count < 128 else { coreError = "Resolve saved message receipts before sending more conversations."; return false }
         let resource = coreResource
         coreBusy = true; coreError = nil; lastCommandAccepted = false
         defer { coreBusy = false }
@@ -1626,7 +1920,7 @@ public final class RelayConnection {
         let pending = PendingCoreCommand(hostID: hostID, resource: resource,
             id: CoreRelayClient.commandID(), op: op, params: params)
         do {
-            state.pendingCoreCommand = pending
+            pendingCoreCommand = pending
             try save() // Persist exact request identity and parameters before any dispatch.
             if let outgoingText {
                 var outgoing = CoreOutgoingMessage(id: pending.id, text: outgoingText, operation: op, params: params)
@@ -1634,7 +1928,7 @@ public final class RelayConnection {
                 try projection.putOutgoing(outgoing); publishCoreEvents()
             }
         } catch {
-            state.pendingCoreCommand = nil; coreError = "Command could not be saved securely; nothing was sent."; return false
+            pendingCoreCommand = nil; coreError = "Command could not be saved securely; nothing was sent."; return false
         }
         return await dispatchCore(pending)
     }
@@ -1643,38 +1937,23 @@ public final class RelayConnection {
         guard coreActionsAvailable, let client = coreClient, state.host?.certificate.id == pending.hostID, coreResource == pending.resource else { return false }
         do {
             let receipt = try await client.request(pending.op, params: pending.params, id: pending.id)
-            guard coreActionsAvailable, coreClient === client, state.pendingCoreCommand?.id == pending.id,
+            guard coreActionsAvailable, coreClient === client, pendingCoreCommand?.id == pending.id,
                   state.host?.certificate.id == pending.hostID, coreResource == pending.resource else { return false }
             guard receipt["state"].string == "accepted" else { throw RelayFailure("UNCERTAIN") }
             if let taskID = receipt["taskId"].string { state.taskID = taskID }
-            try await updateOutgoing(pending, status: .accepted, receipt: receipt)
+            try updateJournalOutgoing(pending, status: .accepted, receipt: receipt)
             try clearSavedCoreCommand(expectedID: pending.id)
-            coreCommandUncertain = false; lastCommandAccepted = true; coreCommandStatus = "Accepted by Core; awaiting outcome"
+            lastCommandAccepted = true; coreCommandStatus = "Accepted by Core; awaiting outcome"
             await refreshCore()
             return true
         } catch {
-            guard coreClient === client, state.pendingCoreCommand?.id == pending.id else { return false }
-            try? await updateOutgoing(pending, status: .uncertain)
-            coreCommandUncertain = true
+            guard coreClient === client, pendingCoreCommand?.id == pending.id else { return false }
+            try? updateJournalOutgoing(pending, status: .uncertain)
+
             coreCommandStatus = "Checking delivery with Core…"
             await reconcileCoreCommand()
             return lastCommandAccepted
         }
-    }
-
-    private func updateOutgoing(_ command: PendingCoreCommand, status: CoreOutgoingMessage.Status,
-                                receipt: CoreJSONValue = .null, errorCode: String? = nil) async throws {
-        guard let projection = coreProjection, command.resource == coreResource,
-              command.hostID == state.host?.certificate.id,
-              var message = projection.outgoing.first(where: { $0.requestID == command.id }) else { return }
-        message.status = status; message.errorCode = errorCode
-        if let execution = receipt["executionId"].string { message.executionID = execution }
-        if message.executionID == nil, let taskID = receipt["taskId"].string, let client = coreClient,
-           let task = try? await client.request("task.get", params: ["taskId": .string(taskID)]), coreProjection === projection {
-            message.executionID = task["execution"]["id"].string
-        }
-        guard coreProjection === projection else { return }
-        try projection.putOutgoing(message); publishCoreEvents()
     }
 
     /// Manual retry first reconciles the saved receipt. Unknown delivery reuses
@@ -1683,28 +1962,28 @@ public final class RelayConnection {
         guard !coreBusy, coreActionsAvailable, let projection = coreProjection,
               let hostID = state.host?.certificate.id,
               let original = projection.outgoing.first(where: { $0.id == id }), original.status != .accepted,
-              state.pendingCoreCommand == nil || state.pendingCoreCommand?.id == original.requestID else { return }
+              pendingCoreCommand == nil || pendingCoreCommand?.id == original.requestID else { return }
         coreBusy = true; defer { coreBusy = false }
         do {
-            if state.pendingCoreCommand == nil {
-                state.pendingCoreCommand = PendingCoreCommand(hostID: hostID, resource: coreResource,
+            if pendingCoreCommand == nil {
+                pendingCoreCommand = PendingCoreCommand(hostID: hostID, resource: coreResource,
                     id: original.requestID, op: original.operation, params: original.params)
                 try save()
             }
             await reconcileCoreCommand()
             guard coreProjection === projection, coreActionsAvailable,
                   var message = projection.outgoing.first(where: { $0.id == id }), message.status != .accepted else { return }
-            if state.pendingCoreCommand == nil {
+            if pendingCoreCommand == nil {
                 // Core explicitly rejected it; the old ID must never be reused
                 // with edited content or an updated goal confirmation.
                 message.requestID = CoreRelayClient.commandID()
                 if let replacementGoalID { message.params["replaceGoalId"] = .string(replacementGoalID) }
                 else if !CoreGoalDraft.needsReplacement(status: coreGoalStatus) { message.params.removeValue(forKey: "replaceGoalId") }
-                state.pendingCoreCommand = PendingCoreCommand(hostID: hostID, resource: coreResource,
+                pendingCoreCommand = PendingCoreCommand(hostID: hostID, resource: coreResource,
                     id: message.requestID, op: message.operation, params: message.params)
                 try save()
             }
-            guard let command = state.pendingCoreCommand else { return }
+            guard let command = pendingCoreCommand else { return }
             message.status = .sending; message.errorCode = nil
             try projection.putOutgoing(message); publishCoreEvents()
             if !coreInputSubmission { guard await claimCoreInput(takeover: corePermissions.contains("takeover")) else { return } }
@@ -1715,37 +1994,88 @@ public final class RelayConnection {
     public func removeFailedOutgoingMessage(_ id: String) {
         guard let projection = coreProjection,
               let message = projection.outgoing.first(where: { $0.id == id }), message.status == .failed,
-              state.pendingCoreCommand?.id != message.requestID else { return }
+              pendingCoreCommand?.id != message.requestID else { return }
         do { try projection.removeFailedOutgoing(id); publishCoreEvents() }
         catch { coreError = "The failed message could not be removed from this device." }
     }
 
     private func clearSavedCoreCommand(expectedID: String) throws {
-        guard state.pendingCoreCommand?.id == expectedID else { throw CoreApplicationError("CONFLICT") }
-        let previous = state.pendingCoreCommand
-        state.pendingCoreCommand = nil
+        let previous = savedCoreCommands
+        guard previous.contains(where: { $0.id == expectedID }) else { throw CoreApplicationError("CONFLICT") }
+        state.pendingCoreCommands = previous.filter { $0.id != expectedID }
+        state.pendingCoreCommand = nil; commandJournalRevision = UUID()
         do { try save() }
-        catch { state.pendingCoreCommand = previous; throw error }
+        catch { state.pendingCoreCommands = previous; commandJournalRevision = UUID(); throw error }
+    }
+
+    /// Resolve receipts against their original immutable scope even while a
+    /// different chat is selected. These calls only read command.status.
+    private func reconcileOtherCoreCommands() async {
+        guard coreActionsAvailable, let transport, let host = state.host else { return }
+        for command in savedCoreCommands where command.hostID == host.certificate.id && command.resource != coreResource {
+            guard !Task.isCancelled, corePairAuthorized, transport.online, state.host?.grantID == host.grantID else { return }
+            guard !reconcilingReceipts.contains(command.id) else { continue }
+            reconcilingReceipts.insert(command.id)
+            let client = CoreRelayClient(transport: transport, hostID: command.hostID, grantID: host.grantID, resource: command.resource,
+                expectedShareKind: agentEntries.contains(where: { $0["existingResource"].string == command.resource }) ? .agent : .terminal)
+            receiptClients[command.id] = client
+            do {
+                _ = try await client.request("session.get")
+                let result = try await client.request("command.status", params: ["requestId": .string(command.id)])
+                guard state.host?.grantID == host.grantID, receiptClients[command.id] === client,
+                      corePairAuthorized, transport.online, savedCoreCommands.contains(where: { $0.id == command.id }) else {
+                    client.disconnected(); receiptClients.removeValue(forKey: command.id); reconcilingReceipts.remove(command.id)
+                    continue
+                }
+                switch result["state"].string {
+                case "accepted":
+                    try updateJournalOutgoing(command, status: .accepted, receipt: result["acceptance"])
+                    try clearSavedCoreCommand(expectedID: command.id)
+                case "rejected":
+                    try updateJournalOutgoing(command, status: .failed, errorCode: result["code"].string)
+                    try clearSavedCoreCommand(expectedID: command.id)
+                default: break // Unknown delivery is preserved for explicit same-ID Retry.
+                }
+            } catch { /* A read failure cannot erase or automatically retry the original command. */ }
+            client.disconnected(); receiptClients.removeValue(forKey: command.id); reconcilingReceipts.remove(command.id)
+        }
+    }
+
+    private func updateJournalOutgoing(_ command: PendingCoreCommand, status: CoreOutgoingMessage.Status,
+                                       receipt: CoreJSONValue = .null, errorCode: String? = nil) throws {
+        guard command.hostID == state.host?.certificate.id else { return }
+        let projection: CoreEventProjectionStore
+        if command.resource == coreResource, let current = coreProjection { projection = current }
+        else {
+            guard let scope = (state.coreCacheScopes ?? []).first(where: { $0.hostID == command.hostID && $0.resource == command.resource }) else { return }
+            projection = try CoreEventProjectionStore(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory,
+                hostID: scope.hostID, resource: scope.resource, sessionID: scope.sessionID)
+        }
+        guard var message = projection.outgoing.first(where: { $0.requestID == command.id }) else { return }
+        message.status = status; message.errorCode = errorCode
+        if let execution = receipt["executionId"].string { message.executionID = execution }
+        try projection.putOutgoing(message)
+        if coreProjection === projection { publishCoreEvents() }
     }
 
     public func reconcileCoreCommand() async {
-        guard coreActionsAvailable, let pending = state.pendingCoreCommand, let client = coreClient,
+        guard coreActionsAvailable, let pending = pendingCoreCommand, let client = coreClient,
               pending.hostID == state.host?.certificate.id, pending.resource == coreResource else { return }
-        coreCommandUncertain = true
+
         do {
             let result = try await client.request("command.status", params: ["requestId": .string(pending.id)])
-            guard coreActionsAvailable, coreClient === client, state.pendingCoreCommand?.id == pending.id,
+            guard coreActionsAvailable, coreClient === client, pendingCoreCommand?.id == pending.id,
                   state.host?.certificate.id == pending.hostID, coreResource == pending.resource else { return }
             switch result["state"].string {
             case "accepted":
                 if let taskID = result["acceptance"]["taskId"].string { state.taskID = taskID }
-                try await updateOutgoing(pending, status: .accepted, receipt: result["acceptance"])
+                try updateJournalOutgoing(pending, status: .accepted, receipt: result["acceptance"])
                 try clearSavedCoreCommand(expectedID: pending.id)
-                coreCommandUncertain = false; lastCommandAccepted = true; coreCommandStatus = "Accepted by Core; awaiting outcome"
+                lastCommandAccepted = true; coreCommandStatus = "Accepted by Core; awaiting outcome"
             case "rejected":
-                try await updateOutgoing(pending, status: .failed, errorCode: result["code"].string)
+                try updateJournalOutgoing(pending, status: .failed, errorCode: result["code"].string)
                 try clearSavedCoreCommand(expectedID: pending.id)
-                coreCommandUncertain = false; coreCommandStatus = "Rejected by Core"
+                coreCommandStatus = "Rejected by Core"
                 if result["code"].string == "CONFIRMATION_REQUIRED" || result["code"].string == "CONFLICT" {
                     coreError = result["code"].string == "CONFIRMATION_REQUIRED"
                         ? "The goal changed. Confirm its replacement before retrying."
@@ -1753,21 +2083,21 @@ public final class RelayConnection {
                     await refreshCore()
                 }
             default:
-                try await updateOutgoing(pending, status: .uncertain)
+                try updateJournalOutgoing(pending, status: .uncertain)
                 coreCommandStatus = "Command \(result["state"].string ?? "uncertain"). No automatic retry."
             }
         } catch {
-            guard coreClient === client, state.pendingCoreCommand?.id == pending.id else { return }
+            guard coreClient === client, pendingCoreCommand?.id == pending.id else { return }
             coreCommandStatus = "Command status uncertain. No automatic retry."
         }
     }
 
     /// Explicit user retry only; retains the saved ID and identical original parameters.
     public func retryCoreCommand() async {
-        guard !coreBusy, coreActionsAvailable, let pending = state.pendingCoreCommand, let client = coreClient else { return }
+        guard !coreBusy, coreActionsAvailable, let pending = pendingCoreCommand, let client = coreClient else { return }
         coreBusy = true; defer { coreBusy = false }
         if !coreInputSubmission { guard await claimCoreInput(takeover: corePermissions.contains("takeover")) else { return } }
-        guard coreActionsAvailable, coreClient === client, state.pendingCoreCommand?.id == pending.id,
+        guard coreActionsAvailable, coreClient === client, pendingCoreCommand?.id == pending.id,
               coreResource == pending.resource, state.host?.certificate.id == pending.hostID else { return }
         _ = await dispatchCore(pending)
     }

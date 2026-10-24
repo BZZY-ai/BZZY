@@ -43,6 +43,11 @@ struct ConversationCanvas: View {
     @State private var showDetails = false
     @State private var showActivity = false
     @State private var composerCaretRequest = 0
+    @State private var visibleMessageLimit = 200
+    @State private var pagingHistory = false
+    @State private var followingLatest = true
+    @State private var initialPositioned = false
+    @State private var scrollViewportHeight: CGFloat = 0
     #if canImport(UIKit)
     @State private var composerFocused = false
     #else
@@ -52,9 +57,10 @@ struct ConversationCanvas: View {
     private var isLive: Bool { remoteSession || store.liveSession?.id == conversationID }
     private var canSubmit: Bool {
         voiceDraft == nil && !voice.isBusy && !voiceHeld && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        (!isLive || relay.coreActionsAvailable && relay.coreSessionID == conversationID && relay.corePermissions.contains("execute") && !relay.coreBusy && !relay.coreCommandUncertain)
+        (!isLive || relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("execute") && !relay.isCoreSessionBusy(conversationID) && !relay.hasUncertainCoreCommand(sessionID: conversationID))
     }
     private func submit(_ submitted: String, replacing goalID: String? = nil) {
+        prepareForSubmission()
         pendingSubmittedDraft = submitted
         Task {
             if await relay.sendCoreMessage(submitted, sessionID: conversationID, replaceGoalID: goalID), draft == submitted {
@@ -63,15 +69,30 @@ struct ConversationCanvas: View {
         }
     }
     private var canDictate: Bool {
-        !isLive || relay.coreActionsAvailable && relay.coreSessionID == conversationID && relay.corePermissions.contains("execute")
+        !isLive || relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("execute")
     }
     private var canSetGoal: Bool {
-        voiceDraft == nil && !voice.isBusy && !voiceHeld && (!isLive || relay.coreActionsAvailable && relay.coreSessionID == conversationID
-            && relay.coreGoalSubmission && relay.corePermissions.contains("execute") && !relay.coreBusy && !relay.coreCommandUncertain)
+        voiceDraft == nil && !voice.isBusy && !voiceHeld && (!isLive || relay.isCoreSessionReady(conversationID)
+            && relay.coreGoalSubmission && relay.corePermissions.contains("execute") && !relay.isCoreSessionBusy(conversationID) && !relay.hasUncertainCoreCommand(sessionID: conversationID))
     }
     private var messages: [LocalMessage] {
         if remoteSession { return store.liveSession?.id == conversationID ? store.liveMessages : [] }
         return store.conversationMessages(conversationID)
+    }
+
+    private var visibleMessages: [LocalMessage] { Array(messages.suffix(visibleMessageLimit)) }
+    private var hasEarlierMessages: Bool {
+        messages.count > visibleMessageLimit || isLive && relay.coreSessionID == conversationID && relay.coreHistoryHasOlder
+    }
+    private var chatConnectionStatus: String {
+        guard isLive else { return isDemo ? "Demo · On device" : "Not connected" }
+        guard relay.isCoreSessionReady(conversationID) else {
+            return relay.coreError ?? (relay.coreConnected ? "Opening conversation…" : "Reconnecting to Core…")
+        }
+        if let error = relay.coreError { return error }
+        if relay.hasUncertainCoreCommand(sessionID: conversationID) { return "Checking message delivery…" }
+        if !relay.coreCommandStatus.isEmpty { return relay.coreCommandStatus }
+        return relay.coreInputStatus ?? (relay.corePermissions.contains("execute") ? "Connected to Core" : "Observer · Read only")
     }
 
     var body: some View {
@@ -86,7 +107,7 @@ struct ConversationCanvas: View {
                 Spacer(minLength: 0)
                 if isLive && relay.coreSharingAllowed && relay.coreSessionID == conversationID {
                     RoundButton(symbol: "square.and.arrow.up", label: relay.coreIsAgent ? "Share agent project and context" : "Share terminal project and context") { showShare = true }
-                        .disabled(!relay.coreActionsAvailable)
+                        .disabled(!relay.isCoreSessionReady(conversationID))
                         .accessibilityIdentifier(relay.coreIsAgent ? "share-live-agent" : "share-live-terminal")
                 } else if shareTarget != nil {
                     RoundButton(symbol: "square.and.arrow.up", label: "Share \(shareTarget?.kind.title.lowercased() ?? "workspace")") { showShare = true }
@@ -105,18 +126,34 @@ struct ConversationCanvas: View {
             ScrollViewReader { reader in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
+                        if hasEarlierMessages {
+                            Button { Task { await loadEarlierHistory(reader) } } label: {
+                                HStack(spacing: 8) {
+                                    if pagingHistory || relay.coreHistoryLoading { ProgressView().controlSize(.small) }
+                                    else { Image(systemName: "arrow.up") }
+                                    Text("Earlier messages").bzzyFont(11, weight: .medium)
+                                }.frame(maxWidth: .infinity, minHeight: 40)
+                            }.buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent)
+                                .disabled(pagingHistory || relay.coreHistoryLoading || (messages.count <= visibleMessageLimit && !relay.isCoreSessionReady(conversationID)))
+                                .accessibilityIdentifier("load-earlier-messages")
+                                .id(visibleMessages.first?.id)
+                                .onAppear {
+                                    if initialPositioned && !followingLatest { Task { await loadEarlierHistory(reader) } }
+                                }
+                        }
                         if messages.isEmpty {
                             FlyEyes(interactive: false).frame(width: 160)
                                 .frame(maxWidth: .infinity).padding(.vertical, 70)
                         }
-                        ForEach(messages) { message in
+                        ForEach(visibleMessages) { message in
                             ChatBubble(message: message, showsDraft: !isDemo && !isLive && message.isUser,
                                        speaker: message.isUser ? "You" : (message.speaker ?? assistantName ?? title))
                                 .id(message.id)
                         }
                         if isLive, relay.coreSessionID == conversationID {
                             ForEach(relay.coreOutgoingMessages) { outgoing in
-                                OutgoingMessageBubble(message: outgoing, retryEnabled: relay.coreActionsAvailable && !relay.coreBusy) {
+                                OutgoingMessageBubble(message: outgoing, retryEnabled: relay.isCoreSessionReady(conversationID) && !relay.isCoreSessionBusy(conversationID)) {
+                                    prepareForSubmission()
                                     if outgoing.status == .failed, CoreGoalDraft.isNewGoal(outgoing.text),
                                        CoreGoalDraft.needsReplacement(status: relay.coreGoalStatus), let goalID = relay.coreGoalID,
                                        outgoing.params["replaceGoalId"]?.string != goalID {
@@ -130,31 +167,56 @@ struct ConversationCanvas: View {
                             }
                         }
                         Color.clear.frame(height: 1).id("bottom")
+                            .background(GeometryReader { geometry in
+                                Color.clear.preference(key: ConversationBottomPreference.self,
+                                    value: geometry.frame(in: .named("conversation-scroll")).maxY)
+                            })
                     }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 16)
                 }.scrollIndicators(.hidden).scrollDismissesKeyboard(.interactively)
+                    .coordinateSpace(name: "conversation-scroll")
+                    .background(GeometryReader { geometry in
+                        Color.clear.onAppear { scrollViewportHeight = geometry.size.height }
+                            .onChange(of: geometry.size.height) { _, height in scrollViewportHeight = height }
+                    })
+                    .onPreferenceChange(ConversationBottomPreference.self) { bottom in
+                        guard initialPositioned, !pagingHistory, let bottom, scrollViewportHeight > 0 else { return }
+                        followingLatest = bottom >= 0 && bottom <= scrollViewportHeight + 72
+                    }
                     .defaultScrollAnchor(.bottom)
                     .task(id: conversationID) {
-                        // Lazy children and restored remote history may arrive
-                        // after appearance. Place the first frame at the latest
-                        // entry without animating through the entire history.
+                        visibleMessageLimit = 200; followingLatest = true; initialPositioned = false
                         await Task.yield()
-                        var transaction = Transaction(); transaction.disablesAnimations = true
-                        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
+                        scrollToLatest(reader)
+                        initialPositioned = true
                     }
-                    .onChange(of: relay.coreOutgoingMessages) {
-                        var transaction = Transaction(); transaction.disablesAnimations = true
-                        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
+                    .onChange(of: relay.coreOutgoingMessages.map(\.id)) { previous, current in
+                        if current.contains(where: { !previous.contains($0) }) {
+                            prepareForSubmission()
+                            scrollToLatest(reader, force: true)
+                        }
                     }
-                    .onChange(of: messages.last?.text) {
-                        var transaction = Transaction(); transaction.disablesAnimations = true
-                        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
-                    }
-                    .onChange(of: messages.count) {
-                        var transaction = Transaction(); transaction.disablesAnimations = true
-                        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
-                    }
+                    .onChange(of: messages.last?.text) { scrollToLatest(reader) }
+                    .onChange(of: messages.last?.id) { scrollToLatest(reader) }
                     .onChange(of: composerFocused) {
                         if composerFocused { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { reader.scrollTo("bottom", anchor: .bottom) } }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if !followingLatest || isLive && relay.coreHistoryHasNewer {
+                            Button {
+                                Task {
+                                    if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
+                                    visibleMessageLimit = 200; followingLatest = true
+                                    await Task.yield()
+                                    scrollToLatest(reader, force: true)
+                                }
+                            } label: {
+                                Label("Latest", systemImage: "arrow.down").bzzyFont(11, weight: .semibold)
+                                    .padding(.horizontal, 14).frame(minHeight: 40)
+                                    .background(BZZYTheme.surface, in: Capsule())
+                                    .overlay(Capsule().stroke(BZZYTheme.accent.opacity(0.5), lineWidth: 0.7))
+                            }.buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent)
+                                .padding(16).accessibilityIdentifier("chat-jump-to-latest")
+                        }
                     }
             }
         }
@@ -227,7 +289,7 @@ struct ConversationCanvas: View {
                             .foregroundStyle(relay.coreYoloEnabled ? BZZYTheme.background : BZZYTheme.secondary)
                             .background(relay.coreYoloEnabled ? BZZYTheme.yolo : BZZYTheme.elevated, in: Capsule())
                     }.buttonStyle(BZZYPressStyle())
-                        .disabled(!relay.coreActionsAvailable || !relay.coreYoloControl || relay.coreBusy || relay.coreCommandUncertain)
+                        .disabled(!relay.isCoreSessionReady(conversationID) || !relay.coreYoloControl || relay.isCoreSessionBusy(conversationID) || relay.hasUncertainCoreCommand(sessionID: conversationID))
                         .accessibilityLabel(relay.coreYoloEnabled ? "Disable YOLO" : "Enable YOLO")
                         .accessibilityIdentifier("chat-yolo")
                 }
@@ -245,7 +307,8 @@ struct ConversationCanvas: View {
                     BZZYTheme.haptic()
                 }
                 goalShortcut("Resume goal", icon: "play.fill", id: "resume-goal",
-                             enabled: isLive && relay.coreSessionID == conversationID && relay.canResumeStalledGoal && !voice.isBusy && voiceDraft == nil) {
+                             enabled: isLive && relay.isCoreSessionReady(conversationID) && relay.canResumeStalledGoal && !voice.isBusy && voiceDraft == nil) {
+                    prepareForSubmission()
                     Task { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
                     BZZYTheme.haptic()
                 }
@@ -301,7 +364,7 @@ struct ConversationCanvas: View {
             }.background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 21))
                 .overlay(RoundedRectangle(cornerRadius: 21).stroke(BZZYTheme.line, lineWidth: 0.7))
             HStack(spacing: 10) {
-                Text(voice.error ?? (voice.isStarting ? "Allow speech access, then hold again" : voice.isRecording ? "Listening · Release to finish" : voice.isFinishing ? "Finishing transcript…" : isLive ? (relay.coreError ?? (!relay.coreCommandStatus.isEmpty ? relay.coreCommandStatus : relay.coreActionsAvailable ? (relay.coreInputStatus ?? (relay.corePermissions.contains("execute") ? "Connected to Core" : "Observer · Read only")) : store.liveStatus)) : isDemo ? "Demo · On device" : "Not connected"))
+                Text(voice.error ?? (voice.isStarting ? "Allow speech access, then hold again" : voice.isRecording ? "Listening · Release to finish" : voice.isFinishing ? "Finishing transcript…" : chatConnectionStatus))
                     .bzzyFont(10).foregroundStyle(voice.error == nil ? BZZYTheme.muted : BZZYTheme.amber)
                 if voice.isBusy {
                     Button("Cancel") { cancelDictation() }.bzzyFont(10).buttonStyle(.plain)
@@ -309,6 +372,36 @@ struct ConversationCanvas: View {
                 }
             }
         }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10).background(BZZYTheme.background)
+    }
+
+    private func prepareForSubmission() {
+        if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
+        visibleMessageLimit = 200; followingLatest = true
+    }
+
+    private func scrollToLatest(_ reader: ScrollViewProxy, force: Bool = false) {
+        guard !pagingHistory, followingLatest || force else { return }
+        if force { followingLatest = true }
+        var transaction = Transaction(); transaction.disablesAnimations = true
+        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
+    }
+
+    private func loadEarlierHistory(_ reader: ScrollViewProxy) async {
+        guard !pagingHistory, !relay.coreHistoryLoading, hasEarlierMessages else { return }
+        pagingHistory = true; followingLatest = false
+        let anchor = visibleMessages.first?.id
+        let previousCount = messages.count
+        if messages.count > visibleMessageLimit { visibleMessageLimit += 200 }
+        else if isLive {
+            await relay.loadOlderCoreHistory(sessionID: conversationID)
+            visibleMessageLimit += max(0, messages.count - previousCount)
+        }
+        await Task.yield()
+        if let anchor {
+            var transaction = Transaction(); transaction.disablesAnimations = true
+            withTransaction(transaction) { reader.scrollTo(anchor, anchor: .top) }
+        }
+        pagingHistory = false
     }
 
     private func goalShortcut(_ title: String, icon: String, id: String, enabled: Bool, action: @escaping () -> Void) -> some View {
@@ -344,6 +437,11 @@ struct ConversationCanvas: View {
         recordingTask?.cancel(); recordingTask = nil
         voice.cancel(); voiceDraft = nil
     }
+}
+
+private struct ConversationBottomPreference: PreferenceKey {
+    static var defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
 }
 
 private struct GoalPhasePill: View {

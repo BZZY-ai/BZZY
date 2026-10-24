@@ -7,10 +7,11 @@ this contract; `/v1/sessions` is never a public HTTP route on the VPS.
 All frames use `v: 1`, `protocol: "bzzy-core"` and `type`. The payload limit is
 28 KiB after UTF-8 JSON encoding, leaving room for authenticated-encryption,
 routing and base64 overhead under Relay's 45 KiB ciphertext/64 KiB frame limits.
-There is no event/evidence chunk transfer in this version. Portable project ZIP
-transfer is a separate authenticated `bzzy-project-transfer` protocol, not an
-arbitrary Core RPC attachment mechanism. Oversized Core results fail
-explicitly rather than silently truncating evidence or advancing a cursor.
+Optional `historyPaging`, `eventChunks` and `singleViewSubscription` capabilities
+extend this same wire version. Clients only send optional fields after the scoped
+`session.get` advertises support. Exact event chunks are described below; other
+oversized results still fail explicitly. Portable project ZIP transfer remains a
+separate authenticated `bzzy-project-transfer` protocol.
 
 ## Requests and responses
 
@@ -78,8 +79,9 @@ An authenticated transport receipt alone is never an application response.
 | `assistant.status` | `{}` | `observe`; this Core assistant context's provider/model/effort, with no global configuration rights |
 | `task.submit` | `owner`, `instruction` | `execute` plus valid input ownership; Core assistant context only, instruction up to 16 KiB; returns `state: "accepted"` and opaque `taskId` |
 | `task.get` | `taskId` | `observe`; this device/resource's task state, execution reference, output event range and `verification: "not-assessed"` |
-| `events.list` | Optional `after` (default 0), `limit` (1–50, default 50) | `observe`; full sanitized envelopes, `nextCursor`, `hasMore`; no cursor acknowledgment |
-| `events.subscribe` | `consumerId` | `observe`; returns `subscriptionId`, `consumerId`, saved `processedCursor` |
+| `events.list` | Optional `after` (default 0), or `latest: true`, or exclusive `before`; `limit` (1–50), optional `eventChunks` | `observe`; exact sanitized envelopes, bounded pages; no cursor acknowledgment |
+| `events.subscribe` | `consumerId`, optional `bootstrapToken`, `eventChunks`, `singleView` | `observe`; returns `subscriptionId`, `consumerId`, saved `processedCursor`; single-view handoff requires full own-phone approval |
+| `events.chunk` | `seq`, `offset`, `limit` (1–16384 bytes) | `observe`; only an exact event in this resource/session, with byte count, SHA-256 and base64 slice |
 | `events.ack` | `subscriptionId`, `seq` | `observe`; saves a processed cursor only for an event sent in that subscription |
 | `events.unsubscribe` | `subscriptionId` | `observe`; closes only this grant's subscription |
 | `input.claim` | `owner`, optional boolean `takeover` | `claim`; `takeover: true` separately requires `takeover`; existing 45-second Core lease |
@@ -228,26 +230,85 @@ The host saves cursors separately by host identity, pinned device, resource,
 session and `consumerId`. Use one stable consumer ID per durable client
 projection. If that projection is deleted, choose a new consumer ID to rebuild
 from zero. Subscribing twice to an active consumer returns the same subscription.
-Disconnect/restart drops active subscriptions, not their processed cursors; the
-client must explicitly resubscribe. No draft/goal is submitted on reconnect.
+A Core gateway disconnect/restart drops active subscriptions, not their processed
+cursors; the client explicitly resubscribes. No draft/goal is submitted on reconnect.
+A phone socket disconnect can leave an empty subscription, so each subscription
+also has a 60-second idle lease. Successful same-resource `session.get`,
+`host.metrics`, subscribe, ACK or chunk requests renew it. Catalog reads and
+receipts for another resource do not. Expiry releases the slot and optionally
+sends `SUBSCRIPTION_EXPIRED`; it never stops model work or erases a cursor.
+
+The fully approved own phone may opt into `singleView: true` after the capability
+is advertised. Subscribing then retires that same PAIR peer's other observation
+subscriptions with `SUBSCRIPTION_REPLACED` before checking capacity, preserving
+all saved cursors. Scoped/friend grants cannot request this handoff and retain
+the normal parallel subscription contract. A late closure for an already retired
+local subscription is harmless.
 
 There is one unacknowledged batch per subscription, at most 16 subscriptions
-globally and 4 per device. A batch acknowledgment deadline is 30 seconds. A
-disconnect, expiry, revocation, unavailable peer, oversized event or timed-out
+globally and 4 per device. A batch acknowledgment deadline is 30 seconds (five minutes for a chunked batch). A
+disconnect, expiry, revocation, unavailable peer, unsupported oversized event or timed-out
 acknowledgment closes the subscription without acknowledging it. On recovery,
 resubscribe from the saved cursor. Default local polling is 500 ms; there is no
 continuous model loop. Request concurrency caps at 16 globally and 4 per device,
 with 60 ordinary application requests per minute per device in addition to Relay
 limits. Cached `host.metrics` reads have a separate 30/minute budget. Only valid
 delivered/current-cursor `events.ack` requests have a separate 240/minute budget;
-invalid acknowledgments retain the ordinary limit. Each budget is bounded and
+invalid acknowledgments retain the ordinary limit. Valid same-session chunk reads
+have a separate 2048/minute budget. Each budget is bounded and
 applied after exact active-grant authorization.
 
 If the grant and transport still permit sending, a failed subscription emits
 `type: "subscription.closed"` with `subscriptionId`, `resource` and a fixed
 `code` such as `RESULT_TOO_LARGE` or `INVALID_CURSOR`. No cursor is advanced.
-Disconnect/revocation may prevent that final notice. An oversized event needs a
-future chunked transfer; repeatedly resubscribing cannot make it fit this version.
+Disconnect/revocation may prevent that final notice. After a processed ACK's
+response is sent, the next page pumps immediately rather than waiting for the
+normal 500 ms idle polling interval. A next page can overtake the ACK response at
+the recipient; the client tracks its durable in-flight ACK boundary and still
+deduplicates exact event identities.
+
+## Recent history and backward paging
+
+With `historyPaging`, `events.list {latest:true,limit:50}` returns an ascending
+recent suffix, `nextCursor`, `oldestCursor`, `hasOlder`, `hasMore:false` and a
+short-lived `bootstrapToken`. `events.list {before:firstCursor,limit:50}` fetches
+older envelopes exclusively, again in ascending order, without a bootstrap token.
+Indexed Core reads retain the original event IDs and provenance.
+
+A new phone projection first persists the exact recent page and its token, then
+subscribes with that token and a fresh consumer ID. The token binds the disclosed
+baseline to the exact grant, pinned peer, resource and session for five minutes.
+Only a new consumer may start there; an existing consumer cannot advance past
+unseen work. This is an explicit recent-view starting point, separate from
+acknowledging delivered live events. Older pages never change the forward cursor.
+If initial attachment was interrupted long enough for the token to expire, the
+phone refreshes the recent disclosure with a new observation consumer while
+retaining its command identities, owner and outgoing messages. No command is
+resubmitted by this recovery.
+
+The iPhone persists a recent tail of about 2000 raw events/4 MiB, with an
+in-memory historical window of about 4000 events/8 MiB. A single oversized event
+may exceed those soft byte limits. Older browsing pins that window while live
+updates continue into the durable recent tail; Latest switches back to that tail.
+Cache eviction never establishes a new live ACK or deletes Core history. Snapshot
+metadata is display-only and never establishes connectivity or grants permission.
+
+## Exact oversized event transfer
+
+With `eventChunks`, an event that cannot fit the normal frame is replaced in an
+event page/batch by `{chunked:true,id,seq,sessionId,bytes,sha256}`. The client fetches
+`events.chunk` slices, validates every offset/count and SHA-256, reconstructs the
+full original sanitized envelope, then persists it before the ordinary ACK.
+The per-event and expanded-page limit is 16 MiB. No body is truncated and no
+cursor skips the oversized event. Clients without the capability keep an explicit
+`RESULT_TOO_LARGE` result rather than receiving unsupported frames.
+
+Gateway transfer snapshots are bounded to 32 MiB/16 entries with a five-minute
+TTL and recheck the exact grant on each read. Native reads are paced and retry
+read-only capacity throttles within a bounded deadline; execution retries remain
+explicit. Concurrent in-flight grant inspections coalesce without caching stale
+peer presence. Both endpoint SDKs reconnect on transient transport receipt errors;
+invalid encrypted content remains rejected without acknowledging it.
 
 ## Security boundary
 

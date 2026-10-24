@@ -10,6 +10,7 @@ import { RelayStore } from '../../BZZY-RELAY/src/store.js';
 import { createIdentity, verifyCertificate } from '../../BZZY-RELAY/src/identity.js';
 import { encodePairingQR } from '../../BZZY-RELAY/src/invitation.js';
 import { RelayGateway } from '../../BZZY-CORE/src/relay/gateway.js';
+import { terminalSession } from '../../BZZY-CORE/src/relay/terminal-catalog.js';
 import { BzzyCore } from '../../BZZY-CORE/src/core.js';
 import { CoreAssistant } from '../../BZZY-CORE/src/assistant.js';
 import { CoreWorkspaces } from '../../BZZY-CORE/src/workspaces.js';
@@ -93,6 +94,10 @@ async function handle(input) {
         subscriptions: gateway.status().subscriptions, gateway: gateway.status().gateway,
         coordinatorConfigured: new CoreAssistant().settings().configured, executionCount: listRecords('execution').length,
         metricsFailures, cliReady, cliFinished, cliMode, inputClaimRequests };
+    case 'second-session': {
+      const second = core.createConversation({ provider: 'codex', model: 'pair-fixture', alias: 'Second fixture terminal', cwd: path.join(directory, 'project') }, { requestId: randomUUID() });
+      return { sessionId: second.id, catalogEligible: terminalSession(second), sessionCount: listRecords('session').length };
+    }
     case 'goal-seed': {
       prepareTask(session, {}, 'Previous unfinished goal'); session.goal = newGoal('Previous unfinished goal');
       session.acceptance = { passed: true }; putRecord('session', session.id, session);

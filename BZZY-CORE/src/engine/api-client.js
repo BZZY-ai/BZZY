@@ -16,6 +16,7 @@ export class BzzyClient {
   activities(id, { after = '', limit = 100 } = {}) { return this.request('GET', `/sessions/${id}/activities?after=${encodeURIComponent(after)}&limit=${limit}`); }
   traffic(id, { after = '', limit = 100 } = {}) { return this.request('GET', `/sessions/${id}/traffic?after=${encodeURIComponent(after)}&limit=${limit}`); }
   events(id, after = 0, limit = 200) { return this.request('GET', `/sessions/${id}/events?after=${after}&limit=${limit}`); }
+  eventHistory(id, before = Number.MAX_SAFE_INTEGER, limit = 200) { return this.request('GET', `/sessions/${id}/events?before=${before}&limit=${limit}`); }
   claim(id, owner, takeover = false) { return this.request('POST', `/sessions/${id}/claim`, { owner, takeover }); }
   release(id, owner) { return this.request('POST', `/sessions/${id}/release`, { owner }); }
   execute(id, { owner, prompt, options = {}, goal = false, resumeGoal = false, requestId }) {

@@ -236,18 +236,9 @@ private struct RemoteTerminalConversationView: View {
     @Environment(RelayConnection.self) private var relay
     @Bindable var store: WorkspaceStore
     let terminal: LiveTerminalRecord
-    @State private var openFailed = false
     var body: some View {
         ConversationCanvas(store: store, conversationID: terminal.id, title: terminal.title,
             subtitle: terminal.directory, assistantName: terminal.model, remoteSession: true)
-            .task(id: terminal.id) {
-                if !relay.coreActionsAvailable || relay.coreSessionID != terminal.id {
-                    openFailed = !(await relay.openCoreSession(terminal.id))
-                }
-            }
-            .alert("Terminal unavailable", isPresented: $openFailed) {
-                Button("Retry attachment") { Task { openFailed = !(await relay.openCoreSession(terminal.id)) } }
-                Button("Close", role: .cancel) { }
-            } message: { Text(relay.coreError ?? "The terminal could not be opened. No execution was started.") }
+            .task(id: terminal.id) { await relay.observeCoreSession(terminal.id) }
     }
 }

@@ -2,6 +2,33 @@
 
 Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a complete single-eye app icon and celeste controls. Local pixel distortion animates the pupils and antennae without blinking, pauses in the background and respects Reduce Motion.
 
+Build **Debug 0.1.0 (15)** repairs conversation attachment and receipt recovery.
+Readiness belongs to the visible conversation: changing terminals waits for that
+exact scoped attachment and retries observation after reconnect. An unresolved
+send in another terminal keeps its own durable receipt without disabling this
+conversation. Reconnecting never automatically resends model work.
+
+The private iPhone cache now keeps a bounded recent tail with display-only
+snapshot metadata. Reopening shows cached messages before the network response;
+the forward subscription fetches missing events and deduplicates their exact IDs.
+New conversations can bootstrap from the latest page, and scrolling back fetches
+older pages from Core without advancing the live acknowledgment cursor. Only the
+latest 200 projected messages render initially. Reading older history stays in
+place while new text streams; **Latest** returns to the current tail. Core remains
+the authoritative full history. Revoking/forgetting a host removes its cache.
+Older Core versions retain their forward-replay fallback; update Core through the
+CLI updater for newest-first history and oversized-event chunk transfer.
+
+The native transport matches Relay's separate bounded PAIR data budget, coalesces
+concurrent fresh inspections and reconnects on transient receipt failures instead
+of silently consuming a delivery. Keys, runtime authorization and processed ACKs
+remain separate from cached display data.
+
+Signed build 15 passed development APNs/privacy/signature checks, was installed
+in place on the connected iPhone, and launched successfully. CoreDevice confirmed
+**0.1.0 (15)**. App data and pairing were preserved. See the
+[connection and history validation record](docs/connection-history-validation.md).
+
 Build **Debug 0.1.0 (14)** keeps the paired workspace visible while offline.
 A small bottom **Online/Offline** indicator uses an authenticated Core response
 through Relay, with an eight-second monotonic lease and immediate invalidation
@@ -13,8 +40,7 @@ remain accessible. The previous full-screen Core disconnect shield is removed.
 The eyes now make short, fast gaze darts followed by stationary pauses, checking
 different directions rather than drifting continuously. Touch tracking remains
 smooth, the eyes never blink, and Reduce Motion/background pausing still apply.
-The signed build 14 artifact passed development APNs/privacy/signature checks
-and is prepared for installation when the phone is reconnected.
+The signed build 14 passed development APNs/privacy/signature checks and was installed and launched on the connected iPhone.
 
 Build **Debug 0.1.0 (13)** preserves the CLI's assistant-message boundaries in
 live and saved conversations. Different item/turn identities and tool/approval
@@ -66,7 +92,7 @@ First launch offers **Pair** before the main interface. Successful host approval
 
 For the current manual setup, create at least one CLI terminal with `bzzy`, then open **CLI Settings → Pair iPhone** on the Mac. Its QR/code appears automatically without choosing a terminal. It requests full session control, terminal catalog access, project sharing and Agent management; there are no permission/scope choices. Scan the compact QR directly from the 80x24 TUI or enter the expiring code on iPhone. Confirm the host on iPhone, then choose **Compare and approve iPhone…** on the Mac, compare **This iPhone** with the displayed fingerprint, and choose **Fingerprints match · Pair iPhone**. Expiry and revocation remain available on the secondary pairing screen. The user performs these steps.
 
-After pairing, **Core offline** or **Connecting to Core** locks Agents, Terminal, open chats, Activity and Core actions. Relay connectivity alone does not unlock them. Authorized foreground heartbeats confirm Core readiness; brief inactive overlays such as Notification Center keep a healthy authenticated subscription; actual outages and backgrounding clear live usage and disable sending, control, agent changes and sharing. Pairing, cached history and uncertain command IDs remain saved. Reconnect only reads state and restores observation.
+After pairing, the workspace stays visible offline with its bottom status indicator. Core-dependent Agents, Terminal and chat actions remain disabled until a fresh authorized Core response; cached history remains readable. Relay connectivity alone does not unlock them. Authorized foreground heartbeats confirm Core readiness; brief inactive overlays such as Notification Center keep a healthy authenticated subscription; actual outages and backgrounding clear live usage and disable sending, control, agent changes and sharing. Pairing, cached history and uncertain command IDs remain saved. Reconnect only reads state and restores observation.
 
 Terminal lists show only sessions with a nonblank `/alias`, ordered by most recent saved activity. Unnamed sessions remain in Core. A failed CPU/RAM read checks an authorized session heartbeat before reporting Core offline; closing CLI only releases its input lease.
 

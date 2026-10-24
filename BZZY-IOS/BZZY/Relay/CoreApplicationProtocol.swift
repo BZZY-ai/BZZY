@@ -108,9 +108,38 @@ public struct CoreEventBatch: Sendable {
     }
 }
 
+/// A chronological backward page. Its cursor is a disclosed replay baseline,
+/// distinct from processed live subscription acknowledgments.
+public struct CoreEventHistoryPage: Sendable {
+    public let sessionID: String
+    public let events: [CoreEvent]
+    public let nextCursor: Int64
+    public let oldestCursor: Int64
+    public let hasOlder: Bool
+    public let bootstrapToken: String?
+
+    public init(_ value: CoreJSONValue, sessionID: String) throws {
+        try value.record(["events", "nextCursor", "hasMore", "oldestCursor", "hasOlder", "bootstrapToken"], required: ["events", "nextCursor", "hasMore", "oldestCursor", "hasOlder"])
+        guard let list = value["events"].array, list.count <= 50,
+              let next = value["nextCursor"].integer, next >= 0,
+              let oldest = value["oldestCursor"].integer, oldest >= 0,
+              value["hasMore"].bool == false, let older = value["hasOlder"].bool else { throw CoreApplicationError("INVALID_RESPONSE") }
+        let envelopes = try list.map { try CoreEvent($0, sessionID: sessionID) }
+        var previous: Int64 = 0
+        for event in envelopes { guard event.seq > previous else { throw CoreApplicationError("INVALID_CURSOR") }; previous = event.seq }
+        guard next == previous, oldest == envelopes.first?.seq ?? 0, !envelopes.isEmpty || !older else { throw CoreApplicationError("INVALID_CURSOR") }
+        if let token = value["bootstrapToken"].string { try CoreApplicationProtocol.opaque(token) }
+        else if value["bootstrapToken"] != .null { throw CoreApplicationError("INVALID_RESPONSE") }
+        self.sessionID = sessionID; self.events = envelopes; self.nextCursor = next; self.oldestCursor = oldest
+        self.hasOlder = older; self.bootstrapToken = value["bootstrapToken"].string
+    }
+}
+
 enum CoreApplicationProtocol {
     static let payloadBytes = 28 * 1024
     static let promptBytes = 16 * 1024
+    static let eventBytes = 16 * 1024 * 1024
+    static let chunkBytes = 16 * 1024
     static let commands: Set<String> = ["voice.send", "voice.cancel", "updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "permissions.set", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
     static let fields: [String: Set<String>] = [
         "updates.status": [], "updates.check": [], "updates.configure": ["monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"], "updates.install": ["target"],
@@ -124,7 +153,8 @@ enum CoreApplicationProtocol {
         "share.create": [], "share.status": ["shareId"], "share.approve": ["shareId", "claimId", "confirmedFingerprint"], "share.revoke": ["shareId"],
         "session.get": [], "session.usage": [], "sessions.list": ["after", "limit"], "sessions.open": ["sessionId"],
         "assistant.status": [], "voice.status": [], "voice.send": ["text"], "voice.poll": ["requestId", "cursor"], "voice.cancel": ["requestId"], "task.submit": ["owner", "instruction", "coordinateInput"], "task.get": ["taskId"],
-        "events.list": ["after", "limit"], "events.subscribe": ["consumerId"], "events.ack": ["subscriptionId", "seq"],
+        "events.list": ["after", "before", "latest", "limit", "eventChunks"], "events.subscribe": ["consumerId", "bootstrapToken", "eventChunks", "singleView"],
+        "events.chunk": ["seq", "offset", "limit"], "events.ack": ["subscriptionId", "seq"],
         "events.unsubscribe": ["subscriptionId"], "input.claim": ["owner", "takeover"], "input.release": ["owner"],
         "execution.execute": ["owner", "prompt", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "coordinateInput"], "question.answer": ["owner", "questionId", "answer", "coordinateInput"],
         "permissions.set": ["owner", "enabled", "questionId", "coordinateInput"],
@@ -138,17 +168,17 @@ enum CoreApplicationProtocol {
     static func request(op: String, params: [String: CoreJSONValue], id: String, resource: String) throws -> CoreJSONValue {
         try opaque(id); try opaque(resource)
         guard let allowed = fields[op], Set(params.keys).isSubset(of: allowed) else { throw CoreApplicationError("OPERATION_DENIED") }
-        var optional: Set<String> = ["coordinateInput", "after", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "text", "scope", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
+        var optional: Set<String> = ["coordinateInput", "after", "before", "latest", "bootstrapToken", "eventChunks", "singleView", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "text", "scope", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
         if op == "voice.send" { optional.remove("text") }
         if op == "voice.poll" { guard let cursor = params["cursor"]?.integer, cursor >= 0 && cursor <= 2_000_000 else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "voice.send" { guard let text = params["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "agents.update" { optional.formUnion(["name", "instructions", "provider"]) }
         if op == "agents.import" { optional.insert("name"); optional.subtract(["model", "effort"]) }
         guard allowed.subtracting(optional).isSubset(of: Set(params.keys)) else { throw CoreApplicationError("INVALID_REQUEST") }
-        for key in ["owner", "consumerId", "subscriptionId", "requestId", "taskId", "claimId", "confirmedFingerprint"] where params[key] != nil {
+        for key in ["owner", "consumerId", "bootstrapToken", "subscriptionId", "requestId", "taskId", "claimId", "confirmedFingerprint"] where params[key] != nil {
             guard let text = params[key]?.string else { throw CoreApplicationError("INVALID_REQUEST") }; try opaque(text)
         }
-        for key in ["coordinateInput", "takeover", "goal", "resumeGoal", "enabled", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
+        for key in ["coordinateInput", "latest", "eventChunks", "singleView", "takeover", "goal", "resumeGoal", "enabled", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
             guard params[key]?.bool != nil else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         for key in ["prompt", "instruction", "answer", "text"] where params[key] != nil {
@@ -178,10 +208,19 @@ enum CoreApplicationProtocol {
                   (try? RelayWire.decoded(fingerprint, count: 32)) != nil else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         if op == "sessions.list" || op == "agents.list", let after = params["after"] { _ = try uuid(after.string) }
-        for key in ["after", "seq", "limit"] where params[key] != nil && !(["sessions.list", "agents.list", "agents.models"].contains(op) && key == "after") {
-            guard let number = params[key]?.integer, number >= (key == "limit" ? 1 : 0),
-                  key != "limit" || number <= (["sessions.list", "agents.list", "agents.models"].contains(op) ? 25 : 50) else { throw CoreApplicationError("INVALID_REQUEST") }
+        if op == "events.list" {
+            guard !(params["after"] != nil && (params["before"] != nil || params["latest"]?.bool == true)),
+                  !(params["before"] != nil && params["latest"]?.bool == true) else { throw CoreApplicationError("INVALID_REQUEST") }
         }
+        if op == "events.chunk" {
+            guard let seq = params["seq"]?.integer, seq > 0, let offset = params["offset"]?.integer, offset >= 0, offset < eventBytes,
+                  let limit = params["limit"]?.integer, limit > 0, limit <= chunkBytes else { throw CoreApplicationError("INVALID_REQUEST") }
+        }
+        for key in ["after", "before", "seq", "limit"] where params[key] != nil && !(["sessions.list", "agents.list", "agents.models"].contains(op) && key == "after") {
+            guard let number = params[key]?.integer, number >= (key == "limit" ? 1 : 0),
+                  key != "limit" || number <= (op == "events.chunk" ? Int64(chunkBytes) : ["sessions.list", "agents.list", "agents.models"].contains(op) ? 25 : 50) else { throw CoreApplicationError("INVALID_REQUEST") }
+        }
+        if let before = params["before"]?.integer, before < 1 { throw CoreApplicationError("INVALID_REQUEST") }
         if op == "agents.models", let after = params["after"] {
             guard let id = after.string, !id.isEmpty, id.utf8.count <= 200,
                   id.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,

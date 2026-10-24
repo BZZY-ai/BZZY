@@ -1,5 +1,27 @@
 import Foundation
 
+/// Administrative requests and approved PAIR data use the same independent
+/// bounded windows as Relay. This is traffic accounting, never authorization.
+struct RelayRequestBudget {
+    private struct Window { var count = 0; let until: TimeInterval }
+    private var administrative: Window?
+    private var data: [String: Window] = [:]
+
+    mutating func consume(dataGrantID: String?, now: TimeInterval = ProcessInfo.processInfo.systemUptime) throws {
+        data = data.filter { $0.value.until > now }
+        if let grantID = dataGrantID {
+            guard data[grantID] != nil || data.count < 512 else { throw RelayFailure("REQUEST_CAPACITY") }
+            var window = data[grantID] ?? Window(until: now + 60)
+            guard window.count < 4096 else { throw RelayFailure("RATE_LIMITED") }
+            window.count += 1; data[grantID] = window
+        } else {
+            var window = administrative.flatMap { $0.until > now ? $0 : nil } ?? Window(until: now + 60)
+            guard window.count < 240 else { throw RelayFailure("RATE_LIMITED") }
+            window.count += 1; administrative = window
+        }
+    }
+}
+
 private final class RelaySessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -18,8 +40,11 @@ final class RelayTransport {
     private var epoch = ""
     private(set) var online = false
     private var outboundBytes = 0
-    private var rateWindow = Date()
-    private var rateCount = 0
+    private var requestBudget = RelayRequestBudget()
+    private struct DataGrant { let peerID: String; let expiresAt: Int64 }
+    private var dataGrants: [String: DataGrant] = [:]
+    private var deliveryGrants: [String: String] = [:]
+    private var inspections: [String: Task<WireValue, Error>] = [:]
     private struct Pending {
         let continuation: CheckedContinuation<WireValue, Error>
         let timeout: Task<Void, Never>
@@ -136,6 +161,11 @@ final class RelayTransport {
         session?.invalidateAndCancel()
         session = nil
         outboundBytes = 0
+        // Keep quota windows across reconnects; fresh inspection is still needed
+        // before a grant qualifies for the data budget on this socket.
+        dataGrants.removeAll(); deliveryGrants.removeAll()
+        let abandonedInspections = inspections; inspections.removeAll()
+        for inspection in abandonedInspections.values { inspection.cancel() }
         let abandoned = pending
         pending.removeAll()
         for row in abandoned.values { row.timeout.cancel(); row.continuation.resume(throwing: RelayFailure("UNCERTAIN")) }
@@ -148,7 +178,22 @@ final class RelayTransport {
         trusted[certificate.id] = certificate
     }
 
-    func forgetPeer(_ id: String) { trusted.removeValue(forKey: id) }
+    func forgetPeer(_ id: String) {
+        trusted.removeValue(forKey: id)
+        dataGrants = dataGrants.filter { $0.value.peerID != id }
+    }
+
+    private func dataGrantID(for op: String, fields: [String: WireValue]) -> String? {
+        let candidate: String?
+        switch op {
+        case "grant.inspect", "route.send": candidate = fields["grantId"]?.string
+        case "delivery.ack": candidate = fields["deliveryId"]?.string.flatMap { deliveryGrants[$0] }
+        default: candidate = nil
+        }
+        guard let id = candidate, let grant = dataGrants[id], grant.expiresAt > RelayWire.now,
+              !revoked.contains(id), trusted[grant.peerID] != nil else { return nil }
+        return id
+    }
 
     func request(_ op: String, fields: [String: WireValue] = [:]) async throws -> WireValue {
         let allowed: [String: Set<String>] = ["invite.claim": ["code"], "invite.status": ["claimId"],
@@ -156,15 +201,13 @@ final class RelayTransport {
         guard allowed[op] == Set(fields.keys) else { throw RelayFailure("INVALID_MESSAGE") }
         guard online, let socket else { throw RelayFailure("OFFLINE") }
         guard pending.count < 64 else { throw RelayFailure("REQUEST_CAPACITY") }
-        if Date().timeIntervalSince(rateWindow) >= 60 { rateWindow = Date(); rateCount = 0 }
-        guard rateCount < 240 else { throw RelayFailure("RATE_LIMITED") }
-        rateCount += 1
         let id = RelayWire.encoded(try RelayWire.random())
         var object = fields
         object["v"] = .number(1); object["id"] = .string(id); object["op"] = .string(op)
         let data = try WireValue.object(object).data()
         guard data.count <= 65_536, outboundBytes + data.count <= 256 * 1024 else { throw RelayFailure("BACKPRESSURE") }
         guard !Task.isCancelled else { throw CancellationError() }
+        try requestBudget.consume(dataGrantID: dataGrantID(for: op, fields: fields))
         let connection = generation
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
@@ -193,8 +236,19 @@ final class RelayTransport {
 
     func inspect(_ grantID: String) async throws -> WireValue {
         try RelayWire.opaque(grantID)
+        // Share only an in-flight inspection. Never cache signed presence across
+        // requests: the peer may have reconnected with a different socket epoch.
+        if let inspection = inspections[grantID] { return try await inspection.value }
+        let connection = generation
+        let inspection = Task { @MainActor in try await self.inspectFresh(grantID, connection: connection) }
+        inspections[grantID] = inspection
+        defer { if generation == connection { inspections.removeValue(forKey: grantID) } }
+        return try await inspection.value
+    }
+
+    private func inspectFresh(_ grantID: String, connection: UUID) async throws -> WireValue {
         let grant = try await request("grant.inspect", fields: ["grantId": .string(grantID)])
-        guard grant["id"].string == grantID, let expiry = grant["expiresAt"].integer, expiry > RelayWire.now,
+        guard generation == connection, grant["id"].string == grantID, let expiry = grant["expiresAt"].integer, expiry > RelayWire.now,
               !revoked.contains(grantID), let host = grant["hostId"].string,
               grant["recipientId"].string == identity.certificate.id, grant["revokedAt"] == .null else {
             throw RelayFailure("GRANT_UNAVAILABLE")
@@ -218,6 +272,11 @@ final class RelayTransport {
         if grant["online"].bool == true {
             try grant["presence"].record(["epoch", "signature"])
             try RelayWire.decode(RelayPresence.self, grant["presence"]).verify(peer: peer)
+        }
+        if kind == "PAIR", mode == "pair" {
+            dataGrants = dataGrants.filter { $0.value.expiresAt > RelayWire.now }
+            guard dataGrants[grantID] != nil || dataGrants.count < 512 else { throw RelayFailure("REQUEST_CAPACITY") }
+            dataGrants[grantID] = DataGrant(peerID: peer.id, expiresAt: expiry)
         }
         return grant
     }
@@ -253,6 +312,8 @@ final class RelayTransport {
         guard let expiry = value["expiresAt"].integer else { throw RelayFailure("INVALID_MESSAGE") }
         try replay.accept(peer.id + ":" + messageID, expiresAt: expiry + 5_000)
         guard generation == connection, !revoked.contains(grantID) else { throw RelayFailure("GRANT_UNAVAILABLE") }
+        deliveryGrants[deliveryID] = grantID
+        defer { if generation == connection { deliveryGrants.removeValue(forKey: deliveryID) } }
         _ = try await request("delivery.ack", fields: ["deliveryId": .string(deliveryID)])
         guard generation == connection, !revoked.contains(grantID) else { throw RelayFailure("GRANT_UNAVAILABLE") }
         // The caller must implement an allowlisted Core schema before consuming this.
@@ -278,13 +339,25 @@ final class RelayTransport {
                     guard let self else { return }
                     defer { self.activeDeliveries -= 1 }
                     do { try await self.receiveDelivery(frame["data"], connection: connection) }
-                    catch { /* Reject without acknowledging or surfacing untrusted payload data. */ }
+                    catch {
+                        guard self.generation == connection else { return }
+                        // A transient transport failure cannot silently consume a
+                        // decrypted frame. Reconnect and let Core replay from its
+                        // processed cursor; application mutations are never retried.
+                        let failure = Self.safeFailure(error)
+                        if Self.requiresReconnect(failure) {
+                            self.disconnect(); self.onFailure?(failure)
+                        }
+                        // Invalid/untrusted encrypted content is rejected without
+                        // acknowledgment, disclosure or disconnecting healthy peers.
+                    }
                 }
             case "grant.revoked":
                 guard let id = frame["data"]["grantId"].string else { throw RelayFailure("INVALID_MESSAGE") }
                 try RelayWire.opaque(id)
                 if revoked.count >= 512 { throw RelayFailure("GRANT_UNAVAILABLE") }
                 revoked.insert(id)
+                dataGrants.removeValue(forKey: id)
                 onEvent?(event, frame["data"])
             case "invite.decided", "delivery.received", "delivery.uncertain": onEvent?(event, frame["data"])
             default: throw RelayFailure("INVALID_SERVER_MESSAGE")
@@ -319,5 +392,10 @@ final class RelayTransport {
         if let failure = error as? RelayFailure { return failure }
         if let error = error as? URLError, (-1206 ... -1200).contains(error.errorCode) { return RelayFailure("TLS_FAILED") }
         return RelayFailure("CONNECTION_FAILED")
+    }
+
+    nonisolated static func requiresReconnect(_ failure: RelayFailure) -> Bool {
+        ["OFFLINE", "RATE_LIMITED", "REQUEST_CAPACITY", "BACKPRESSURE", "UNCERTAIN", "DELIVERY_UNAVAILABLE",
+         "CONNECTION_FAILED", "CONNECTION_TIMEOUT", "PEER_OFFLINE"].contains(failure.code)
     }
 }

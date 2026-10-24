@@ -121,6 +121,31 @@ struct ChatChecks {
         ])
         require(live.liveMessages.map(\.text) == ["Real user message"], "Approval choices stay in activity, without fake yes/no chat messages")
         require(live.liveActivity.count == 2, "Original approval events remain in the activity projection")
+        var streamed = [try event(10, "message.user", ["text": "Streamed question"])]
+        live.applyLiveEvents(streamed)
+        for index in 11...110 {
+            streamed.append(try event(index, "text", ["text": "\(index) ", "itemId": "reply-a", "turnId": "turn-a"]))
+            live.applyLiveEvents(streamed)
+        }
+        streamed.append(try event(111, "tool", ["name": "inspection"]))
+        streamed.append(try event(112, "text", ["text": "Separate reply", "itemId": "reply-b", "turnId": "turn-a"]))
+        live.applyLiveEvents(streamed)
+        let streamedMessages = live.liveMessages
+        let rebuilt = WorkspaceStore()
+        rebuilt.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: ["session": ["id": sessionID]]))
+        rebuilt.applyLiveEvents(streamed)
+        require(streamedMessages == rebuilt.liveMessages, "Incremental deltas preserve exactly the same message boundaries and IDs as replay")
+        require(streamedMessages.count == 3, "A tool boundary creates a separate assistant bubble during streaming")
+        live.applyLiveEvents(streamed)
+        require(live.liveMessages == streamedMessages, "Repeated cache publication never duplicates text")
+        let backfilled = [try event(8, "message.user", ["text": "Older question"]), try event(9, "text", ["text": "Older answer"])] + streamed
+        live.applyLiveEvents(backfilled)
+        require(live.liveMessages.suffix(3) == streamedMessages[...], "Prepending history preserves the IDs and bodies of visible messages")
+        live.applyLiveEvents(streamed)
+        require(live.liveMessages == streamedMessages, "A bounded cache-window shift rebuilds without retaining stale older entries")
+        live.clearLiveConversation()
+        rebuilt.applyLiveEvents([])
+        require(live.liveMessages.isEmpty && rebuilt.liveMessages.isEmpty, "Clearing a scope removes its projected history")
         print("PASS: rich message examples, nested styles, tables, escapes, code, malformed/untrusted markup rejection, demo isolation, smooth gaze, approval projection")
     }
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) { precondition(condition(), message) }

@@ -19,7 +19,7 @@ let package = Package(
         .executableTarget(name: "BZZYPreview", dependencies: ["RelayKit"], path: ".",
             exclude: ["BZZY/Relay", "BZZY/Resources", "BZZY.xcodeproj", "Tests", "docs", "previews",
                       "message_format.txt", "bzzy-eyes.jpeg", "README.md", "tools/RelayProbe", "tools/check.sh", "tools/relay-interop.mjs",
-                      "tools/core-line-fixture.mjs", "tools/core-line-model.mjs", "tools/pairing-connection-fixture.mjs", "tools/check-app-artifact.py"].filter { FileManager.default.fileExists(atPath: packageRoot.appendingPathComponent($0).path) },
+                      "tools/core-line-fixture.mjs", "tools/core-line-model.mjs", "tools/pairing-connection-fixture.mjs", "tools/relay-transport-fixture.mjs", "tools/check-app-artifact.py"].filter { FileManager.default.fileExists(atPath: packageRoot.appendingPathComponent($0).path) },
             sources: ["BZZY/App", "BZZY/Design", "BZZY/Mascot/FlyEyes.swift", "BZZY/Model", "BZZY/Notifications", "BZZY/Views", "BZZY/Voice", "tools/RenderPreview.swift"],
             resources: [.copy("BZZY/Assets.xcassets"), .copy("BZZY/Mascot/FlyMotion.metal")],
             swiftSettings: [.define("BZZY_PREVIEW")])

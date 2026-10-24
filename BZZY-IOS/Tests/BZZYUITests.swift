@@ -1,6 +1,33 @@
 import XCTest
 
 final class BZZYUITests: XCTestCase {
+    func testHistoryOpensAtLatestAndLoadsEarlierWithoutJumpingBackToBottom() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing", "--history-paging-testing"]
+        app.launch()
+        app.buttons["agent-COOL"].tap()
+        XCTAssertTrue(app.staticTexts["History entry 225"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["History entry 225"].isHittable)
+        let scroll = app.scrollViews.firstMatch
+        let earlier = app.buttons["load-earlier-messages"]
+        let first = app.staticTexts["History entry 001"]
+        for _ in 0..<60 {
+            if first.exists && first.isHittable { break }
+            if earlier.exists && earlier.isHittable { break }
+            scroll.swipeDown(velocity: .fast)
+        }
+        if earlier.exists && earlier.isHittable { earlier.tap() }
+        for _ in 0..<10 {
+            if first.exists && first.isHittable { break }
+            scroll.swipeDown(velocity: .fast)
+        }
+        XCTAssertTrue(first.isHittable)
+        XCTAssertFalse(app.staticTexts["History entry 225"].isHittable)
+        attach(app, name: "Earlier history remains in place")
+        app.buttons["chat-jump-to-latest"].tap()
+        XCTAssertTrue(app.staticTexts["History entry 225"].isHittable)
+    }
     func testGoalShortcutsPrepareTheEditorAndLeaveResumeDisabledWithoutAStalledGoal() {
         continueAfterFailure = false
         let app = XCUIApplication()

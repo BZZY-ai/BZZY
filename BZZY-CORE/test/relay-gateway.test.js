@@ -31,7 +31,7 @@ async function waitFor(check) {
   while (Date.now() < deadline) { const value = await check(); if (value) return value; await delay(25); }
   assert.fail('Expected fixture state was not reached.');
 }
-async function fixture(t, { provisioned = true } = {}) {
+async function fixture(t, { provisioned = true, subscriptionLeaseMs = 60000 } = {}) {
   const directory = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'bg-'));
   const keys = ['BZZY_HOME', 'BZZY_CODEX_BIN', 'BZZY_CODEX_HOME'], previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_HOME: path.join(directory, 'codex'), BZZY_CODEX_BIN: path.join(coreRoot, 'test/fixtures/codex.mjs') });
@@ -46,7 +46,7 @@ async function fixture(t, { provisioned = true } = {}) {
   const relay = await startRelay({ store, allowInsecureLocal: true, audit: event => relayAudit.push(event) });
   const clients = [], wire = [], context = { directory, workspace, store, relay, host, clients, wire, relayAudit, core: new BzzyCore() };
   context.makeGateway = () => new RelayGateway({ identity: host, url: relay.audience, allowInsecureLocal: true, autoReconnect: false,
-    pollIntervalMs: 100, requestTimeoutMs: 2000, clientFactory: options => {
+    pollIntervalMs: 100, subscriptionLeaseMs, requestTimeoutMs: 2000, clientFactory: options => {
       const client = new RelayClient(options);
       context.hostClient = client;
       client.on('status', status => {
@@ -754,4 +754,108 @@ test('offline local revocation is enforced before Relay revocation completes', a
   assert.equal(f.gateway.status().activeGrants, 0);
   await waitFor(() => getRecord('core.relay.revocation', paired.local.id)?.state === 'complete');
   await assert.rejects(paired.peer.send(paired.local.id, {}));
+});
+
+test('recent history bootstrap is scoped, durable and separate from strict delivered acknowledgments', async t => {
+  const f = await fixture(t), session = f.createSession(), other = f.createSession(), paired = await f.pair(session.id);
+  const envelopes = Array.from({ length: 70 }, (_, i) => appendEvent(session.id, 'text', { text: `history-${i}`, itemId: `item-${i}` }));
+  const latest = await f.rpc(paired, 'events.list', { latest: true, limit: 10 });
+  assert.equal(latest.ok, true); assert.deepEqual(latest.result.events.map(event => event.seq), envelopes.slice(-10).map(event => event.seq));
+  assert.equal(latest.result.hasOlder, true); assert.equal(latest.result.oldestCursor, envelopes.at(-10).seq);
+  const older = await f.rpc(paired, 'events.list', { before: latest.result.oldestCursor, limit: 10 });
+  assert.deepEqual(older.result.events.map(event => event.seq), envelopes.slice(-20, -10).map(event => event.seq));
+  assert.equal(older.result.bootstrapToken, undefined);
+  const otherPair = await f.pair(other.id);
+  assert.equal((await f.rpc(otherPair, 'events.subscribe', { consumerId: 'tail', bootstrapToken: latest.result.bootstrapToken })).error.code, 'INVALID_CURSOR');
+  const subscribed = await f.rpc(paired, 'events.subscribe', { consumerId: 'tail', bootstrapToken: latest.result.bootstrapToken });
+  assert.equal(subscribed.result.processedCursor, latest.result.nextCursor);
+  assert.equal((await f.rpc(paired, 'events.ack', { subscriptionId: subscribed.result.subscriptionId, seq: latest.result.nextCursor + 999 })).error.code, 'INVALID_CURSOR');
+  const proof = listRecords('core.relay.bootstrap').find(row => row.resource === paired.local.resource);
+  putRecord('core.relay.bootstrap', digest({ host: f.host.certificate.id, peer: paired.peer.identity.certificate.id, resource: paired.local.resource }), { ...proof, expiresAt: 0 });
+  assert.equal((await f.rpc(paired, 'events.subscribe', { consumerId: 'expired', bootstrapToken: latest.result.bootstrapToken })).error.code, 'INVALID_CURSOR');
+  // Ambiguous acceptance recovers its already committed consumer without a
+  // proof; a fresh uncommitted cache can explicitly disclose a newer tail.
+  assert.equal((await f.rpc(paired, 'events.subscribe', { consumerId: 'tail' })).result.processedCursor, latest.result.nextCursor);
+  const refreshed = await f.rpc(paired, 'events.list', { latest: true, limit: 10 });
+  assert.equal((await f.rpc(paired, 'events.subscribe', { consumerId: 'fresh-after-expiry', bootstrapToken: refreshed.result.bootstrapToken })).result.processedCursor, refreshed.result.nextCursor);
+});
+
+test('large event chunk transfer preserves exact sanitized bytes across paging and live acknowledgment', async t => {
+  const f = await fixture(t), session = f.createSession(), paired = await f.pair(session.id);
+  const large = appendEvent(session.id, 'text', { text: 'A compound eye 🪰 '.repeat(4000), provenance: 'model-reported' });
+  const latest = await f.rpc(paired, 'events.list', { latest: true, eventChunks: true, limit: 1 });
+  assert.equal(latest.ok, true);
+  const descriptor = latest.result.events[0]; assert.equal(descriptor.chunked, true); assert.equal(descriptor.seq, large.seq);
+  const chunks = [];
+  for (let offset = 0; offset < descriptor.bytes;) {
+    const response = await f.rpc(paired, 'events.chunk', { seq: large.seq, offset, limit: 16384 });
+    assert.equal(response.ok, true); assert.equal(response.result.sha256, descriptor.sha256);
+    chunks.push(Buffer.from(response.result.data, 'base64')); offset = response.result.nextOffset;
+  }
+  const encoded = Buffer.concat(chunks); assert.equal(digest(encoded), descriptor.sha256); assert.deepEqual(JSON.parse(encoded), large);
+  const cross = await f.pair(f.createSession().id);
+  assert.equal((await f.rpc(cross, 'events.chunk', { seq: large.seq, offset: 0, limit: 16384 })).error.code, 'INVALID_CURSOR');
+  assert.equal((await f.rpc(paired, 'events.chunk', { seq: large.seq, offset: descriptor.bytes, limit: 16384 })).error.code, 'RESULT_TOO_LARGE');
+  const incoming = new Promise(resolve => paired.peer.on('message', message => { if (message.payload.type === 'events' && message.payload.events.some(event => event.seq === large.seq)) resolve(message.payload); }));
+  const subscribed = await f.rpc(paired, 'events.subscribe', { consumerId: 'chunks', eventChunks: true });
+  const page = await incoming;
+  assert.equal(page.events.find(event => event.seq === large.seq).sha256, descriptor.sha256);
+  assert.equal((await f.rpc(paired, 'events.ack', { subscriptionId: subscribed.result.subscriptionId, seq: page.nextCursor })).result.processedCursor, page.nextCursor);
+});
+
+test('an existing observation consumer upgrades to chunked events without changing its durable cursor', async t => {
+  const f = await fixture(t), session = f.createSession(), paired = await f.pair(session.id);
+  const large = appendEvent(session.id, 'text', { text: 'large exact reply '.repeat(3000) });
+  const pages = [], notices = [];
+  paired.peer.on('message', message => {
+    if (message.payload.type === 'events') pages.push(message.payload);
+    if (message.payload.type === 'subscription.closed') notices.push(message.payload);
+  });
+  const first = await f.rpc(paired, 'events.subscribe', { consumerId: 'upgrade' });
+  const upgraded = await f.rpc(paired, 'events.subscribe', { consumerId: 'upgrade', eventChunks: true });
+  assert.equal(upgraded.result.subscriptionId, first.result.subscriptionId);
+  assert.equal(upgraded.result.processedCursor, first.result.processedCursor);
+  let descriptor;
+  await waitFor(async () => {
+    assert.equal(notices.length, 0, 'An upgraded consumer must not close at an oversized event.');
+    const page = pages.shift();
+    if (!page) return false;
+    descriptor = page.events.find(event => event.seq === large.seq);
+    await f.rpc(paired, 'events.ack', { subscriptionId: upgraded.result.subscriptionId, seq: page.nextCursor });
+    return descriptor;
+  });
+  assert.equal(descriptor.chunked, true); assert.equal(descriptor.id, large.id);
+});
+
+test('idle subscriptions expire and reclaim capacity while same-resource health renews the lease', async t => {
+  const f = await fixture(t, { subscriptionLeaseMs: 400 }), session = f.createSession(), paired = await f.pair(session.id);
+  const notices = [];
+  paired.peer.on('message', message => { if (message.payload.type === 'subscription.closed') notices.push(message.payload); });
+  for (let i = 0; i < 4; i++) assert.equal((await f.rpc(paired, 'events.subscribe', { consumerId: `idle-${i}` })).ok, true);
+  assert.equal((await f.rpc(paired, 'events.subscribe', { consumerId: 'capacity' })).error.code, 'CAPACITY');
+  await delay(650);
+  assert.equal(notices.filter(notice => notice.code === 'SUBSCRIPTION_EXPIRED').length, 4);
+  const active = await f.rpc(paired, 'events.subscribe', { consumerId: 'active' });
+  for (let i = 0; i < 4; i++) { await delay(170); assert.equal((await f.rpc(paired, 'session.get')).ok, true); }
+  const renewed = await f.rpc(paired, 'events.subscribe', { consumerId: 'active' });
+  assert.equal(renewed.result.subscriptionId, active.result.subscriptionId);
+  assert.equal(notices.length, 4);
+});
+
+test('fully approved phone switches its single foreground subscription without orphan capacity or cursor loss', async t => {
+  const f = await fixture(t), session = f.createSession();
+  const paired = await f.pair(session.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });
+  const snapshot = await f.rpc(paired, 'session.get'); assert.equal(snapshot.result.capabilities.singleViewSubscription, true);
+  const first = await f.rpc(paired, 'events.subscribe', { consumerId: 'first-view', singleView: true });
+  for (let i = 0; i < 6; i++) {
+    const nextSession = f.createSession(), opened = await f.rpc(paired, 'sessions.open', { sessionId: nextSession.id });
+    const response = await f.rpc(paired, 'events.subscribe', { consumerId: `view-${i}`, singleView: true }, { resource: opened.result.resource });
+    assert.equal(response.ok, true);
+  }
+  const reopened = await f.rpc(paired, 'events.subscribe', { consumerId: 'first-view', singleView: true });
+  assert.notEqual(reopened.result.subscriptionId, first.result.subscriptionId);
+  assert.equal(reopened.result.processedCursor, first.result.processedCursor);
+  const scoped = await f.pair(session.id, ['observe']);
+  assert.equal((await f.rpc(scoped, 'events.subscribe', { consumerId: 'scoped', singleView: true })).error.code, 'FORBIDDEN');
+  assert.equal((await f.rpc(scoped, 'events.subscribe', { consumerId: 'scoped' })).ok, true);
 });

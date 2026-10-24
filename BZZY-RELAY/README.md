@@ -56,6 +56,13 @@ products and are **not implemented here**. An encrypted payload is not proof of 
 safe portable package. Relay grants are routing records, not Core permissions.
 No end-user import or remote execution is claimed complete by this transport.
 
+The native and Node clients share concurrent in-flight grant inspections; they
+still validate fresh signed presence rather than caching an old connection epoch.
+Transient transport-receipt failures force reconnection and application cursor
+recovery. Invalid encrypted content stays rejected. Approved PAIR data traffic
+uses a separately bounded 4096/minute per-device/grant budget; administrative
+requests retain their 240/minute budget. This accounting never grants access.
+
 ## Endpoint integration
 
 Generate identities on the endpoints, keeping private identity files there:

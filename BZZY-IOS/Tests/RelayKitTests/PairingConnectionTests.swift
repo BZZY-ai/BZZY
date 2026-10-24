@@ -2,6 +2,10 @@ import XCTest
 @testable import RelayKit
 
 final class PairingConnectionTests: XCTestCase {
+    @MainActor func testLegacyReceiptInAnotherSessionCannotBlockVisibleTerminalOrReplayWork() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, resourceJournal: true)
+    }
+
     @MainActor func testPhoneGoalDispatchRequiresReplacementAndUsesCoreGoalLifecycle() async throws {
         try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, goals: true)
     }
@@ -40,7 +44,7 @@ final class PairingConnectionTests: XCTestCase {
     }
 
     @MainActor private func checkPairing(ignoreDecisionEvent: Bool, backgroundBeforeApproval: Bool,
-                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false, allowTakeover: Bool = true) async throws {
+                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false, allowTakeover: Bool = true, resourceJournal: Bool = false) async throws {
         let fixture = try PairingConnectionFixture()
         defer { fixture.shutdown() }
         let identity = try RelayIdentity.generate()
@@ -98,6 +102,77 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertFalse(connection.coreIsAssistant, "A terminal pair must not depend on coordinator setup")
         XCTAssertEqual(connection.corePermissions, Set(["observe", "claim", "takeover", "execute", "answer", "pause", "cancel", "steer"].filter { allowTakeover || $0 != "takeover" }))
         XCTAssertTrue(availabilityFailures.isEmpty, "Approval must not cancel its own initial Core read: \(availabilityFailures)")
+        if resourceJournal {
+            var journalPhase = "create second session"
+            var journalDiagnostics: () -> String = { "not restored" }
+            do {
+            let firstID = connection.coreSessionID
+            let second = try fixture.request(["op": .string("second-session")])
+            let secondID = try XCTUnwrap(second["sessionId"].string)
+            XCTAssertTrue(second["catalogEligible"].bool == true, "Disposable second session must be catalog-eligible")
+            XCTAssertEqual(second["sessionCount"].integer, 2)
+            connection.pause()
+            var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(savedAuthorization)) as? [String: Any])
+            let scope = try XCTUnwrap(saved["coreCacheScope"] as? [String: Any])
+            let unknownID = UUID().uuidString
+            // Restore the old on-device schema with an unresolved request in A.
+            // No command with this ID was executed by the disposable fixture.
+            saved["pendingCoreCommand"] = ["hostID": try XCTUnwrap(scope["hostID"] as? String),
+                "resource": try XCTUnwrap(scope["resource"] as? String), "id": unknownID,
+                "op": "execution.execute", "params": ["owner": UUID().uuidString, "prompt": "Unsent fixture input", "goal": false]]
+            savedAuthorization = try JSONSerialization.data(withJSONObject: saved)
+            let restoredTransport = try RelayTransport(identity: identity, loopbackEndpoint: endpoint)
+            let restored = try RelayConnection(isolatedIdentity: identity, loopbackTransport: restoredTransport,
+                projectionDirectory: directory, loadAuthorization: { savedAuthorization }, saveAuthorization: { savedAuthorization = $0 })
+            defer { restored.pause() }
+            var restoredAvailability: [String] = []
+            restored.onCoreAvailability = { available, message in
+                if !available, restoredAvailability.last != message { restoredAvailability.append(message) }
+            }
+            journalDiagnostics = { [weak restored] in
+                guard let restored else { return "released" }
+                return "online=\(restored.connectionOnline) connected=\(restored.coreConnected) busy=\(restored.coreBusy) attaching=\(restored.coreAttaching) catalog=\(restored.coreCatalogReady)/\(restored.coreCatalogAvailable) target=\(restored.coreSessionID == secondID) pair=\(restored.corePairAuthorized) relay=\(restored.status.rawValue) failures=\(restoredAvailability) error=\(restored.coreError ?? "none")"
+            }
+            journalPhase = "restore first connection"
+            await restored.connect()
+            try await eventually { restored.isCoreSessionReady(firstID) }
+            XCTAssertTrue(restored.hasUncertainCoreCommand(sessionID: firstID))
+            // Refresh and opening overlap deliberately: the visible attachment
+            // must wait/retry through startup rather than fail once and go blank.
+            journalPhase = "attach second session"
+            var catalogContainsSecond = false
+            restored.onCoreSessions = { data in
+                guard let entries = try? JSONDecoder().decode([CoreJSONValue].self, from: data) else { return }
+                catalogContainsSecond = entries.contains { $0["id"].string == secondID }
+            }
+            let refresh = Task { await restored.refreshCoreSessions() }
+            let viewing = Task { await restored.observeCoreSession(secondID) }
+            defer { viewing.cancel() }
+            do { try await eventually { restored.isCoreSessionReady(secondID) } }
+            catch { print("JOURNAL attachment before cleanup:", journalDiagnostics(), "catalogContainsTarget=", catalogContainsSecond); throw error }
+            await refresh.value
+            XCTAssertTrue(restored.connectionOnline)
+            XCTAssertFalse(restored.hasUncertainCoreCommand(sessionID: secondID))
+            XCTAssertFalse(restored.isCoreSessionBusy(secondID))
+            journalPhase = "send second session"
+            let accepted = await restored.sendCoreMessage("SYNTHETIC_SECOND_SESSION", sessionID: secondID)
+            XCTAssertTrue(accepted, "An unresolved receipt in A cannot disable input in B")
+            try await eventually { try fixture.request(["op": .string("state")])["executionCount"].integer == 1 }
+            let migrated = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(savedAuthorization)) as? [String: Any])
+            XCTAssertNil(migrated["pendingCoreCommand"], "The legacy field is migrated on the next journal write")
+            let journal = try XCTUnwrap(migrated["pendingCoreCommands"] as? [[String: Any]])
+            XCTAssertTrue(journal.contains { $0["id"] as? String == unknownID }, "Unknown receipts retain their original request identity")
+            restored.pause()
+            try await Task.sleep(for: .milliseconds(600))
+            XCTAssertFalse(restored.coreActionsAvailable, "A surviving view task cannot undo actual app suspension")
+            journalPhase = "resume visible second session"
+            await restored.resume()
+            try await eventually { restored.isCoreSessionReady(secondID) }
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["executionCount"].integer, 1, "Recovery never replays either input")
+            viewing.cancel()
+            return
+            } catch { print("JOURNAL regression phase:", journalPhase, "error:", String(describing: error), journalDiagnostics()); throw error }
+        }
         if goals {
             var phase = "seed"
             do {

@@ -2,9 +2,34 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { WebSocket } from 'ws';
 import { createIdentity, authText, presenceText, sign, seal } from '../src/identity.js';
-import { random } from '../src/protocol.js';
+import { random, RelayError } from '../src/protocol.js';
 import { encodeInvitation, decodeInvitation } from '../src/invitation.js';
 import { fixture, next, pair } from './helpers.js';
+
+test('concurrent route inspections share one fresh request without caching peer presence', async t => {
+  const f = await fixture(t), host = await f.client({ host: true }), recipient = await f.client();
+  const { grant } = await pair(host, recipient);
+  const request = host.request.bind(host); let inspections = 0;
+  host.request = async (op, fields) => {
+    if (op === 'grant.inspect') { inspections++; await new Promise(resolve => setTimeout(resolve, 15)); }
+    return request(op, fields);
+  };
+  const routes = await Promise.all(Array.from({ length: 8 }, () => host.route(grant.id)));
+  assert.equal(inspections, 1); assert.ok(routes.every(route => route.grant.id === grant.id));
+  await host.route(grant.id); assert.equal(inspections, 2);
+});
+
+test('transient receipt failure disconnects without dispatching an unacknowledged message', async t => {
+  const f = await fixture(t), host = await f.client({ host: true }), recipient = await f.client();
+  const { grant } = await pair(host, recipient);
+  const request = recipient.request.bind(recipient); let messages = 0;
+  recipient.on('message', () => { messages++; });
+  recipient.request = (op, fields) => op === 'delivery.ack' ? Promise.reject(new RelayError('BACKPRESSURE')) : request(op, fields);
+  const rejected = next(recipient, 'rejected'), offline = next(recipient, 'status');
+  await host.send(grant.id, { mustReplay: true });
+  assert.equal((await rejected).code, 'BACKPRESSURE'); assert.equal(await offline, 'offline');
+  assert.equal(messages, 0);
+});
 
 test('pairing uses sender approval; only encrypted application content reaches Relay', async t => {
   const f = await fixture(t), host = await f.client({ host: true }), recipient = await f.client();

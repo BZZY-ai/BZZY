@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { home, privateDir, readJson, writeJson, loadSession, saveSession, findSession, lockFile, lockOwner } from './store.js';
-import { database, getRecord, putRecord, listRecords, removeRecord, appendEvent, events, reserveRequest, transaction, now, digest } from './database.js';
+import { database, getRecord, putRecord, listRecords, removeRecord, appendEvent, events, eventsBefore, reserveRequest, transaction, now, digest } from './database.js';
 import { processIdentity, identityAlive, reconcileSession, recoverOrphanedVerification } from './recovery.js';
 import { root, runtimeEnv } from './process.js';
 import { getProvider, providers } from './providers.js';
@@ -215,6 +215,13 @@ export async function serveRuntime() {
           response.on('drain', () => { blocked = false; pump(); });
           const timer = guardedInterval(pump, 150, { label: 'Event stream', onError: () => response.destroy() }), heartbeat = guardedInterval(() => { if (!blocked) response.write(': heartbeat\n\n'); }, 10000, { label: 'Event heartbeat', onError: () => response.destroy() });
           response.on('close', () => { clearInterval(timer); clearInterval(heartbeat); streams.delete(response); }); pump(); return;
+        }
+        if (url.searchParams.has('before')) {
+          const before = Number(url.searchParams.get('before')), limit = Number(url.searchParams.get('limit') || 200);
+          const items = eventsBefore(id, before, limit);
+          const oldest = items[0]?.seq || 0;
+          const hasOlder = oldest > 0 && Boolean(eventsBefore(id, oldest, 1).length);
+          send(response, 200, { events: items, nextCursor: items.at(-1)?.seq || 0, hasMore: false, oldestCursor: oldest, hasOlder }); return;
         }
         const items = events(id, Number(url.searchParams.get('after') || 0), Number(url.searchParams.get('limit') || 200));
         send(response, 200, { events: items, nextCursor: items.at(-1)?.seq || Number(url.searchParams.get('after') || 0), hasMore: items.length === Number(url.searchParams.get('limit') || 200) }); return;

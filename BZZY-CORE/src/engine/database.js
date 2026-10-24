@@ -75,6 +75,13 @@ export function events(sessionId, after = 0, limit = 200) {
   return database().prepare('SELECT * FROM events WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?').all(sessionId, after, limit)
     .map(row => ({ version: 1, id: `${row.session_id}:${row.seq}`, seq: row.seq, sessionId: row.session_id, type: row.type, data: JSON.parse(row.data), createdAt: row.created_at }));
 }
+// Backward pages use the same indexed immutable event log. The cursor is
+// exclusive and envelopes are returned chronologically for client projection.
+export function eventsBefore(sessionId, before = Number.MAX_SAFE_INTEGER, limit = 200) {
+  if (!Number.isSafeInteger(before) || before < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error('Invalid historical event cursor or limit.');
+  return database().prepare('SELECT * FROM events WHERE session_id=? AND seq<? ORDER BY seq DESC LIMIT ?').all(sessionId, before, limit).reverse()
+    .map(row => ({ version: 1, id: `${row.session_id}:${row.seq}`, seq: row.seq, sessionId: row.session_id, type: row.type, data: JSON.parse(row.data), createdAt: row.created_at }));
+}
 export function reserveRequest(scope, id, input, operation) {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(id)) throw new Error('Supply a request ID of 1–128 letters, digits, _, ., : or -.');
   return transaction(db => {

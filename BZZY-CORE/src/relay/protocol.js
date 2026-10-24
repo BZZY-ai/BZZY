@@ -4,7 +4,7 @@ export const PROTOCOL = 'bzzy-core';
 export const VERSION = 1;
 export const LIMITS = Object.freeze({ payloadBytes: 28 * 1024, promptBytes: 16 * 1024, pageLimit: 50,
   grants: 128, pendingPairings: 32, subscriptions: 16, subscriptionsPerPeer: 4,
-  requests: 16, requestsPerPeer: 4, requestsPerMinute: 60, metricsPerMinute: 30, acknowledgmentsPerMinute: 240, ackTimeoutMs: 30000 });
+  requests: 16, requestsPerPeer: 4, requestsPerMinute: 60, metricsPerMinute: 30, acknowledgmentsPerMinute: 240, ackTimeoutMs: 30000, chunkAckTimeoutMs: 300000, eventBytes: 16 * 1024 * 1024, chunkBytes: 16 * 1024, chunksPerMinute: 2048 });
 
 const fields = Object.freeze({
   'voice.status': [], 'voice.send': ['text'], 'voice.poll': ['requestId', 'cursor'], 'voice.cancel': ['requestId'],
@@ -21,7 +21,8 @@ const fields = Object.freeze({
   'agents.import.status': ['importId'], 'agents.import.cancel': ['importId'],
   'share.create': [], 'share.status': ['shareId'], 'share.approve': ['shareId', 'claimId', 'confirmedFingerprint'], 'share.revoke': ['shareId'],
   'assistant.status': [], 'task.submit': ['owner', 'instruction', 'coordinateInput'], 'task.get': ['taskId'],
-  'events.list': ['after', 'limit'], 'events.subscribe': ['consumerId'],
+  'events.list': ['after', 'before', 'latest', 'limit', 'eventChunks'], 'events.subscribe': ['consumerId', 'bootstrapToken', 'eventChunks', 'singleView'],
+  'events.chunk': ['seq', 'offset', 'limit'],
   'events.ack': ['subscriptionId', 'seq'], 'events.unsubscribe': ['subscriptionId'],
   'input.claim': ['owner', 'takeover'], 'input.release': ['owner'],
   'execution.execute': ['owner', 'prompt', 'goal', 'resumeGoal', 'replaceGoalId', 'resumeGoalId', 'coordinateInput'],

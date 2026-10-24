@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Device-scoped RPC over the existing encrypted Relay channel. A transport
 /// delivery receipt is never interpreted as Core command acceptance.
@@ -20,10 +21,14 @@ import Foundation
         let continuation: CheckedContinuation<CoreJSONValue, Error>
         let timer: Task<Void, Never>
     }
-    private struct Subscription { var cursor: Int64; var delivered: Set<Int64> = []; var deliveredEvents: [CoreEvent] = [] }
+    private struct Subscription { var cursor: Int64; var delivered: Set<Int64> = []; var deliveredEvents: [CoreEvent] = []; var acknowledging: Int64? }
     private var pending: [String: Pending] = [:]
     private var subscriptions: [String: Subscription] = [:]
     private var inputActor: String?
+    private var eventChunksSupported = false
+    private var singleViewSupported = false
+    private var chunkTasks: [String: Task<Void, Never>] = [:]
+    private var assemblingFrames: [String: CoreJSONValue] = [:]
 
     init(transport: RelayTransport, hostID: String, grantID: String, resource: String, expectedShareKind: RelayShareKind = .terminal) {
         self.hostID = hostID; self.grantID = grantID; self.resource = resource
@@ -43,22 +48,36 @@ import Foundation
 
     /// Keep mutation IDs until reconciled with command.status. Retrying is an
     /// explicit caller action; reconnect never resubmits or claims input.
-    public func request(_ op: String, params: [String: CoreJSONValue] = [:], id: String = CoreRelayClient.commandID(), readTimeoutNanoseconds: UInt64? = nil) async throws -> CoreJSONValue {
+    public func request(_ op: String, params suppliedParams: [String: CoreJSONValue] = [:], id: String = CoreRelayClient.commandID(), readTimeoutNanoseconds: UInt64? = nil) async throws -> CoreJSONValue {
         guard connected else { throw CoreApplicationError("OFFLINE") }
+        var params = suppliedParams
+        if eventChunksSupported && ["events.list", "events.subscribe"].contains(op) { params["eventChunks"] = .bool(true) }
+        if singleViewSupported && op == "events.subscribe" { params["singleView"] = .bool(true) }
         if let timeout = readTimeoutNanoseconds {
             guard !CoreApplicationProtocol.commands.contains(op), (1_000_000_000...15_000_000_000).contains(timeout) else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         try CoreApplicationProtocol.opaque(hostID); try CoreApplicationProtocol.opaque(grantID)
         let payload = try CoreApplicationProtocol.request(op: op, params: params, id: id, resource: resource)
         guard pending[id] == nil else { throw CoreApplicationError("CONFLICT") }
-        guard pending.count < 4 else { throw CoreApplicationError("CAPACITY") }
+        // Leave one slot for durable ACKs and explicit user input. Background
+        // telemetry/history cannot consume the control lane.
+        let urgent = op == "events.ack" || CoreApplicationProtocol.commands.contains(op)
+        if urgent {
+            let deadline = Date().addingTimeInterval(15)
+            while pending.count >= 4 && Date() < deadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+                guard connected else { throw CoreApplicationError("OFFLINE") }
+            }
+        }
+        guard pending.count < (urgent ? 4 : 3) else { throw CoreApplicationError("CAPACITY") }
         if op == "events.subscribe", sessionID == nil { throw CoreApplicationError("INVALID_REQUEST") }
         if op == "events.ack" {
             guard let subID = params["subscriptionId"]?.string, let seq = params["seq"]?.integer,
                   let sub = subscriptions[subID], seq == sub.cursor || sub.delivered.contains(seq) else { throw CoreApplicationError("INVALID_CURSOR") }
+            if seq > sub.cursor { var updated = sub; updated.acknowledging = seq; subscriptions[subID] = updated }
         }
         guard !Task.isCancelled else { throw CancellationError() }
-        return try await withTaskCancellationHandler(operation: {
+        let result: CoreJSONValue = try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let timer = Task { [weak self] in
                     do { try await Task.sleep(nanoseconds: readTimeoutNanoseconds ?? self?.timeoutNanoseconds ?? 0) } catch { return }
@@ -67,10 +86,21 @@ import Foundation
                 pending[id] = Pending(op: op, params: params, continuation: continuation, timer: timer)
                 Task { [weak self] in
                     do { try await self?.send(payload.wire()) }
-                    catch { self?.finish(id, result: .failure(CoreApplicationError("UNCERTAIN"))) }
+                    catch {
+                        let code = (error as? RelayFailure)?.code
+                        let failure = !CoreApplicationProtocol.commands.contains(op) && ["RATE_LIMITED", "CAPACITY"].contains(code ?? "")
+                            ? CoreApplicationError(code!) : CoreApplicationError("UNCERTAIN")
+                        self?.finish(id, result: .failure(failure))
+                    }
                 }
             }
         }, onCancel: { [weak self] in Task { @MainActor in self?.finish(id, result: .failure(CoreApplicationError("UNCERTAIN"))) } })
+        if op == "events.list" {
+            let complete = try await materializeEvents(result)
+            try acceptResult(complete, op: op, params: params)
+            return complete
+        }
+        return result
     }
 
     /// Only RelayTransport's authenticated payload callback may call this.
@@ -104,19 +134,34 @@ import Foundation
                 finish(id, result: .failure(failure)); throw error
             }
         case "events":
-            guard let subID = frame["subscriptionId"].string, var subscription = subscriptions[subID], let sessionID else { throw CoreApplicationError("INVALID_CURSOR") }
-            let batch = try CoreEventBatch(frame, resource: resource, sessionID: sessionID, cursor: subscription.cursor)
-            if !subscription.delivered.isEmpty {
-                guard subscription.deliveredEvents == batch.events else { throw CoreApplicationError("INVALID_CURSOR") }
-            }
-            subscription.delivered = Set(batch.events.map(\.seq)); subscription.deliveredEvents = batch.events; subscriptions[subID] = subscription
-            try acceptInputReceipts(batch)
-            onEvents?(batch)
+            guard let subID = frame["subscriptionId"].string, subscriptions[subID] != nil else { throw CoreApplicationError("INVALID_CURSOR") }
+            if frame["events"].array?.contains(where: { $0["chunked"].bool == true }) == true {
+                guard eventChunksSupported else { throw CoreApplicationError("PROTOCOL_UNSUPPORTED") }
+                if let old = assemblingFrames[subID] { guard old == frame else { throw CoreApplicationError("CONFLICT") }; return }
+                assemblingFrames[subID] = frame
+                chunkTasks[subID] = Task { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let complete = try await materializeEvents(frame)
+                        guard connected, subscriptions[subID] != nil, !Task.isCancelled else { return }
+                        assemblingFrames.removeValue(forKey: subID); chunkTasks.removeValue(forKey: subID)
+                        try deliverEvents(complete)
+                    } catch {
+                        assemblingFrames.removeValue(forKey: subID); chunkTasks.removeValue(forKey: subID)
+                        if subscriptions.removeValue(forKey: subID) != nil { onSubscriptionClosed?(subID, "GATEWAY_UNAVAILABLE") }
+                    }
+                }
+            } else { try deliverEvents(frame) }
         case "subscription.closed":
             try frame.record(["v", "protocol", "type", "subscriptionId", "resource", "code"])
             guard frame["resource"].string == resource, let subID = frame["subscriptionId"].string,
-                  subscriptions.removeValue(forKey: subID) != nil, let code = frame["code"].string,
-                  code.range(of: "^[A-Z_]{1,64}$", options: .regularExpression) != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
+                  let code = frame["code"].string, code.range(of: "^[A-Z_]{1,64}$", options: .regularExpression) != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
+            try CoreApplicationProtocol.opaque(subID)
+            // Handoffs and bootstrap recovery can retire an earlier consumer
+            // before this client's new subscription response arrives. A valid
+            // late closure cannot invalidate the replacement subscription.
+            guard subscriptions.removeValue(forKey: subID) != nil else { return }
+            chunkTasks.removeValue(forKey: subID)?.cancel(); assemblingFrames.removeValue(forKey: subID)
             onSubscriptionClosed?(subID, code)
         default: throw CoreApplicationError("PROTOCOL_UNSUPPORTED")
         }
@@ -124,8 +169,79 @@ import Foundation
 
     public func disconnected() {
         connected = false; subscriptions.removeAll()
+        for task in chunkTasks.values { task.cancel() }; chunkTasks.removeAll(); assemblingFrames.removeAll()
         let abandoned = pending; pending.removeAll()
         for row in abandoned.values { row.timer.cancel(); row.continuation.resume(throwing: CoreApplicationError("UNCERTAIN")) }
+    }
+
+    private func deliverEvents(_ frame: CoreJSONValue) throws {
+        guard let subID = frame["subscriptionId"].string, var subscription = subscriptions[subID], let sessionID else { throw CoreApplicationError("INVALID_CURSOR") }
+        // The next authenticated page can overtake the ACK RPC response. A
+        // requested ACK follows durable local persistence; receiving a page
+        // beyond it proves Core committed that boundary without losing new data.
+        if let requested = subscription.acknowledging, let first = frame["events"].array?.first?["seq"].integer, first > requested {
+            subscription.cursor = max(subscription.cursor, requested)
+            subscription.delivered = []; subscription.deliveredEvents = []
+        }
+        let batch = try CoreEventBatch(frame, resource: resource, sessionID: sessionID, cursor: subscription.cursor)
+        if !subscription.delivered.isEmpty { guard subscription.deliveredEvents == batch.events else { throw CoreApplicationError("INVALID_CURSOR") } }
+        subscription.delivered = Set(batch.events.map(\.seq)); subscription.deliveredEvents = batch.events; subscriptions[subID] = subscription
+        try acceptInputReceipts(batch); onEvents?(batch)
+    }
+
+    private func validateDescriptor(_ value: CoreJSONValue) throws {
+        try value.record(["chunked", "id", "seq", "sessionId", "bytes", "sha256"])
+        guard value["chunked"].bool == true, let sessionID, value["sessionId"].string == sessionID,
+              let seq = value["seq"].integer, seq > 0, value["id"].string == "\(sessionID):\(seq)",
+              let bytes = value["bytes"].integer, bytes > 0, bytes <= CoreApplicationProtocol.eventBytes,
+              let hash = value["sha256"].string, hash.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
+    }
+
+    private func materializeEvents(_ page: CoreJSONValue) async throws -> CoreJSONValue {
+        guard var object = page.object, let list = page["events"].array else { throw CoreApplicationError("INVALID_RESPONSE") }
+        // Count disclosed source bytes before allocating fragment buffers.
+        // Descriptors must not expand one tiny frame into unbounded memory.
+        var expandedBytes = 0
+        for value in list {
+            let count: Int
+            if value["chunked"].bool == true { try validateDescriptor(value); count = Int(value["bytes"].integer!) }
+            else { count = try JSONEncoder().encode(value).count }
+            expandedBytes += count
+            guard expandedBytes <= CoreApplicationProtocol.eventBytes + CoreApplicationProtocol.payloadBytes else { throw CoreApplicationError("RESULT_TOO_LARGE") }
+        }
+        var events: [CoreJSONValue] = []
+        for value in list {
+            guard value["chunked"].bool == true else { events.append(value); continue }
+            try validateDescriptor(value)
+            let seq = value["seq"].integer!, total = Int(value["bytes"].integer!), expectedHash = value["sha256"].string!
+            var bytes = Data(); bytes.reserveCapacity(total)
+            let deadline = Date().addingTimeInterval(240)
+            while bytes.count < total {
+                try Task.checkCancellation()
+                let cycleStarted = ProcessInfo.processInfo.systemUptime
+                let part: CoreJSONValue
+                do { part = try await request("events.chunk", params: ["seq": .number(Double(seq)), "offset": .number(Double(bytes.count)), "limit": .number(Double(CoreApplicationProtocol.chunkBytes))]) }
+                catch let error as CoreApplicationError where ["RATE_LIMITED", "CAPACITY"].contains(error.code) && Date() < deadline {
+                    try await Task.sleep(nanoseconds: error.code == "CAPACITY" ? 100_000_000 : 2_000_000_000); continue
+                }
+                guard part["bytes"].integer == Int64(total), part["sha256"].string == expectedHash,
+                      let encoded = part["data"].string, let chunk = Data(base64Encoded: encoded), !chunk.isEmpty,
+                      bytes.count + chunk.count <= total else { throw CoreApplicationError("CONFLICT") }
+                bytes.append(chunk)
+                // A chunk RPC consumes several authenticated Relay controls.
+                // Bound sustained transfer below that shared minute budget,
+                // retaining room for user commands, receipts and health reads.
+                let remaining = 0.08 - (ProcessInfo.processInfo.systemUptime - cycleStarted)
+                if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
+            }
+            let actualHash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            guard actualHash == expectedHash else { throw CoreApplicationError("CONFLICT") }
+            let event = try JSONDecoder().decode(CoreJSONValue.self, from: bytes)
+            guard let sessionID, try CoreEvent(event, sessionID: sessionID).seq == seq else { throw CoreApplicationError("INVALID_RESPONSE") }
+            events.append(event)
+        }
+        object["events"] = .array(events)
+        return .object(object)
     }
 
     private func acceptInputReceipts(_ batch: CoreEventBatch) throws {
@@ -178,13 +294,19 @@ import Foundation
             if result["execution"] != .null { guard result["execution"]["sessionId"].string == id else { throw CoreApplicationError("FORBIDDEN") } }
             if result["inputOwner"] != .null { guard result["inputOwner"]["sessionId"].string == id else { throw CoreApplicationError("FORBIDDEN") } }
             sessionID = id
+            eventChunksSupported = result["capabilities"]["eventChunks"].bool == true
+            singleViewSupported = result["capabilities"]["singleViewSubscription"].bool == true
             inputActor = result["capabilities"]["inputSubmission"].bool == true ? result["capabilities"]["inputActor"].string : nil
         case "events.subscribe":
             try result.record(["subscriptionId", "consumerId", "processedCursor"])
             guard let subID = result["subscriptionId"].string, result["consumerId"].string == params["consumerId"]?.string,
                   let cursor = result["processedCursor"].integer, cursor >= 0 else { throw CoreApplicationError("INVALID_RESPONSE") }
             try CoreApplicationProtocol.opaque(subID)
-            if subscriptions[subID] == nil { subscriptions[subID] = Subscription(cursor: cursor) }
+            if var existing = subscriptions[subID] {
+                guard cursor >= existing.cursor, cursor == existing.cursor || existing.delivered.contains(cursor) || existing.acknowledging == cursor else { throw CoreApplicationError("INVALID_CURSOR") }
+                if cursor > existing.cursor { existing.cursor = cursor; existing.delivered = []; existing.deliveredEvents = []; existing.acknowledging = nil }
+                subscriptions[subID] = existing
+            } else { subscriptions[subID] = Subscription(cursor: cursor) }
         case "events.ack":
             try result.record(["processedCursor"])
             guard let subID = params["subscriptionId"]?.string, var sub = subscriptions[subID],
@@ -192,18 +314,40 @@ import Foundation
             // Repeating the already processed cursor must not consume a newer
             // outstanding batch; Core preserves that batch in the same case.
             if cursor > sub.cursor { sub.cursor = cursor; sub.delivered = []; sub.deliveredEvents = [] }
+            if sub.acknowledging == cursor { sub.acknowledging = nil }
             subscriptions[subID] = sub
         case "events.unsubscribe":
             try result.record(["unsubscribed"])
             guard result["unsubscribed"].bool == true, let subID = params["subscriptionId"]?.string else { throw CoreApplicationError("INVALID_RESPONSE") }
             subscriptions.removeValue(forKey: subID)
+        case "events.chunk":
+            try result.record(["seq", "offset", "bytes", "sha256", "data", "nextOffset"])
+            guard result["seq"].integer == params["seq"]?.integer,
+                  result["offset"].integer == params["offset"]?.integer,
+                  let total = result["bytes"].integer, total > 0, total <= CoreApplicationProtocol.eventBytes,
+                  let offset = result["offset"].integer,
+                  let data = result["data"].string, let decoded = Data(base64Encoded: data), !decoded.isEmpty,
+                  decoded.count <= Int(params["limit"]?.integer ?? 0), offset + Int64(decoded.count) <= total,
+                  result["nextOffset"].integer == offset + Int64(decoded.count),
+                  let hash = result["sha256"].string, hash.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
         case "events.list":
-            try result.record(["events", "nextCursor", "hasMore"])
+            try result.record(["events", "nextCursor", "hasMore", "oldestCursor", "hasOlder", "bootstrapToken"], required: ["events", "nextCursor", "hasMore"])
             guard let list = result["events"].array, list.count <= 50, let sessionID,
                   let cursor = result["nextCursor"].integer, result["hasMore"].bool != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
             var previous = params["after"]?.integer ?? 0
-            for value in list { let event = try CoreEvent(value, sessionID: sessionID); guard event.seq > previous else { throw CoreApplicationError("INVALID_CURSOR") }; previous = event.seq }
+            for value in list {
+                let sequence: Int64
+                if value["chunked"].bool == true { try validateDescriptor(value); sequence = value["seq"].integer! }
+                else { sequence = try CoreEvent(value, sessionID: sessionID).seq }
+                guard sequence > previous, params["before"]?.integer.map({ sequence < $0 }) ?? true else { throw CoreApplicationError("INVALID_CURSOR") }
+                previous = sequence
+            }
             guard cursor == previous else { throw CoreApplicationError("INVALID_CURSOR") }
+            if result["oldestCursor"] != .null {
+                guard result["oldestCursor"].integer == list.first?["seq"].integer ?? 0,
+                      result["hasOlder"].bool != nil, result["hasMore"].bool == false else { throw CoreApplicationError("INVALID_RESPONSE") }
+                if let token = result["bootstrapToken"].string { try CoreApplicationProtocol.opaque(token) }
+            }
         case "input.claim":
             try result.record(["owner", "sessionId", "expiresAt"])
             guard result["sessionId"].string == sessionID, result["owner"].string != nil,

@@ -91,6 +91,110 @@ struct TerminalPreview: Identifiable {
     ]
 }
 
+/// Reuse the last projection for streamed suffixes. Backfill, cache-window
+/// shifts and scope changes rebuild from exact envelopes with stable IDs.
+@MainActor private struct LiveConversationProjection {
+    var sessionID: String?
+    var bytes: [Data] = []
+    var seen = Set<String>()
+    var approvalIDs = Set<String>()
+    var projected: [LocalMessage] = []
+    var activity: [LiveActivity] = []
+    var activeReply: (identity: LiveReplyIdentity, index: Int)?
+    var peerReplies: [LiveReplyIdentity: Int] = [:]
+    private struct DecodedEvent {
+        let sessionID: String
+        let id: String
+        let seq: Int64
+        let type: String
+        let payload: [String: Any]
+        let date: Date
+        let activityDetails: String?
+    }
+    private var decoded: [Data: DecodedEvent] = [:]
+
+    mutating func apply(_ data: [Data], sessionID: String) {
+        if self.sessionID != sessionID || data.count < bytes.count || !data.starts(with: bytes) {
+            let retained = self.sessionID == sessionID ? decoded : [:]
+            self = LiveConversationProjection()
+            self.decoded = retained
+        }
+        self.sessionID = sessionID
+        let previousCount = bytes.count
+        var textSegments: [Int: [String]] = [:]
+        for bytes in data.dropFirst(previousCount) {
+            let event: DecodedEvent
+            if let cached = decoded[bytes] { event = cached }
+            else {
+                guard let raw = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                      let scope = raw["sessionId"] as? String, let id = raw["id"] as? String,
+                      let seq = raw["seq"] as? Int64, seq >= 0, let type = raw["type"] as? String,
+                      let payload = raw["data"] as? [String: Any] else { continue }
+                let details = ["text", "message.user", "input.accepted"].contains(type) ? nil
+                    : (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
+                        .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                event = DecodedEvent(sessionID: scope, id: id, seq: seq, type: type, payload: payload,
+                    date: (raw["createdAt"] as? String).flatMap(WorkspaceStore.eventDate) ?? Date(timeIntervalSince1970: 0),
+                    activityDetails: details)
+                decoded[bytes] = event
+            }
+            guard event.sessionID == sessionID, seen.insert(event.id).inserted else { continue }
+            let id = event.id, seq = event.seq, type = event.type, payload = event.payload, date = event.date
+            // Sequence is durable and unique within this explicitly scoped conversation.
+            let uuid = UUID(uuidString: String(format: "20000000-0000-4000-8000-%012llx", UInt64(seq) & 0xffffffffffff))!
+            if type == "question", payload["kind"] as? String == "approval", let questionID = payload["id"] as? String { approvalIDs.insert(questionID) }
+            // Match terminal chat entries, including boundaries kept only in
+            // Activity on iOS. Telemetry/backend events do not split deltas.
+            if ["message.user", "question", "tool", "summary", "error", "control.failed", "debate.message", "debate.result"].contains(type)
+                || type == "info" && !(payload["message"] as? String ?? "").isEmpty
+                || type == "worker.progress" && payload["type"] as? String == "error" { activeReply = nil }
+            if type == "message.user", let text = payload["text"] as? String {
+                projected.append(.init(id: uuid, text: text, kind: .user, createdAt: date))
+            } else if ["text", "peer.text"].contains(type), let text = payload["text"] as? String {
+                let peer = type == "peer.text" ? ["childSessionId", "sessionId", "agent"].compactMap { payload[$0] as? String }.first(where: { !$0.isEmpty }) : nil
+                let speaker = type == "peer.text" ? (payload["agent"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? peer ?? "Agent" : "bzzy"
+                let identity = LiveReplyIdentity(speaker: speaker, peer: peer, item: payload["itemId"] as? String, turn: payload["turnId"] as? String)
+                // Explicit peer identities can interleave without creating
+                // duplicate bubbles; ordinary replies merge only adjacently.
+                let previous = peer != nil && identity.item?.isEmpty == false ? peerReplies[identity]
+                    : activeReply.flatMap { $0.identity == identity && $0.index == projected.count - 1 ? $0.index : nil }
+                let index: Int
+                if let previous {
+                    let message = projected[previous]; index = previous
+                    if textSegments[index] == nil { textSegments[index] = [message.text] }
+                    textSegments[index, default: []].append(text)
+                } else {
+                    index = projected.count
+                    projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date, speaker: type == "peer.text" ? speaker : nil))
+                }
+                if peer != nil && identity.item?.isEmpty == false { peerReplies[identity] = index }
+                // Updating an older peer bubble leaves the latest entry intact.
+                if index == projected.count - 1 { activeReply = (identity, index) }
+            } else if type == "question", payload["kind"] as? String == "input", let text = payload["question"] as? String {
+                projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))
+            } else if type == "question.answered", !approvalIDs.contains(payload["id"] as? String ?? ""), let text = payload["answer"] as? String {
+                projected.append(.init(id: uuid, text: text, kind: .user, createdAt: date))
+            } else if type == "debate.result", let text = payload["message"] as? String {
+                projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))
+            } else if type == "debate.message", let text = payload["text"] as? String {
+                let speaker = [payload["participant"] as? String, payload["role"] as? String].compactMap { $0 }.joined(separator: " · ")
+                projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date, speaker: speaker.isEmpty ? nil : speaker))
+            }
+            if let details = event.activityDetails {
+                activity.append(LiveActivity(id: id, type: type, details: details, date: date))
+            }
+        }
+        for (index, segments) in textSegments {
+            let message = projected[index]
+            projected[index] = .init(id: message.id, text: segments.joined(), kind: message.kind,
+                createdAt: message.createdAt, speaker: message.speaker)
+        }
+        let retained = Set(data)
+        decoded = decoded.filter { retained.contains($0.key) }
+        bytes = data
+    }
+}
+
 @MainActor @Observable
 final class WorkspaceStore {
     var selectedTab: WorkspaceTab = .agents
@@ -103,6 +207,7 @@ final class WorkspaceStore {
     // Host projections are kept separate from local demo and draft conversations.
     private(set) var liveSession: LiveSessionState?
     private(set) var liveMessages: [LocalMessage] = []
+    @ObservationIgnored private var liveProjection = LiveConversationProjection()
     private(set) var liveActivity: [LiveActivity] = []
     private(set) var liveTerminals: [LiveTerminalRecord] = []
     private(set) var hostAgents: [HostAgentRecord] = []
@@ -144,7 +249,17 @@ final class WorkspaceStore {
         if CommandLine.arguments.contains("--ui-testing") {
             let testFile = folder.appendingPathComponent("ui-test-workspace.json")
             if CommandLine.arguments.contains("--reset-ui-testing") { try? FileManager.default.removeItem(at: testFile) }
-            return WorkspaceStore(persistenceURL: testFile)
+            let store = WorkspaceStore(persistenceURL: testFile)
+            if CommandLine.arguments.contains("--history-paging-testing") {
+                store.agents[0].isSample = false
+                let id = AgentProfile.samples[0].id.uuidString
+                store.messages[id] = (1...225).map { index in
+                    LocalMessage(id: UUID(uuidString: String(format: "30000000-0000-4000-8000-%012d", index))!,
+                        text: String(format: "History entry %03d", index), kind: index.isMultiple(of: 2) ? .assistant : .user,
+                        createdAt: Date(timeIntervalSince1970: Double(index)))
+                }
+            }
+            return store
         }
         #endif
         return WorkspaceStore(persistenceURL: folder.appendingPathComponent("preview-workspace.json"), includeSamples: false)
@@ -258,63 +373,9 @@ final class WorkspaceStore {
 
     func applyLiveEvents(_ data: [Data]) {
         guard let session = liveSession else { return }
-        var seen = Set<String>(), approvalIDs = Set<String>(), projected: [LocalMessage] = [], activity: [LiveActivity] = []
-        var activeReply: (identity: LiveReplyIdentity, index: Int)?
-        var peerReplies: [LiveReplyIdentity: Int] = [:]
-        for bytes in data {
-            guard let event = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-                  event["sessionId"] as? String == session.id,
-                  let id = event["id"] as? String, seen.insert(id).inserted,
-                  let seq = event["seq"] as? Int64, let type = event["type"] as? String,
-                  let payload = event["data"] as? [String: Any] else { continue }
-            let date = (event["createdAt"] as? String).flatMap(Self.eventDate) ?? Date(timeIntervalSince1970: 0)
-            // Sequence is durable and unique within this explicitly scoped conversation.
-            let uuid = UUID(uuidString: String(format: "20000000-0000-4000-8000-%012llx", UInt64(seq) & 0xffffffffffff))!
-            if type == "question", payload["kind"] as? String == "approval", let questionID = payload["id"] as? String { approvalIDs.insert(questionID) }
-            // Match terminal chat entries, including boundaries kept only in
-            // Activity on iOS. Telemetry/backend events do not split deltas.
-            if ["message.user", "question", "tool", "summary", "error", "control.failed", "debate.message", "debate.result"].contains(type)
-                || type == "info" && !(payload["message"] as? String ?? "").isEmpty
-                || type == "worker.progress" && payload["type"] as? String == "error" { activeReply = nil }
-            if type == "message.user", let text = payload["text"] as? String {
-                projected.append(.init(id: uuid, text: text, kind: .user, createdAt: date))
-            } else if ["text", "peer.text"].contains(type), let text = payload["text"] as? String {
-                let peer = type == "peer.text" ? ["childSessionId", "sessionId", "agent"].compactMap { payload[$0] as? String }.first(where: { !$0.isEmpty }) : nil
-                let speaker = type == "peer.text" ? (payload["agent"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? peer ?? "Agent" : "bzzy"
-                let identity = LiveReplyIdentity(speaker: speaker, peer: peer, item: payload["itemId"] as? String, turn: payload["turnId"] as? String)
-                // Explicit peer identities can interleave without creating
-                // duplicate bubbles; ordinary replies merge only adjacently.
-                let previous = peer != nil && identity.item?.isEmpty == false ? peerReplies[identity]
-                    : activeReply.flatMap { $0.identity == identity && $0.index == projected.count - 1 ? $0.index : nil }
-                let index: Int
-                if let previous {
-                    let message = projected[previous]; index = previous
-                    projected[index] = .init(id: message.id, text: message.text + text, kind: .assistant, createdAt: message.createdAt, speaker: message.speaker)
-                } else {
-                    index = projected.count
-                    projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date, speaker: type == "peer.text" ? speaker : nil))
-                }
-                if peer != nil && identity.item?.isEmpty == false { peerReplies[identity] = index }
-                // Updating an older peer bubble leaves the latest entry intact.
-                if index == projected.count - 1 { activeReply = (identity, index) }
-            } else if type == "question", payload["kind"] as? String == "input", let text = payload["question"] as? String {
-                projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))
-            } else if type == "question.answered", !approvalIDs.contains(payload["id"] as? String ?? ""), let text = payload["answer"] as? String {
-                projected.append(.init(id: uuid, text: text, kind: .user, createdAt: date))
-            } else if type == "debate.result", let text = payload["message"] as? String {
-                projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))
-            } else if type == "debate.message", let text = payload["text"] as? String {
-                let speaker = [payload["participant"] as? String, payload["role"] as? String].compactMap { $0 }.joined(separator: " · ")
-                projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date, speaker: speaker.isEmpty ? nil : speaker))
-            }
-            if !["text", "message.user", "input.accepted"].contains(type) {
-                let details = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
-                    .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-                activity.append(LiveActivity(id: id, type: type, details: details, date: date))
-            }
-        }
-        liveMessages = projected
-        liveActivity = activity
+        liveProjection.apply(data, sessionID: session.id)
+        if liveMessages != liveProjection.projected { liveMessages = liveProjection.projected }
+        if liveActivity != liveProjection.activity { liveActivity = liveProjection.activity }
     }
 
     func applyHostAgents(_ data: Data) {
@@ -357,9 +418,9 @@ final class WorkspaceStore {
     }
 
     func setLiveAvailability(_ available: Bool, status: String) { liveAvailable = available; liveStatus = status }
-    func clearLiveConversation() { liveSession = nil; liveMessages = []; liveActivity = []; liveAvailable = false; liveStatus = "Conversation unavailable" }
-    func clearLiveSession() { liveSession = nil; liveMessages = []; liveActivity = []; liveTerminals = []; hostAgents = []; hostAgentWorkspace = nil; hostAgentsConfigured = false; liveAvailable = false; liveStatus = "Not connected" }
-    private static func eventDate(_ text: String) -> Date? {
+    func clearLiveConversation() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveAvailable = false; liveStatus = "Conversation unavailable" }
+    func clearLiveSession() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveTerminals = []; hostAgents = []; hostAgentWorkspace = nil; hostAgentsConfigured = false; liveAvailable = false; liveStatus = "Not connected" }
+    fileprivate static func eventDate(_ text: String) -> Date? {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
     }
