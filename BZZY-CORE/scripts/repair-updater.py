@@ -12,6 +12,94 @@ import sys
 import tempfile
 
 REPOSITORY = 'https://github.com/BZZY-ai/BZZY.git'
+WRAPPER_ENVIRONMENT = frozenset(('HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'TERM', 'COLORTERM', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ',
+                                 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'BZZY_HOME', 'BZZY_LAUNCHER_BIN_DIR'))
+
+
+def launcher_environment(value, environment):
+    """Expand only ordinary environment references; never evaluate shell code."""
+    pattern = r'\$(?:\{([A-Za-z_]\w*)(?:(:-|-)([^{}$`]*))?\}|([A-Za-z_]\w*))'
+    def replace(match):
+        name, operator, default, simple = match.groups()
+        name = name or simple
+        if name not in WRAPPER_ENVIRONMENT:
+            raise RuntimeError('REPAIR_WRAPPER_ENVIRONMENT: Unsupported launcher environment reference. No values were displayed or changed.')
+        existing = environment.get(name)
+        return (default or '') if existing is None or operator == ':-' and not existing else existing
+    expanded = re.sub(pattern, replace, value)
+    if '$' in expanded or '`' in expanded:
+        raise RuntimeError('REPAIR_WRAPPER_ENVIRONMENT: Shell evaluation in the launcher is unsupported. No command was executed.')
+    return expanded
+
+
+def inspect_launcher(launcher, environment, seen=()):
+    """Read wrappers as data, including an existing runuser/sudo account boundary."""
+    launcher = Path(launcher)
+    try:
+        source = launcher.resolve(strict=True)
+        body = source.read_text()
+    except FileNotFoundError:
+        raise RuntimeError('REPAIR_LAUNCHER_MISSING: The BZZY launcher points to a missing file. Use --installation with the current CLI or Core package path.')
+    except PermissionError:
+        raise RuntimeError('REPAIR_LAUNCHER_PERMISSION: Run the repair as the account that owns the BZZY installation.')
+    except UnicodeError:
+        raise RuntimeError('REPAIR_LAUNCHER_FORMAT: This launcher is not a text script. Use --installation and --node with the installed paths.')
+    if source in seen or len(seen) >= 4:
+        raise RuntimeError('REPAIR_LAUNCHER_LOOP: The launcher chain is cyclic or too long. No launcher was executed.')
+    if source.name in ('bzzy.js', 'bzzy-core.js'):
+        return source.parent.parent, None, None, None
+    try:
+        logical = re.sub(r'\\\r?\n', '', body)
+        entries = [shlex.split(line, comments=True) for line in logical.splitlines() if line.lstrip().startswith('exec ')]
+    except ValueError:
+        raise RuntimeError('REPAIR_LAUNCHER_FORMAT: The launcher command could not be parsed. Use --installation and --node explicitly.')
+    if len(entries) != 1 or not entries[0] or entries[0][-1] != '$@':
+        raise RuntimeError('Unrecognized launcher. Use --installation and --node explicitly.')
+    command = entries[0]
+    if len(command) >= 8 and Path(command[1]).name in ('runuser', 'sudo') and command[2] == '-u' and command[4] == '--' and Path(command[5]).name == 'env':
+        import pwd
+        try:
+            account = pwd.getpwnam(command[3])
+        except KeyError:
+            raise RuntimeError('REPAIR_WRAPPER_ACCOUNT: The existing launcher account does not exist. No account or permissions were changed.')
+        if account.pw_uid <= 0:
+            raise RuntimeError('REPAIR_WRAPPER_ACCOUNT: The wrapper must select an existing non-root BZZY account.')
+        if os.geteuid() not in (0, account.pw_uid):
+            raise RuntimeError('REPAIR_WRAPPER_ACCOUNT: Run the repair as the BZZY installation account or through its existing root wrapper.')
+        selected = {'HOME': account.pw_dir, 'USER': account.pw_name, 'LOGNAME': account.pw_name,
+                    'SHELL': account.pw_shell, 'PATH': '/usr/local/bin:/usr/bin:/bin'}
+        arguments = command[6:-1]
+        while arguments and re.match(r'^[A-Za-z_]\w*=', arguments[0]):
+            name, value = arguments.pop(0).split('=', 1)
+            if name not in WRAPPER_ENVIRONMENT:
+                raise RuntimeError('REPAIR_WRAPPER_ENVIRONMENT: Unsupported launcher environment assignment. No values were displayed or changed.')
+            selected[name] = launcher_environment(value, environment)
+        if len(arguments) != 1 or not Path(arguments[0]).is_absolute() or selected['HOME'] != account.pw_dir:
+            raise RuntimeError('REPAIR_WRAPPER_FORMAT: Expected the existing account home and one absolute inner launcher path. No command was executed.')
+        directory, node, launcher_bin, nested = inspect_launcher(arguments[0], selected, (*seen, source))
+        if nested:
+            raise RuntimeError('REPAIR_WRAPPER_FORMAT: Multiple account switches are unsupported. No command was executed.')
+        return directory, node, launcher_bin, (account, selected)
+    if len(command) != 4 or not Path(command[1]).is_absolute() or not Path(command[2]).is_absolute():
+        raise RuntimeError('Unrecognized launcher. Use --installation and --node explicitly.')
+    return Path(command[2]).parent.parent, Path(command[1]), launcher.parent, None
+
+
+def repair_as_account(account, environment, directory, node, launcher_bin):
+    """Drop to the wrapper's existing owner before running Node, Git or installers."""
+    if not sys.platform.startswith('linux'):
+        raise RuntimeError('REPAIR_WRAPPER_ACCOUNT: Run the repair directly as the BZZY installation account on this platform.')
+    environment = dict(environment)
+    if launcher_bin:
+        environment['BZZY_LAUNCHER_BIN_DIR'] = str(launcher_bin)
+    arguments = [sys.executable, '-I', '-', '--installation', str(directory)]
+    if node:
+        arguments.extend(('--node', str(node)))
+    print('Repairing as the existing non-root BZZY account. Root wrappers and private state are retained.', flush=True)
+    result = subprocess.run(arguments, input=Path(__file__).read_text(), text=True, env=environment, cwd=account.pw_dir,
+                            user=account.pw_uid, group=account.pw_gid,
+                            extra_groups=os.getgrouplist(account.pw_name, account.pw_gid), umask=0o077)
+    return result.returncode
 
 
 def main():
@@ -24,31 +112,13 @@ def main():
         launcher = shutil.which('bzzy') or shutil.which('bzzy-core')
         if not launcher:
             raise RuntimeError('BZZY is not on PATH. Use --installation and --node for its installed paths.')
-        launcher = Path(launcher)
-        try:
-            source = launcher.resolve(strict=True)
-            body = source.read_text()
-        except FileNotFoundError:
-            raise RuntimeError('REPAIR_LAUNCHER_MISSING: The BZZY launcher points to a missing file. Use --installation with the current CLI or Core package path.')
-        except PermissionError:
-            raise RuntimeError('REPAIR_LAUNCHER_PERMISSION: Run the repair as the account that owns the BZZY installation.')
-        except UnicodeError:
-            raise RuntimeError('REPAIR_LAUNCHER_FORMAT: This launcher is not a text script. Use --installation and --node with the installed paths.')
-        if '# bzzy-managed launcher' in body or source.name not in ('bzzy.js', 'bzzy-core.js'):
-            try:
-                # Shell continuations join physical lines before tokenization.
-                # shlex.split on an isolated `exec \` line raises ValueError.
-                logical = re.sub(r'\\\r?\n', '', body)
-                entries = [shlex.split(line) for line in logical.splitlines() if line.lstrip().startswith('exec ')]
-            except ValueError:
-                raise RuntimeError('REPAIR_LAUNCHER_FORMAT: The launcher command could not be parsed. Use --installation and --node explicitly.')
-            if len(entries) != 1 or len(entries[0]) != 4 or entries[0][-1] != '$@':
-                raise RuntimeError('Unrecognized launcher. Use --installation and --node explicitly.')
-            node = node or Path(entries[0][1])
-            directory = Path(entries[0][2]).parent.parent
-            launcher_bin = launcher.parent
-        else:
-            directory = source.parent.parent
+        directory, detected_node, launcher_bin, wrapper = inspect_launcher(launcher, os.environ)
+        node = node or detected_node
+        if wrapper:
+            account, selected = wrapper
+            if os.geteuid() != account.pw_uid:
+                sys.exit(repair_as_account(account, selected, directory, node, launcher_bin))
+            os.environ.update(selected)
     try:
         directory = directory.resolve(strict=True)
     except FileNotFoundError:
@@ -92,7 +162,7 @@ def main():
         result = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', *command], cwd=cwd, env=env,
                                 capture_output=True, text=True, timeout=180)
         if result.returncode:
-            raise RuntimeError('Could not download the official BZZY repair. Check GitHub access and Git authentication.')
+            raise RuntimeError('Could not download the official BZZY repair. Check GitHub access and Git authentication for the BZZY installation account.')
         return result.stdout.strip()
     head = git('ls-remote', '--symref', REPOSITORY, 'HEAD')
     match = re.search(r'^([a-f0-9]{40,64})\s+HEAD$', head, re.MULTILINE)

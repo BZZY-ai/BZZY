@@ -7,7 +7,9 @@ import { spawnSync } from 'node:child_process';
 import { updateRepository } from '../src/packaged-update.js';
 
 const repair = new URL('../../../BZZY-CORE/scripts/repair-updater.py', import.meta.url).pathname;
-for (const layout of ['managed', 'multiline', 'multiline-crlf', 'multiline-legacy', 'explicit']) test(`old updater recovery works from another cwd with ${layout} paths and preserves the old source`, t => {
+for (const layout of ['managed', 'multiline', 'multiline-crlf', 'multiline-legacy', 'runuser', 'sudo', 'explicit']) test(`old updater recovery works from another cwd with ${layout} paths and preserves the old source`, t => {
+  const accountWrapper = ['runuser', 'sudo'].includes(layout);
+  if (accountWrapper && os.userInfo().uid === 0) return t.skip('non-root owner fixture; root handoff is checked separately');
   const explicit = layout === 'explicit';
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bzzy repair's fixture-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -26,7 +28,7 @@ for (const layout of ['managed', 'multiline', 'multiline-crlf', 'multiline-legac
   fs.writeFileSync(helper, `import fs from 'node:fs'; import path from 'node:path';
 export async function updateRepositoryInstallation(directory, options) {
   if (fs.readFileSync(path.join(directory, 'local-notes.txt'), 'utf8') !== 'preserve my local files') throw new Error('Local files changed');
-  fs.writeFileSync(process.env.BZZY_REPAIR_TEST_RECEIPT, JSON.stringify({ directory, target: options.expectedCommit, bin: process.env.BZZY_LAUNCHER_BIN_DIR, runtime: process.execPath, version: process.versions.node }));
+  fs.writeFileSync(process.env.BZZY_REPAIR_TEST_RECEIPT, JSON.stringify({ directory, target: options.expectedCommit, bin: process.env.BZZY_LAUNCHER_BIN_DIR, runtime: process.execPath, version: process.versions.node, stateHome: process.env.BZZY_HOME }));
 }`);
   git(author, 'add', '.'); git(author, 'commit', '-m', 'Official repair fixture'); git(author, 'push', 'origin', 'main');
   const target = git(author, 'rev-parse', 'HEAD');
@@ -54,6 +56,22 @@ export async function updateRepositoryInstallation(directory, options) {
       '    "$@"', '',
     ].join(newline), { mode: 0o755 });
   }
+  let outer, outerBody;
+  if (accountWrapper) {
+    const outerBin = path.join(root, 'root bin'); fs.mkdirSync(outerBin);
+    outer = path.join(outerBin, 'bzzy');
+    const account = os.userInfo();
+    outerBody = [
+      '#!/bin/sh', `exec /usr/sbin/${layout} -u ${quote(account.username)} -- env`,
+      `HOME=${quote(account.homedir)} USER=${quote(account.username)} LOGNAME=${quote(account.username)}`,
+      `SHELL=/bin/sh XDG_RUNTIME_DIR=/run/user/${account.uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${account.uid}/bus`,
+      'TERM="${TERM:-xterm-256color}" COLORTERM="${COLORTERM:-truecolor}" LANG="${LANG:-C.UTF-8}"',
+      `PATH=${quote(env.PATH)} BZZY_HOME=${quote(path.join(root, 'existing private home'))}`,
+      `${quote(path.join(bin, 'bzzy'))} "$@"`,
+    ].map((line, index, lines) => index > 0 && index < lines.length - 1 ? line + ' ' + String.fromCharCode(92) : line).join('\n') + '\n';
+    fs.writeFileSync(outer, outerBody, { mode: 0o755 });
+    env.PATH = outerBin + path.delimiter + env.PATH;
+  }
   const args = [repair, ...(explicit ? ['--installation', old, '--node', process.execPath] : [])];
   const result = spawnSync('python3', args, { cwd: os.tmpdir(), env, encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.stderr);
@@ -61,9 +79,87 @@ export async function updateRepositoryInstallation(directory, options) {
   assert.equal(actual.directory, fs.realpathSync(old)); assert.equal(actual.target, target);
   assert.equal(actual.runtime, process.execPath); assert.ok(Number(actual.version.split('.')[0]) >= 24);
   if (!explicit) assert.equal(actual.bin, bin);
+  if (accountWrapper) {
+    assert.equal(actual.stateHome, path.join(root, 'existing private home'));
+    assert.equal(fs.readFileSync(outer, 'utf8'), outerBody);
+  }
   assert.equal(fs.readFileSync(path.join(old, 'local-notes.txt'), 'utf8'), 'preserve my local files');
   assert.equal(fs.readFileSync(path.join(old, 'bin/bzzy.js'), 'utf8'), '// installed CLI');
   assert.match(result.stdout, /updater repaired/);
+});
+
+test('root wrapper recovery drops identity before Git/Node and rejects unsupported commands without executing them or exposing secrets', () => {
+  const code = String.raw`
+import importlib.util, os, pathlib, subprocess, sys, tempfile, types
+from unittest.mock import patch
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('repair', sys.argv[1])
+repair = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(repair)
+with tempfile.TemporaryDirectory() as temporary:
+    root = pathlib.Path(temporary)
+    account = types.SimpleNamespace(pw_name='fixture-owner', pw_uid=4242, pw_gid=4343, pw_dir=str(root), pw_shell='/bin/sh')
+    inner = root / 'inner'
+    inner.write_text('#!/bin/sh\nexec /installed/node /installed/cli/bin/bzzy.js "$@"\n')
+    outer = root / 'bzzy'
+    def wrapper(assignments='', target=inner):
+        outer.write_text(f'#!/bin/sh\nexec /usr/sbin/runuser -u fixture-owner -- env HOME={root} {assignments} {target} "$@"\n')
+    wrapper('BZZY_HOME=/existing/private/state')
+    with patch('pwd.getpwnam', return_value=account), patch.object(repair.os, 'geteuid', return_value=0):
+        directory, node, bin_dir, (owner, selected) = repair.inspect_launcher(outer, {'ROOT_PRIVATE_TOKEN': 'do-not-forward', 'GIT_CONFIG_GLOBAL': '/root/private-gitconfig'})
+        assert directory == pathlib.Path('/installed/cli') and node == pathlib.Path('/installed/node')
+        assert bin_dir == root and selected['BZZY_HOME'] == '/existing/private/state'
+        assert 'ROOT_PRIVATE_TOKEN' not in selected and 'GIT_CONFIG_GLOBAL' not in selected
+        with patch.object(repair.sys, 'platform', 'linux'), patch.object(repair.os, 'getgrouplist', return_value=[4343, 4545]), patch.object(repair.subprocess, 'run', return_value=types.SimpleNamespace(returncode=17)) as run:
+            assert repair.repair_as_account(owner, selected, directory, node, bin_dir) == 17
+            arguments = run.call_args.args[0]
+            options = run.call_args.kwargs
+            assert arguments == [sys.executable, '-I', '-', '--installation', str(directory), '--node', str(node)]
+            assert options['user'] == 4242 and options['group'] == 4343 and options['extra_groups'] == [4343, 4545]
+            assert options['umask'] == 0o077 and options['cwd'] == str(root)
+            assert options['env']['HOME'] == str(root) and options['env']['BZZY_LAUNCHER_BIN_DIR'] == str(root)
+            assert 'ROOT_PRIVATE_TOKEN' not in options['env'] and 'GIT_CONFIG_GLOBAL' not in options['env']
+            assert options['input'] == pathlib.Path(sys.argv[1]).read_text()
+        with patch.object(repair.sys, 'argv', ['repair']), patch.object(repair.shutil, 'which', return_value=str(outer)), patch.object(repair, 'repair_as_account', return_value=17) as handoff, patch.object(repair.subprocess, 'run', side_effect=AssertionError('Git or Node ran before dropping privileges')):
+            try:
+                repair.main()
+                raise AssertionError('Expected child exit status')
+            except SystemExit as result:
+                assert result.code == 17
+            handoff.assert_called_once()
+        marker = root / 'must-not-exist'
+        for assignment, expected in [('API_KEY=fixture-private-token', 'REPAIR_WRAPPER_ENVIRONMENT'), (f'PATH="$(touch {marker})"', 'REPAIR_WRAPPER_ENVIRONMENT'), ('HOME=/wrong-owner', 'REPAIR_WRAPPER_FORMAT'), ('PATH="$PRIVATE_TOKEN"', 'REPAIR_WRAPPER_ENVIRONMENT')]:
+            wrapper(assignment)
+            with patch.object(repair.subprocess, 'run', side_effect=AssertionError('Wrapper executed')):
+                try:
+                    repair.inspect_launcher(outer, {})
+                    raise AssertionError('Unsafe wrapper accepted')
+                except RuntimeError as error:
+                    assert expected in str(error) and 'fixture-private-token' not in str(error)
+            assert not marker.exists()
+        wrapper(target=outer)
+        try:
+            repair.inspect_launcher(outer, {})
+            raise AssertionError('Loop accepted')
+        except RuntimeError as error:
+            assert 'REPAIR_LAUNCHER_LOOP' in str(error)
+        wrapper()
+        with patch.object(repair.os, 'geteuid', return_value=5151):
+            try:
+                repair.inspect_launcher(outer, {})
+                raise AssertionError('Another account accepted')
+            except RuntimeError as error:
+                assert 'REPAIR_WRAPPER_ACCOUNT' in str(error)
+        account.pw_uid = 0
+        try:
+            repair.inspect_launcher(outer, {})
+            raise AssertionError('Root model execution accepted')
+        except RuntimeError as error:
+            assert 'REPAIR_WRAPPER_ACCOUNT' in str(error)
+`;
+  const result = spawnSync('python3', ['-I', '-c', code, repair], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!result.stdout.includes('fixture-private-token'));
 });
 
 for (const scenario of ['missing-install', 'missing-package', 'invalid-package', 'missing-node', 'failed-node']) test(`repair identifies ${scenario} before network access without exposing file contents`, t => {

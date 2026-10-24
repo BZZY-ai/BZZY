@@ -119,7 +119,14 @@ returns 404; it does not use credentials configured for Git.
 
 The repair reads single-line or continued shell launcher commands to find the
 installed package and its configured Node 24+ runtime, including when the shell’s
-system Node is older. It downloads the official updater at a verified commit and invokes the same
+system Node is older. An existing root launcher using `runuser -u USER -- env …`
+or `sudo -u USER -- env …` is followed to the inner BZZY launcher. The repair drops
+to that existing non-root account before running Node, Git or installation, using
+the wrapper's allowlisted environment and existing private home. It retains the
+root wrapper and updates the inner managed launchers. Root credentials are not
+forwarded; GitHub authentication must work for the BZZY installation account.
+No account, group membership, service privilege or filesystem permission is changed.
+The repair downloads the official updater at a verified commit and invokes the same
 separate-release installer. It preserves the original checkout, private state,
 existing launcher location and active execution sources. Reopen BZZY afterward;
 future updates use `bzzy --update`. Core’s supervised service requires a
