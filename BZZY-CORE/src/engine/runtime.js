@@ -25,6 +25,7 @@ import { terminalYolo } from './terminal-permissions.js';
 import { submitSessionInput } from './session-input.js';
 import { assertCoreAvailable } from './maintenance.js';
 import { HostMetricsSampler } from './host-metrics.js';
+import { authorizedOwnPhoneTerminalInput } from './update-access.js';
 
 const runtimeBuild = digest(['src', 'assets', 'bin'].flatMap(directory => fs.readdirSync(path.join(root, directory), { recursive: true })
   .filter(file => !file.split(path.sep).some(part => part.startsWith('._')) && fs.statSync(path.join(root, directory, file)).isFile()).sort()
@@ -46,7 +47,7 @@ export { pauseRuntimeExecutions };
 function groupChildren(session) {
   if (!['parallel', 'besties'].includes(session?.mode)) return [];
   const group = getRecord(session.mode, session.id);
-  if (group?.goalId && group.goalId !== session.goal?.id) return [];
+  if (!group && session.modeRevision || group && (group.goalId && group.goalId !== session.goal?.id || (group.modeRevision || 0) !== (session.modeRevision || 0))) return [];
   const peers = group?.peers, ids = peers && new Set(peers.map(peer => peer.sessionId));
   return listRecords('session', { parentSessionId: session.id }).filter(child => !ids || ids.has(child.id));
 }
@@ -244,7 +245,8 @@ export async function serveRuntime() {
       if (action === 'input') {
         if (access && (body.preparedGoalId !== undefined || body.operation === 'execute' && body.goal === true)) throw Object.assign(new Error('Scoped goals must use the canonical goal submission operation.'), { status: 403 });
         if (access && (body.environment !== undefined || body.options != null && (typeof body.options !== 'object' || Array.isArray(body.options) || Object.keys(body.options).length))) throw Object.assign(new Error('Scoped input uses saved host execution settings.'), { status: 403 });
-        if (access && access.includeChildren === false && ['parallel', 'besties', 'debate'].includes(session.mode)) throw Object.assign(new Error('Group input requires the approved child-session scope.'), { status: 403 });
+        if (access && access.includeChildren === false && ['parallel', 'besties', 'debate'].includes(session.mode) &&
+          (!['mode', 'execute', 'goal', 'control', 'answer', 'permissions'].includes(body.operation) || !authorizedOwnPhoneTerminalInput(access, session))) throw Object.assign(new Error('Group input requires the approved own-phone terminal scope.'), { status: 403 });
         const requestId = request.headers['idempotency-key'] || body.requestId;
         const { requestId: ignored, ...input } = body;
         const info = { url: `http://127.0.0.1:${server.address().port}`, token: request.headers.authorization.slice(7) };
@@ -256,7 +258,8 @@ export async function serveRuntime() {
         send(response, 202, result); return;
       }
       requireAccess(action === 'control' ? body.action : action === 'release' ? 'claim' : action);
-      if (access && access.includeChildren === false && ['parallel', 'besties', 'debate'].includes(session.mode) && (action === 'execute' || action === 'control' || action === 'claim' && body.takeover)) throw Object.assign(new Error('Group controls require a grant that includes child sessions.'), { status: 403 });
+      if (access && access.includeChildren === false && ['parallel', 'besties', 'debate'].includes(session.mode) && (action === 'execute' || action === 'control' || action === 'claim' && body.takeover) &&
+        !(action === 'control' && authorizedOwnPhoneTerminalInput(access, session))) throw Object.assign(new Error('Group controls require a grant that includes child sessions.'), { status: 403 });
       if (action === 'claim') {
         if (body.takeover) requireAccess('takeover');
         if (body.takeover !== undefined && typeof body.takeover !== 'boolean') throw new Error('takeover must be a boolean.');

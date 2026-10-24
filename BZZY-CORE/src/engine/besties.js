@@ -11,6 +11,7 @@ import { reconcileSession } from './recovery.js';
 import { peerCollaborationState } from './peer-collaboration.js';
 import { delay } from './delegation.js';
 import { supervisorTokens } from './delegation-usage.js';
+import { conversationPrompt } from './conversation.js';
 import { assessGroupCompletion } from './verification.js';
 
 export async function runBesties(session, options, ui) {
@@ -24,20 +25,23 @@ export async function runBesties(session, options, ui) {
     if ((options.concurrency ?? session.contract.limits.concurrency ?? choices.length) < choices.length) throw new Error(`Besties needs ${choices.length} concurrent peers. Increase the configured concurrency limit to at least ${choices.length}.`);
     for (const selection of choices) { const provider = getProvider(selection.provider); if (provider.auth === 'api-key') apiKey(provider); }
     group = getRecord('besties', session.id);
-    if (group && group.goalId !== session.goal.id) group = null;
+    if (group && (group.goalId !== session.goal.id || (group.modeRevision || 0) !== (session.modeRevision || 0))) {
+      putRecord('coordination-history', `${session.id}:besties:${group.modeRevision || 0}`, group); group = null;
+    }
     if (!group) {
+      const context = session.conversationHandoff?.pending ? conversationPrompt(session, session.goal.objective) : '';
       const snapshot = snapshotWorkspace(session, 'besties-common-input'), peers = [];
       for (const [index, selection] of choices.entries()) {
-        const namespace = `${selection.provider}-bestie-${index + 1}-${session.goal.id.slice(0, 8)}`, work = path.join(home(), 'besties', session.id, namespace);
+        const namespace = `${selection.provider}-bestie-${index + 1}-${session.goal.id.slice(0, 8)}${session.modeRevision ? '-' + session.modeRevision : ''}`, work = path.join(home(), 'besties', session.id, namespace);
         privateDir(path.dirname(work)); fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
         const child = createSession(getProvider(selection.provider), work, selection.model);
         Object.assign(child, { mode: 'solo', role: 'bestie', parentSessionId: session.id, bestiesSessionId: session.id, parallelSessionId: session.id,
           projectRoot: session.cwd, agentNamespace: namespace, selectedEffort: selection.effort, modelCapabilities: selection.capabilities,
-          contract: { ...session.contract, context: `${session.contract.context || ''}\nYou are peer ${index + 1} in a ${choices.length}-peer collaboration. Divide work through peer_message, publish decisive evidence, inspect and review the other peer's claims, preserve disagreement. No peer supervises another.` },
+          contract: { ...session.contract, context: `${session.contract.context || ''}\n${context}\nYou are peer ${index + 1} in a ${choices.length}-peer collaboration. Divide work through peer_message, publish decisive evidence, inspect and review the other peer's claims, preserve disagreement. No peer supervises another.` },
           policy: session.policy, backendHomes: session.backendHomes, strictPolicy: true, suppressNotifications: true, goal: newGoal(session.goal.objective, session.goal.tokenBudget) });
         peers.push({ namespace, sessionId: child.id, selection }); saveSession(child);
       }
-      group = { goalId: session.goal.id, peers, snapshotId: snapshot.id, cursors: {}, createdAt: now() }; putRecord('besties', session.id, group);
+      group = { modeRevision: session.modeRevision || 0, tokenOffset: coordinator.tokenOffset, goalId: session.goal.id, peers, snapshotId: snapshot.id, cursors: {}, createdAt: now() }; putRecord('besties', session.id, group);
       for (const peer of peers) { const child = loadSession(peer.sessionId); child.peers = peers; saveSession(child); }
     }
     if (options.bestiesResume) { group.resumed = {}; group.exchanges = {}; putRecord('besties', session.id, group); }
@@ -51,7 +55,7 @@ export async function runBesties(session, options, ui) {
       }
       if (recovered.live) return false;
       if (recovered.state === 'cleanup_required') throw new Error(recovered.reason);
-      const remaining = session.goal.tokenBudget == null ? null : Math.max(0, session.goal.tokenBudget - usage.totalTokens);
+      const remaining = session.goal.tokenBudget == null ? null : Math.max(0, session.goal.tokenBudget - coordinator.tokenOffset - usage.totalTokens);
       if (remaining === 0) { coordinator.stopping = 'token_limit'; return false; }
       const prompt = initial ? session.goal.objective : 'Your peer published new collaboration evidence. Read peer_inbox, inspect the cited artifacts, independently verify relevant claims, answer concrete objections and record peer_review. Continue the same shared objective; preserve unresolved disagreement.';
       const result = enqueueExecution(child.id, { prompt, goal: true, resumeGoal: Boolean(child.engineThreadId),

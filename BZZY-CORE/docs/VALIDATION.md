@@ -1,3 +1,30 @@
+# iOS chat layout and five paused modes (2026-10-24)
+
+Node 24 on Apple Silicon: Core **260 passed, 1 platform skip**; CLI **463
+passed, 21 skips**. Syntax checks passed. After restoring the legacy group
+catalog fallback, the focused CLI/PTY/session-browser checks passed **24 with
+3 skips**, followed by the passing full CLI suite. Native model/chat checks and
+all **86 Swift tests** passed. Signed iPhone build **19** passed artifact, APNs
+entitlement and existing app/Keychain identity checks.
+
+Real encrypted Core/Relay/native fixtures exercise Pause followed by Delegate,
+Debate, Parallel, Besties and Solo in the same chat without execution. Core
+retains goal identity, history, policy/evidence and consumed budgets, rejects
+active workers/stale revisions and uses saved presets. Group generation tests
+keep prior usage while preventing old groups from being reused under new models.
+Own-phone coordinator admission leaves includeChildren:false and direct worker
+reads denied; scoped peers cannot switch modes. Catalog goal feedback is
+capability-negotiated so older strict clients keep their original response shape.
+
+Four iOS simulator UI checks passed across the final targeted runs: compact
+Set-goal/keyboard and hidden global header, accessibility navigation, Agent
+sharing/import through Chat settings, and terminal sharing/import/draft relaunch.
+Native layouts were rendered and inspected. Xcode's last UI result-bundle
+finalization stalled after its passing XCTest summary and was terminated; the
+per-case logs remain the evidence, rather than claiming a finalized xcresult.
+The provisioned physical app's installation is verified separately from any
+locked-screen Apple push delivery.
+
 # Relay goal alerts and terminal feedback (2026-10-24)
 
 Node 24 on Apple Silicon: Core **256 passed, 1 platform skip**; CLI **463

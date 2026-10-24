@@ -54,6 +54,7 @@ public struct CoreApplicationError: Error, LocalizedError, Equatable, Sendable {
         case "FORBIDDEN", "GRANT_UNAVAILABLE": "Core access is unavailable or this action is not permitted."
         case "OPERATION_DENIED": "This operation is unavailable for the paired resource."
         case "PROJECTION_UNAVAILABLE": "The saved conversation could not be read or saved."
+        case "DEFAULT_REQUIRED": "Save this mode’s default models in Settings, then try again."
         case "PROJECTION_CAPACITY": "The local conversation storage limit was reached."
         case "OFFLINE": "Core is disconnected."
         case "RESULT_TOO_LARGE": "This result exceeds the current protocol limit."
@@ -140,11 +141,12 @@ enum CoreApplicationProtocol {
     static let promptBytes = 16 * 1024
     static let eventBytes = 16 * 1024 * 1024
     static let chunkBytes = 16 * 1024
-    static let commands: Set<String> = ["settings.configure", "session.configure", "voice.send", "voice.cancel", "updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "permissions.set", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
+    static let commands: Set<String> = ["settings.configure", "session.configure", "session.mode", "voice.send", "voice.cancel", "updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "permissions.set", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
     static let fields: [String: Set<String>] = [
         "updates.status": [], "updates.check": [], "updates.configure": ["monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"], "updates.install": ["target"],
         "settings.get": [], "settings.providers": [], "settings.models": ["provider", "after", "limit"],
         "settings.configure": ["target", "expectedRevision", "agents"],
+        "session.mode": ["owner", "mode", "expectedUpdatedAt", "coordinateInput"],
         "session.configure": ["owner", "selection", "expectedUpdatedAt", "coordinateInput"],
         "host.metrics": [],
         "agents.status": [], "agents.providers": [], "agents.models": ["provider", "after", "limit"], "agents.list": ["after", "limit"], "agents.get": ["agentId"],
@@ -154,7 +156,7 @@ enum CoreApplicationProtocol {
         "agents.import.status": ["importId"], "agents.import.cancel": ["importId"],
         "notifications.register": ["deviceToken", "environment", "enabled", "scope", "hostHints", "relayPush"], "notifications.update": ["enabled"], "notifications.revoke": [],
         "share.create": [], "share.status": ["shareId"], "share.approve": ["shareId", "claimId", "confirmedFingerprint"], "share.revoke": ["shareId"],
-        "session.get": [], "session.usage": [], "sessions.list": ["after", "limit"], "sessions.open": ["sessionId"],
+        "session.get": [], "session.usage": [], "sessions.list": ["after", "limit", "goalFeedback"], "sessions.open": ["sessionId"],
         "assistant.status": [], "voice.status": [], "voice.send": ["text"], "voice.poll": ["requestId", "cursor"], "voice.cancel": ["requestId"], "task.submit": ["owner", "instruction", "coordinateInput"], "task.get": ["taskId"],
         "events.list": ["after", "before", "latest", "limit", "eventChunks"], "events.subscribe": ["consumerId", "bootstrapToken", "eventChunks", "singleView"],
         "events.chunk": ["seq", "offset", "limit"], "events.ack": ["subscriptionId", "seq"],
@@ -171,7 +173,8 @@ enum CoreApplicationProtocol {
     static func request(op: String, params: [String: CoreJSONValue], id: String, resource: String) throws -> CoreJSONValue {
         try opaque(id); try opaque(resource)
         guard let allowed = fields[op], Set(params.keys).isSubset(of: allowed) else { throw CoreApplicationError("OPERATION_DENIED") }
-        var optional: Set<String> = ["coordinateInput", "after", "before", "latest", "bootstrapToken", "eventChunks", "singleView", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "resumeGoalStatus", "text", "scope", "hostHints", "relayPush", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
+        var optional: Set<String> = ["coordinateInput", "after", "before", "latest", "bootstrapToken", "eventChunks", "singleView", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "resumeGoalStatus", "text", "scope", "hostHints", "relayPush", "goalFeedback", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
+        if op == "session.mode", !["solo", "delegate", "debate", "parallel", "besties"].contains(params["mode"]?.string ?? "") { throw CoreApplicationError("INVALID_REQUEST") }
         if op == "voice.send" { optional.remove("text") }
         if op == "voice.poll" { guard let cursor = params["cursor"]?.integer, cursor >= 0 && cursor <= 2_000_000 else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "voice.send" { guard let text = params["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CoreApplicationError("INVALID_REQUEST") } }
@@ -181,7 +184,7 @@ enum CoreApplicationProtocol {
         for key in ["owner", "consumerId", "bootstrapToken", "subscriptionId", "requestId", "taskId", "claimId", "confirmedFingerprint"] where params[key] != nil {
             guard let text = params[key]?.string else { throw CoreApplicationError("INVALID_REQUEST") }; try opaque(text)
         }
-        for key in ["coordinateInput", "latest", "eventChunks", "singleView", "takeover", "goal", "resumeGoal", "enabled", "hostHints", "relayPush", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
+        for key in ["coordinateInput", "latest", "eventChunks", "singleView", "takeover", "goal", "resumeGoal", "enabled", "hostHints", "relayPush", "goalFeedback", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
             guard params[key]?.bool != nil else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         for key in ["prompt", "instruction", "answer", "text"] where params[key] != nil {

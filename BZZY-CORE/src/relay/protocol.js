@@ -11,11 +11,12 @@ const fields = Object.freeze({
   'updates.status': [], 'updates.check': [], 'updates.configure': ['monitoringEnabled', 'notificationsEnabled', 'remoteUpdatesEnabled'], 'updates.install': ['target'],
   'settings.get': [], 'settings.providers': [], 'settings.models': ['provider', 'after', 'limit'],
   'settings.configure': ['target', 'expectedRevision', 'agents'],
+  'session.mode': ['owner', 'mode', 'expectedUpdatedAt', 'coordinateInput'],
   'session.configure': ['owner', 'selection', 'expectedUpdatedAt', 'coordinateInput'],
   'session.get': [], 'session.usage': [], 'host.metrics': [],
   'notifications.register': ['deviceToken', 'environment', 'enabled', 'scope', 'hostHints', 'relayPush'],
   'notifications.update': ['enabled'], 'notifications.revoke': [],
-  'sessions.list': ['after', 'limit'], 'sessions.open': ['sessionId'],
+  'sessions.list': ['after', 'limit', 'goalFeedback'], 'sessions.open': ['sessionId'],
   'agents.status': [], 'agents.providers': [], 'agents.models': ['provider', 'after', 'limit'], 'agents.list': ['after', 'limit'],
   'agents.get': ['agentId'], 'agents.create': ['name', 'instructions', 'provider', 'model', 'effort'],
   'agents.update': ['agentId', 'expectedRevision', 'name', 'instructions', 'provider', 'model', 'effort'],
@@ -33,7 +34,7 @@ const fields = Object.freeze({
   'permissions.set': ['owner', 'enabled', 'questionId', 'coordinateInput'],
   'control.request': ['owner', 'action', 'text', 'coordinateInput'], 'command.status': ['requestId'],
 });
-export const COMMANDS = new Set(['settings.configure', 'session.configure', 'voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
+export const COMMANDS = new Set(['settings.configure', 'session.configure', 'session.mode', 'voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
   'agents.create', 'agents.update', 'agents.archive', 'agents.open', 'agents.import', 'agents.import.cancel']);
 export const OPERATIONS = Object.freeze(Object.keys(fields));
 
@@ -52,11 +53,12 @@ export function validateRequest(value) {
   if (value.params.coordinateInput !== undefined && typeof value.params.coordinateInput !== 'boolean') fail('INVALID_REQUEST', 'Input coordination must be boolean.');
   if (value.params.hostHints !== undefined && typeof value.params.hostHints !== 'boolean') fail('INVALID_REQUEST', 'Notification host hints must be boolean.');
   if (value.params.relayPush !== undefined && typeof value.params.relayPush !== 'boolean') fail('INVALID_REQUEST', 'Notification relay delivery must be boolean.');
+  if (value.params.goalFeedback !== undefined && typeof value.params.goalFeedback !== 'boolean') fail('INVALID_REQUEST', 'Goal feedback must be boolean.');
   return value;
 }
 
 export function permissionFor(request) {
-  if (['settings.configure', 'session.configure'].includes(request.op)) return 'execute';
+  if (['settings.configure', 'session.configure', 'session.mode'].includes(request.op)) return 'execute';
   if (request.op === 'voice.send') return 'execute';
   if (request.op === 'voice.cancel') return 'pause';
   if (['updates.install', 'updates.configure'].includes(request.op)) return 'execute';

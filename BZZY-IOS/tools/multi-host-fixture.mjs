@@ -86,6 +86,7 @@ if (worker) {
         return { approved: true };
       }
       case 'state': return { pendingCount: gateway.pendingPairings().length, ...gateway.status(),
+        modeCommands: listRecords('core.relay.command').filter(row => row.op === 'session.mode').map(row => ({ state: row.state, code: row.code || null, mode: row.result?.mode || null })),
         notificationHostHints: listRecords('core.push.registration').map(row => row.hostHints === true),
         notificationRelayPush: listRecords('core.push.registration').map(row => row.relayPush === true),
         notificationBindings: listRecords('core.push.registration').map(row => ({ enabled: row.enabled, revoked: Boolean(row.revokedAt), hasToken: Boolean(row.deviceToken) })),

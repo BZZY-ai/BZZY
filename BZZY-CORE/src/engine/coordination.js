@@ -10,10 +10,14 @@ import { printGoalSummary } from './controller.js';
 import { NotificationHub } from './notifications.js';
 import { artifact } from './evidence.js';
 import { cancelAssignment, delay } from './delegation.js';
-import { supervisorTokens } from './delegation-usage.js';
+import { supervisorTokens, budgetUsage, delegationUsage } from './delegation-usage.js';
 
 export class Coordinator {
-  constructor(session, ui, options) { Object.assign(this, { session, ui, options }); this.started = Date.now(); this.stopping = null; this.abort = new AbortController(); }
+  constructor(session, ui, options) {
+    const group = ['parallel', 'besties'].includes(session.mode) ? getRecord(session.mode, session.id) : null;
+    this.tokenOffset = group && group.goalId === session.goal?.id && (group.modeRevision || 0) === (session.modeRevision || 0)
+      ? group.tokenOffset || 0 : Math.max(session.goal?.tokensUsed || 0, budgetUsage(session));
+    Object.assign(this, { session, ui, options }); this.started = Date.now(); this.stopping = null; this.abort = new AbortController(); }
   start() {
     requireSandbox(`${this.session.mode} workers`);
     this.unlock = lockSession(this.session);
@@ -39,7 +43,7 @@ export class Coordinator {
     }, 100, { label: 'Coordination controls', onError: (_error, failures) => { if (failures >= 3) { this.stopping ||= 'persistence_failure'; this.abort.abort(); } } });
   }
   checkBudget(tokens) {
-    if (this.session.goal.tokenBudget != null && tokens >= this.session.goal.tokenBudget) this.stopping ||= 'token_limit';
+    if (this.session.goal.tokenBudget != null && tokens + this.tokenOffset >= this.session.goal.tokenBudget) this.stopping ||= 'token_limit';
     if (this.stopping) this.abort.abort();
     return !this.stopping;
   }
@@ -87,8 +91,9 @@ export class Coordinator {
     const resultArtifact = artifact(this.session, JSON.stringify(record, null, 2), `${this.session.mode}-decision`, 'application/json');
     for (const workspace of this.session.acceptance?.workspaces || []) if (workspace.changes.length) this.ui.event('info', { message: `${workspace.agent} · ${workspace.changes.length} changed file(s)${workspace.unapplied.length ? ' · integration required' : ' · present in project'}\nWorkspace: ${workspace.directory}\nChanges: ${workspace.changes.map(change => change.path).join(', ')}` });
     this.session.goal.status = status; this.session.goal.reason = this.stopping || record.stopReason || null;
-    this.session.goal.tokensUsed = usage.totalTokens; this.session.goal.runtimeUsedSeconds = (this.session.goal.runtimeUsedSeconds || 0) + (Date.now() - this.started) / 1000;
-    this.session.goal.evidence = [resultArtifact.id]; this.session.executionState = status === 'cancelled' ? 'cancelled' : status === 'paused' ? 'paused' : 'idle';
+    this.session.goal.tokensUsed = this.tokenOffset + usage.totalTokens;
+    this.session.goal.supervisorTokensUsed = Math.max(0, this.session.goal.tokensUsed - delegationUsage(this.session).delegatedTokens); this.session.goal.runtimeUsedSeconds = (this.session.goal.runtimeUsedSeconds || 0) + (Date.now() - this.started) / 1000;
+    this.session.goal.evidence = [...new Set([...(this.session.goal.evidence || []), resultArtifact.id])]; this.session.executionState = status === 'cancelled' ? 'cancelled' : status === 'paused' ? 'paused' : 'idle';
     if (this.session.mode === 'debate') {
       const consensus = record.investigationConsensus || record.decision?.consensus || null;
       const text = item => typeof item === 'string' ? item : item?.claim || item?.summary || item?.description || JSON.stringify(item);

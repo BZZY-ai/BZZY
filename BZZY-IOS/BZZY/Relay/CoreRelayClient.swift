@@ -250,7 +250,7 @@ import CryptoKit
             let proof = event.type == "input.accepted" ? event.data : event.data["channel"]
             guard proof["actor"].string == inputActor,
                   let id = proof["requestId"].string, let row = pending[id], row.params["coordinateInput"]?.bool == true,
-                  ["execution.execute", "task.submit", "question.answer", "permissions.set", "session.configure", "control.request"].contains(row.op) else { continue }
+                  ["execution.execute", "task.submit", "question.answer", "permissions.set", "session.configure", "session.mode", "control.request"].contains(row.op) else { continue }
             var result = event.type == "input.accepted" ? event.data["result"].object ?? [:]
                 : ["sessionId": .string(event.sessionId), "executionId": event.data["executionId"]]
             result["state"] = .string("accepted")
@@ -282,6 +282,10 @@ import CryptoKit
                           agent["model"] == .null || agent["model"].string != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
                 }
             }
+        case "session.mode":
+            try result.record(["state", "sessionId", "mode"])
+            guard result["state"].string == "accepted", result["sessionId"].string == sessionID,
+                  result["mode"].string == params["mode"]?.string else { throw CoreApplicationError("INVALID_RESPONSE") }
         case "session.configure":
             try result.record(["state", "sessionId", "provider", "model", "effort"])
             guard result["state"].string == "accepted", result["sessionId"].string == sessionID,
@@ -508,7 +512,7 @@ import CryptoKit
                   let more = result["hasMore"].bool else { throw CoreApplicationError("INVALID_RESPONSE") }
             var seen = Set<String>()
             for session in sessions {
-                try session.record(["id", "alias", "provider", "model", "mode", "cwd", "executionState", "createdAt", "updatedAt", "existingResource"],
+                try session.record(["id", "alias", "provider", "model", "mode", "cwd", "executionState", "goalStatus", "goalReason", "createdAt", "updatedAt", "existingResource"],
                                    required: ["id", "provider", "model", "cwd", "executionState", "createdAt", "updatedAt"])
                 let id = try CoreApplicationProtocol.uuid(session["id"].string)
                 guard seen.insert(id).inserted, session["provider"].string != nil,

@@ -306,3 +306,13 @@ goal is running. Labels provide the same information without relying on color.
 Reduce Motion uses a static running dot; offline rows show dimmed last-known
 state without animation. Core lifecycle revisions refresh the catalog without
 opening each chat. An ordinary response ending is never labeled goal achieved.
+
+Chat layout: opening a conversation hides the global BZZY/computer header and
+connection footer to leave room for messages. The top-right Chat settings menu
+contains Share, Import, Activity, Details, model/effort, defaults, YOLO and Set goal.
+Pause/Resume stays beside the compact goal status above the composer. The mode
+below the alias opens a dropdown for Solo, Delegate, Debate, Parallel and Besties.
+Unpaused chats offer Pause first; Core independently requires a saved paused
+state and stopped workers. Selecting a mode consumes its existing preset, keeps
+the same chat/history/goal and starts no work. Missing presets point to Mode
+defaults. Persistent Agents and scoped observers cannot change terminal modes.

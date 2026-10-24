@@ -3,7 +3,7 @@ import { loadSession, sessionDeleted } from './store.js';
 import { claimInput, effectiveInputOwner, requireOwner } from './runtime.js';
 import { enqueueExecution } from './execution-queue.js';
 import { providerSelection } from '../conversations.js';
-import { enqueueGoalTurn, configureSessionSelection } from './session-operations.js';
+import { enqueueGoalTurn, configureSessionSelection, configureSessionMode, assertSessionModeSwitch } from './session-operations.js';
 import { needsGoalReplacement, parseGoalCommand } from './goals.js';
 import { setTerminalYolo } from './terminal-permissions.js';
 import { authorizedUpdateGrant } from './update-access.js';
@@ -17,9 +17,9 @@ const reject = (message, code = 'INVALID_REQUEST', status = 400) => { throw Obje
 export function submitSessionInput(sessionId, input, requestId, context) {
   if (!context?.authorize || !context.request) throw new Error('Input needs an authenticated Core context.');
   if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(requestId)) reject('Supply a stable input request ID.');
-  const allowed = ['operation', 'owner', 'prompt', 'objective', 'options', 'environment', 'goal', 'resumeGoal', 'replaceGoalId', 'resumeGoalId', 'resumeGoalStatus', 'preparedGoalId', 'questionId', 'answer', 'action', 'text', 'enabled', 'clientRequestId', 'selection', 'expectedUpdatedAt'];
+  const allowed = ['operation', 'owner', 'prompt', 'objective', 'options', 'environment', 'goal', 'resumeGoal', 'replaceGoalId', 'resumeGoalId', 'resumeGoalStatus', 'preparedGoalId', 'questionId', 'answer', 'action', 'text', 'enabled', 'clientRequestId', 'selection', 'expectedUpdatedAt', 'mode'];
   if (!input || Object.keys(input).some(key => !allowed.includes(key))) reject('Unknown input field.');
-  if (!['execute', 'goal', 'answer', 'control', 'permissions', 'selection'].includes(input.operation)) reject('Unknown input operation.');
+  if (!['execute', 'goal', 'answer', 'control', 'permissions', 'selection', 'mode'].includes(input.operation)) reject('Unknown input operation.');
   if (typeof input.owner !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.owner)) reject('Invalid input actor.');
   if (input.clientRequestId !== undefined && (typeof input.clientRequestId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(input.clientRequestId))) reject('Invalid client request identity.');
   for (const flag of ['goal', 'resumeGoal', 'enabled']) if (input[flag] !== undefined && typeof input[flag] !== 'boolean') reject('Input flags must be boolean.');
@@ -42,8 +42,8 @@ async function dispatch(sessionId, input, requestId, { authorize, principal = 'o
   const permission = input.operation === 'answer' ? 'answer' : input.operation === 'control' ? input.action : 'execute';
   if (!['execute', 'answer', 'pause', 'cancel', 'steer'].includes(permission)) reject('Unknown input permission.');
   authorize(permission);
-  if (input.operation === 'selection') {
-    providerSelection(input.selection);
+  if (['selection', 'mode'].includes(input.operation)) {
+    if (input.operation === 'selection') providerSelection(input.selection);
     if (typeof input.expectedUpdatedAt !== 'string') reject('Use the displayed session revision.');
     if (principal !== 'owner') {
       const binding = [...listRecords('core.relay.grant'), ...listRecords('core.relay.context')]
@@ -73,6 +73,7 @@ async function dispatch(sessionId, input, requestId, { authorize, principal = 'o
     }
     reject('Inspect the original input receipt; an incomplete input is never replayed automatically.', existing.state === 'rejected' ? existing.code : 'UNCERTAIN', 409);
   }
+  if (input.operation === 'mode') assertSessionModeSwitch(loadSession(sessionId));
   let objective = input.objective, resume = input.resumeGoal === true;
   const command = input.operation === 'execute' && typeof input.prompt === 'string' ? parseGoalCommand(input.prompt) : null;
   const isGoal = input.operation === 'goal' || Boolean(command);
@@ -115,6 +116,8 @@ async function dispatch(sessionId, input, requestId, { authorize, principal = 'o
     } else if (input.operation === 'selection') {
       const selection = providerSelection(input.selection);
       result = configureSessionSelection(sessionId, input.owner, { selection, expectedUpdatedAt: input.expectedUpdatedAt }, executionRequestId, { authorize: permit });
+    } else if (input.operation === 'mode') {
+      result = configureSessionMode(sessionId, input.owner, { mode: input.mode, expectedUpdatedAt: input.expectedUpdatedAt }, executionRequestId, { authorize: permit });
     } else if (input.operation === 'permissions') {
       result = setTerminalYolo(sessionId, { enabled: input.enabled, questionId: input.questionId }, executionRequestId, { authorize: permit });
     } else {

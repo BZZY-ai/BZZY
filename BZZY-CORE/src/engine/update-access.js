@@ -1,4 +1,4 @@
-import { getRecord, digest } from './database.js';
+import { getRecord, listRecords, digest } from './database.js';
 import { activeAccess, sessionPermissions } from './session-access.js';
 import { fail } from '../validation.js';
 
@@ -18,6 +18,16 @@ export function requireUpdateGrant(row) {
   const current = row && authorizedUpdateGrant(row.id);
   if (!current || row.relayGrantId || current.resource !== row.resource || current.peerId !== row.peerId || current.hostId !== row.hostId) fail('FORBIDDEN', 'Host updates require the fully approved own-phone pairing.', 403);
   return current;
+}
+// Root group admission does not grant direct access to worker sessions. Core
+// remains the coordinator; the existing device token keeps includeChildren:false.
+export function authorizedOwnPhoneTerminalInput(access, session) {
+  if (!session || session.parentSessionId || session.purpose && session.purpose !== 'terminal') return false;
+  const binding = [...listRecords('core.relay.grant'), ...listRecords('core.relay.context')].find(row =>
+    row.coreGrantId === access.id && row.sessionId === session.id && !row.revokedAt && row.expiresAt > Date.now());
+  const parent = binding && authorizedUpdateGrant(binding.relayGrantId || binding.id);
+  return Boolean(parent && binding.kind !== 'agent' && binding.peerId === parent.peerId && binding.hostId === parent.hostId &&
+    binding.relayUrl === parent.relayUrl && binding.expiresAt <= parent.expiresAt);
 }
 export const updateDeviceKey = row => digest({ host: row.hostId, peer: row.peerId, grant: row.id });
 export function updateDevicePreferences(row) {

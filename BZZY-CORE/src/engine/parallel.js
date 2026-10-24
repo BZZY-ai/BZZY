@@ -10,6 +10,7 @@ import { putRecord, getRecord, listRecords, appendEvent, now } from './database.
 import { snapshotWorkspace } from './evidence.js';
 import { writeProjectRecord } from './project.js';
 import { configuredParallel } from './parallel-setup.js';
+import { conversationPrompt } from './conversation.js';
 import { assessGroupCompletion } from './verification.js';
 
 export async function runParallel(session, options, ui) {
@@ -17,26 +18,28 @@ export async function runParallel(session, options, ui) {
   let peers = [], usage = { totalTokens: 0, complete: false, agents: [] };
   try {
     const saved = getRecord('parallel', session.id);
-    const sameGoal = saved && (saved.goalId === session.goal.id || !saved.goalId && saved.createdAt >= session.goal.createdAt && saved.goal === session.goal.objective);
+    const sameGoal = saved && (saved.modeRevision || 0) === (session.modeRevision || 0) && (saved.goalId === session.goal.id || !saved.goalId && saved.createdAt >= session.goal.createdAt && saved.goal === session.goal.objective);
     const choices = configuredParallel({ ...options, parallelAgents: options.parallelAgents || session.parallelAgents || (sameGoal ? saved.peers.map(peer => peer.selection) : undefined) });
     for (const choice of choices) { const p = getProvider(choice.provider); if (p.auth === 'api-key') apiKey(p); }
     if (sameGoal) peers = saved.peers;
     else {
+      if (saved) putRecord('coordination-history', `${session.id}:parallel:${saved.modeRevision || 0}`, saved);
+      const context = session.conversationHandoff?.pending ? conversationPrompt(session, session.goal.objective) : '';
       const snapshot = snapshotWorkspace(session, 'parallel-common-input');
       for (const [index, selection] of choices.entries()) {
-        const namespace = `${selection.provider}-${index + 1}-${session.goal.id.slice(0, 8)}`;
+        const namespace = `${selection.provider}-${index + 1}-${session.goal.id.slice(0, 8)}${session.modeRevision ? '-' + session.modeRevision : ''}`;
         const work = path.join(home(), 'parallel', session.id, namespace); privateDir(path.dirname(work));
         fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
         const child = createSession(getProvider(selection.provider), work, selection.model);
-        const tokenBudget = session.goal.tokenBudget == null ? undefined : Math.max(1, Math.floor(session.goal.tokenBudget / choices.length));
+        const tokenBudget = session.goal.tokenBudget == null ? undefined : Math.max(1, Math.floor((session.goal.tokenBudget - coordinator.tokenOffset) / choices.length));
         Object.assign(child, { mode: 'solo', role: 'peer', parentSessionId: session.id, projectRoot: session.cwd, agentNamespace: namespace,
           selectedEffort: selection.effort || 'default', modelCapabilities: selection.capabilities,
-          contract: { ...session.contract, limits: { ...session.contract.limits, ...(tokenBudget ? { tokenBudget } : {}) } },
+          contract: { ...session.contract, context: [session.contract.context, context].filter(Boolean).join('\n\n'), limits: { ...session.contract.limits, ...(tokenBudget ? { tokenBudget } : {}) } },
           policy: session.policy, backendHomes: session.backendHomes, strictPolicy: true, suppressNotifications: true, goal: newGoal(session.goal.objective, tokenBudget) });
         peers.push({ namespace, sessionId: child.id, selection }); saveSession(child);
         appendEvent(child.id, 'message.user', { text: session.goal.objective, kind: 'goal', source: 'parallel', parentSessionId: session.id });
       }
-      putRecord('parallel', session.id, { peers, snapshotId: snapshot.id, goalId: session.goal.id, goal: session.goal.objective, createdAt: now() });
+      putRecord('parallel', session.id, { peers, modeRevision: session.modeRevision || 0, tokenOffset: coordinator.tokenOffset, snapshotId: snapshot.id, goalId: session.goal.id, goal: session.goal.objective, createdAt: now() });
     }
     const concurrency = options.concurrency || choices.length;
     const executions = new Map();

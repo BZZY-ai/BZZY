@@ -338,3 +338,16 @@ expectedUpdatedAt on an own-phone terminal, starts no execution and journals its
 receipt. `selectionControl` advertises support. A manually paused goal resume
 uses resumeGoalId plus resumeGoalStatus:"paused", checked at admission and commit.
 No credentials, environment, filesystem path or tool policy can be supplied.
+
+Paused terminal modes: `session.get.capabilities.modeControl` advertises the
+full own-phone `session.mode` command (`owner`, `mode`, `expectedUpdatedAt`,
+`coordinateInput:true`). Accepted receipts contain `state`, `sessionId`, and the
+requested `mode`. Core enforces pause/worker/revision checks and its saved preset;
+this command does not execute or resume. `command.status` and authenticated
+`input.accepted` events retain the normal durable recovery contract.
+
+Goal list feedback is opt-in: `capabilities.terminalGoalFeedback:true` permits
+`sessions.list` with `goalFeedback:true`, returning optional `goalStatus` and
+`goalReason`. Older clients retain the original strict catalog schema. Lifecycle
+revisions prompt a fresh authorized catalog read; the hint itself is not an
+execution or verified-completion claim.

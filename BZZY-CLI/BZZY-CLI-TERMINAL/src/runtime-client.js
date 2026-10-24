@@ -172,8 +172,8 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   };
   if (options.activeControl || options.allowControlOnInput) ui.permissionConnection = { info, owner, sessionId, acquire: acquireControl };
   const initial = await api('GET'); let children = initial.capabilities.chatTabs ? initial.children : [];
-  const roomSessionId = initial.session.bestiesSessionId || (initial.session.mode === 'besties' ? sessionId : null);
-  const roomApi = roomSessionId ? client(info, roomSessionId, owner) : null;
+  let roomSessionId = initial.session.bestiesSessionId || (initial.session.mode === 'besties' ? sessionId : null);
+  let roomApi = roomSessionId ? client(info, roomSessionId, owner) : null;
   let tabs = [{ id: sessionId, agent: 'Overview' }, ...children], activeId = ui.activeTab && tabs.some(t => t.id === ui.activeTab) ? ui.activeTab
     : ui.interactive && initial.session.mode === 'parallel' && children.length ? children[0].id : sessionId;
   const seenQuestions = new Set();
@@ -389,6 +389,16 @@ async function watch(info, sessionId, owner, ui, options = {}) {
       const snapshot = await api('GET'), selected = renderingId === sessionId ? snapshot : await selectedApi('GET');
       if (renderingId !== activeId) continue;
       if (modalTask) continue;
+      if ((initial.session.mode || 'solo') !== (snapshot.session.mode || 'solo')) {
+        Object.assign(initial.session, snapshot.session);
+        roomSessionId = snapshot.session.bestiesSessionId || (snapshot.session.mode === 'besties' ? sessionId : null);
+        roomApi = roomSessionId ? client(info, roomSessionId, owner) : null;
+        if (activeId !== sessionId) { selectTab(sessionId); continue; }
+      }
+      if (!snapshot.capabilities.chatTabs && children.length) {
+        children = []; tabs = [{ id: sessionId, agent: 'Overview' }]; ui.setTabs?.(sessionId, children, sessionId);
+        if (activeId !== sessionId) { selectTab(sessionId); continue; }
+      }
       ui.updateSession?.(selected);
       if (snapshot.capabilities.chatTabs) {
         if (children.map(child => child.id).join() !== snapshot.children.map(child => child.id).join()) {

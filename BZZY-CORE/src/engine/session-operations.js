@@ -4,13 +4,13 @@ import { delay } from './delegation.js';
 import { loadSession, sessionPath, writeJson, recordSessionLifecycle } from './store.js';
 import { prepareTask } from './task.js';
 import { newGoal, needsGoalReplacement } from './goals.js';
-import { getProvider, selectionFromSession, defaultSelection } from './providers.js';
+import { getProvider, selectionFromSession, defaultSelection, modeDefault } from './providers.js';
 import { assertModelIdle, assertSessionIdle } from './models.js';
 import { reserveRequest, database, transaction, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
 import { conversationCursor } from './conversation.js';
 import { enqueueExecution } from './execution-queue.js';
 import { normalizeContract } from './contracts.js';
-import { budgetUsage } from './delegation-usage.js';
+import { budgetUsage, delegationUsage } from './delegation-usage.js';
 import { reconcileSession } from './recovery.js';
 import { isStalledGoal } from './goal-state.js';
 
@@ -120,10 +120,10 @@ export function updateIdleGoal(sessionId, owner, action) {
   writeJson(sessionPath(changed.id), changed); return changed;
 }
 
-function editSession(sessionId, owner, apply, authorize, existingDb) {
+function editSession(sessionId, owner, apply, authorize, existingDb, validate = assertModelIdle) {
   const operation = db => {
     requireOwner(sessionId, owner); authorize?.();
-    const current = loadSession(sessionId); assertModelIdle(current);
+    const current = loadSession(sessionId); validate(current);
     apply(current, db); current.updatedAt = now();
     putRecord('session', sessionId, current, db);
     return current;
@@ -168,8 +168,8 @@ export function setSessionProvider(sessionId, owner, expectedProvider, providerI
 }
 
 export function assertSessionModeSwitch(session) {
-  if (!session || session.purpose === 'agent' || session.parentSessionId || session.parallelSessionId || !['solo', 'delegate', 'debate'].includes(session.mode || 'solo')) {
-    throw new Error('Switch modes in a solo, Delegate or Debate terminal chat, not an Agent or parallel/besties group.');
+  if (!session || session.purpose === 'agent' || session.parentSessionId || session.parallelSessionId || !['solo', 'delegate', 'debate', 'parallel', 'besties'].includes(session.mode || 'solo')) {
+    throw new Error('Switch modes in a root terminal chat, not an Agent or worker.');
   }
   assertSessionIdle(session);
   if (session.executionState !== 'paused') throw Object.assign(new Error('Pause this chat with /pause or /goal pause before switching modes.'), { code: 'CONFLICT', status: 409 });
@@ -189,7 +189,7 @@ const modeSelection = selected => {
 // Trusted local terminal operation. Changing mode never queues work, replaces a
 // goal, changes its policy, or transfers private account bindings.
 export function setSessionMode(sessionId, owner, input, { authorize, db } = {}) {
-  if (!['solo', 'delegate', 'debate'].includes(input?.mode)) throw new Error('Choose /delegate, /debate or /solo.');
+  if (!['solo', 'delegate', 'debate', 'parallel', 'besties'].includes(input?.mode)) throw new Error('Choose a supported terminal mode.');
   return editSession(sessionId, owner, (session, db) => {
     assertSessionModeSwitch(session);
     if (typeof input.expectedUpdatedAt !== 'string' || input.expectedUpdatedAt !== session.updatedAt) {
@@ -198,6 +198,9 @@ export function setSessionMode(sessionId, owner, input, { authorize, db } = {}) 
     const previous = session.mode || 'solo';
     if (input.mode === 'solo' && previous === 'solo') return;
     if (previous === 'solo') session.soloSelection = { ...selectionFromSession(session), modelSelectionRequired: session.modelSelectionRequired === true };
+    const spent = session.goal ? Math.max(session.goal.tokensUsed || 0, budgetUsage(session)) : 0;
+    const delegated = session.goal ? Math.max(delegationUsage(session).delegatedTokens, session.goal.delegatedTokensUsed || 0) : 0;
+    for (const field of ['executor', 'debateAgents', 'parallelAgents', 'besties']) delete session[field];
     let selected;
     if (input.mode === 'delegate') {
       if (!input.selection?.supervisor || !input.selection?.executor) throw new Error('Choose both the Delegate supervisor and executor.');
@@ -205,10 +208,12 @@ export function setSessionMode(sessionId, owner, input, { authorize, db } = {}) 
       const executor = modeSelection(input.selection.executor);
       session.executor = executor;
       delete session.debateAgents;
-    } else if (input.mode === 'debate') {
-      if (!Array.isArray(input.selection?.agents) || input.selection.agents.length < 2 || input.selection.agents.length > 3) throw new Error('Choose two or three Debate agents.');
-      session.debateAgents = input.selection.agents.map(modeSelection);
-      selected = session.debateAgents[0];
+    } else if (['debate', 'parallel', 'besties'].includes(input.mode)) {
+      if (!Array.isArray(input.selection?.agents) || input.selection.agents.length < 2 || input.selection.agents.length > 3) throw new Error('Choose two or three agents.');
+      const agents = input.selection.agents.map(modeSelection);
+      if (input.mode === 'besties' && session.contract?.limits.concurrency != null && session.contract.limits.concurrency < agents.length) throw new Error('This goal limits concurrent peers. Choose a smaller Besties preset.');
+      session[{ debate: 'debateAgents', parallel: 'parallelAgents', besties: 'besties' }[input.mode]] = agents;
+      selected = agents[0];
       delete session.executor;
     } else {
       selected = session.soloSelection || defaultSelection() || selectionFromSession(session);
@@ -220,11 +225,16 @@ export function setSessionMode(sessionId, owner, input, { authorize, db } = {}) 
     // instructions/tools cannot survive the switch, even with the same model.
     applyProviderSelection(session, getProvider(selected.provider), selected, db, { preservePause: true });
     session.modelSelectionRequired = selected.modelSelectionRequired === true;
-    session.mode = input.mode;
+    session.mode = input.mode; session.modeRevision = (session.modeRevision || 0) + 1;
+    if (session.goal) {
+      session.goal.tokensUsed = spent; session.goal.supervisorTokensUsed = Math.max(0, spent - delegated);
+      session.goal.nativeTokenOffset = session.goal.supervisorTokensUsed;
+      session.goal.supervisorUsageBase = session.usage?.tokens || 0;
+    }
     appendEvent(session.id, 'mode.changed', { previousMode: previous, mode: session.mode, provider: session.provider,
       model: session.model, effort: session.selectedEffort, ...(session.executor ? { executor: session.executor } : {}),
       ...(session.debateAgents ? { agents: session.debateAgents } : {}), appliesTo: 'next_turn', paused: true }, db);
-  }, authorize, db);
+  }, authorize, db, assertSessionModeSwitch);
 }
 
 // Shared authenticated input operation; a model edit starts no execution and
@@ -241,5 +251,21 @@ export function configureSessionSelection(sessionId, owner, input, requestId, { 
       ? setSessionModel(sessionId, owner, selection, options)
       : setSessionProvider(sessionId, owner, current.provider, selection.provider, selection, options);
     return { sessionId, provider: saved.provider, model: saved.model, effort: saved.selectedEffort };
+  });
+}
+
+// Mode changes consume the selected mode's private-host preset, never client
+// supplied execution options. Admission shares the ordinary input journal.
+export function configureSessionMode(sessionId, owner, input, requestId, { authorize } = {}) {
+  return reserveRequest(`mode:${sessionId}`, requestId, input, db => {
+    authorize?.();
+    const current = loadSession(sessionId); assertSessionModeSwitch(current);
+    const mode = input.mode;
+    if (!['solo', 'delegate', 'debate', 'parallel', 'besties'].includes(mode)) throw Object.assign(new Error('Choose a terminal mode.'), { code: 'INVALID_REQUEST', status: 400 });
+    const agents = mode === 'solo' ? null : modeDefault(mode);
+    if (mode !== 'solo' && !agents) throw Object.assign(new Error('Save this mode’s defaults in Settings before switching.'), { code: 'DEFAULT_REQUIRED', status: 409 });
+    const selection = mode === 'delegate' ? { supervisor: agents[0], executor: agents[1] } : { agents };
+    const saved = setSessionMode(sessionId, owner, { mode, selection, expectedUpdatedAt: input.expectedUpdatedAt }, { authorize, db });
+    return { sessionId, mode: saved.mode };
   });
 }

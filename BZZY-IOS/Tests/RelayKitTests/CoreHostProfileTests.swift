@@ -2,6 +2,43 @@ import XCTest
 @testable import RelayKit
 
 final class CoreHostProfileTests: XCTestCase {
+    @MainActor func testPausedModeDropdownUsesDefaultsInOneRealCoreChatWithoutExecution() async throws {
+        let fixture = try MultiHostFixture(); defer { fixture.shutdown() }
+        let identity = try RelayIdentity.generate()
+        let configuration = try fixture.request(["op": .string("start"), "certificate": try RelayWire.object(identity.certificate)])
+        let endpoint = try XCTUnwrap(URL(string: try XCTUnwrap(configuration["endpoint"].string)))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("bzzy-mode-dropdown-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var authorization: Data?
+        let connection = try RelayConnection(isolatedIdentity: identity, loopbackTransport: RelayTransport(identity: identity, loopbackEndpoint: endpoint),
+            projectionDirectory: directory, loadAuthorization: { authorization }, saveAuthorization: { authorization = $0 })
+        defer { connection.pause() }
+        await connection.connect()
+        let host = try XCTUnwrap(configuration["hosts"].array?.first)
+        connection.previewPairing(try XCTUnwrap(host["qr"].string)); await connection.claimConfirmedHost()
+        try await eventually { try fixture.request(["op": .string("state"), "host": .number(0)])["pendingCount"].integer == 1 }
+        _ = try fixture.request(["op": .string("approve"), "host": .number(0)])
+        try await eventually { connection.coreActionsAvailable && connection.coreModeControl }
+        let sessionID = connection.coreSessionID
+        let premature = await connection.changeCoreSessionMode("delegate", sessionID: sessionID)
+        XCTAssertFalse(premature)
+        let paused = await connection.controlCore("pause", sessionID: sessionID); XCTAssertTrue(paused)
+        try await eventually { connection.coreExecutionState == "paused" }
+        let selection: CoreJSONValue = .object(["provider": .string("codex"), "model": .string("fixture"), "effort": .string("default")])
+        for mode in ["delegate", "debate", "parallel", "besties"] {
+            let settings = try await connection.readCoreSettings()
+            _ = try await connection.saveCoreDefaults(target: mode, revision: try XCTUnwrap(settings["revision"].string), agents: [selection, selection], requestID: UUID().uuidString)
+            let changed = await connection.changeCoreSessionMode(mode, sessionID: sessionID)
+            let commands = try fixture.request(["op": .string("state"), "host": .number(0)])["modeCommands"]
+            XCTAssertTrue(changed, "\(mode): \(connection.coreError ?? connection.coreCommandStatus), receipts \(commands)")
+            guard changed else { return }
+            XCTAssertEqual(connection.coreSessionMode, mode); XCTAssertEqual(connection.coreExecutionState, "paused")
+            XCTAssertEqual(connection.coreSessionID, sessionID)
+        }
+        let solo = await connection.changeCoreSessionMode("solo", sessionID: sessionID); XCTAssertTrue(solo)
+        XCTAssertEqual(connection.coreSessionMode, "solo")
+        XCTAssertEqual(try fixture.request(["op": .string("state"), "host": .number(0)])["executionCount"].integer, 0)
+    }
     func testSingleHostMigrationPreservesEveryDurableRecoveryField() throws {
         let identity = try RelayIdentity.generate(), session = UUID().uuidString, request = UUID().uuidString
         let host = identity.certificate.id

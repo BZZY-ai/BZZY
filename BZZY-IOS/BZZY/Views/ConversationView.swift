@@ -36,6 +36,8 @@ struct ConversationCanvas: View {
     @State private var showReplaceGoal = false
     @State private var retryGoalMessageID: String?
     @State private var showShare = false
+    @State private var showImport = false
+    @State private var showDefaults = false
     @State private var voice = VoiceCapture()
     @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var recognitionLanguage = SpeechLanguage.preferred.rawValue
     @State private var voiceDraft: VoiceDraft?
@@ -105,26 +107,45 @@ struct ConversationCanvas: View {
                 RoundButton(symbol: "chevron.left", label: "Back") { dismiss() }
                 VStack(alignment: .leading, spacing: 5) {
                     Text(title).bzzyFont(16, weight: .medium).lineLimit(1)
-                    Text(subtitle).bzzyFont(9, design: .monospaced).foregroundStyle(BZZYTheme.secondary)
-                        .accessibilityIdentifier("conversation-mode")
+                    modePicker
                 }
                 Spacer(minLength: 0)
-                if isLive && relay.coreSharingAllowed && relay.coreSessionID == conversationID {
-                    RoundButton(symbol: "square.and.arrow.up", label: relay.coreIsAgent ? "Share agent project and context" : "Share terminal project and context") { showShare = true }
-                        .disabled(!relay.isCoreSessionReady(conversationID))
-                        .accessibilityIdentifier(relay.coreIsAgent ? "share-live-agent" : "share-live-terminal")
-                } else if shareTarget != nil {
-                    RoundButton(symbol: "square.and.arrow.up", label: "Share \(shareTarget?.kind.title.lowercased() ?? "workspace")") { showShare = true }
-                        .accessibilityIdentifier("share-resource")
-                }
-                if isLive {
-                    RoundButton(symbol: "list.bullet", label: "Live activity") { showActivity = true }
-                        .disabled(relay.coreSessionID != conversationID)
-                        .accessibilityIdentifier("live-session-activity")
-                }
-                RoundButton(symbol: "ellipsis", label: "Workspace details") { showDetails = true }
-                    .disabled(isLive && relay.coreSessionID != conversationID)
-            }.padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 14)
+                Menu {
+                    if isLive && relay.coreSharingAllowed && relay.coreSessionID == conversationID {
+                        Button { showShare = true } label: { Label("Share project and context", systemImage: "square.and.arrow.up") }
+                            .disabled(!relay.isCoreSessionReady(conversationID))
+                            .accessibilityIdentifier(relay.coreIsAgent ? "share-live-agent" : "share-live-terminal")
+                    } else if shareTarget != nil {
+                        Button { showShare = true } label: { Label("Share", systemImage: "square.and.arrow.up") }
+                            .accessibilityIdentifier("share-resource")
+                    }
+                    Button { showImport = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
+                        .disabled(isLive && !relay.coreActionsAvailable)
+                    if isLive {
+                        Button { showActivity = true } label: { Label("Activity", systemImage: "list.bullet") }
+                            .disabled(relay.coreSessionID != conversationID).accessibilityIdentifier("live-session-activity")
+                        if relay.coreSelectionControl {
+                            Button { showModelSettings = true } label: { Label("Model and effort", systemImage: "slider.horizontal.3") }
+                                .disabled(!relay.isCoreSessionReady(conversationID) || relay.coreExecutionState != "paused")
+                                .accessibilityIdentifier("session-model")
+                        }
+                        if relay.coreModeControl { Button("Mode defaults") { showDefaults = true } }
+                        if relay.coreYoloControl {
+                            Toggle("YOLO", isOn: Binding(get: { relay.coreYoloEnabled }, set: { enabled in
+                                let pending = store.liveSession?.questions.first(where: { $0.kind == "approval" })
+                                relay.performHostAction { await relay.setCoreYolo(enabled, questionID: pending?.id, sessionID: conversationID) }
+                            })).disabled(!relay.isCoreSessionReady(conversationID) || relay.coreBusy).accessibilityIdentifier("chat-yolo")
+                        }
+                    }
+                    Button { draft = CoreGoalDraft.settingGoal(draft); composerCaretRequest &+= 1; composerFocused = true } label: { Label("Set goal", systemImage: "scope") }
+                        .disabled(!canSetGoal).accessibilityIdentifier("set-goal")
+                    Button { showDetails = true } label: { Label("Details", systemImage: "info.circle") }
+                        .disabled(isLive && relay.coreSessionID != conversationID)
+                } label: {
+                    Image(systemName: "slider.horizontal.3").bzzyFont(18).frame(width: 44, height: 44)
+                        .foregroundStyle(BZZYTheme.secondary).contentShape(Rectangle())
+                }.accessibilityLabel("Chat settings").accessibilityIdentifier("chat-settings")
+            }.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 6)
             Rectangle().fill(BZZYTheme.line.opacity(0.65)).frame(height: 0.5)
 
             ScrollViewReader { reader in
@@ -175,7 +196,7 @@ struct ConversationCanvas: View {
                                 Color.clear.preference(key: ConversationBottomPreference.self,
                                     value: geometry.frame(in: .named("conversation-scroll")).maxY)
                             })
-                    }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 16)
+                    }.padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)
                 }.scrollIndicators(.hidden).scrollDismissesKeyboard(.interactively)
                     .coordinateSpace(name: "conversation-scroll")
                     .background(GeometryReader { geometry in
@@ -226,6 +247,7 @@ struct ConversationCanvas: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .bzzyScreen().toolbar(.hidden)
+        .preference(key: ConversationPresentationPreference.self, value: true)
         .onChange(of: relay.coreCommandStatus) { _, status in
             if isLive, status.hasPrefix("Accepted"), let submitted = pendingSubmittedDraft, draft == submitted {
                 draft = ""; pendingSubmittedDraft = nil
@@ -237,6 +259,13 @@ struct ConversationCanvas: View {
                 draft = ""; pendingSubmittedDraft = nil
             }
         }
+        .sheet(isPresented: $showModelSettings) { CoreDefaultsEditor(sessionID: conversationID) }
+        .sheet(isPresented: $showDefaults) { CoreDefaultsEditor() }
+        .sheet(isPresented: $showImport) {
+            let kind: SharedResourceKind = agent != nil || shareTarget?.kind == .agent || isLive && relay.coreIsAgent ? .agent : .terminal
+            if kind == .agent && !store.showsDemoContent { LiveAgentImportView(store: store).coreAvailabilityGate() }
+            else { ImportResourceView(store: store, kind: kind).coreAvailabilityGate() }
+        }
         .sheet(isPresented: $showActivity) { ActivityView(store: store, sessionID: conversationID) }
         .sheet(isPresented: $showShare) {
             if isLive { LiveTerminalShareView(sessionID: conversationID, title: title, directory: store.liveSession?.directory, kind: relay.coreIsAgent ? .agent : .terminal) }
@@ -244,6 +273,9 @@ struct ConversationCanvas: View {
         }
         .onChange(of: voiceHeld) { _, held in
             if held { startDictation() } else { finishDictation() }
+        }
+        .onChange(of: [showShare, showImport, showDetails, showActivity, showDefaults, showModelSettings]) { _, presented in
+            if presented.contains(true) { cancelDictation(); persistHostDraft() }
         }
         .onChange(of: voice.transcript) { _, text in
             if let voiceDraft { draft = voiceDraft.text(with: text) }
@@ -289,6 +321,38 @@ struct ConversationCanvas: View {
         }
     }
 
+    private var canPause: Bool {
+        isLive && relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("pause") && relay.coreExecutionState != "paused"
+            && !relay.coreBusy && !relay.coreCommandUncertain
+    }
+    private var modeTitle: String {
+        guard isLive, relay.coreSessionID == conversationID else { return isDemo ? "Solo · Demo" : "Draft" }
+        return relay.coreIsAgent ? "Agent" : relay.coreSessionMode.capitalized
+    }
+    private var modePicker: some View {
+        Menu {
+            if relay.coreExecutionState != "paused" {
+                Button("Pause to change mode", systemImage: "pause.fill") {
+                    relay.performHostAction { await relay.controlCore("pause", sessionID: conversationID) }
+                }.disabled(!canPause)
+            }
+            ForEach(["solo", "delegate", "debate", "parallel", "besties"], id: \.self) { mode in
+                Button {
+                    relay.performHostAction { _ = await relay.changeCoreSessionMode(mode, sessionID: conversationID) }
+                } label: {
+                    if relay.coreSessionMode == mode { Label(mode.capitalized, systemImage: "checkmark") }
+                    else { Text(mode.capitalized) }
+                }.disabled(relay.coreExecutionState != "paused" || relay.coreSessionMode == mode || relay.coreBusy || relay.coreCommandUncertain)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(modeTitle)
+                if isLive && relay.coreModeControl { Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) }
+            }.bzzyFont(11, weight: .medium).foregroundStyle(BZZYTheme.accent).frame(minHeight: 24)
+        }.disabled(!isLive || !relay.coreModeControl || !relay.isCoreSessionReady(conversationID))
+            .accessibilityLabel("Chat mode").accessibilityValue(modeTitle).accessibilityIdentifier("conversation-mode")
+    }
+
     private func persistHostDraft() {
         guard let hostID = draftHostID, relay.hosts.contains(where: { $0.id == hostID && $0.isPaired }) else { return }
         store.saveComposerDraft(draft, hostID: hostID, conversationID: conversationID, persist: true)
@@ -302,19 +366,15 @@ struct ConversationCanvas: View {
                         GoalPhasePill(status: status, reason: relay.coreGoalReason)
                     }
                     Spacer(minLength: 6)
-                    Button {
-                        let pending = store.liveSession?.questions.first(where: { $0.kind == "approval" })
-                        relay.performHostAction { await relay.setCoreYolo(!relay.coreYoloEnabled, questionID: pending?.id, sessionID: conversationID) }
-                        BZZYTheme.haptic()
-                    } label: {
-                        Text(relay.coreYoloEnabled ? "YOLO ON" : "YOLO OFF").bzzyFont(11, weight: .bold, design: .monospaced)
-                            .padding(.horizontal, 13).frame(minHeight: 38)
-                            .foregroundStyle(relay.coreYoloEnabled ? BZZYTheme.background : BZZYTheme.secondary)
-                            .background(relay.coreYoloEnabled ? BZZYTheme.yolo : BZZYTheme.elevated, in: Capsule())
-                    }.buttonStyle(BZZYPressStyle())
-                        .disabled(!relay.isCoreSessionReady(conversationID) || !relay.coreYoloControl || relay.isCoreSessionBusy(conversationID) || relay.hasUncertainCoreCommand(sessionID: conversationID))
-                        .accessibilityLabel(relay.coreYoloEnabled ? "Disable YOLO" : "Enable YOLO")
-                        .accessibilityIdentifier("chat-yolo")
+                    if relay.canResumeCoreGoal {
+                        goalShortcut("Resume", icon: "play.fill", id: "resume-goal", enabled: relay.isCoreSessionReady(conversationID) && !relay.coreBusy && !relay.coreCommandUncertain) {
+                            prepareForSubmission(); relay.performHostAction { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
+                        }
+                    } else {
+                        goalShortcut(relay.coreExecutionState == "paused" ? "Paused" : "Pause", icon: "pause.fill", id: "pause-goal", enabled: canPause) {
+                            relay.performHostAction { await relay.controlCore("pause", sessionID: conversationID) }
+                        }
+                    }
                 }
                 if let session = store.liveSession, session.id == conversationID {
                     ScrollView {
@@ -323,32 +383,6 @@ struct ConversationCanvas: View {
                 }
                 if let error = relay.coreError { Text(error).bzzyFont(11).foregroundStyle(BZZYTheme.danger) }
             }
-            ScrollView(.horizontal) { HStack(spacing: 8) {
-                goalShortcut("Set goal", icon: "scope", id: "set-goal", enabled: canSetGoal) {
-                    draft = CoreGoalDraft.settingGoal(draft)
-                    composerCaretRequest &+= 1; composerFocused = true
-                    BZZYTheme.haptic()
-                }
-                if isLive {
-                    goalShortcut("Pause", icon: "pause.fill", id: "pause-goal",
-                                 enabled: relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("pause") && !relay.coreBusy && ["active", "verifying"].contains(relay.coreGoalStatus ?? "")) {
-                        relay.performHostAction { await relay.controlCore("pause", sessionID: conversationID) }
-                    }
-                    if relay.coreSelectionControl {
-                        goalShortcut("Model", icon: "slider.horizontal.3", id: "session-model",
-                                     enabled: relay.isCoreSessionReady(conversationID) && !["queued", "launching", "running", "waiting_for_input", "verifying"].contains(relay.coreExecutionState ?? "") && !relay.coreBusy) {
-                            showModelSettings = true
-                        }.sheet(isPresented: $showModelSettings) { CoreDefaultsEditor(sessionID: conversationID) }
-                    }
-                }
-                goalShortcut("Resume goal", icon: "play.fill", id: "resume-goal",
-                             enabled: isLive && relay.isCoreSessionReady(conversationID) && relay.canResumeCoreGoal && !relay.isCoreSessionBusy(conversationID) && !voice.isBusy && voiceDraft == nil) {
-                    prepareForSubmission()
-                    relay.performHostAction { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
-                    BZZYTheme.haptic()
-                }
-                Spacer(minLength: 0)
-            } }.scrollIndicators(.hidden)
             HStack(alignment: .bottom, spacing: 10) {
                 #if canImport(UIKit)
                 GoalMessageEditor(text: $draft, focused: Binding(get: { composerFocused }, set: { composerFocused = $0 }), caretAtEndRequest: composerCaretRequest)
@@ -678,3 +712,8 @@ private struct GoalMessageEditor: UIViewRepresentable {
     }
 }
 #endif
+
+struct ConversationPresentationPreference: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}

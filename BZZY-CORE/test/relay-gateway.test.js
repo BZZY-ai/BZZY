@@ -990,6 +990,46 @@ test('paused own-phone terminal model edits preserve goal/history and use durabl
   assert.equal((await f.rpc(own, 'session.configure', { ...params, selection: { ...params.selection, model: 'stale' } })).error.code, 'CONFLICT');
 });
 
+test('own-phone mode switches require a confirmed pause, retain the chat, and consume saved presets without execution', async t => {
+  const f = await fixture(t), session = f.createSession();
+  const own = await f.pair(session.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });
+  const scoped = await f.pair(session.id, controls);
+  const { loadSession } = await import('../src/engine/store.js');
+  const { saveModeDefault } = await import('../src/engine/providers.js');
+  assert.equal((await f.rpc(own, 'session.get')).result.capabilities.modeControl, true);
+  assert.equal((await f.rpc(scoped, 'session.get')).result.capabilities.modeControl, false);
+  let params = { owner: 'phone', mode: 'delegate', expectedUpdatedAt: loadSession(session.id).updatedAt, coordinateInput: true };
+  assert.equal((await f.rpc(scoped, 'session.mode', params)).error.code, 'FORBIDDEN');
+  assert.equal((await f.rpc(own, 'session.mode', params)).error.code, 'CONFLICT');
+  await f.rpc(own, 'control.request', { owner: 'phone', action: 'pause', coordinateInput: true });
+  params.expectedUpdatedAt = loadSession(session.id).updatedAt;
+  assert.equal((await f.rpc(own, 'session.mode', params)).error.code, 'DEFAULT_REQUIRED');
+  saveModeDefault('delegate', [{ provider: 'codex', model: 'brain', effort: 'high' }, { provider: 'claude', model: 'hands', effort: 'default' }]);
+  const id = randomUUID(), changed = await f.rpc(own, 'session.mode', params, { id });
+  assert.equal(changed.ok, true, JSON.stringify(changed));
+  assert.deepEqual(changed.result, { state: 'accepted', sessionId: session.id, mode: 'delegate' });
+  assert.deepEqual(await f.rpc(own, 'session.mode', params, { id }), changed);
+  assert.equal((await f.rpc(own, 'command.status', { requestId: id })).result.state, 'accepted');
+  assert.equal(loadSession(session.id).executionState, 'paused'); assert.equal(loadSession(session.id).executor.model, 'hands');
+  for (const mode of ['debate', 'parallel', 'besties', 'solo']) {
+    if (mode !== 'solo') saveModeDefault(mode, [{ provider: 'codex', model: 'one', effort: 'default' }, { provider: 'codex', model: 'two', effort: 'default' }]);
+    const changed = await f.rpc(own, 'session.mode', { ...params, mode, expectedUpdatedAt: loadSession(session.id).updatedAt });
+    assert.equal(changed.ok, true, JSON.stringify(changed)); assert.equal(changed.result.mode, mode);
+    assert.equal((await f.rpc(own, 'control.request', { owner: 'phone', action: 'pause', coordinateInput: true })).ok, true);
+  }
+  const binding = getRecord('core.relay.grant', own.local.id), access = getRecord('access-token', digest(binding.token));
+  assert.equal(access.includeChildren, false, 'group admission must not broaden the device token');
+  const goalSession = loadSession(session.id); goalSession.goal = { ...newGoal('Goal feedback fixture'), status: 'paused' }; putRecord('session', session.id, goalSession);
+  const legacyCatalog = (await f.rpc(own, 'sessions.list')).result.sessions.find(row => row.id === session.id);
+  const feedbackCatalog = (await f.rpc(own, 'sessions.list', { goalFeedback: true })).result.sessions.find(row => row.id === session.id);
+  assert.equal(legacyCatalog.goalStatus, undefined, 'older strict clients retain their original catalog shape');
+  assert.equal(feedbackCatalog.goalStatus, 'paused');
+  const worker = f.createSession(), child = loadSession(worker.id); child.parentSessionId = session.id; putRecord('session', child.id, child);
+  const denied = await fetch(runtimeInfo().url + `/sessions/${child.id}`, { headers: { authorization: `Bearer ${binding.token}` } });
+  assert.equal(denied.status, 403); await denied.arrayBuffer();
+  assert.equal(listRecords('execution').length, 0);
+});
+
 test('own-phone pause, model change and exact paused-goal resume retain the same goal', async t => {
   const f = await fixture(t), session = f.createSession();
   const own = await f.pair(session.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });

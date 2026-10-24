@@ -25,6 +25,8 @@ export function enqueueExecution(sessionId, input, requestId, { authorize, prepa
     const options = { ...input.options, mode: session.mode || input.options?.mode || 'solo',
       ...(session.mode === 'delegate' && session.executor ? { executor: session.executor.provider, executorModel: session.executor.model } : {}),
       ...(session.mode === 'debate' && session.debateAgents ? { debateAgents: session.debateAgents } : {}),
+      ...(session.mode === 'parallel' && session.parallelAgents ? { parallelAgents: session.parallelAgents } : {}),
+      ...(session.mode === 'besties' && session.besties ? { besties: session.besties } : {}),
       yolo: terminalYolo(sessionId) ?? input.options?.yolo ?? false };
     effectivePolicy(session, options);
     if (input.goal && !session.goal) throw new Error('This session has no goal contract. Create its goal through the CLI first.');

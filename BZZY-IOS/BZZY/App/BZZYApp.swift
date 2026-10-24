@@ -88,6 +88,7 @@ struct WorkspaceView: View {
     @State private var hostProfilesReady = false
     @State private var pendingConnectionFromNotification = false
     @State private var navigationID = UUID()
+    @State private var conversationPresented = false
     @Environment(\.scenePhase) private var scenePhase
 
     init(store: WorkspaceStore, relay: RelayConnection? = nil, notifications: NotificationStore? = nil) {
@@ -112,7 +113,7 @@ struct WorkspaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !relay.hosts.isEmpty || allowsDemoNavigation { workspaceHeader }
+            if !conversationPresented && (!relay.hosts.isEmpty || allowsDemoNavigation) { workspaceHeader }
             if !allowsDemoNavigation && !relay.corePairAuthorized {
                 ConnectView(required: true)
             } else {
@@ -134,9 +135,10 @@ struct WorkspaceView: View {
             .toolbar(.hidden)
         }.id(navigationID)
             }
-            if !relay.hosts.isEmpty || allowsDemoNavigation { CoreConnectionFooter() }
+            if !conversationPresented && (!relay.hosts.isEmpty || allowsDemoNavigation) { CoreConnectionFooter() }
         }
             .bzzyScreen()
+            .onPreferenceChange(ConversationPresentationPreference.self) { conversationPresented = $0 }
             .sheet(isPresented: $showSettings, onDismiss: {
                 if pendingConnectionFromNotification {
                     pendingConnectionFromNotification = false

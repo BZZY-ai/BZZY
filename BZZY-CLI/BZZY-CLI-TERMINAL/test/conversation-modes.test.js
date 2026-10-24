@@ -142,7 +142,9 @@ def until(check):
     while time.monotonic() < deadline:
         drain()
         if check(): return
-        assert child.poll() is None, output[-3000:].decode(errors='replace')
+        if child.poll() is not None:
+            assert check(), output[-3000:].decode(errors='replace')
+            return
     raise AssertionError(output[-3000:].decode(errors='replace'))
 try:
     until(lambda: session().get('model') == 'fixture-solo' and (pathlib.Path(os.environ['BZZY_HOME']) / 'runtime/service.json').exists())

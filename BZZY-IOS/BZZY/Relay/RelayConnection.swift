@@ -198,9 +198,12 @@ public final class RelayConnection {
     @ObservationIgnored private var agentEntries: [CoreJSONValue] = []
     public private(set) var coreCatalogAvailable = false
     public private(set) var coreCatalogReady = false
+    private var terminalGoalFeedback = false
     public private(set) var coreSharingAllowed = false
     public private(set) var coreYoloEnabled = false
     public private(set) var coreYoloControl = false
+    public private(set) var coreModeControl = false
+    public private(set) var coreSessionMode = "solo"
     public private(set) var coreSelectionControl = false
     public private(set) var coreGoalSubmission = false
     public private(set) var coreStalledGoalResume = false
@@ -1062,6 +1065,8 @@ public final class RelayConnection {
         coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
         coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
         coreSelectionControl = snapshot["capabilities"]["selectionControl"].bool == true
+        coreModeControl = snapshot["capabilities"]["modeControl"].bool == true
+        coreSessionMode = snapshot["session"]["mode"].string ?? "solo"
         coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
         coreStalledGoalResume = snapshot["capabilities"]["stalledGoalResume"].bool == true
         coreHistoryPaging = snapshot["capabilities"]["historyPaging"].bool == true
@@ -1070,7 +1075,7 @@ public final class RelayConnection {
         coreGoalID = snapshot["session"]["goal"]["id"].string
         coreGoalStatus = snapshot["session"]["goal"]["status"].string
         coreGoalReason = snapshot["session"]["goal"]["reason"].string
-        coreExecutionState = snapshot["execution"]["state"].string
+        coreExecutionState = snapshot["execution"]["state"].string ?? snapshot["session"]["executionState"].string
         corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
         if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: inputLease.generation) { stopInputRenewal() }
         if !coreSessionDeleted { try coreProjection?.saveSnapshot(snapshot) }
@@ -1198,6 +1203,7 @@ public final class RelayConnection {
         repeat {
             var params: [String: CoreJSONValue] = ["limit": .number(25)]
             if let cursor { params["after"] = .string(cursor) }
+            if terminalGoalFeedback { params["goalFeedback"] = .bool(true) }
             let page = try await readCoreCatalog("sessions.list", params: params, using: catalog)
             guard catalogClient === catalog, !suspended else { return }
             entries += page["sessions"].array ?? []
@@ -1817,6 +1823,17 @@ public final class RelayConnection {
         return snapshot["session"]
     }
 
+    public func changeCoreSessionMode(_ mode: String, sessionID: String) async -> Bool {
+        guard sessionID == coreSessionID, coreModeControl, coreExecutionState == "paused", isCoreSessionReady(sessionID),
+              !coreBusy, !coreCommandUncertain, let client = coreClient else { coreError = "Pause this chat before switching modes."; return false }
+        do {
+            let snapshot = try await client.request("session.get")
+            guard coreClient === client, sessionID == coreSessionID, snapshot["session"]["executionState"].string == "paused",
+                  let revision = snapshot["session"]["updatedAt"].string else { return false }
+            return await mutateCore("session.mode", params: ["mode": .string(mode), "expectedUpdatedAt": .string(revision)])
+        } catch { if coreClient === client { coreError = "Could not refresh the paused chat. Try again." }; return false }
+    }
+
     public func changeCoreSessionSelection(_ selection: CoreJSONValue, revision: String, sessionID: String) async -> Bool {
         guard sessionID == coreSessionID, coreSelectionControl else { return false }
         return await mutateCore("session.configure", params: ["selection": selection, "expectedUpdatedAt": .string(revision)])
@@ -2063,6 +2080,7 @@ public final class RelayConnection {
     /// Catalog revisions are hints from an authenticated scoped Core response.
     /// Keep one bounded refresh and retry a failed read on the next real probe.
     private func observeCatalogRevision(_ snapshot: CoreJSONValue) {
+        terminalGoalFeedback = snapshot["capabilities"]["terminalGoalFeedback"].bool == true
         catalogSnapshotUptime = ProcessInfo.processInfo.systemUptime
         guard let revision = snapshot["capabilities"]["terminalCatalogRevision"].string,
               revision.utf8.count <= 80, !revision.isEmpty else { return }
@@ -2100,7 +2118,7 @@ public final class RelayConnection {
             historyReadEpoch = UUID(); coreHistoryLoading = false; coreHistoryHasOlder = false; coreHistoryHasNewer = false
             coreOutgoingMessages = []; encodedCoreEvents.removeAll(); state.taskID = nil
             stopInputRenewal(); inputLease.reset()
-            coreSharingAllowed = false; coreSelectionControl = false; coreGoalSubmission = false; coreYoloControl = false
+            coreSharingAllowed = false; coreSelectionControl = false; coreModeControl = false; coreGoalSubmission = false; coreYoloControl = false
             coreGoalID = nil; coreGoalStatus = nil; coreGoalReason = nil; coreExecutionState = nil
             corePermissions = ["observe"]
             onCoreConversationCleared?()
@@ -2195,7 +2213,7 @@ public final class RelayConnection {
         coreConnected = false; coreSessionDeleted = false; inputLease.reset()
         coreSubscriptionID = nil; corePermissions = []; coreIsAssistant = false; coreSharingAllowed = false; coreIsAgent = false
         coreYoloEnabled = false; coreYoloControl = false
-        coreSelectionControl = false; coreGoalSubmission = false; coreStalledGoalResume = false; coreInputSubmission = false; coreInputActor = nil; coreGoalID = nil; coreGoalStatus = nil; coreGoalReason = nil; coreExecutionState = nil
+        coreSelectionControl = false; coreModeControl = false; coreGoalSubmission = false; coreStalledGoalResume = false; coreInputSubmission = false; coreInputActor = nil; coreGoalID = nil; coreGoalStatus = nil; coreGoalReason = nil; coreExecutionState = nil
         if purge {
             coreOutgoingMessages = []
             observedDeletedCoreSessions.removeAll(); observedCatalogRevision = nil; loadedCatalogRevision = nil
@@ -2364,6 +2382,8 @@ public final class RelayConnection {
             coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
             coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
             coreSelectionControl = snapshot["capabilities"]["selectionControl"].bool == true
+            coreModeControl = snapshot["capabilities"]["modeControl"].bool == true
+            coreSessionMode = snapshot["session"]["mode"].string ?? "solo"
             coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
             coreStalledGoalResume = snapshot["capabilities"]["stalledGoalResume"].bool == true
             coreInputSubmission = snapshot["capabilities"]["inputSubmission"].bool == true
@@ -2371,7 +2391,7 @@ public final class RelayConnection {
             coreGoalID = snapshot["session"]["goal"]["id"].string
             coreGoalStatus = snapshot["session"]["goal"]["status"].string
             coreGoalReason = snapshot["session"]["goal"]["reason"].string
-            coreExecutionState = snapshot["execution"]["state"].string
+            coreExecutionState = snapshot["execution"]["state"].string ?? snapshot["session"]["executionState"].string
             corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
             if !coreSessionDeleted { try coreProjection?.saveSnapshot(snapshot) }
             try publishCoreSnapshot(snapshot)
@@ -2701,7 +2721,10 @@ public final class RelayConnection {
                 try updateJournalOutgoing(pending, status: .failed, errorCode: result["code"].string)
                 try clearSavedCoreCommand(expectedID: pending.id)
                 coreCommandStatus = "Rejected by Core"
-                if result["code"].string == "CONFIRMATION_REQUIRED" || result["code"].string == "CONFLICT" {
+                if pending.op == "session.mode" {
+                    coreError = result["code"].string == "DEFAULT_REQUIRED" ? "Set this mode’s default models in Chat settings → Mode defaults, then try again." : "Pause this chat and wait for its workers to stop before switching modes."
+                    await refreshCore()
+                } else if result["code"].string == "CONFIRMATION_REQUIRED" || result["code"].string == "CONFLICT" {
                     coreError = result["code"].string == "CONFIRMATION_REQUIRED"
                         ? "The goal changed. Confirm its replacement before retrying."
                         : "Core could not apply that input. Your message is saved; retry or edit it."

@@ -79,6 +79,19 @@ final class CoreApplicationTests: XCTestCase {
         try h.client.receive(from: "host", grantID: "grant", payload: h.batch([1]).wire()); XCTAssertTrue(delivered)
     }
 
+    @MainActor func testModeReceiptIsBoundToTheRequestedModeAndSession() async throws {
+        let h = CoreHarness(); try await h.bind(inputActor: "phone")
+        let params: [String: CoreJSONValue] = ["owner": .string("phone"), "coordinateInput": .bool(true), "mode": .string("parallel"), "expectedUpdatedAt": .string("revision")]
+        h.result = .object(["state": .string("accepted"), "sessionId": .string(h.session), "mode": .string("parallel")])
+        let accepted = try await h.client.request("session.mode", params: params)
+        XCTAssertEqual(accepted["mode"].string, "parallel")
+        h.result = .object(["state": .string("accepted"), "sessionId": .string(h.session), "mode": .string("delegate")])
+        do { _ = try await h.client.request("session.mode", params: params); XCTFail("Wrong mode accepted") }
+        catch { XCTAssertEqual((error as? CoreApplicationError)?.code, "UNCERTAIN") }
+        var invalid = params; invalid["mode"] = .string("arbitrary")
+        XCTAssertThrowsError(try CoreApplicationProtocol.request(op: "session.mode", params: invalid, id: "mode", resource: "resource"))
+    }
+
     @MainActor func testNextPageMayOvertakeProcessedAckResponse() async throws {
         let h = CoreHarness(); try await h.bind(); try await h.subscribe()
         var delivered: [Int64] = []
@@ -306,10 +319,10 @@ final class CoreApplicationTests: XCTestCase {
         let h = CoreHarness(); try await h.bind()
         let other = UUID().uuidString.lowercased()
         h.result = .object(["sessions": .array([.object(["id": .string(other), "provider": .string("discovered-provider"), "model": .null,
-            "cwd": .string("/a/project outside the default root"), "executionState": .string("idle"),
+            "cwd": .string("/a/project outside the default root"), "executionState": .string("idle"), "goalStatus": .string("complete"), "goalReason": .null,
             "createdAt": .string("2026-10-22T00:00:00Z"), "updatedAt": .string("2026-10-22T00:00:00Z"), "existingResource": .string("derived-resource")])]),
             "nextCursor": .null, "hasMore": .bool(false)])
-        let list = try await h.client.request("sessions.list", params: ["limit": .number(25)])
+        let list = try await h.client.request("sessions.list", params: ["limit": .number(25), "goalFeedback": .bool(true)])
         XCTAssertEqual(list["sessions"].array?.first?["cwd"].string, "/a/project outside the default root")
         h.result = .object(["state": .string("accepted"), "resource": .string("derived-resource"), "sessionId": .string(other),
             "cwd": .string("/a/project outside the default root"), "provider": .string("discovered-provider"), "model": .null, "effort": .string("default")])

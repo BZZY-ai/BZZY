@@ -70,7 +70,7 @@ test('paused solo/delegate switches preserve the same chat, goal, policies, hist
   assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('session').length, 1); assert.equal(defaultSelection(), null);
 });
 
-test('mode switches always require a paused chat and reject queued work, live workers and group/Agent contexts', () => {
+test('mode switches always require a paused chat and reject queued work, live workers and child/Agent contexts', () => {
   const session = goalSession(), owner = randomUUID(); claimInput(session.id, owner);
   for (const state of ['idle', 'failed', 'cancelled']) {
     session.executionState = state; session.goal.status = 'paused'; saveSession(session);
@@ -85,9 +85,9 @@ test('mode switches always require a paused chat and reject queued work, live wo
   putRecord('round', 'worker:1', { state: 'starting' });
   assert.throws(() => switchMode(session, owner, 'solo'), /workers are still stopping/);
   putRecord('round', 'worker:1', { state: 'cancelled' });
-  for (const marker of [{ purpose: 'agent' }, { parentSessionId: 'parent' }, { mode: 'besties' }, { mode: 'parallel' }]) {
+  for (const marker of [{ purpose: 'agent' }, { parentSessionId: 'parent' }, { parallelSessionId: 'parent' }]) {
     const fresh = { ...session, ...marker }; saveSession(fresh);
-    assert.throws(() => switchMode(fresh, owner, 'solo'), /solo, Delegate or Debate|individual agent/);
+    assert.throws(() => switchMode(fresh, owner, 'solo'), /root terminal chat/);
     saveSession(session);
   }
   assert.equal(loadSession(session.id).mode, 'solo');

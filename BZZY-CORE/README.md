@@ -408,3 +408,9 @@ authenticated current socket, with a six-second freshness bound; an open socket
 or old status file is insufficient. This probes no model or application command.
 The `@bzzy/core/connections` facade validates the Core identity and returns only
 safe state to the CLI. Connection and metrics polling never start a stopped Core.
+
+The full paired iPhone can switch an existing paused terminal between Solo,
+Delegate, Debate, Parallel and Besties using the mode dropdown. Core reads that
+mode's preset and preserves the conversation, goal, permissions and remaining
+budget. Workers must finish stopping first; a switch never resumes work. See
+[session admission](docs/SESSION-INPUT.md).

@@ -36,7 +36,7 @@ const commandAcceptance = record => record.op === 'task.submit' ? { taskId: reco
 const safeCodes = new Set(['ASSISTANT_SETUP_REQUIRED', 'VOICE_UNAVAILABLE', 'FORBIDDEN', 'INVALID_REQUEST', 'CONFLICT', 'UNCERTAIN', 'OPERATION_DENIED', 'PROTOCOL_UNSUPPORTED',
   'REQUEST_TOO_LARGE', 'RESULT_TOO_LARGE', 'RATE_LIMITED', 'CAPACITY', 'INVALID_CURSOR', 'GRANT_UNAVAILABLE', 'AUTHORIZATION_REQUIRED',
   'WORKSPACE_SETUP_REQUIRED', 'WORKSPACE_CHANGED', 'WORKSPACE_UNAVAILABLE', 'PROVIDER_UNAVAILABLE', 'CORE_STOPPED',
-  'CONFIRMATION_REQUIRED', 'EXPORT_ACTIVE', 'SECRET_DETECTED', 'EXPORT_INVALID', 'SHARE_CONTEXT_INCOMPLETE',
+  'CONFIRMATION_REQUIRED', 'DEFAULT_REQUIRED', 'EXPORT_ACTIVE', 'SECRET_DETECTED', 'EXPORT_INVALID', 'SHARE_CONTEXT_INCOMPLETE',
   'IMPORT_UNAVAILABLE', 'IMPORT_INVALID', 'IMPORT_CONFLICT', 'CANCELLED', 'TRANSFER_UNAVAILABLE', 'SESSION_DELETED']);
 const errorCode = error => {
   if ((error.status === 403 || error.status === 401) && (!safeCodes.has(error.code) || error.code === 'INVALID_REQUEST')) return 'FORBIDDEN';
@@ -374,7 +374,7 @@ export class RelayGateway extends EventEmitter {
       try {
         request = validateRequest(message.payload);
         row = this.#authorize(row.id, message.from, request.resource, permissionFor(request));
-        if (getRecord('session-deletion', row.sessionId) && ['input.claim', 'input.release', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'session.configure', 'control.request'].includes(request.op)) {
+        if (getRecord('session-deletion', row.sessionId) && ['input.claim', 'input.release', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'session.configure', 'session.mode', 'control.request'].includes(request.op)) {
           fail('SESSION_DELETED', 'This chat was deleted.', 404);
         }
         if ((await runtime()).operatorStopRequested()) fail('CORE_STOPPED', 'Core was stopped by the local operator.', 409);
@@ -602,7 +602,7 @@ export class RelayGateway extends EventEmitter {
       const existing = contexts.find(context => context.sessionId === session.id);
       const item = { id: session.id, ...(session.alias ? { alias: session.alias } : {}), provider: session.provider, model: session.model ?? null,
         ...(session.mode ? { mode: session.mode } : {}), cwd: session.cwd, executionState: session.executionState || 'idle',
-        ...(session.goal ? { goalStatus: session.goal.status, goalReason: session.goal.reason || null } : {}),
+        ...(params.goalFeedback === true && session.goal ? { goalStatus: session.goal.status, goalReason: session.goal.reason || null } : {}),
         createdAt: session.createdAt, updatedAt: session.updatedAt || session.createdAt,
         ...(existing ? { existingResource: existing.resource } : {}) };
       if (Buffer.byteLength(JSON.stringify([...sessions, item])) > LIMITS.payloadBytes - 2048) {
@@ -703,15 +703,15 @@ export class RelayGateway extends EventEmitter {
         if (getRecord('session-deletion', row.sessionId)) return this.#deletedSessionSnapshot(row);
         const snapshot = await client.session(row.sessionId);
         if (getRecord('session-deletion', row.sessionId)) return this.#deletedSessionSnapshot(row);
-        return { session: pick(snapshot.session, ['id', 'alias', 'provider', 'backend', 'model', 'cwd', 'createdAt', 'updatedAt', 'turns', 'selectedEffort', 'executionState', 'goal', 'acceptance']),
+        return { session: pick(snapshot.session, ['id', 'alias', 'provider', 'backend', 'model', 'mode', 'cwd', 'createdAt', 'updatedAt', 'turns', 'selectedEffort', 'executionState', 'goal', 'acceptance']),
           execution: pick(snapshot.execution, ['id', 'sessionId', 'state', 'createdAt', 'startedAt', 'finishedAt', 'exitCode']),
           questions: snapshot.questions.filter(question => question.sessionId === row.sessionId).map(question => pick(question, ['id', 'sessionId', 'question', 'text', 'kind', 'options', 'createdAt', 'expiresAt'])),
           inputOwner: pick(snapshot.inputOwner, ['owner', 'sessionId', 'expiresAt']),
           capabilities: { activeSteering: Boolean(snapshot.capabilities.activeSteering && row.permissions.includes('steer')),
-            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), selectionControl: Boolean(authorizedOwnPhone(row.relayGrantId || row.id) && terminalSession(snapshot.session) && !['parallel', 'besties', 'debate'].includes(snapshot.session.mode)), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
+            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), modeControl: Boolean(authorizedOwnPhone(row.relayGrantId || row.id) && terminalSession(snapshot.session)), selectionControl: Boolean(authorizedOwnPhone(row.relayGrantId || row.id) && terminalSession(snapshot.session) && !['parallel', 'besties', 'debate'].includes(snapshot.session.mode)), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
             inputOwnedByDevice: snapshot.inputOwner?.principal === `grant:${row.coreGrantId}`,
             inputActor: digest(`grant:${row.coreGrantId}`),
-            durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, notificationsRelayPush: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
+            durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, notificationsRelayPush: true, terminalGoalFeedback: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
             ...(authorizedOwnPhone(row.relayGrantId || row.id) ? { terminalCatalogRevision: terminalCatalogRevision() } : {}),
             permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
             relay: true, portableSharing: row.shareAccess === true, shareKind: row.kind === 'agent' ? 'AGENT' : 'TERMINAL' } };
@@ -746,7 +746,7 @@ export class RelayGateway extends EventEmitter {
     return { session: { ...pick(saved, ['id', 'provider', 'backend', 'model', 'cwd', 'createdAt', 'updatedAt']), executionState: 'deleted' },
       execution: null, questions: [], inputOwner: null,
       capabilities: { sessionDeleted: true, activeSteering: false, yolo: false, yoloControl: false, goalSubmission: false, inputSubmission: false,
-        stalledGoalResume: false, inputOwnedByDevice: false, durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, notificationsRelayPush: true,
+        stalledGoalResume: false, inputOwnedByDevice: false, durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, notificationsRelayPush: true, terminalGoalFeedback: true,
         singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
         ...(authorizedOwnPhone(row.relayGrantId || row.id) ? { terminalCatalogRevision: terminalCatalogRevision() } : {}),
         permissions: ['observe'], sessionAccess: row.sessionAccess === true, agentAccess: row.agentAccess === true,
@@ -771,7 +771,7 @@ export class RelayGateway extends EventEmitter {
           putRecord('core.relay.command', record.id, record);
         }
       }
-      const kind = { 'execution.execute': 'execute', 'task.submit': 'execute', 'question.answer': 'answer', 'permissions.set': 'permissions', 'session.configure': 'selection', 'control.request': 'control' }[record.op];
+      const kind = { 'execution.execute': 'execute', 'task.submit': 'execute', 'question.answer': 'answer', 'permissions.set': 'permissions', 'session.configure': 'selection', 'session.mode': 'mode', 'control.request': 'control' }[record.op];
       const intent = getRecord('input-intent', digest({ sessionId: row.sessionId, principal: `grant:${row.coreGrantId}`, requestId: `relay.${record.id}` }));
       if (intent?.state === 'accepted') {
         record = { ...record, state: 'accepted', result: intent.result, reconciledAt: now() };
@@ -798,6 +798,11 @@ export class RelayGateway extends EventEmitter {
 
   async #command(row, request) {
     if (request.op === 'settings.configure') return configureRemoteDefaults(row, request.params, request.id);
+    if (request.op === 'session.mode') {
+      const parent = authorizedOwnPhone(row.relayGrantId || row.id), session = loadSession(row.sessionId);
+      if (!parent || parent.peerId !== row.peerId || !terminalSession(session) || !['solo', 'delegate', 'debate', 'parallel', 'besties'].includes(request.params.mode)) fail('FORBIDDEN', 'Mode changes require your fully approved phone and a terminal.', 403);
+      if (request.params.coordinateInput !== true) fail('INVALID_REQUEST', 'Use coordinated input for mode changes.');
+    }
     if (request.op === 'session.configure') {
       const parent = authorizedOwnPhone(row.relayGrantId || row.id);
       const session = loadSession(row.sessionId);
@@ -851,7 +856,8 @@ export class RelayGateway extends EventEmitter {
       const requestId = `relay.${key}`;
       let result;
       if (params.coordinateInput === true) {
-        const input = request.op === 'session.configure' ? { operation: 'selection', selection: params.selection, expectedUpdatedAt: params.expectedUpdatedAt }
+        const input = request.op === 'session.mode' ? { operation: 'mode', mode: params.mode, expectedUpdatedAt: params.expectedUpdatedAt }
+          : request.op === 'session.configure' ? { operation: 'selection', selection: params.selection, expectedUpdatedAt: params.expectedUpdatedAt }
           : request.op === 'task.submit' ? { operation: 'execute', prompt: params.instruction }
           : request.op === 'execution.execute' ? { operation: params.goal === true ? 'goal' : 'execute',
             ...(params.goal === true ? { objective: params.prompt } : { prompt: params.prompt }),
