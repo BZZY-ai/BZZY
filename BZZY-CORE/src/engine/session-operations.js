@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
 import { delay } from './delegation.js';
-import { loadSession, sessionPath, writeJson } from './store.js';
+import { loadSession, sessionPath, writeJson, recordSessionLifecycle } from './store.js';
 import { prepareTask } from './task.js';
 import { newGoal, needsGoalReplacement } from './goals.js';
 import { getProvider, selectionFromSession, defaultSelection } from './providers.js';
@@ -108,13 +108,14 @@ export function updateIdleGoal(sessionId, owner, action) {
   const changed = transaction(db => {
     requireOwner(sessionId, owner); const fresh = loadSession(sessionId); assertSessionIdle(fresh);
     if (!fresh.goal) throw new Error('This session has no goal.');
+    const previous = structuredClone(fresh);
     if (action === 'clear') { putRecord('goal-history', fresh.goal.id, { sessionId: fresh.id, ...fresh.goal, clearedAt: now() }, db); fresh.goal = null; }
     else {
-      if (!(action === 'pause' && fresh.goal.status === 'complete')) fresh.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
+      if (!(action === 'pause' && fresh.goal.status === 'complete')) { fresh.goal.status = action === 'cancel' ? 'cancelled' : 'paused'; fresh.goal.reason = 'user_' + action; }
       fresh.executionState = action === 'cancel' ? 'cancelled' : 'paused';
     }
     fresh.updatedAt = now(); putRecord('session', fresh.id, fresh, db);
-    appendEvent(fresh.id, 'lifecycle', { status: fresh.goal?.status || null, executionState: fresh.executionState, reason: 'user_' + action }, db); return fresh;
+    recordSessionLifecycle(fresh, previous, db); return fresh;
   });
   writeJson(sessionPath(changed.id), changed); return changed;
 }

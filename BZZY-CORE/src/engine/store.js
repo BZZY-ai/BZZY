@@ -33,22 +33,31 @@ export function saveSession(session) {
       else if (session.executionState === 'waiting_for_input') session.executionState = previous?.executionState === 'waiting_for_input' ? 'running' : previous?.executionState || 'running';
     }
     putRecord('session', session.id, session, db);
-    const before = previous?.goal;
-    if (session.goal?.status !== before?.status || session.executionState !== previous?.executionState || !previous) {
-      appendEvent(session.id, 'lifecycle', { status: session.goal?.status || null, executionState: session.executionState || 'idle', reason: session.goal?.reason || null }, db);
-    }
-      const event = goalEvent(session);
-      if (event && !session.deferTerminalNotification) {
-        const key = `${event.sessionId}-${event.goalId}-${event.epoch}-${event.type}`;
-        if (!getRecord('goal-event', key)) {
-          putRecord('goal-event', key, event, db);
-          appendEvent(session.id, event.type, event, db);
-          if (!session.suppressNotifications) putRecord('outbox', key, { event, deliveries: destinationSnapshot(readJson(path.join(home(), 'config.json'), {})) }, db);
-        }
-      }
+    recordSessionLifecycle(session, previous, db);
   });
   // Compatibility export. SQLite is authoritative; a stale export is recoverable.
   writeJson(sessionPath(session.id), session);
+}
+
+// Called inside the same transaction as a saved lifecycle transition.
+export function recordSessionLifecycle(session, previous, db) {
+  if (session.alias?.trim() && !session.parentSessionId && (!session.purpose || session.purpose === 'terminal') &&
+    (!previous || previous.executionState !== session.executionState || previous.goal?.status !== session.goal?.status || previous.goal?.reason !== session.goal?.reason)) {
+    putRecord('terminal-catalog', 'current', { revision: randomUUID(), updatedAt: session.updatedAt }, db);
+  }
+  const before = previous?.goal;
+  if (session.goal?.status !== before?.status || session.executionState !== previous?.executionState || !previous) {
+    appendEvent(session.id, 'lifecycle', { status: session.goal?.status || null, executionState: session.executionState || 'idle', reason: session.goal?.reason || null }, db);
+  }
+  const event = goalEvent(session);
+  if (event && !session.deferTerminalNotification) {
+    const key = `${event.sessionId}-${event.goalId}-${event.epoch}-${event.type}`;
+    if (!getRecord('goal-event', key)) {
+      putRecord('goal-event', key, event, db);
+      appendEvent(session.id, event.type, event, db);
+      if (!session.suppressNotifications) putRecord('outbox', key, { event, deliveries: destinationSnapshot(readJson(path.join(home(), 'config.json'), {})) }, db);
+    }
+  }
 }
 
 export const sessionDeleted = id => typeof id === 'string' && Boolean(getRecord('session-deletion', id));

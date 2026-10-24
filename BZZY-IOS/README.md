@@ -238,9 +238,9 @@ Settings → BZZY Updates shows the authoritative Core update status. The fully 
 
 ## Notifications and voice
 
-Settings → Notifications requests native alert/sound/badge permission only when **Enable notifications** is tapped. It shows current permission, an Activity alerts toggle, an iOS Settings shortcut and an explicit test notification. Native notification taps select an allowlisted screen and reconcile state; they never execute commands. Verified pairing approval/revocation can emit generic local alerts. No private content or pairing codes enter notifications.
+Settings → Notifications requests native alert/sound/badge permission only when **Enable notifications** is tapped. It shows current permission, an Activity alerts toggle, an iOS Settings shortcut and an explicit test notification. Native notification taps select an allowlisted screen and reconcile state; they never execute commands. Verified pairing approval/revocation can emit generic local alerts. Pairing codes and credentials never enter notifications; goal aliases and sanitized previews may appear on the lock screen.
 
-APNs registration is sent through the encrypted Core contract. The daemon uses the durable goal outbox while the app is closed. Goal alerts use **Goal achieved/stalled - Session** with a sanitized final-reply preview limited to 180 Unicode characters, including `...` when truncated. Input alerts keep command details inside the app. Exact session or explicitly approved terminal/Agent scopes apply, with expiry/revocation, deduplication and bounded retries. Taps recheck authorization and navigate without executing. **Actual background delivery requires Apple provisioning, private host APNs configuration and a physical-device test.** Missing configuration is reported as pending, never as working delivery. See [host push setup](../BZZY-CORE/docs/PUSH.md).
+The phone registers its APNs token with authenticated Relay and sends its approved notification scope through the encrypted Core contract. Current Core/Relay versions use a durable Relay queue while the app is closed; older versions retain direct Core push. Registration is reasserted after foreground/reconnect, and a startup permission check cannot prematurely disable it. Goal alerts distinguish **achieved, stalled, paused, cancelled and input needed**, with the session alias with a sanitized final-reply preview limited to 180 Unicode characters, including `...` when truncated. Input alerts keep command details inside the app. Exact session or explicitly approved terminal/Agent scopes apply, with expiry/revocation, deduplication and bounded retries. Taps recheck authorization and navigate without executing. **Actual background delivery requires Apple provisioning, private Relay APNs configuration (or legacy direct Core setup) and a physical-device test.** Missing configuration is reported as pending, never as working delivery. See [host push setup](../BZZY-CORE/docs/PUSH.md).
 
 Voice drafts use Apple Speech and AVFoundation with English/Spanish selection. Recording requests microphone/speech access only after a tap and requires supported on-device recognition. Otherwise text remains editable. Capture stops on dismissal/backgrounding. Physical-device permissions and transcription accuracy still need validation.
 
@@ -299,3 +299,10 @@ actual RelayConnection event/polling/background recovery with full permissions
 and an unset coordinator. These fixtures are isolated; the user performs the
 real phone pairing. The terminal-rendered 80x24 QR also decoded exactly in Apple
 Vision. No app data or device identity was reset.
+
+Terminal goal feedback: each aliased terminal row shows a green achieved dot,
+red stalled dot, amber paused/input-needed dot, or a progress spinner while its
+goal is running. Labels provide the same information without relying on color.
+Reduce Motion uses a static running dot; offline rows show dimmed last-known
+state without animation. Core lifecycle revisions refresh the catalog without
+opening each chat. An ordinary response ending is never labeled goal achieved.

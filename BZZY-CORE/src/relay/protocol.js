@@ -13,7 +13,7 @@ const fields = Object.freeze({
   'settings.configure': ['target', 'expectedRevision', 'agents'],
   'session.configure': ['owner', 'selection', 'expectedUpdatedAt', 'coordinateInput'],
   'session.get': [], 'session.usage': [], 'host.metrics': [],
-  'notifications.register': ['deviceToken', 'environment', 'enabled', 'scope', 'hostHints'],
+  'notifications.register': ['deviceToken', 'environment', 'enabled', 'scope', 'hostHints', 'relayPush'],
   'notifications.update': ['enabled'], 'notifications.revoke': [],
   'sessions.list': ['after', 'limit'], 'sessions.open': ['sessionId'],
   'agents.status': [], 'agents.providers': [], 'agents.models': ['provider', 'after', 'limit'], 'agents.list': ['after', 'limit'],
@@ -51,6 +51,7 @@ export function validateRequest(value) {
   object(value.params, fields[value.op], 'Operation parameters');
   if (value.params.coordinateInput !== undefined && typeof value.params.coordinateInput !== 'boolean') fail('INVALID_REQUEST', 'Input coordination must be boolean.');
   if (value.params.hostHints !== undefined && typeof value.params.hostHints !== 'boolean') fail('INVALID_REQUEST', 'Notification host hints must be boolean.');
+  if (value.params.relayPush !== undefined && typeof value.params.relayPush !== 'boolean') fail('INVALID_REQUEST', 'Notification relay delivery must be boolean.');
   return value;
 }
 

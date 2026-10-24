@@ -44,7 +44,7 @@ it does not establish capacity on the intended 2 GB VPS.
 - Online-sender, single-use atomic claims, confirmation of the exact recipient,
   denial, expiry and revocation. PAIR and portable/live import purposes differ.
 - Persistent public device records, hashed code lookups and scoped transport
-  grants using SQLite. No payload persistence or offline store-and-forward.
+  grants using SQLite. No application-payload persistence or offline conversation store-and-forward. A separate, bounded goal-alert queue supports background Apple push.
 - Heartbeats, connection status, reconnect with capped jittered backoff,
   bounded requests/buffers/queues, delivery receipts and uncertain-delivery states.
 - Per-device request limits, bounded handshake rate tracking, connection limits,
@@ -62,6 +62,24 @@ Transient transport-receipt failures force reconnection and application cursor
 recovery. Invalid encrypted content stays rejected. Approved PAIR data traffic
 uses a separately bounded 4096/minute per-device/grant budget; administrative
 requests retain their 240/minute budget. This accounting never grants access.
+
+## Background goal alerts
+
+Current iOS registers its own APNs token using authenticated `push.register`.
+Only hosts with an active PAIR grant can queue an alert for that bound phone;
+hosts cannot supply a token or arbitrary destination. Core authorizes the exact
+session/Agent scope and sanitizes previews first. Relay rechecks the PAIR grant,
+phone preference and token at dispatch. Apple signing credentials belong only
+to the service account's private `STATE_DIRECTORY/push/apns.json`; see
+[push configuration and delivery limits](../BZZY-CORE/docs/PUSH.md).
+
+The durable queue holds at most 4,096 receipts, with 256 pending alerts per host,
+a one-day lifetime, eight dispatches per second and bounded rejection retries.
+Immutable request IDs deduplicate Core retries and survive restarts. Relay sees
+bounded notification titles/previews and opaque routing hints; encrypted chats,
+Core owner keys and model-provider credentials remain outside this service.
+Dispatched preview text is removed. An Apple acceptance is distinct from a
+confirmed phone display; uncertain dispatch is preserved rather than repeated.
 
 ## Endpoint integration
 

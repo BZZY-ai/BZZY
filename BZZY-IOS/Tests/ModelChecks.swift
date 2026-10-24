@@ -162,7 +162,7 @@ struct ModelChecks {
         let olderID = "12345678-1234-4234-8234-123456789001"
         let catalog: [[String: Any]] = [
             ["id": olderID, "cwd": "/projects/older", "alias": "  Older  ", "updatedAt": "2026-10-21T21:00:00-03:00"],
-            ["id": sessionID, "cwd": "/projects/nasa", "provider": "fixture", "model": "fixture-v1", "executionState": "idle", "alias": "NASA", "updatedAt": "2026-10-23T00:00:00.100Z"],
+            ["id": sessionID, "cwd": "/projects/nasa", "provider": "fixture", "model": "fixture-v1", "executionState": "idle", "goalStatus": "complete", "alias": "NASA", "updatedAt": "2026-10-23T00:00:00.100Z"],
             ["id": UUID().uuidString, "cwd": "/projects/test", "alias": "  \n"],
             ["id": UUID().uuidString, "cwd": "/projects/test", "alias": ""],
             ["id": UUID().uuidString, "cwd": "/projects/test"],
@@ -170,11 +170,18 @@ struct ModelChecks {
         store.applyLiveTerminalCatalog(try JSONSerialization.data(withJSONObject: catalog))
         require(store.liveTerminals.first?.directory == "/projects/nasa" && store.liveTerminals.first?.id == sessionID, "Authorized terminal discovery keeps actual directory and session identity")
         require(store.liveTerminals.map(\.title) == ["NASA", "Older"], "Only actual trimmed aliases appear, newest activity first regardless of catalog order")
+        require(store.liveTerminals.first?.activity == .achieved, "Saved goal outcome is shown beside its alias")
+        require(TerminalGoalActivity(goal: nil, reason: nil, execution: "finished") == .idle, "An execution ending cannot turn the dot green")
+        require(TerminalGoalActivity(goal: "paused", reason: "turn_limit", execution: "paused") == .stalled, "Turn limits need attention")
+        require(TerminalGoalActivity(goal: "paused", reason: "user_pause", execution: "paused") == .paused, "An explicit pause is distinct from a stall")
+        require(TerminalGoalActivity(goal: "active", reason: nil, execution: "waiting_for_input") == .waiting, "Questions stop the running animation")
+        require(TerminalGoalActivity(goal: "active", reason: nil, execution: "running") == .running, "Active goals animate")
         var olderSnapshot = snapshot
         olderSnapshot["session"] = ["id": olderID, "alias": "Older", "cwd": "/projects/older", "updatedAt": "2026-10-24T00:00:00Z"]
         store.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: olderSnapshot))
         require(store.liveTerminals.first?.id == olderID, "Fresh activity moves an existing aliased terminal to the top")
         store.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: snapshot))
+        require(store.liveTerminals.first(where: { $0.id == sessionID })?.activity == .paused, "Live snapshot updates a catalog indicator without opening the list again")
         require(store.liveSession?.questions.first?.text == "Approve?", "Only actual pending host questions appear")
         let agentID = "12345678-1234-4234-8234-123456789aaa"
         let hostAgent: [[String: Any]] = [["id": agentID, "name": "Real agent", "provider": "fixture", "model": "fixture-v1", "effort": "default", "cwd": "/agents/real", "sessionId": sessionID, "revision": 2, "state": "idle"]]

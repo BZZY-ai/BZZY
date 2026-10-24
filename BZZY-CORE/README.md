@@ -76,8 +76,8 @@ Implemented:
   delegation, account tools or schedules. Native provider configuration and
   permissions are restricted separately from ordinary terminal execution; see
   [Agent execution](docs/AGENT-EXECUTION.md).
-- Send compact goal alerts with aliased titles and bounded final-reply previews from the daemon's durable outbox through APNs after
-  private Apple setup and encrypted device registration; see [push setup](docs/PUSH.md).
+- Send compact goal alerts with aliased titles and bounded final-reply previews for achieved, stalled, paused, cancelled and waiting goals from the daemon's durable outbox through Relay and APNs after
+  private Relay Apple setup and authorized device registration (legacy direct Core APNs remains supported); see [push setup](docs/PUSH.md).
 - Mobile `/goal` submissions create a fresh goal and acceptance contract through
   the same operation as CLI, including verified completion and durable alerts.
   Replacing active, verifying or paused work requires confirmation of its exact

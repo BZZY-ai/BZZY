@@ -198,8 +198,19 @@ final class RelayTransport {
     func request(_ op: String, fields: [String: WireValue] = [:], timeoutNanoseconds: UInt64 = 10_000_000_000) async throws -> WireValue {
         guard (1_000_000...10_000_000_000).contains(timeoutNanoseconds) else { throw RelayFailure("INVALID_MESSAGE") }
         let allowed: [String: Set<String>] = ["invite.claim": ["code"], "invite.status": ["claimId"],
-            "grant.list": [], "grant.inspect": ["grantId"], "route.send": ["grantId", "messageId", "box"], "delivery.ack": ["deliveryId"]]
+            "grant.list": [], "grant.inspect": ["grantId"], "route.send": ["grantId", "messageId", "box"], "delivery.ack": ["deliveryId"],
+            "push.register": fields["enabled"]?.bool == false ? ["enabled"] : ["enabled", "deviceToken", "environment", "grantIds"]]
         guard allowed[op] == Set(fields.keys) else { throw RelayFailure("INVALID_MESSAGE") }
+        if op == "push.register" {
+            guard let enabled = fields["enabled"]?.bool else { throw RelayFailure("INVALID_MESSAGE") }
+            if enabled {
+                guard let token = fields["deviceToken"]?.string, token.count % 2 == 0,
+                      token.range(of: "^[a-fA-F0-9]{64,512}$", options: .regularExpression) != nil,
+                      let grants = fields["grantIds"]?.array, grants.count <= 256,
+                      grants.allSatisfy({ $0.string?.range(of: "^[A-Za-z0-9_-]{1,80}$", options: .regularExpression) != nil }),
+                      ["sandbox", "production"].contains(fields["environment"]?.string ?? "") else { throw RelayFailure("INVALID_MESSAGE") }
+            }
+        }
         guard online, let socket else { throw RelayFailure("OFFLINE") }
         guard pending.count < 64 else { throw RelayFailure("REQUEST_CAPACITY") }
         let id = RelayWire.encoded(try RelayWire.random())

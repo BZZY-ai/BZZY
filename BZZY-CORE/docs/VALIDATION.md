@@ -1,3 +1,24 @@
+# Relay goal alerts and terminal feedback (2026-10-24)
+
+Node 24 on Apple Silicon: Core **256 passed, 1 platform skip**; CLI **463
+passed, 21 skips**; Relay **36 passed**. Core/Relay syntax checks passed.
+The final Core push subset passed all **16** checks after per-computer Relay
+opt-in was added. Native iOS model/chat checks and **84 Swift tests** passed;
+the iOS simulator app build succeeded. Normal and large-text terminal previews
+were rendered and inspected. These are isolated tests, not a live deployment.
+
+Real socket fixtures cover a closed phone, durable Relay queue recovery, a lost
+Core queue receipt with one delivery, per-computer opt-in/removal, expiry,
+revocation, token rotation, strict payloads, stable retry IDs and ambiguous Apple
+acceptance. Idle pause state and its notification are saved transactionally.
+Lifecycle changes update terminal catalog revisions; ordinary response completion
+cannot become a green goal-completion indicator. Native fixtures cover two Core
+registrations and phone preference/revocation races without model work.
+
+Live Relay Apple configuration, deployment, and a locked physical-iPhone alert
+remain unverified. No private credentials were moved and no running installation
+was changed by this validation.
+
 # Paused terminal mode switches (2026-10-24)
 
 Node 24 on Apple Silicon macOS: Core **253 passed, 1 platform skip**; CLI

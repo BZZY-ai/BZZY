@@ -2,14 +2,16 @@ import http from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { authText, verify, verifyPresence } from './identity.js';
 import { LIMITS, VERSION, RateLimiter, RelayError, b64, fail, opaque, random, record, relayUrl } from './protocol.js';
+import { RelayPushService } from './push.js';
 
-export async function startRelay({ store, audience, host = '127.0.0.1', port = 0, allowInsecureLocal = false, limits: overrides = {}, audit = () => {} } = {}) {
+export async function startRelay({ store, audience, host = '127.0.0.1', port = 0, allowInsecureLocal = false, limits: overrides = {}, audit = () => {}, push = {} } = {}) {
   if (!store) fail('STORE_REQUIRED');
   if (!['127.0.0.1', '::1'].includes(host)) fail('LOOPBACK_PROXY_REQUIRED');
   const limits = { ...LIMITS, ...overrides };
   for (const value of Object.values(limits)) if (!Number.isSafeInteger(value) || value < 1) fail('INVALID_LIMIT');
   let relayAudience = audience ? relayUrl(audience, allowInsecureLocal) : null;
   if (!relayAudience && !allowInsecureLocal) fail('AUDIENCE_REQUIRED');
+  const pushService = new RelayPushService({ ...push, store }).start();
   const sockets = new Set(), peers = new Map(), pending = new Map();
   const attempts = new RateLimiter({ maxKeys: limits.ipBuckets, limit: limits.attemptsPerMinute });
   const requests = new RateLimiter({ maxKeys: limits.devices + limits.connections, limit: limits.requestsPerMinute });
@@ -76,12 +78,23 @@ export async function startRelay({ store, audience, host = '127.0.0.1', port = 0
       'invite.decide': ['claimId', 'approve', 'recipient'], 'invite.revoke': ['invitationId'],
       'grant.list': [], 'grant.inspect': ['grantId'], 'grant.revoke': ['grantId'],
       'peer.revoke': ['peerId'], 'route.send': ['grantId', 'messageId', 'box'],
-      'delivery.ack': ['deliveryId']
+      'delivery.ack': ['deliveryId'], 'push.register': ['deviceToken', 'environment', 'enabled', 'grantIds'], 'push.status': ['environment'],
+      'push.enqueue': ['grantId', 'notificationId', 'environment', 'payload', 'occurredAt']
     };
     if (!Object.hasOwn(fields, op)) fail('UNKNOWN_OPERATION');
     record(frame, ['v', 'id', 'op', ...fields[op]]);
     const deviceId = state.cert.id;
     switch (op) {
+      case 'push.status': {
+        store.host(deviceId);
+        if (!['sandbox', 'production'].includes(frame.environment)) fail('INVALID_PUSH');
+        return { providerConfigured: Boolean(pushService.configuration(frame.environment)) };
+      }
+      case 'push.register': return pushService.register(deviceId, { enabled: frame.enabled,
+        ...(frame.deviceToken !== undefined ? { deviceToken: frame.deviceToken } : {}), ...(frame.environment !== undefined ? { environment: frame.environment } : {}),
+        ...(frame.grantIds !== undefined ? { grantIds: frame.grantIds } : {}) });
+      case 'push.enqueue': return pushService.enqueue(deviceId, { grantId: frame.grantId, id: frame.notificationId,
+        environment: frame.environment, payload: frame.payload, occurredAt: frame.occurredAt });
       case 'host.register': {
         const result = store.provisionHost(state.cert);
         emitAudit('host', 'registered', deviceId); return result;
@@ -227,13 +240,14 @@ export async function startRelay({ store, audience, host = '127.0.0.1', port = 0
   }, 1000);
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
-  } catch (error) { clearInterval(heartbeat); clearInterval(maintenance); wss.close(); throw error; }
+  } catch (error) { clearInterval(heartbeat); clearInterval(maintenance); await pushService.close(); wss.close(); throw error; }
   relayAudience ||= `ws://${host === '::1' ? '[::1]' : host}:${server.address().port}/v1/socket`;
   return {
     audience: relayAudience, address: server.address(),
     metrics: () => ({ connections: sockets.size, pendingDeliveries: pending.size, bufferedBytes: buffered(), rssBytes: processMemory() }),
     async close() {
       stopping = true; clearInterval(heartbeat); clearInterval(maintenance);
+      await pushService.close();
       for (const state of sockets) state.ws.terminate();
       await new Promise(resolve => wss.close(resolve));
       await new Promise(resolve => server.close(resolve));

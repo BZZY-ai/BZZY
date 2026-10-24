@@ -103,7 +103,7 @@ export async function controlSavedGoal(session, action, options, events) {
     }
     if (action === 'clear') { putRecord('goal-history', session.goal.id, { sessionId: session.id, ...session.goal, clearedAt: new Date().toISOString() }); session.goal = null; }
     else {
-      if (!(action === 'pause' && session.goal.status === 'complete')) session.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
+      if (!(action === 'pause' && session.goal.status === 'complete')) { session.goal.status = action === 'cancel' ? 'cancelled' : 'paused'; session.goal.reason = 'user_' + action; }
       session.executionState = action === 'cancel' ? 'cancelled' : 'paused';
     }
     saveSession(session); return { requested: false, session };

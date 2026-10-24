@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { home, privateDir, readJson, writeJson, loadSession, saveSession, findSession, lockFile, lockOwner, sessionDeleted } from './store.js';
+import { home, privateDir, readJson, writeJson, loadSession, saveSession, findSession, lockFile, lockOwner, sessionDeleted, recordSessionLifecycle } from './store.js';
 import { deleteTerminalConversation } from './session-deletion.js';
 import { database, getRecord, putRecord, listRecords, removeRecord, appendEvent, events, eventsBefore, reserveRequest, transaction, now, digest } from './database.js';
 import { processIdentity, identityAlive, reconcileSession, recoverOrphanedVerification } from './recovery.js';
@@ -131,6 +131,9 @@ export async function serveRuntime() {
         persistOperatorStopIntent(); quiescing = true;
         if (!operatorStopPromise) operatorStopPromise = pauseRuntimeExecutions().catch(error => { operatorStopPromise = undefined; throw error; });
         const result = await operatorStopPromise;
+        // Queue the durable pause outcome before stopping connectivity. A slow
+        // or offline Relay cannot indefinitely hold up an explicit Core stop.
+        await pushWorker.flush().catch(() => {});
         send(response, 200, { [input.shutdown === false ? 'quiesced' : 'stopped']: true, ...result, runningAgentsContinue: false });
         if (input.shutdown !== false) setImmediate(() => shutdown());
         return;
@@ -292,7 +295,7 @@ export async function serveRuntime() {
             const targets = children.filter(child => listRecords('execution', { sessionId: child.id, states: ['queued', 'launching', 'running'], limit: 1 }).length > 0);
             for (const child of targets) { const childControl = { ...control, id: randomUUID(), sessionId: child.id, parentControlId: control.id }; putRecord('control', childControl.id, childControl, db); appendEvent(child.id, 'control.queued', childControl, db); }
             control.state = 'observed'; control.result = { active: false, childSessions: targets.map(child => child.id) };
-            const fresh = loadSession(id);
+            const fresh = loadSession(id), previous = structuredClone(fresh);
             if (!targets.length) {
               if (fresh.goal && !['complete', 'cancelled'].includes(fresh.goal.status)) {
                 fresh.goal.status = body.action === 'pause' ? 'paused' : 'cancelled';
@@ -300,7 +303,7 @@ export async function serveRuntime() {
               }
               fresh.executionState = body.action === 'pause' ? 'paused' : 'cancelled'; fresh.updatedAt = now();
               putRecord('session', id, fresh, db);
-              appendEvent(id, 'lifecycle', { status: fresh.goal?.status || null, executionState: fresh.executionState, reason: 'user_' + body.action }, db);
+              recordSessionLifecycle(fresh, previous, db);
             }
 
           }
@@ -319,7 +322,7 @@ export async function serveRuntime() {
   metrics.start();
   writeJson(listenerFile, { port: server.address().port, token });
   writeJson(runtimeFile(), { version: 1, url: `http://127.0.0.1:${server.address().port}`, token, identity, runtimeBuild, environment, startedAt: now() });
-  const pushWorker = new CorePushWorker().start();
+  const pushWorker = new CorePushWorker({ relaySend: async (registration, request) => (await relay()).enqueuePush(registration, request) }).start();
   const updateWatcher = coreUpdates().start();
   // Optional saved connectivity is restored only after the listener is ready;
   // RelayGateway.start() discovers this same engine instead of spawning another.

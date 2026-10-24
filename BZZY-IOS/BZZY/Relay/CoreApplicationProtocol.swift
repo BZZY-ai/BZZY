@@ -152,7 +152,7 @@ enum CoreApplicationProtocol {
         "agents.archive": ["agentId", "expectedRevision"], "agents.open": ["agentId"],
         "agents.import": ["code", "expectedSenderFingerprint", "provider", "model", "effort", "name"],
         "agents.import.status": ["importId"], "agents.import.cancel": ["importId"],
-        "notifications.register": ["deviceToken", "environment", "enabled", "scope", "hostHints"], "notifications.update": ["enabled"], "notifications.revoke": [],
+        "notifications.register": ["deviceToken", "environment", "enabled", "scope", "hostHints", "relayPush"], "notifications.update": ["enabled"], "notifications.revoke": [],
         "share.create": [], "share.status": ["shareId"], "share.approve": ["shareId", "claimId", "confirmedFingerprint"], "share.revoke": ["shareId"],
         "session.get": [], "session.usage": [], "sessions.list": ["after", "limit"], "sessions.open": ["sessionId"],
         "assistant.status": [], "voice.status": [], "voice.send": ["text"], "voice.poll": ["requestId", "cursor"], "voice.cancel": ["requestId"], "task.submit": ["owner", "instruction", "coordinateInput"], "task.get": ["taskId"],
@@ -171,7 +171,7 @@ enum CoreApplicationProtocol {
     static func request(op: String, params: [String: CoreJSONValue], id: String, resource: String) throws -> CoreJSONValue {
         try opaque(id); try opaque(resource)
         guard let allowed = fields[op], Set(params.keys).isSubset(of: allowed) else { throw CoreApplicationError("OPERATION_DENIED") }
-        var optional: Set<String> = ["coordinateInput", "after", "before", "latest", "bootstrapToken", "eventChunks", "singleView", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "resumeGoalStatus", "text", "scope", "hostHints", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
+        var optional: Set<String> = ["coordinateInput", "after", "before", "latest", "bootstrapToken", "eventChunks", "singleView", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "resumeGoalStatus", "text", "scope", "hostHints", "relayPush", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
         if op == "voice.send" { optional.remove("text") }
         if op == "voice.poll" { guard let cursor = params["cursor"]?.integer, cursor >= 0 && cursor <= 2_000_000 else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "voice.send" { guard let text = params["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CoreApplicationError("INVALID_REQUEST") } }
@@ -181,7 +181,7 @@ enum CoreApplicationProtocol {
         for key in ["owner", "consumerId", "bootstrapToken", "subscriptionId", "requestId", "taskId", "claimId", "confirmedFingerprint"] where params[key] != nil {
             guard let text = params[key]?.string else { throw CoreApplicationError("INVALID_REQUEST") }; try opaque(text)
         }
-        for key in ["coordinateInput", "latest", "eventChunks", "singleView", "takeover", "goal", "resumeGoal", "enabled", "hostHints", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
+        for key in ["coordinateInput", "latest", "eventChunks", "singleView", "takeover", "goal", "resumeGoal", "enabled", "hostHints", "relayPush", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
             guard params[key]?.bool != nil else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         for key in ["prompt", "instruction", "answer", "text"] where params[key] != nil {

@@ -5,6 +5,7 @@ import { createIdentity, loadIdentity, saveIdentity } from '../src/identity.js';
 import { RelayStore } from '../src/store.js';
 import { startRelay } from '../src/server.js';
 import { RelayError, fail, integer } from '../src/protocol.js';
+import { loadAPNsConfigurationFile } from '../src/apns.js';
 
 process.umask(0o077);
 const [command, ...args] = process.argv.slice(2);
@@ -57,6 +58,7 @@ try {
       const port = opt.port ? integer(Number(opt.port), 1024, 65535) : 8787;
       const store = new RelayStore({ directory: path.resolve(opt.state) });
       const relay = await startRelay({ store, port, audience: opt.audience,
+        push: { configurationLoader: () => loadAPNsConfigurationFile(path.join(path.resolve(opt.state), 'push', 'apns.json')) },
         audit: entry => process.stdout.write(JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n') });
       process.stdout.write(JSON.stringify({ event: 'relay', decision: 'ready', port }) + '\n');
       let stopping = false;

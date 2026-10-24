@@ -36,7 +36,7 @@ struct TerminalView: View {
                             NavigationLink {
                                 RemoteTerminalConversationView(store: store, terminal: terminal)
                             } label: {
-                                sessionRow(name: terminal.title, symbol: "terminal")
+                                sessionRow(name: terminal.title, symbol: "terminal", activity: terminal.activity)
                             }.buttonStyle(.plain)
                                 .disabled(!relay.coreActionsAvailable || !relay.coreCatalogReady || relay.coreBusy)
                                 .accessibilityIdentifier("terminal-host-\(terminal.id)")
@@ -50,7 +50,7 @@ struct TerminalView: View {
                             ConversationCanvas(store: store, conversationID: session.id, title: session.title,
                                 subtitle: "\(session.model) · \(store.liveAvailable ? session.execution : "Disconnected")", assistantName: session.model, remoteSession: true)
                         } label: {
-                            sessionRow(name: session.title, symbol: "terminal")
+                            sessionRow(name: session.title, symbol: "terminal", activity: .init(goal: session.goalStatus, reason: nil, execution: session.execution))
                         }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable).accessibilityIdentifier("terminal-live")
                     }
                 }
@@ -93,13 +93,41 @@ struct TerminalView: View {
                 if let id, let terminal = store.liveTerminals.first(where: { $0.id == id }) { notificationTerminal = terminal; store.notificationTerminalID = nil }
             }
     }
-    private func sessionRow(name: String, symbol: String) -> some View {
+    private func sessionRow(name: String, symbol: String, activity: TerminalGoalActivity? = nil) -> some View {
         HStack(spacing: 17) {
             Image(systemName: symbol).font(.system(size: 21, weight: .light))
                 .foregroundStyle(BZZYTheme.secondary).frame(width: 30)
             Text(name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.text)
             Spacer()
+            if let activity { TerminalGoalIndicator(activity: activity, online: relay.coreActionsAvailable) }
         }.padding(.vertical, 21).contentShape(Rectangle())
+    }
+}
+
+private struct TerminalGoalIndicator: View {
+    let activity: TerminalGoalActivity
+    let online: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        HStack(spacing: 7) {
+            if activity == .running && online && !reduceMotion {
+                ProgressView().controlSize(.mini).tint(BZZYTheme.accent)
+            } else {
+                Circle().fill(color).frame(width: 8, height: 8)
+            }
+            Text(activity.rawValue).bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
+        }.opacity(online ? 1 : 0.5)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(online ? activity.rawValue : "Last known: \(activity.rawValue), Core offline")
+    }
+    private var color: Color {
+        switch activity {
+        case .achieved: .green
+        case .stalled: .red
+        case .paused, .waiting: BZZYTheme.amber
+        case .running: BZZYTheme.accent
+        case .idle, .cancelled: BZZYTheme.muted
+        }
     }
 }
 

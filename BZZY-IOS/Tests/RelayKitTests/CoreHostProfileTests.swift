@@ -236,7 +236,10 @@ final class CoreHostProfileTests: XCTestCase {
         func state(_ host: Int) throws -> WireValue { try fixture.request(["op": .string("state"), "host": .number(Double(host))]) }
         func enabled(_ host: Int) throws -> Bool? { try state(host)["notificationBindings"].array?.first?["enabled"].bool }
         _ = await connection.synchronizeAllCoreNotifications(token: token, environment: "sandbox", enabled: true)
-        for host in 0...1 { XCTAssertEqual(try enabled(host), true) }
+        for host in 0...1 {
+            XCTAssertEqual(try enabled(host), true)
+            XCTAssertEqual(try state(host)["notificationRelayPush"].array?.first?.bool, true, "A capable Relay owns background delivery for each Core")
+        }
         let callsBefore = try (0...1).map { try state($0)["notificationCalls"].array?.count }
         _ = await connection.synchronizeAllCoreNotifications(token: token, environment: "sandbox", enabled: true)
         XCTAssertEqual(try (0...1).map { try state($0)["notificationCalls"].array?.count }, callsBefore, "Unchanged bindings skip repeat writes")

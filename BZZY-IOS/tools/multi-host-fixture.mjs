@@ -87,6 +87,7 @@ if (worker) {
       }
       case 'state': return { pendingCount: gateway.pendingPairings().length, ...gateway.status(),
         notificationHostHints: listRecords('core.push.registration').map(row => row.hostHints === true),
+        notificationRelayPush: listRecords('core.push.registration').map(row => row.relayPush === true),
         notificationBindings: listRecords('core.push.registration').map(row => ({ enabled: row.enabled, revoked: Boolean(row.revokedAt), hasToken: Boolean(row.deviceToken) })),
         notificationCalls, controlCalls,
         executions: listRecords('execution').map(e => ({ id: e.id, state: e.state, prompt: e.prompt })), executionCount: listRecords('execution').length };

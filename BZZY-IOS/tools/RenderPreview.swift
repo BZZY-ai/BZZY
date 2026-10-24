@@ -26,6 +26,17 @@ struct RenderPreview {
         terminal.selectedTab = .terminal
         try render("agents", view: WorkspaceView(store: agents), folder: folder)
         try render("terminal", view: WorkspaceView(store: terminal), folder: folder)
+        let goalTerminals = WorkspaceStore(includeSamples: false)
+        goalTerminals.selectedTab = .terminal
+        let statuses: [(String, String, String, String?)] = [("starbucks-japan", "complete", "idle", nil),
+            ("Research", "blocked", "idle", nil), ("Current work", "active", "running", nil),
+            ("Paused project", "paused", "paused", "user_pause"), ("Review request", "active", "waiting_for_input", nil)]
+        goalTerminals.applyLiveTerminalCatalog(try JSONSerialization.data(withJSONObject: statuses.map { name, goal, execution, reason in
+            ["id": UUID().uuidString, "alias": name, "cwd": "/fixture/project", "goalStatus": goal,
+             "executionState": execution, "goalReason": reason as Any? ?? NSNull()] as [String: Any]
+        }))
+        try render("terminal-goal-status", view: WorkspaceView(store: goalTerminals), folder: folder)
+        try render("terminal-goal-status-large", view: WorkspaceView(store: goalTerminals).environment(\.dynamicTypeSize, .accessibility2), folder: folder, width: 375)
         try render("conversation", view: ConversationView(store: agents, agent: agents.agents[0]), folder: folder)
         try render("subscriptions-chat", view: ConversationView(store: agents, agent: agents.agents[2]), folder: folder)
         try render("terminal-chat", view: TerminalConversationView(store: terminal, session: TerminalPreview.samples[0]), folder: folder)

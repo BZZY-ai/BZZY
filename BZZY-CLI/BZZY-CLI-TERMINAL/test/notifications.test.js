@@ -17,9 +17,10 @@ test.beforeEach(() => {
 });
 test.afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); for (const [key, value] of Object.entries(previousEnv)) if (value == null) delete process.env[key]; else process.env[key] = value; });
 
-test('only completed and stalled lifecycle states create versioned provider-neutral events', () => {
+test('goal outcomes and explicit pauses create distinct versioned provider-neutral events', () => {
   assert.equal(goalEvent(session), null);
-  session.goal.status = 'paused'; assert.equal(goalEvent(session), null);
+  session.goal.status = 'paused'; assert.equal(goalEvent(session).type, 'goal.paused');
+  session.goal.status = 'cancelled'; assert.equal(goalEvent(session).type, 'goal.cancelled');
   session.goal.status = 'complete';
   assert.equal(goalEvent(session).type, 'goal.completed');
   for (const status of ['blocked', 'budget_limited', 'usage_limited']) {

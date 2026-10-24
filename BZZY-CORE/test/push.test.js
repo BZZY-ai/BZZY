@@ -15,6 +15,8 @@ import { getRecord, putRecord, listRecords, digest } from '../src/engine/databas
 import { validateRequest, sanitize } from '../src/relay/protocol.js';
 import { CoreAgents } from '../src/agents.js';
 import { CoreWorkspaces } from '../src/workspaces.js';
+import { fixture, pair } from '../../BZZY-RELAY/test/helpers.js';
+import { updateIdleGoal } from '../src/engine/session-operations.js';
 
 const token = 'ab'.repeat(32), hostId = 'H'.repeat(43), peerId = 'phone-fixture';
 let directory, previous;
@@ -53,6 +55,63 @@ function outbox(selected, type = 'goal.completed', extra = {}) {
     objective: 'PRIVATE GOAL TEXT', cwd: '/private/workspace', ...extra };
   putRecord('outbox', event.id, { event, deliveries: {} }); return event;
 }
+
+test('Core forwards a durable outcome through Relay while phone is closed, recovering a lost queue receipt without duplicate delivery', async t => {
+  let clock = Date.now(), sends = 0, loseReceipt = true;
+  const f = await fixture(t, { server: { push: { configurationLoader: () => ({ environment: 'sandbox', fingerprint: 'fixture' }),
+    clientFactory: () => ({ send: async () => { sends++; }, close() {} }) } } });
+  const host = await f.client({ host: true }), phone = await f.client();
+  const { grant: relayGrant } = await pair(host, phone);
+  await phone.request('push.register', { enabled: true, deviceToken: token, environment: 'sandbox', grantIds: [relayGrant.id] });
+  const local = grant({ host: host.identity.certificate.id, peer: phone.identity.certificate.id });
+  const row = { ...local, id: relayGrant.id, resource: relayGrant.spec.resource };
+  putRecord('core.relay.grant', row.id, row);
+  register(row, { relayPush: true, hostHints: true }); await phone.close();
+  outbox(getRecord('session', row.sessionId), 'goal.paused');
+  const worker = new CorePushWorker({ hostID: () => row.hostId, configurationLoader: () => null, clock: () => clock,
+    relaySend: async (binding, request) => {
+      const result = await host.request('push.enqueue', { grantId: binding.relayGrantId, notificationId: request.id, environment: binding.environment, payload: request.payload, occurredAt: request.occurredAt });
+      if (loseReceipt) { loseReceipt = false; throw Object.assign(new Error(), { code: 'SEND_UNCERTAIN' }); }
+      return result;
+    } });
+  await worker.tick(); worker.close();
+  const saved = listRecords('core.push.delivery')[0]; assert.equal(saved.state, 'relay_queued');
+  for (let i = 0; i < 40 && !sends; i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(sends, 1);
+  clock += 40_000;
+  const restarted = new CorePushWorker({ hostID: () => row.hostId, configurationLoader: () => null, clock: () => clock,
+    relaySend: (binding, request) => host.request('push.enqueue', { grantId: binding.relayGrantId, notificationId: request.id,
+      environment: binding.environment, payload: request.payload, occurredAt: request.occurredAt }) });
+  t.after(() => restarted.close());
+  await restarted.tick(); await restarted.tick();
+  assert.equal(listRecords('core.push.delivery')[0].state, 'sent'); assert.equal(sends, 1);
+});
+
+test('manual pause and cancellation notify once per saved goal epoch, separately from stalls', () => {
+  const selected = session(); selected.alias = 'starbucks-japan'; selected.goal = newGoal('An authorized task');
+  saveSession(selected); assert.equal(listRecords('outbox').length, 0);
+  const firstRevision = getRecord('terminal-catalog', 'current').revision;
+  selected.goal.status = 'paused'; selected.goal.reason = 'user_pause'; saveSession(selected); saveSession(selected);
+  assert.notEqual(getRecord('terminal-catalog', 'current').revision, firstRevision);
+  const pausedRevision = getRecord('terminal-catalog', 'current').revision; saveSession(selected);
+  assert.equal(getRecord('terminal-catalog', 'current').revision, pausedRevision, 'unchanged saves do not churn the list');
+  assert.deepEqual(listRecords('outbox').map(row => row.event.type), ['goal.paused']);
+  selected.goal.notificationEpoch = (selected.goal.notificationEpoch || 0) + 1; selected.goal.status = 'active'; saveSession(selected);
+  selected.goal.status = 'paused'; saveSession(selected);
+  assert.equal(listRecords('outbox').length, 2);
+  selected.goal.status = 'cancelled'; saveSession(selected);
+  assert.equal(listRecords('outbox').filter(row => row.event.type === 'goal.cancelled').length, 1);
+});
+
+test('an idle owner pause records state, catalog revision and alert atomically without retaining a previous stall reason', () => {
+  const selected = session(); selected.alias = 'Paused chat'; selected.goal = { ...newGoal('An authorized task'), status: 'blocked', reason: 'recovery_required' };
+  saveSession(selected);
+  putRecord('input-owner', selected.id, { owner: 'fixture-owner', expiresAt: Date.now() + 60_000 });
+  updateIdleGoal(selected.id, 'fixture-owner', 'pause');
+  const saved = getRecord('session', selected.id);
+  assert.equal(saved.goal.status, 'paused'); assert.equal(saved.goal.reason, 'user_pause');
+  assert.equal(listRecords('outbox').filter(row => row.event.type === 'goal.paused').length, 1);
+});
 
 test('private APNs configuration validates owner-only P256 keys without returning credentials to the remote app', () => {
   const cfg = configuration(), folder = path.join(process.env.BZZY_HOME, 'push'); fs.mkdirSync(folder, { mode: 0o700 });

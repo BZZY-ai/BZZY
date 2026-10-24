@@ -1,3 +1,15 @@
+# Native alert queue validation — 2026-10-24
+
+Local Node 24 syntax checks and all **36 tests** pass. Disposable real WebSocket
+fixtures verify offline-phone enqueue, immutable duplicate receipts, restart
+recovery, per-computer opt-in/removal, stale windows, token rotation, expiry,
+grant revocation, bounded alert schema, retry backoff and uncertain dispatch.
+The existing Core HTTP/2 APNs fixture continues to check the shared ES256 client.
+No alert preview remains in a terminal delivery receipt. The new service is not
+yet deployed or configured with the operator's private Apple key; no live locked
+phone delivery is claimed. Earlier production records below describe their own
+historical releases.
+
 # Current production update — 2026-10-23
 
 The actual Debian Relay was upgraded under the authorized operator account to

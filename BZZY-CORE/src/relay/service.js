@@ -90,6 +90,10 @@ export class CoreRelayService {
     if (this.#config().enabled === true) await this.#start().catch(() => {});
     return this.snapshot();
   }
+  async enqueuePush(registration, request) {
+    if (!this.#gateway) fail('GATEWAY_OFFLINE', 'The Core gateway is offline.');
+    return this.#gateway.enqueuePush(registration, request);
+  }
   async connect() {
     this.#stopped = false;
     writeJson(configPath(), { ...this.#config(), enabled: true });

@@ -91,6 +91,7 @@ final class CoreSharingNotificationTests: XCTestCase {
         _ = try CoreApplicationProtocol.request(op: "notifications.register", params: params, id: "register", resource: "approved")
         for hostHints in [true, false] {
             var upgraded = params; upgraded["hostHints"] = .bool(hostHints)
+            upgraded["relayPush"] = .bool(true)
             _ = try CoreApplicationProtocol.request(op: "notifications.register", params: upgraded, id: "register", resource: "approved")
         }
         for field in ["topic", "url", "recipient", "deviceId", "sessionId", "message", "headers", "credentials"] {
@@ -99,7 +100,7 @@ final class CoreSharingNotificationTests: XCTestCase {
         }
         for (field, value) in [("deviceToken", CoreJSONValue.string(String(repeating: "a", count: 63))),
                                ("deviceToken", .string(String(repeating: "a", count: 514))), ("deviceToken", .string(String(repeating: "g", count: 64))),
-                               ("environment", .string("other")), ("scope", .string("all-users")), ("enabled", .string("yes")), ("hostHints", .string("true")), ("hostHints", .null)] {
+                               ("environment", .string("other")), ("scope", .string("all-users")), ("enabled", .string("yes")), ("hostHints", .string("true")), ("hostHints", .null), ("relayPush", .string("true"))] {
             var altered = params; altered[field] = value
             XCTAssertThrowsError(try CoreApplicationProtocol.request(op: "notifications.register", params: altered, id: "register", resource: "approved"))
         }

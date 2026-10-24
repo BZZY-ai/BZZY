@@ -8,10 +8,10 @@ import { sharedSecrets } from '../engine/share-bundle-policy.js';
 import { notificationPreview } from '../engine/notification-preview.js';
 import { APNsClient, loadAPNsConfiguration } from './apns.js';
 
-const types = new Set(['goal.completed', 'goal.stalled', 'goal.waiting_for_input', 'system.update_available']);
+const types = new Set(['goal.completed', 'goal.stalled', 'goal.paused', 'goal.cancelled', 'goal.waiting_for_input', 'system.update_available']);
 export function goalAlert(event, session, secrets = []) {
   const safe = (value, maximum = 180) => notificationPreview(value, maximum, secrets);
-  const state = event.type === 'goal.completed' ? 'Goal achieved' : event.type === 'goal.waiting_for_input' ? 'Input needed' : 'Goal stalled';
+  const state = { 'goal.completed': 'Goal achieved', 'goal.waiting_for_input': 'Input needed', 'goal.paused': 'Goal paused', 'goal.cancelled': 'Goal cancelled' }[event.type] || 'Goal stalled';
   const alias = safe(session?.alias, 48);
   if (event.type === 'goal.waiting_for_input') return { title: alias ? `${state} - ${alias}` : state, body: 'Open BZZY to review the request.' };
   const preview = event.replyPreview || (event.type === 'goal.stalled' ? event.reason : null);
@@ -24,12 +24,21 @@ export function goalAlert(event, session, secrets = []) {
 export class CorePushWorker {
   #home = home(); #timer; #busy = false; #client; #configuration; #cursor = ''; #abort = new AbortController();
   constructor({ configurationLoader = loadAPNsConfiguration, clientFactory = options => new APNsClient(options),
-    hostID = () => { try { return loadRelayIdentity().certificate.id; } catch { return null; } }, clock = Date.now } = {}) {
+    hostID = () => { try { return loadRelayIdentity().certificate.id; } catch { return null; } }, clock = Date.now, relaySend } = {}) {
     this.configurationLoader = configurationLoader; this.clientFactory = clientFactory; this.hostID = hostID; this.clock = clock;
+    this.relaySend = relaySend;
   }
   start() {
     if (!this.#timer) { this.#timer = setInterval(() => { void this.tick().catch(() => {}); }, 1000); this.#timer.unref(); }
     void this.tick().catch(() => {}); return this;
+  }
+  async flush() {
+    const deadline = Date.now() + 3000;
+    while (this.#busy && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    if (this.#busy) return;
+    let timer;
+    try { await Promise.race([this.tick(), new Promise(resolve => { timer = setTimeout(resolve, Math.max(1, deadline - Date.now())); })]); }
+    finally { clearTimeout(timer); }
   }
   async tick() {
     if (this.#busy || this.#abort.signal.aborted || home() !== this.#home) return;
@@ -46,9 +55,15 @@ export class CorePushWorker {
       let sent = 0;
       let records = database().prepare("SELECT id,data FROM records WHERE kind='outbox' AND id>? ORDER BY id LIMIT 200").all(this.#cursor);
       if (!records.length) { this.#cursor = ''; records = database().prepare("SELECT id,data FROM records WHERE kind='outbox' ORDER BY id LIMIT 200").all(); }
+      const rotatedCursor = records.at(-1)?.id || '';
+      // New outcomes must not wait behind a large historical outbox. The
+      // independent rotating page still recovers older queued work fairly.
+      const recent = database().prepare("SELECT id,data FROM records WHERE kind='outbox' AND json_extract(data,'$.event.occurredAt')>=? ORDER BY json_extract(data,'$.event.occurredAt') DESC LIMIT 200")
+        .all(new Date(this.clock() - 60_000).toISOString());
+      records = [...new Map([...recent, ...records].map(row => [row.id, row])).values()];
+      this.#cursor = rotatedCursor;
       const secrets = sharedSecrets();
       for (const row of records) {
-        this.#cursor = row.id;
         const record = JSON.parse(row.data);
         const event = record.event, isUpdate = event?.type === 'system.update_available', occurred = Date.parse(event?.occurredAt);
         if (!event || typeof event.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(event.id) ||
@@ -64,10 +79,12 @@ export class CorePushWorker {
           if (isUpdate && (!authorizedUpdateGrant(registration.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(registration.relayGrantId)).notificationsEnabled === false)) continue;
           const id = digest({ hostId, peer: registration.peerId, token: registration.tokenDigest, event: event.id });
           let delivery = getRecord('core.push.delivery', id);
-          if (!configuration || registration.environment !== configuration.environment) {
+          const viaRelay = delivery?.route === 'relay' || registration.relayPush === true;
+          if (!viaRelay && (!configuration || registration.environment !== configuration.environment)) {
             if (!delivery || delivery.state === 'waiting_for_configuration' && delivery.code !== (!configuration ? 'APNS_SETUP_REQUIRED' : 'APNS_ENVIRONMENT_MISMATCH')) putRecord('core.push.delivery', id, { id, registrationId: registration.id, eventId: event.id, sessionId: event.sessionId || null, state: 'waiting_for_configuration', attempts: 0, code: !configuration ? 'APNS_SETUP_REQUIRED' : 'APNS_ENVIRONMENT_MISMATCH', updatedAt: now() });
             continue;
           }
+          if (delivery?.route === 'relay' && delivery.registrationId !== registration.id) continue;
           if (delivery && (['sent', 'failed', 'uncertain'].includes(delivery.state) || delivery.nextAttemptAt > this.clock())) continue;
           if (delivery?.state === 'dispatching') {
             // A crash after APNs acceptance has an uncertain outcome. Preserve
@@ -75,7 +92,7 @@ export class CorePushWorker {
             putRecord('core.push.delivery', id, { ...delivery, state: 'uncertain', updatedAt: now() }); continue;
           }
           delivery = { ...delivery, id, registrationId: registration.id, eventId: event.id, sessionId: event.sessionId || null,
-            state: 'dispatching', attempts: (delivery?.attempts || 0) + 1, apnsId: delivery?.apnsId || randomUUID(), updatedAt: now() };
+            route: viaRelay ? 'relay' : 'direct', state: viaRelay ? 'relay_queued' : 'dispatching', attempts: (delivery?.attempts || 0) + 1, apnsId: delivery?.apnsId || randomUUID(), updatedAt: now() };
           putRecord('core.push.delivery', id, delivery); sent++;
           try {
             const current = getRecord('core.push.registration', registration.id);
@@ -85,17 +102,37 @@ export class CorePushWorker {
             const session = isUpdate ? null : getRecord('session', event.sessionId), isAgent = session?.purpose === 'agent';
             // Older iOS parsers reject unknown metadata. Opt-in belongs to the
             // device binding; pre-capability registrations retain their shape.
-            const hostHint = current.hostHints === true ? { hostId: current.hostId } : {};
-            const receipt = await this.#client.send({ token: current.deviceToken, id: delivery.apnsId, collapseID: id, signal: this.#abort.signal,
-              payload: { aps: { alert: isUpdate ? { title: 'BZZY update available', body: 'Update CLI and Core from Settings on your iPhone.' } : goalAlert(event, session, secrets), sound: 'default', category: 'BZZY_UPDATE',
+            const hostHint = current.hostHints === true || viaRelay ? { hostId: current.hostId } : {};
+            const payload = delivery.payload || { aps: { alert: isUpdate ? { title: 'BZZY update available', body: 'Update CLI and Core from Settings on your iPhone.' } : goalAlert(event, session, secrets), sound: 'default', category: 'BZZY_UPDATE',
                   'thread-id': digest({ hostId, resource: current.resource, sessionId: event.sessionId }) },
                 // This public routing hint comes from the reauthorized private
                 // binding, never from a model reply or the queued event. Clients
                 // still authenticate the selected Core before opening details.
                 bzzy: isUpdate ? { v: 1, eventId: id, ...hostHint, destination: 'updates' } : { v: 1, eventId: id, ...hostHint, destination: isAgent ? 'agents' : 'terminal', resource: current.resource, sessionId: event.sessionId,
-                  ...(isAgent ? { agentId: session.agentId } : {}) } } });
+                  ...(isAgent ? { agentId: session.agentId } : {}) } };
+            if (viaRelay) {
+              // Persist the exact request before transport. Repeating this ID
+              // queries the Relay receipt; it cannot enqueue a second alert.
+              delivery = { ...delivery, payload }; putRecord('core.push.delivery', id, delivery);
+              const receipt = await this.relaySend?.(current, { id, payload, occurredAt: occurred });
+              if (!receipt || !['queued', 'retry', 'dispatching', 'sent', 'failed', 'uncertain'].includes(receipt.state)) throw new Error('Relay push unavailable.');
+              putRecord('core.push.relay-status', 'current', { configured: receipt.providerConfigured === true, environment: current.environment, updatedAt: now() });
+              const { payload: ignored, ...metadata } = delivery;
+              putRecord('core.push.delivery', id, { ...(['sent', 'failed', 'uncertain'].includes(receipt.state) ? metadata : delivery),
+                state: ['sent', 'failed', 'uncertain'].includes(receipt.state) ? receipt.state : 'relay_queued',
+                ...(receipt.code ? { code: receipt.code } : {}), nextAttemptAt: this.clock() + 2000, updatedAt: now() });
+              continue;
+            }
+            const receipt = await this.#client.send({ token: current.deviceToken, id: delivery.apnsId, collapseID: id, signal: this.#abort.signal, payload });
             putRecord('core.push.delivery', id, { ...delivery, state: 'sent', receipt: { accepted: receipt.accepted === true, apnsId: receipt.apnsId }, updatedAt: now() });
           } catch (error) {
+            if (viaRelay) {
+              const permanent = ['GRANT_UNAVAILABLE', 'FORBIDDEN', 'PUSH_CONFLICT', 'INVALID_PUSH'].includes(error?.code);
+              putRecord('core.push.delivery', id, { ...delivery, state: permanent ? 'failed' : 'relay_queued',
+                code: permanent ? 'FORBIDDEN' : error?.code === 'PUSH_REGISTRATION_REQUIRED' ? 'PUSH_REGISTRATION_REQUIRED' : 'RELAY_PUSH_UNAVAILABLE',
+                nextAttemptAt: this.clock() + Math.min(30_000, 1000 * 2 ** Math.min(delivery.attempts, 5)), updatedAt: now() });
+              continue;
+            }
             const fixed = ['APNS_TOKEN_INVALID', 'APNS_REJECTED', 'APNS_UNAVAILABLE', 'APNS_PAYLOAD_INVALID', 'APNS_RESPONSE_INVALID'].includes(error?.code) ? error.code : 'APNS_UNAVAILABLE';
             putRecord('core.push.delivery', id, { ...delivery, state: error?.uncertain ? 'uncertain' : error?.permanent || delivery.attempts >= 8 ? 'failed' : 'retry', code: fixed,
               nextAttemptAt: this.clock() + Math.min(300_000, 1000 * 2 ** Math.min(delivery.attempts, 8)), updatedAt: now() });

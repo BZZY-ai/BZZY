@@ -1,12 +1,45 @@
-# Goal notifications through APNs
+# Goal notifications through Relay and APNs
+
+Current clients register the phone with Relay and register its approved scope
+with each Core over the encrypted Core protocol. Core saves each outcome and
+outbox record transactionally, then submits a bounded alert to Relay. Relay
+queues it durably and sends it through Apple's APNs even with iOS closed. Apple
+push credentials are configured once on Relay; Core owner/provider credentials
+stay on their original machines. Older clients and Relays retain direct Core
+APNs delivery. A transient Relay failure never changes an accepted alert to a
+different delivery route.
+
+For the Relay route, place the private APNs configuration described below at
+`STATE_DIRECTORY/push/apns.json` on the Relay service, with its private signing
+key readable only by the Relay service user. The same strict schema, ownership,
+permissions and environment checks apply. Provisioning and notification permission
+on the phone are still required. No remote operation accepts Apple signing keys,
+APNs endpoints or provider credentials.
+
+Relay sees only the recipient's private device binding, bounded sanitized alert
+text and opaque routing hints. Full conversation/event traffic remains end-to-end
+encrypted and is never queued by Relay. Alert previews are removed after dispatch;
+deduplication receipts expire with the one-day queue retention. Disable/revoke, removal of a saved computer
+and device-token changes are rechecked before dispatch, along with the live
+PAIR grant. A Core rechecks its narrower local permission before queueing.
+
+Core polls new saved outcomes every second, prioritizing recent events ahead of
+historical backlog. Relay also drains its queue every second. A lost Core-to-Relay
+receipt is retried with the same immutable ID and request, including across Core
+restarts. Relay returns the existing receipt rather than adding another push.
+Explicit Apple rejections use bounded backoff. Ambiguous Apple acceptance is
+reported as uncertain and is not blindly resent: APNs offers no end-to-end
+exactly-once or guaranteed display contract.
+
+## Legacy direct Core delivery
 
 Core's daemon reads the existing durable goal notification outbox and sends native
 Apple Push Notification service alerts directly from the home host. Relay carries
 the encrypted device registration; it never receives the Apple signing key or
 provider authorization. Closing/backgrounding iOS does not remove registration.
 
-Implemented events are `goal.completed`, `goal.stalled` and
-`goal.waiting_for_input`. An execution merely ending does not create a verified
+Implemented events are `goal.completed`, `goal.stalled`, `goal.paused`,
+`goal.cancelled` and `goal.waiting_for_input`. An execution merely ending does not create a verified
 goal-completion alert. Titles use `Goal achieved - ALIAS`, `Goal stalled - ALIAS`
 or `Input needed - ALIAS` (the alias is omitted if unavailable/unsafe). Completion
 and stalled descriptions preview the last assistant reply, capped at **180 Unicode
@@ -28,7 +61,7 @@ saved outcome, independently of CLI, Relay or iPhone connectivity. Supervision
 releases notification deferral if a runner dies before its own cleanup executes.
 Saving the same outcome again does not create another alert; an explicit resume
 advances the goal's notification epoch so a later stall can notify again.
-Manual pause, explicit Stop and cancellation are not reported as stalls.
+Manual pauses and cancellations have distinct alerts and are never reported as stalls.
 
 ## Host setup
 
@@ -79,7 +112,7 @@ These operations use the existing `bzzy-core` v1 encrypted payload:
 
 | Operation | Parameters | Result |
 | --- | --- | --- |
-| `notifications.register` | `deviceToken` (64–512 hexadecimal characters, even length), `environment` (`sandbox` or `production`), `enabled` (boolean), optional `scope` (`session`, default, `terminals`, or `authorized`) and `hostHints` (boolean) | `registered`, `enabled`, `providerConfigured`, actual `scope` |
+| `notifications.register` | `deviceToken` (64–512 hexadecimal characters, even length), `environment` (`sandbox` or `production`), `enabled` (boolean), optional `scope` (`session`, default, `terminals`, or `authorized`), `hostHints` (boolean) and `relayPush` (boolean; negotiated through `capabilities.notificationsRelayPush`) | `registered`, `enabled`, `providerConfigured`, actual `scope` |
 | `notifications.update` | `enabled` (boolean) | Same public state |
 | `notifications.revoke` | `{}` | `{ "revoked": true }` |
 

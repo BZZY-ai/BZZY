@@ -109,6 +109,13 @@ export class RelayGateway extends EventEmitter {
   #check() {
     if (home() !== this.#home) fail('HOST_CONTEXT_CHANGED', 'The gateway host context changed.', 409);
   }
+  async enqueuePush(registration, request) {
+    this.#check();
+    this.#authorize(registration.relayGrantId, registration.peerId, registration.resource);
+    const result = await this.#relay.request('push.enqueue', { grantId: registration.relayGrantId,
+      notificationId: request.id, environment: registration.environment, payload: request.payload, occurredAt: request.occurredAt });
+    return result;
+  }
   #rows(kind) { this.#check(); return listRecords(kind).filter(row => row.hostId === this.#identity.certificate.id && row.relayUrl === this.#relay.url); }
   #audit(row, decision, code) {
     this.#check();
@@ -595,6 +602,7 @@ export class RelayGateway extends EventEmitter {
       const existing = contexts.find(context => context.sessionId === session.id);
       const item = { id: session.id, ...(session.alias ? { alias: session.alias } : {}), provider: session.provider, model: session.model ?? null,
         ...(session.mode ? { mode: session.mode } : {}), cwd: session.cwd, executionState: session.executionState || 'idle',
+        ...(session.goal ? { goalStatus: session.goal.status, goalReason: session.goal.reason || null } : {}),
         createdAt: session.createdAt, updatedAt: session.updatedAt || session.createdAt,
         ...(existing ? { existingResource: existing.resource } : {}) };
       if (Buffer.byteLength(JSON.stringify([...sessions, item])) > LIMITS.payloadBytes - 2048) {
@@ -657,7 +665,14 @@ export class RelayGateway extends EventEmitter {
     if (request.op.startsWith('agents.')) return this.#agentRead(row, request);
     const client = await this.#clientFor(row), params = request.params;
     switch (request.op) {
-      case 'notifications.register': return registerDeviceNotifications(row, params);
+      case 'notifications.register': {
+        if (params.relayPush === true) {
+          const status = await this.#relay.request('push.status', { environment: params.environment });
+          this.#authorize(row.relayGrantId || row.id, row.peerId, row.resource);
+          putRecord('core.push.relay-status', 'current', { configured: status.providerConfigured === true, environment: params.environment, updatedAt: now() });
+        }
+        return registerDeviceNotifications(row, params);
+      }
       case 'notifications.update': return updateDeviceNotifications(row, params);
       case 'notifications.revoke': return revokeDeviceNotifications(row, params);
       case 'sessions.list': return this.#catalogList(row, params);
@@ -696,7 +711,7 @@ export class RelayGateway extends EventEmitter {
             yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), selectionControl: Boolean(authorizedOwnPhone(row.relayGrantId || row.id) && terminalSession(snapshot.session) && !['parallel', 'besties', 'debate'].includes(snapshot.session.mode)), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
             inputOwnedByDevice: snapshot.inputOwner?.principal === `grant:${row.coreGrantId}`,
             inputActor: digest(`grant:${row.coreGrantId}`),
-            durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
+            durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, notificationsRelayPush: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
             ...(authorizedOwnPhone(row.relayGrantId || row.id) ? { terminalCatalogRevision: terminalCatalogRevision() } : {}),
             permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
             relay: true, portableSharing: row.shareAccess === true, shareKind: row.kind === 'agent' ? 'AGENT' : 'TERMINAL' } };
@@ -731,7 +746,7 @@ export class RelayGateway extends EventEmitter {
     return { session: { ...pick(saved, ['id', 'provider', 'backend', 'model', 'cwd', 'createdAt', 'updatedAt']), executionState: 'deleted' },
       execution: null, questions: [], inputOwner: null,
       capabilities: { sessionDeleted: true, activeSteering: false, yolo: false, yoloControl: false, goalSubmission: false, inputSubmission: false,
-        stalledGoalResume: false, inputOwnedByDevice: false, durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true,
+        stalledGoalResume: false, inputOwnedByDevice: false, durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, notificationsRelayPush: true,
         singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
         ...(authorizedOwnPhone(row.relayGrantId || row.id) ? { terminalCatalogRevision: terminalCatalogRevision() } : {}),
         permissions: ['observe'], sessionAccess: row.sessionAccess === true, agentAccess: row.agentAccess === true,

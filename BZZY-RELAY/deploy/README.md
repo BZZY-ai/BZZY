@@ -95,3 +95,14 @@ network checks must be recorded after an actual deployment.
 References: [Caddy reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy),
 [WebSocket compression and backpressure](https://github.com/websockets/ws),
 [Node SQLite](https://nodejs.org/api/sqlite.html).
+
+## Apple background alerts
+
+The service optionally reads `STATE_DIRECTORY/push/apns.json` using the strict
+schema documented in [Core push setup](../../BZZY-CORE/docs/PUSH.md). Keep that
+configuration and its P256 signing key outside the source/deployment checkout,
+owned by the dedicated Relay user with mode 0600 (private directory 0700).
+Configure the installed iOS build's exact topic and sandbox/production environment.
+Missing configuration leaves queued alerts pending; transport health alone does
+not prove push readiness. Normal upgrades preserve the private state directory
+and SQLite goal-alert queue. Never copy Core owner/provider credentials here.

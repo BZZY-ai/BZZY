@@ -148,3 +148,24 @@ pages. Device records are public keys and revocation state, retained within the
 device quota. No encrypted payloads, prompts, auth proofs or raw codes are stored.
 The 8 MiB bound is for WebSocket send buffers; OS sockets, TLS and process memory
 have additional overhead and service-level limits. Monitor all layers on the VPS.
+
+## Native alert transport (additive v1 operations)
+
+`push.register` accepts only the authenticated phone's `enabled`, `deviceToken`
+and `environment`, plus the explicit `grantIds` for its saved computers. Disabling removes the Relay token. An active PAIR recipient
+is required. `push.status` accepts only an environment and returns provider
+configuration readiness to an authenticated host. `push.enqueue` accepts the
+host's `grantId`, immutable `notificationId`, environment, occurrence time and a
+strict bounded APNs alert/navigation schema. There is no supplied recipient,
+token, endpoint, signing credential, arbitrary metadata or execution action.
+The active grant binds recipient and host. Core remains responsible for local
+session/Agent scope authorization, verified outcomes and preview sanitization.
+
+These native alerts are a documented exception to opaque application routing:
+Relay can see the bounded alert preview and opaque navigation hints. It never
+reads or persists encrypted conversations. The private SQLite queue rechecks
+grants and phone opt-in at dispatch; revoked/rotated bindings fail closed.
+Retries of an identical notification return its existing queued/sent/failed/
+uncertain state. Reusing an ID with different content is rejected. The queue
+expires after one day, removes dispatched preview text and never blindly
+retries an uncertain APNs dispatch.

@@ -8,9 +8,10 @@ export function goalEvent(session, { question } = {}) {
   if (goal.importedHistorical) return null;
   const completed = goal.status === 'complete';
   const stalled = isStalledGoal(goal);
-  if (!completed && !stalled && !question) return null;
+  const paused = goal.status === 'paused', cancelled = goal.status === 'cancelled';
+  if (!completed && !stalled && !paused && !cancelled && !question) return null;
   const usage = session.summary?.usage || session.delegationUsage;
-  return { version: 1, id: randomUUID(), type: question ? 'goal.waiting_for_input' : completed ? 'goal.completed' : 'goal.stalled', occurredAt: new Date().toISOString(),
+  return { version: 1, id: randomUUID(), type: question ? 'goal.waiting_for_input' : completed ? 'goal.completed' : stalled ? 'goal.stalled' : paused ? 'goal.paused' : 'goal.cancelled', occurredAt: new Date().toISOString(),
     ...(question ? { question: { id: question.id, text: question.question, kind: question.kind } } : {}),
     sessionId: session.id, goalId: goal.id, epoch: question ? `${goal.notificationEpoch || 0}-${question.id}` : goal.notificationEpoch || 0, provider: session.provider, model: session.model, mode: session.mode || 'solo',
     ...(session.mode === 'delegate' ? { executor: { provider: session.executor?.provider, model: session.executor?.model || null } } : {}),

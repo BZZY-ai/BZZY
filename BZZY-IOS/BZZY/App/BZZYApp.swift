@@ -247,7 +247,7 @@ struct WorkspaceView: View {
     }
 
     private func synchronizePushRegistration() async {
-        guard notifications.enabled else { return }
+        guard notifications.enabled, notifications.permissionChecked else { return }
         let revision = notifications.registrationRevision
         let token = notifications.pushToken
         let environment = notifications.pushEnvironment

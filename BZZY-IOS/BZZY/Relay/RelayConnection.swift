@@ -226,6 +226,8 @@ public final class RelayConnection {
     @ObservationIgnored private var notificationSyncEpoch = UUID()
     @ObservationIgnored private var notificationClients: [UUID: CoreRelayClient] = [:]
     @ObservationIgnored private var notificationFingerprints: [String: String] = [:]
+    @ObservationIgnored private var notificationSyncUptime: TimeInterval = 0
+    @ObservationIgnored private var notificationHostSet: [String] = []
     @ObservationIgnored private var notificationStatuses: [String: String] = [:]
     @ObservationIgnored private var notificationForgettingHosts = Set<String>()
     @ObservationIgnored private var notificationHostHintsSupported = false
@@ -555,6 +557,9 @@ public final class RelayConnection {
         guard profiles.profiles.contains(where: { $0.id == id }), !notificationForgettingHosts.contains(id) else { return }
         notificationForgettingHosts.insert(id)
         defer { notificationForgettingHosts.remove(id) }
+        if let plan = notificationPreferencePlan {
+            _ = await synchronizeAllCoreNotifications(token: plan.token, environment: plan.environment, enabled: plan.enabled)
+        }
         for client in notificationClients.values where client.hostID == id { client.disconnected() }
         if let host = notificationHost(id) { await revokeNotifications(for: id, host: host) }
         guard let index = profiles.profiles.firstIndex(where: { $0.id == id }) else { return }
@@ -1009,7 +1014,7 @@ public final class RelayConnection {
                         if self.coreClient === client && !self.coreSessionDeleted { self.publishCoreEvents() }
                         return
                     }
-                    if batch.events.contains(where: { ["goal.completed", "goal.stalled", "execution.finished"].contains($0.type) }) {
+                    if batch.events.contains(where: { ["goal.completed", "goal.stalled", "goal.paused", "goal.cancelled", "execution.finished"].contains($0.type) }) {
                         await self.refreshCore()
                     }
                 } catch {
@@ -1512,11 +1517,17 @@ public final class RelayConnection {
     /// Coalesce rapid preference/token changes into one serial latest plan.
     /// Tokens stay in memory and encrypted RPC only, never profile persistence.
     public func synchronizeAllCoreNotifications(token: String?, environment: String?, enabled: Bool) async -> String {
-        if notificationPreferencePlan?.matches(token: token, environment: environment, enabled: enabled) != true {
+        let hostSet = profiles.profiles.compactMap { profile -> String? in
+            guard !notificationForgettingHosts.contains(profile.id), let host = notificationHost(profile.id), host.expiresAt > RelayWire.now else { return nil }
+            return host.grantID
+        }.sorted()
+        if notificationHostSet != hostSet || notificationPreferencePlan?.matches(token: token, environment: environment, enabled: enabled) != true {
+            notificationHostSet = hostSet
             notificationPreferencePlan = NotificationPreferencePlan(token: token, environment: environment, enabled: enabled)
         }
         guard networkingEnabled, !suspended, transport?.online == true else { return "Waiting for authorized Core connection" }
         if notificationSyncTask == nil {
+            notificationSyncUptime = ProcessInfo.processInfo.systemUptime
             let epoch = UUID(); notificationSyncEpoch = epoch
             notificationSyncTask = Task { [weak self] in
                 guard let self else { return }
@@ -1524,11 +1535,33 @@ public final class RelayConnection {
                 while !Task.isCancelled, !self.suspended, let plan = self.notificationPreferencePlan {
                     // A fresh Apple registration is required before enabling.
                     if plan.enabled && (plan.token == nil || plan.environment == nil) { return }
+                    var relayPush = false, relayConfigured = false
+                    do {
+                        var fields: [String: WireValue] = ["enabled": .bool(plan.enabled)]
+                        if plan.enabled, let token = plan.token, let environment = plan.environment {
+                            fields["deviceToken"] = .string(token); fields["environment"] = .string(environment)
+                            let grants = self.profiles.profiles.compactMap { profile -> String? in
+                                guard !self.notificationForgettingHosts.contains(profile.id), let host = self.notificationHost(profile.id), host.expiresAt > RelayWire.now else { return nil }
+                                return host.grantID
+                            }
+                            fields["grantIds"] = .array(Array(Set(grants)).sorted().map { .string($0) })
+                        }
+                        let result = try await self.transport?.request("push.register", fields: fields, timeoutNanoseconds: 3_000_000_000)
+                        relayPush = result?["registered"].bool == true
+                        relayConfigured = result?["providerConfigured"].bool == true
+                    } catch {
+                        // Only a known older Relay selects the legacy route.
+                        // Transient failures cannot silently change delivery paths.
+                        if (error as? RelayFailure)?.code != "UNKNOWN_OPERATION" {
+                            for id in self.profiles.profiles.map(\.id) { self.notificationStatuses[id] = "Relay push registration pending · Retrying automatically" }
+                            return
+                        }
+                    }
                     let ids = self.profiles.profiles.map(\.id)
                     for id in ids {
                         guard !Task.isCancelled, self.notificationPreferencePlan?.id == plan.id, !self.suspended else { break }
                         guard !self.notificationForgettingHosts.contains(id), let host = self.notificationHost(id) else { continue }
-                        await self.synchronizeNotifications(for: id, host: host, plan: plan)
+                        await self.synchronizeNotifications(for: id, host: host, plan: plan, relayPush: relayPush, relayConfigured: relayConfigured)
                     }
                     if self.notificationPreferencePlan?.id == plan.id { return }
                 }
@@ -1579,7 +1612,7 @@ public final class RelayConnection {
         }
     }
 
-    private func synchronizeNotifications(for id: String, host: HostBinding, plan: NotificationPreferencePlan) async {
+    private func synchronizeNotifications(for id: String, host: HostBinding, plan: NotificationPreferencePlan, relayPush: Bool, relayConfigured: Bool) async {
         guard let transport, !suspended, transport.online else { return }
         let deadline = ProcessInfo.processInfo.systemUptime + 3
         var client: CoreRelayClient?
@@ -1601,8 +1634,9 @@ public final class RelayConnection {
             guard notificationRequestIsCurrent(id: id, host: host, transport: transport, planID: plan.id, deadline: deadline, revoking: false) else { return }
             let scope = snapshot["capabilities"]["sessionAccess"].bool == true || snapshot["capabilities"]["agentAccess"].bool == true ? "authorized" : "session"
             let hints = snapshot["capabilities"]["notificationsHostRouting"].bool == true
+            let useRelay = relayPush && snapshot["capabilities"]["notificationsRelayPush"].bool == true
             let bytes = try JSONEncoder().encode([id, host.grantID, resource, plan.enabled ? "enabled" : "disabled",
-                plan.enabled ? plan.token ?? "" : "", plan.enabled ? plan.environment ?? "" : "", scope, hints ? "host-hints" : "legacy"])
+                plan.enabled ? plan.token ?? "" : "", plan.enabled ? plan.environment ?? "" : "", scope, hints ? "host-hints" : "legacy", useRelay ? "relay" : "direct"])
             let fingerprint = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
             if notificationFingerprints[id] == fingerprint { return }
             // Once a mutation is dispatched, an unknown/stale response cannot
@@ -1613,12 +1647,14 @@ public final class RelayConnection {
                 guard let token = plan.token, let environment = plan.environment else { return }
                 var params: [String: CoreJSONValue] = ["deviceToken": .string(token), "environment": .string(environment), "enabled": .bool(true), "scope": .string(scope)]
                 if hints { params["hostHints"] = .bool(true) }
+                if useRelay { params["relayPush"] = .bool(true) }
                 result = try await rpc.request("notifications.register", params: params)
             } else { result = try await rpc.request("notifications.update", params: ["enabled": .bool(false)]) }
             guard notificationRequestIsCurrent(id: id, host: host, transport: transport, planID: plan.id, deadline: deadline, revoking: false) else { return }
             notificationFingerprints[id] = fingerprint
-            notificationStatuses[id] = !plan.enabled ? "Host activity alerts disabled" : result["providerConfigured"].bool == true
-                ? "Host push configured · Delivery requires Apple connectivity" : "Device registered · Configure APNs on the source Core"
+            notificationStatuses[id] = !plan.enabled ? "Host activity alerts disabled" : useRelay
+                ? (relayConfigured ? "Relay push configured · Background alerts enabled" : "Device registered · Configure Apple push on Relay")
+                : result["providerConfigured"].bool == true ? "Host push configured · Delivery requires Apple connectivity" : "Device registered · Configure APNs on the source Core"
         } catch {
             if notificationHostIsCurrent(id, host: host), notificationPreferencePlan?.id == plan.id {
                 notificationStatuses[id] = "Host push registration unavailable; retry after reconnecting"
@@ -1650,6 +1686,9 @@ public final class RelayConnection {
     }
 
     private func cancelNotificationSynchronization() {
+        // Reassert registration on foreground/reconnect. Core may have restored
+        // its own private database while this phone was asleep.
+        notificationFingerprints.removeAll()
         notificationSyncEpoch = UUID(); notificationSyncTask?.cancel(); notificationSyncTask = nil
         for client in notificationClients.values { client.disconnected() }
         notificationClients.removeAll()
@@ -2236,6 +2275,10 @@ public final class RelayConnection {
                 }
                 if self.coreConnected, self.coreSubscriptionID == nil, let client = self.coreClient {
                     self.scheduleCoreHistory(client, sessionID: self.coreSessionID, paging: self.coreHistoryPaging)
+                }
+                if self.notificationSyncTask == nil, let plan = self.notificationPreferencePlan,
+                   ProcessInfo.processInfo.systemUptime - self.notificationSyncUptime >= 30 {
+                    Task { await self.synchronizeAllCoreNotifications(token: plan.token, environment: plan.environment, enabled: plan.enabled) }
                 }
                 if !self.coreConnected && !self.coreStarting && !self.coreBusy { await self.reconcile() }
             }

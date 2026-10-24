@@ -15,7 +15,8 @@
     ".": "./src/client.js",
     "./identity": "./src/identity.js",
     "./invitation": "./src/invitation.js",
-    "./server": "./src/server.js"
+    "./server": "./src/server.js",
+    "./apns": "./src/apns.js"
   },
   "scripts": {
     "start": "node bin/relay.js serve",

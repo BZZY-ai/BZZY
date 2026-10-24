@@ -50,6 +50,7 @@ final class NotificationStore {
     static let shared = NotificationStore(enabled: true)
     private(set) var permission = "Not enabled"
     private(set) var authorized = false
+    private(set) var permissionChecked = false
     private(set) var pushStatus = "Host delivery not registered"
     private(set) var pushToken: String?
     private(set) var registrationRevision = 0
@@ -85,6 +86,7 @@ final class NotificationStore {
     func refresh() async {
         guard enabled else { return }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
+        permissionChecked = true
         authorized = [.authorized, .provisional].contains(settings.authorizationStatus)
         #if os(iOS)
         if settings.authorizationStatus == .ephemeral { authorized = true }

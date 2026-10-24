@@ -396,7 +396,8 @@ final class WorkspaceStore {
             if !current.hasAlias { liveTerminals.remove(at: index) }
             else { liveTerminals[index] = LiveTerminalRecord(id: current.id, title: current.title,
                 directory: current.directory ?? previous.directory, provider: current.provider, model: current.model,
-                execution: current.execution, updatedAt: session["updatedAt"] as? String ?? previous.updatedAt) }
+                execution: current.execution, updatedAt: session["updatedAt"] as? String ?? previous.updatedAt,
+                goalStatus: current.goalStatus, goalReason: goal["reason"] as? String) }
             sortLiveTerminals()
         }
     }
@@ -434,7 +435,8 @@ final class WorkspaceStore {
                   let alias = (item["alias"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !alias.isEmpty else { return nil }
             return LiveTerminalRecord(id: id, title: alias, directory: directory,
                 provider: item["provider"] as? String ?? "Unknown provider", model: item["model"] as? String ?? "Unknown model",
-                execution: item["executionState"] as? String ?? "Unknown", updatedAt: item["updatedAt"] as? String ?? item["createdAt"] as? String ?? "")
+                execution: item["executionState"] as? String ?? "Unknown", updatedAt: item["updatedAt"] as? String ?? item["createdAt"] as? String ?? "",
+                goalStatus: item["goalStatus"] as? String, goalReason: item["goalReason"] as? String)
         }
         sortLiveTerminals()
     }
@@ -585,6 +587,23 @@ struct LiveTerminalRecord: Identifiable, Hashable {
     let model: String
     let execution: String
     let updatedAt: String
+    var goalStatus: String? = nil
+    var goalReason: String? = nil
+    var activity: TerminalGoalActivity { TerminalGoalActivity(goal: goalStatus, reason: goalReason, execution: execution) }
+}
+
+enum TerminalGoalActivity: String {
+    case achieved = "Goal achieved", stalled = "Goal stalled", running = "In progress"
+    case paused = "Paused", waiting = "Input needed", cancelled = "Cancelled", idle = "Idle"
+    init(goal: String?, reason: String?, execution: String) {
+        if goal == "complete" { self = .achieved }
+        else if ["blocked", "usage_limited", "budget_limited", "awaiting_review"].contains(goal ?? "") || goal == "paused" && ["turn_limit", "recovery_required"].contains(reason ?? "") || execution == "failed" { self = .stalled }
+        else if execution == "waiting_for_input" { self = .waiting }
+        else if goal == "cancelled" || execution == "cancelled" { self = .cancelled }
+        else if goal == "paused" || execution == "paused" { self = .paused }
+        else if goal == "active" || ["queued", "running", "verifying"].contains(execution) { self = .running }
+        else { self = .idle }
+    }
 }
 
 struct HostAgentRecord: Identifiable, Hashable {
