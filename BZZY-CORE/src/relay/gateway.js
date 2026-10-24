@@ -1,4 +1,5 @@
 import { coreUpdates } from '../engine/updates.js';
+import { terminalCatalogRevision } from '../engine/session-deletion.js';
 import { CoreVoiceChat } from '../engine/voice-chat.js';
 import { setTerminalYolo } from '../engine/terminal-permissions.js';
 import { enqueueGoalTurn } from '../engine/session-operations.js';
@@ -33,7 +34,7 @@ const safeCodes = new Set(['ASSISTANT_SETUP_REQUIRED', 'VOICE_UNAVAILABLE', 'FOR
   'REQUEST_TOO_LARGE', 'RESULT_TOO_LARGE', 'RATE_LIMITED', 'CAPACITY', 'INVALID_CURSOR', 'GRANT_UNAVAILABLE', 'AUTHORIZATION_REQUIRED',
   'WORKSPACE_SETUP_REQUIRED', 'WORKSPACE_CHANGED', 'WORKSPACE_UNAVAILABLE', 'PROVIDER_UNAVAILABLE', 'CORE_STOPPED',
   'CONFIRMATION_REQUIRED', 'EXPORT_ACTIVE', 'SECRET_DETECTED', 'EXPORT_INVALID', 'SHARE_CONTEXT_INCOMPLETE',
-  'IMPORT_UNAVAILABLE', 'IMPORT_INVALID', 'IMPORT_CONFLICT', 'CANCELLED', 'TRANSFER_UNAVAILABLE']);
+  'IMPORT_UNAVAILABLE', 'IMPORT_INVALID', 'IMPORT_CONFLICT', 'CANCELLED', 'TRANSFER_UNAVAILABLE', 'SESSION_DELETED']);
 const errorCode = error => {
   if ((error.status === 403 || error.status === 401) && (!safeCodes.has(error.code) || error.code === 'INVALID_REQUEST')) return 'FORBIDDEN';
   return safeCodes.has(error.code) ? error.code : 'GATEWAY_UNAVAILABLE';
@@ -320,9 +321,22 @@ export class RelayGateway extends EventEmitter {
   }
   async #send(row, payload) {
     this.#authorize(row.id, row.peerId, row.resource);
+    this.#assertDeletedDisclosure(row, payload);
     const clean = boundedPayload(await this.#clean(payload));
     this.#authorize(row.id, row.peerId, row.resource);
+    this.#assertDeletedDisclosure(row, clean);
     return this.#relay.send(row.id, clean);
+  }
+  #assertDeletedDisclosure(row, payload) {
+    const deletion = getRecord('session-deletion', row.sessionId);
+    if (!deletion) return;
+    const result = payload.type === 'events' ? payload : payload.ok === true ? payload.result : null;
+    if (!result) return;
+    if (result.session && result.capabilities?.sessionDeleted !== true
+      || result.events?.some(event => digest(event) !== digest(deletion.event))
+      || typeof result.data === 'string' && Number.isSafeInteger(result.seq) && result.seq !== deletion.event.seq) {
+      fail('SESSION_DELETED', 'This chat was deleted.', 404);
+    }
   }
   #takeRate(peerId, kind = 'requests') {
     const rates = kind === 'metrics' ? this.#metricsRates : kind === 'ack' ? this.#ackRates : kind === 'chunks' ? this.#chunkRates : this.#rates;
@@ -344,6 +358,9 @@ export class RelayGateway extends EventEmitter {
       try {
         request = validateRequest(message.payload);
         row = this.#authorize(row.id, message.from, request.resource, permissionFor(request));
+        if (getRecord('session-deletion', row.sessionId) && ['input.claim', 'input.release', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request'].includes(request.op)) {
+          fail('SESSION_DELETED', 'This chat was deleted.', 404);
+        }
         if ((await runtime()).operatorStopRequested()) fail('CORE_STOPPED', 'Core was stopped by the local operator.', 409);
         // Only an actual delivered/current-cursor acknowledgment gets the data
         // budget. Guessed subscriptions and invalid cursors retain normal limits.
@@ -653,7 +670,9 @@ export class RelayGateway extends EventEmitter {
           ...(saved.code ? { code: saved.code } : {}) };
       }
       case 'session.get': {
+        if (getRecord('session-deletion', row.sessionId)) return this.#deletedSessionSnapshot(row);
         const snapshot = await client.session(row.sessionId);
+        if (getRecord('session-deletion', row.sessionId)) return this.#deletedSessionSnapshot(row);
         return { session: pick(snapshot.session, ['id', 'alias', 'provider', 'backend', 'model', 'cwd', 'createdAt', 'updatedAt', 'turns', 'executionState', 'goal', 'acceptance']),
           execution: pick(snapshot.execution, ['id', 'sessionId', 'state', 'createdAt', 'startedAt', 'finishedAt', 'exitCode']),
           questions: snapshot.questions.filter(question => question.sessionId === row.sessionId).map(question => pick(question, ['id', 'sessionId', 'question', 'text', 'kind', 'options', 'createdAt', 'expiresAt'])),
@@ -662,10 +681,13 @@ export class RelayGateway extends EventEmitter {
             yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
             inputOwnedByDevice: snapshot.inputOwner?.principal === `grant:${row.coreGrantId}`,
             inputActor: digest(`grant:${row.coreGrantId}`),
-            durableEvents: true, historyPaging: true, eventChunks: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)), permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
+            durableEvents: true, historyPaging: true, eventChunks: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
+            ...(authorizedOwnPhone(row.relayGrantId || row.id) ? { terminalCatalogRevision: terminalCatalogRevision() } : {}),
+            permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
             relay: true, portableSharing: row.shareAccess === true, shareKind: row.kind === 'agent' ? 'AGENT' : 'TERMINAL' } };
       }
-      case 'session.usage': return client.usage(row.sessionId);
+      case 'session.usage': return getRecord('session-deletion', row.sessionId)
+        ? { sessionId: row.sessionId, usage: null, summary: null, goal: null } : client.usage(row.sessionId);
       case 'events.list': return this.#eventList(row, params, client);
       case 'events.chunk': return this.#eventChunk(row, params);
       case 'events.subscribe': return this.#subscribe(row, opaque(params.consumerId), params);
@@ -687,6 +709,18 @@ export class RelayGateway extends EventEmitter {
       }
       default: fail('OPERATION_DENIED', 'Operation is not exposed.', 403);
     }
+  }
+
+  #deletedSessionSnapshot(row) {
+    const saved = getRecord('session', row.sessionId);
+    return { session: { ...pick(saved, ['id', 'provider', 'backend', 'model', 'cwd', 'createdAt', 'updatedAt']), executionState: 'deleted' },
+      execution: null, questions: [], inputOwner: null,
+      capabilities: { sessionDeleted: true, activeSteering: false, yolo: false, yoloControl: false, goalSubmission: false, inputSubmission: false,
+        stalledGoalResume: false, inputOwnedByDevice: false, durableEvents: true, historyPaging: true, eventChunks: true,
+        singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
+        ...(authorizedOwnPhone(row.relayGrantId || row.id) ? { terminalCatalogRevision: terminalCatalogRevision() } : {}),
+        permissions: ['observe'], sessionAccess: row.sessionAccess === true, agentAccess: row.agentAccess === true,
+        shareAccess: false, relay: true, portableSharing: false, shareKind: 'TERMINAL' } };
   }
 
   #assistantContext(row) {
@@ -832,6 +866,8 @@ export class RelayGateway extends EventEmitter {
     boundedInteger(params.seq, 1, Number.MAX_SAFE_INTEGER);
     boundedInteger(params.offset, 0, LIMITS.eventBytes - 1);
     boundedInteger(params.limit, 1, LIMITS.chunkBytes);
+    const deletion = getRecord('session-deletion', row.sessionId);
+    if (deletion && params.seq !== deletion.event.seq) fail('SESSION_DELETED', 'This chat was deleted.', 404);
     const event = database().prepare('SELECT seq FROM events WHERE session_id=? AND seq=?').get(row.sessionId, params.seq);
     if (!event) fail('INVALID_CURSOR', 'The scoped event is unavailable.');
   }
@@ -847,6 +883,7 @@ export class RelayGateway extends EventEmitter {
       this.#eventDescriptor(row, clean); transfer = this.#eventTransfers.get(key);
     }
     const { bytes, sha256 } = transfer;
+    this.#chunkTarget(row, params);
     if (bytes.length > LIMITS.eventBytes || params.offset >= bytes.length) fail('RESULT_TOO_LARGE', 'The event exceeds the bounded transfer.');
     const part = bytes.subarray(params.offset, params.offset + params.limit);
     return { seq: params.seq, offset: params.offset, bytes: bytes.length, sha256, data: part.toString('base64'), nextOffset: params.offset + part.length };
@@ -873,7 +910,12 @@ export class RelayGateway extends EventEmitter {
     if (!backwards) return this.#eventPage(row, params.after ?? 0, params.limit ?? LIMITS.pageLimit, client, params.eventChunks === true);
     const before = boundedInteger(params.before ?? Number.MAX_SAFE_INTEGER, 1, Number.MAX_SAFE_INTEGER);
     const limit = boundedInteger(params.limit ?? LIMITS.pageLimit, 1, LIMITS.pageLimit);
-    const page = await client.eventHistory(row.sessionId, before, limit), selected = [];
+    let deletion = getRecord('session-deletion', row.sessionId);
+    let page = deletion ? { events: deletion.event.seq < before ? [deletion.event] : [], hasOlder: false }
+      : await client.eventHistory(row.sessionId, before, limit);
+    deletion = getRecord('session-deletion', row.sessionId);
+    if (deletion) page = { events: deletion.event.seq < before ? [deletion.event] : [], hasOlder: false };
+    const selected = [];
     let expandedBytes = 0;
     // Select from newest backwards, then restore chronological order. The page
     // boundary always describes a contiguous suffix, including huge envelopes.
@@ -888,6 +930,7 @@ export class RelayGateway extends EventEmitter {
       selected.unshift(value); expandedBytes += bytes;
     }
     const oldestCursor = selected[0]?.seq ?? 0, nextCursor = selected.at(-1)?.seq ?? 0;
+    if (!deletion && getRecord('session-deletion', row.sessionId)) return this.#eventList(row, params, client);
     const result = { events: selected, nextCursor, hasMore: false, oldestCursor, hasOlder: page.hasOlder || selected.length < page.events.length };
     if (params.latest === true) {
       // A scoped short-lived proof that this exact tail was disclosed. A later
@@ -902,7 +945,12 @@ export class RelayGateway extends EventEmitter {
   }
   async #eventPage(row, after, limit, client, chunks = false) {
     boundedInteger(after, 0, Number.MAX_SAFE_INTEGER); boundedInteger(limit, 1, LIMITS.pageLimit);
-    const page = await client.events(row.sessionId, after, limit), selected = [];
+    let deletion = getRecord('session-deletion', row.sessionId);
+    let page = deletion ? { events: deletion.event.seq > after ? [deletion.event] : [], hasMore: false }
+      : await client.events(row.sessionId, after, limit);
+    deletion = getRecord('session-deletion', row.sessionId);
+    if (deletion) page = { events: deletion.event.seq > after ? [deletion.event] : [], hasMore: false };
+    const selected = [];
     let expandedBytes = 0;
     for (const event of page.events) {
       if (event.sessionId !== row.sessionId || event.version !== 1 || event.id !== `${row.sessionId}:${event.seq}` || !Number.isSafeInteger(event.seq) || event.seq <= (selected.at(-1)?.seq ?? after)) fail('GATEWAY_UNAVAILABLE', 'The Core event envelope was invalid.');
@@ -915,6 +963,7 @@ export class RelayGateway extends EventEmitter {
       if (Buffer.byteLength(JSON.stringify([...selected, value])) > LIMITS.payloadBytes - 2048) break;
       selected.push(value); expandedBytes += bytes;
     }
+    if (!deletion && getRecord('session-deletion', row.sessionId)) return this.#eventPage(row, after, limit, client, chunks);
     return { events: selected, nextCursor: selected.at(-1)?.seq ?? after, hasMore: page.hasMore || selected.length < page.events.length };
   }
   #cursorKey(row, consumerId) { return digest({ hostId: row.hostId, peerId: row.peerId, resource: row.resource, sessionId: row.sessionId, consumerId }); }
@@ -1007,6 +1056,9 @@ export class RelayGateway extends EventEmitter {
     try {
       const row = this.#authorize(subscription.grantId, subscription.peerId, subscription.resource);
       if (subscription.expiresAt <= Date.now()) { this.#retireSubscription(subscription, 'SUBSCRIPTION_EXPIRED'); return; }
+      if (getRecord('session-deletion', row.sessionId) && subscription.pending?.page.events.some(event => event.type !== 'session.deleted')) {
+        fail('SESSION_DELETED', 'This chat was deleted.', 404);
+      }
       if (subscription.pending) {
         if (subscription.pending.until <= Date.now()) fail('INVALID_CURSOR', 'Subscription acknowledgment timed out.');
         if (subscription.pending.replay) {

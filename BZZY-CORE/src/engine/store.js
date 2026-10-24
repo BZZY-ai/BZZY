@@ -23,6 +23,7 @@ export function sessionPath(id) {
 export function saveSession(session) {
   session.updatedAt = new Date().toISOString();
   transaction(db => {
+    if (sessionDeleted(session.id)) throw Object.assign(new Error('This chat was deleted.'), { code: 'SESSION_DELETED', status: 404 });
     const previous = getRecord('session', session.id);
     // A running agent may save an older snapshot after the user renames its chat.
     if (previous && Object.hasOwn(previous, 'alias')) session.alias = previous.alias;
@@ -50,7 +51,11 @@ export function saveSession(session) {
   writeJson(sessionPath(session.id), session);
 }
 
-export function loadSession(id) { return getRecord('session', id) || readJson(sessionPath(id), null); }
+export const sessionDeleted = id => typeof id === 'string' && Boolean(getRecord('session-deletion', id));
+export function loadSession(id) {
+  if (sessionDeleted(id)) return null;
+  return getRecord('session', id) || readJson(sessionPath(id), null);
+}
 
 export function createSession(provider, cwd, model, alias) {
   const session = {
@@ -67,9 +72,9 @@ export function sessions(cwd) {
   const dir = path.join(home(), 'sessions');
   if (fs.existsSync(dir)) for (const file of fs.readdirSync(dir).filter(file => /^[a-f0-9-]{36}\.json$/.test(file))) {
     const id = file.slice(0, -5);
-    if (!getRecord('session', id)) putRecord('session', id, readJson(path.join(dir, file)));
+    if (!sessionDeleted(id) && !getRecord('session', id)) putRecord('session', id, readJson(path.join(dir, file)));
   }
-  return listRecords('session').filter(s => !cwd || s.cwd === cwd).sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+  return listRecords('session').filter(s => !sessionDeleted(s.id) && (!cwd || s.cwd === cwd)).sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
 }
 
 export function setSessionAlias(id, value, authorize) {

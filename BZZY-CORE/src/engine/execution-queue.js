@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { reserveRequest, listRecords, getRecord, putRecord, appendEvent, now } from './database.js';
-import { loadSession } from './store.js';
+import { loadSession, sessionDeleted } from './store.js';
 import { identityAlive } from './recovery.js';
 import { effectivePolicy } from './policy.js';
 import { captureEnvironment, saveExecutionEnvironment, removeExecutionEnvironment } from './execution-environment.js';
@@ -10,6 +10,7 @@ import { terminalYolo } from './terminal-permissions.js';
 export function enqueueExecution(sessionId, input, requestId, { authorize, prepare, channel } = {}) {
   if (!authorize) throw new Error('Execution needs an authorized input channel.');
   authorize();
+  if (sessionDeleted(sessionId)) throw Object.assign(new Error('This chat was deleted.'), { code: 'SESSION_DELETED', status: 404 });
   const environment = captureEnvironment(input.environment);
   let environmentId;
   try { return reserveRequest(`execute:${sessionId}`, requestId, { prompt: input.prompt, options: input.options, goal: input.goal, resumeGoal: input.resumeGoal, replaceGoalId: input.replaceGoalId, ...(input.resumeGoalId === undefined ? {} : { resumeGoalId: input.resumeGoalId }), environment }, db => {

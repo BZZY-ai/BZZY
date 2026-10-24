@@ -2,6 +2,22 @@
 
 Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a complete single-eye app icon and celeste controls. Local pixel distortion animates the pupils and antennae without blinking, pauses in the background and respects Reduce Motion.
 
+Build **Debug 0.1.0 (16)** follows Core's saved-chat deletions. A CLI deletion
+removes that terminal from the iPhone list after authenticated catalog revision
+synchronization. Deleting a terminal that originally anchored phone pairing keeps
+that pairing and access to other terminals and Agents. Confirmed deletion clears
+that conversation's phone cache and closes its open view. Cached live-session
+fallback rows cannot recreate a terminal absent from an authoritative catalog.
+Update Core/CLI through the CLI updater to enable saved-chat deletion and catalog
+revision discovery; older Core versions retain their existing behavior.
+The signed build 16 passed development APNs/privacy/signature checks and was
+installed in place on the connected iPhone; CoreDevice confirmed **0.1.0 (16)**.
+Automatic launch was blocked by the phone lock. App data and pairing were kept.
+Validation: 76 native Swift tests, model/format checks and targeted offline/keyboard
+UI regressions pass; Core has 239 passing tests, and CLI has 438 passing tests plus
+21 existing platform skips. Deletion tests use isolated synthetic chats.
+
+
 Build **Debug 0.1.0 (15)** repairs conversation attachment and receipt recovery.
 Readiness belongs to the visible conversation: changing terminals waits for that
 exact scoped attachment and retries observation after reconnect. An unresolved

@@ -11,6 +11,10 @@ export class BzzyClient {
   metrics() { return this.request('GET', '/v1/metrics'); }
   sessions() { return this.request('GET', '/sessions'); }
   session(id) { return this.request('GET', `/sessions/${id}`); }
+  deleteConversation(id, { requestId } = {}) {
+    if (!requestId) throw new Error('Deleting a chat requires a stable requestId.');
+    return this.request('POST', `/sessions/${id}/delete`, {}, requestId);
+  }
   submitInput(id, { requestId, ...input }) { return this.request('POST', `/sessions/${id}/input`, input, requestId); }
   usage(id) { return this.request('GET', `/sessions/${id}/usage`); }
   activities(id, { after = '', limit = 100 } = {}) { return this.request('GET', `/sessions/${id}/activities?after=${encodeURIComponent(after)}&limit=${limit}`); }

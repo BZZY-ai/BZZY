@@ -220,12 +220,19 @@ public final class RelayConnection {
         return desiredCoreSessionID.map { isCoreSessionReady($0) } ?? true
     }
     public func isCoreSessionReady(_ sessionID: String) -> Bool {
-        coreActionsAvailable && coreSessionID == sessionID && !coreAttaching
+        coreActionsAvailable && coreSessionID == sessionID && !coreAttaching && !coreSessionDeleted
             && (desiredCoreSessionID == nil || desiredCoreSessionID == sessionID)
     }
     public func isCoreSessionBusy(_ sessionID: String) -> Bool {
         coreAttaching || (coreSessionID == sessionID && coreBusy)
     }
+    public private(set) var coreSessionDeleted = false
+    public private(set) var coreRemovedSessionID = ""
+    public private(set) var coreConversationRemovalID = UUID()
+    @ObservationIgnored private var observedDeletedCoreSessions = Set<String>()
+    @ObservationIgnored private var observedCatalogRevision: String?
+    @ObservationIgnored private var loadedCatalogRevision: String?
+    @ObservationIgnored private var catalogSnapshotUptime = ProcessInfo.processInfo.systemUptime
     public private(set) var coreAttaching = false
     public private(set) var desiredCoreSessionID: String?
     public private(set) var coreHistoryHasOlder = false
@@ -657,6 +664,7 @@ public final class RelayConnection {
             coreCatalogAvailable = baseSnapshot["capabilities"]["sessionAccess"].bool == true
             coreAgentsAvailable = baseSnapshot["capabilities"]["agentAccess"].bool == true
             coreCatalogReady = true
+            observeCatalogRevision(baseSnapshot)
             try await bindCoreSession(active, snapshot: selectedSnapshot ?? baseSnapshot)
             scheduleCatalogRefresh(catalog)
         } catch {
@@ -693,9 +701,20 @@ public final class RelayConnection {
             Task { @MainActor in
                 guard let self, let client, self.coreClient === client, let projection = self.coreProjection else { return }
                 do {
+                    if self.coreSessionDeleted || self.observedDeletedCoreSessions.contains(batch.sessionId) {
+                        _ = try? await client.request("events.ack", params: ["subscriptionId": .string(batch.subscriptionId), "seq": .number(Double(batch.nextCursor))])
+                        return
+                    }
                     try projection.apply(batch)
-                    self.publishCoreEvents()
+                    if !batch.events.contains(where: { $0.type == "session.deleted" }) { self.publishCoreEvents() }
                     _ = try await client.request("events.ack", params: ["subscriptionId": .string(batch.subscriptionId), "seq": .number(Double(batch.nextCursor))])
+                    if batch.events.contains(where: { $0.type == "session.deleted" }) {
+                        // Historical/imported event bodies cannot establish a
+                        // deletion. Only the fresh Core tombstone capability can.
+                        await self.refreshCore()
+                        if self.coreClient === client && !self.coreSessionDeleted { self.publishCoreEvents() }
+                        return
+                    }
                     if batch.events.contains(where: { ["goal.completed", "goal.stalled", "execution.finished"].contains($0.type) }) {
                         await self.refreshCore()
                     }
@@ -708,6 +727,11 @@ public final class RelayConnection {
         }
         client.onSubscriptionClosed = { [weak self, weak client] subscriptionID, code in
             guard let self, let client, self.coreClient === client, self.coreSubscriptionID == subscriptionID else { return }
+            if code == "SESSION_DELETED" {
+                self.coreSubscriptionID = nil
+                Task { [weak self] in await self?.refreshCore() }
+                return
+            }
             if ["FORBIDDEN", "GRANT_UNAVAILABLE"].contains(code) {
                 if client !== self.catalogClient { self.removeSelectedCoreContext() }
                 else { self.stopCore(purge: true) }
@@ -717,10 +741,11 @@ public final class RelayConnection {
     }
 
     private func bindCoreSession(_ client: CoreRelayClient, snapshot: CoreJSONValue) async throws {
-        let healthGeneration = coreHealth.begin(scope: client.resource)
         guard coreClient === client, let sessionID = snapshot["session"]["id"].string, UUID(uuidString: sessionID) != nil else {
             throw RelayFailure("INVALID_MESSAGE")
         }
+        guard !observedDeletedCoreSessions.contains(sessionID) || snapshot["capabilities"]["sessionDeleted"].bool == true else { return }
+        let healthGeneration = coreHealth.begin(scope: client.resource)
         if coreProjection == nil || coreSessionID != sessionID || state.coreCacheScope?.hostID != client.hostID || state.coreCacheScope?.resource != client.resource {
             let directory = isolatedProjectionDirectory ?? Self.coreProjectionDirectory
             coreProjection = try CoreEventProjectionStore(directory: directory, hostID: client.hostID, resource: client.resource, sessionID: sessionID)
@@ -733,6 +758,7 @@ public final class RelayConnection {
         }
         if coreSessionID != sessionID { coreCommandStatus = ""; coreTaskStatus = "" }
         coreSessionID = sessionID
+        coreSessionDeleted = snapshot["capabilities"]["sessionDeleted"].bool == true
         coreSharingAllowed = snapshot["capabilities"]["shareAccess"].bool == true && (!coreIsAgent || coreAgentsAvailable)
         coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
         coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
@@ -747,7 +773,7 @@ public final class RelayConnection {
         coreExecutionState = snapshot["execution"]["state"].string
         corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
         if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: inputLease.generation) { stopInputRenewal() }
-        try coreProjection?.saveSnapshot(snapshot)
+        if !coreSessionDeleted { try coreProjection?.saveSnapshot(snapshot) }
         cachedPresentationScope = CoreCacheScope(hostID: client.hostID, resource: client.resource, sessionID: sessionID)
         try publishCoreSnapshot(snapshot); publishCoreEvents()
         guard coreClient === client, !suspended,
@@ -769,7 +795,7 @@ public final class RelayConnection {
     }
 
     private func scheduleCoreHistory(_ client: CoreRelayClient, sessionID: String, paging: Bool) {
-        guard historySyncTask == nil, coreSubscriptionID == nil, let projection = coreProjection else { return }
+        guard !coreSessionDeleted, historySyncTask == nil, coreSubscriptionID == nil, let projection = coreProjection else { return }
         let epoch = UUID(); historySyncEpoch = epoch; coreHistorySyncing = true
         historySyncTask = Task { [weak self, weak client] in
             guard let self, let client else { return }
@@ -779,7 +805,7 @@ public final class RelayConnection {
             do {
                 if paging, !projection.historyInitialized {
                     let page = try await client.request("events.list", params: ["latest": .bool(true), "limit": .number(50)])
-                    guard self.coreClient === client, self.coreProjection === projection, !self.suspended else { return }
+                    guard self.coreClient === client, self.coreProjection === projection, self.historySyncEpoch == epoch, !self.coreSessionDeleted, !self.suspended, !Task.isCancelled else { return }
                     try projection.bootstrap(CoreEventHistoryPage(page, sessionID: sessionID))
                     self.publishCoreEvents()
                 }
@@ -789,14 +815,14 @@ public final class RelayConnection {
                 do { subscription = try await client.request("events.subscribe", params: subscribe) }
                 catch let failure as CoreApplicationError where failure.code == "INVALID_CURSOR" && paging && projection.bootstrapToken != nil {
                     let page = try await client.request("events.list", params: ["latest": .bool(true), "limit": .number(50)])
-                    guard self.coreClient === client, self.coreProjection === projection, !self.suspended else { return }
+                    guard self.coreClient === client, self.coreProjection === projection, self.historySyncEpoch == epoch, !self.coreSessionDeleted, !self.suspended, !Task.isCancelled else { return }
                     try projection.refreshBootstrap(CoreEventHistoryPage(page, sessionID: sessionID))
                     self.publishCoreEvents()
                     var retry: [String: CoreJSONValue] = ["consumerId": .string(projection.consumerID)]
                     if let token = projection.bootstrapToken { retry["bootstrapToken"] = .string(token) }
                     subscription = try await client.request("events.subscribe", params: retry)
                 }
-                guard self.coreClient === client, self.coreProjection === projection, !self.suspended else { return }
+                guard self.coreClient === client, self.coreProjection === projection, self.historySyncEpoch == epoch, !self.coreSessionDeleted, !self.suspended, !Task.isCancelled else { return }
                 self.coreSubscriptionID = subscription["subscriptionId"].string
                 try projection.markSubscribed()
                 // Assistant discovery is optional for terminal attachments and
@@ -814,7 +840,7 @@ public final class RelayConnection {
                     await self.loadOlderCoreHistory(sessionID: sessionID)
                 }
             } catch {
-                guard self.coreClient === client, !self.suspended else { return }
+                guard self.coreClient === client, self.historySyncEpoch == epoch, !self.coreSessionDeleted, !self.suspended, !Task.isCancelled else { return }
                 let code = (error as? CoreApplicationError)?.code
                 if ["FORBIDDEN", "GRANT_UNAVAILABLE"].contains(code ?? "") {
                     if client !== self.catalogClient { self.removeSelectedCoreContext() }
@@ -866,6 +892,7 @@ public final class RelayConnection {
     }
 
     private func readCoreSessionPages(using catalog: CoreRelayClient) async throws {
+        let revisionAtStart = observedCatalogRevision
         var entries: [CoreJSONValue] = [], cursor: String?
         repeat {
             var params: [String: CoreJSONValue] = ["limit": .number(25)]
@@ -879,6 +906,7 @@ public final class RelayConnection {
             cursor = page["hasMore"].bool == true ? page["nextCursor"].string : nil
         } while cursor != nil
         catalogEntries = entries
+        loadedCatalogRevision = revisionAtStart
         onCoreSessions?(try JSONEncoder().encode(entries))
     }
 
@@ -912,6 +940,7 @@ public final class RelayConnection {
     }
     private func observeCoreConversation(sessionID: String, agentID: String?) async {
         guard UUID(uuidString: sessionID) != nil else { return }
+        if observedDeletedCoreSessions.contains(sessionID) { notifyCoreConversationRemoval(sessionID); return }
         let intent = UUID(); attachmentIntent = intent; desiredCoreSessionID = sessionID
         presentCachedCoreSession(sessionID)
         // An unfinished attachment is an idempotent authorization/read, not work.
@@ -945,7 +974,7 @@ public final class RelayConnection {
                 hostID: scope.hostID, resource: scope.resource, sessionID: scope.sessionID)
             guard let snapshot = cached.cachedSnapshot else { return }
             cachedPresentationScope = scope
-            try publishCoreSnapshot(snapshot)
+            try publishCoreSnapshot(snapshot, authenticated: false)
             coreOutgoingMessages = cached.outgoing
             coreHistoryHasOlder = cached.hasOlderHistory
             coreHistoryHasNewer = cached.hasNewerHistory
@@ -966,7 +995,8 @@ public final class RelayConnection {
         coreHistoryLoading = true; defer { if historyReadEpoch == epoch { coreHistoryLoading = false } }
         do {
             let page = try await client.request("events.list", params: ["before": .number(Double(projection.firstCursor)), "limit": .number(50)])
-            guard coreClient === client, coreProjection === projection, coreSessionID == sessionID else { return }
+            guard coreClient === client, coreProjection === projection, coreSessionID == sessionID,
+                  !coreSessionDeleted, !observedDeletedCoreSessions.contains(sessionID) else { return }
             try projection.prepend(CoreEventHistoryPage(page, sessionID: sessionID))
             publishCoreEvents()
         } catch {
@@ -1509,6 +1539,8 @@ public final class RelayConnection {
 
     private func removeSelectedCoreContext() {
         let resource = state.selectedSession?.resource ?? coreResource
+        let removedSessionID = state.selectedSession?.sessionID ?? coreSessionID
+        notifyCoreConversationRemoval(removedSessionID)
         let scopes = state.coreCacheScopes ?? state.coreCacheScope.map { [$0] } ?? []
         for scope in scopes where scope.resource == resource {
             try? CoreEventProjectionStore.purge(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory, hostID: scope.hostID, resource: scope.resource, sessionID: scope.sessionID)
@@ -1525,7 +1557,71 @@ public final class RelayConnection {
         try? save()
     }
 
-    private func publishCoreSnapshot(_ snapshot: CoreJSONValue) throws {
+    /// Catalog revisions are hints from an authenticated scoped Core response.
+    /// Keep one bounded refresh and retry a failed read on the next real probe.
+    private func observeCatalogRevision(_ snapshot: CoreJSONValue) {
+        catalogSnapshotUptime = ProcessInfo.processInfo.systemUptime
+        guard let revision = snapshot["capabilities"]["terminalCatalogRevision"].string,
+              revision.utf8.count <= 80, !revision.isEmpty else { return }
+        let previous = observedCatalogRevision
+        observedCatalogRevision = revision
+        guard previous != nil, loadedCatalogRevision != revision, coreCatalogReady,
+              coreCatalogAvailable, !coreCatalogRefreshing, !suspended else { return }
+        Task { [weak self] in await self?.refreshCoreSessions() }
+    }
+
+    private func notifyCoreConversationRemoval(_ sessionID: String) {
+        guard UUID(uuidString: sessionID) != nil else { return }
+        if desiredCoreSessionID == sessionID { desiredCoreSessionID = nil; attachmentIntent = UUID() }
+        if state.openingSession?.sessionID == sessionID { state.openingSession = nil }
+        if state.selectedSession?.sessionID == sessionID { state.selectedSession = nil }
+        coreRemovedSessionID = sessionID; coreConversationRemovalID = UUID()
+    }
+
+    /// A confirmed tombstone removes only this conversation's phone projection.
+    /// Its parent pairing remains usable for catalogs, Agents and other sessions.
+    private func observeDeletedCoreSession(_ sessionID: String) throws {
+        guard UUID(uuidString: sessionID) != nil, let hostID = state.host?.certificate.id else { return }
+        if sessionID == coreSessionID { coreSessionDeleted = true }
+        guard !observedDeletedCoreSessions.contains(sessionID) else { return }
+        var scopes = state.coreCacheScopes ?? []
+        if let legacy = state.coreCacheScope, !scopes.contains(where: { $0.hostID == legacy.hostID && $0.resource == legacy.resource && $0.sessionID == legacy.sessionID }) { scopes.append(legacy) }
+        let removed = scopes.filter { $0.hostID == hostID && $0.sessionID == sessionID }
+        for scope in removed {
+            try CoreEventProjectionStore.purge(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory,
+                hostID: scope.hostID, resource: scope.resource, sessionID: scope.sessionID)
+        }
+        if sessionID == coreSessionID {
+            try coreProjection?.purge()
+            historySyncEpoch = UUID(); historySyncTask?.cancel(); historySyncTask = nil; coreHistorySyncing = false
+            historyReadEpoch = UUID(); coreHistoryLoading = false; coreHistoryHasOlder = false; coreHistoryHasNewer = false
+            coreOutgoingMessages = []; encodedCoreEvents.removeAll(); state.taskID = nil
+            stopInputRenewal(); inputLease.reset()
+            coreSharingAllowed = false; coreGoalSubmission = false; coreYoloControl = false
+            coreGoalID = nil; coreGoalStatus = nil; coreGoalReason = nil; coreExecutionState = nil
+            corePermissions = ["observe"]
+            onCoreConversationCleared?()
+            onCoreEvents?([])
+        }
+        let resources = Set(removed.map(\.resource))
+        state.pendingCoreCommands = savedCoreCommands.filter { !($0.hostID == hostID && resources.contains($0.resource)) }
+        state.pendingCoreCommand = nil; commandJournalRevision = UUID()
+        state.coreCacheScopes = scopes.filter { !($0.hostID == hostID && $0.sessionID == sessionID) }
+        if state.coreCacheScope?.sessionID == sessionID { state.coreCacheScope = nil }
+        catalogEntries.removeAll { $0["id"].string == sessionID }
+        onCoreSessions?(try JSONEncoder().encode(catalogEntries))
+        observedDeletedCoreSessions.insert(sessionID)
+        notifyCoreConversationRemoval(sessionID)
+        try save()
+    }
+
+    private func publishCoreSnapshot(_ snapshot: CoreJSONValue, authenticated: Bool = true) throws {
+        if authenticated {
+            observeCatalogRevision(snapshot)
+            if snapshot["capabilities"]["sessionDeleted"].bool == true, let id = snapshot["session"]["id"].string {
+                try observeDeletedCoreSession(id)
+            }
+        }
         guard desiredCoreSessionID == nil || desiredCoreSessionID == snapshot["session"]["id"].string else { return }
         onCoreSnapshot?(try JSONEncoder().encode(snapshot))
     }
@@ -1533,6 +1629,11 @@ public final class RelayConnection {
     private func publishCoreEvents() {
         guard let projection = coreProjection,
               desiredCoreSessionID == nil || desiredCoreSessionID == coreSessionID else { return }
+        if coreSessionDeleted {
+            coreOutgoingMessages = []; coreHistoryHasOlder = false; coreHistoryHasNewer = false
+            onCoreEvents?([])
+            return
+        }
         coreOutgoingMessages = projection.outgoing
         coreHistoryHasOlder = projection.hasOlderHistory
         coreHistoryHasNewer = projection.hasNewerHistory
@@ -1588,12 +1689,13 @@ public final class RelayConnection {
             catalogClient?.disconnected(); catalogClient = nil; coreCatalogReady = false
         }
 
-        coreConnected = false; inputLease.reset()
+        coreConnected = false; coreSessionDeleted = false; inputLease.reset()
         coreSubscriptionID = nil; corePermissions = []; coreIsAssistant = false; coreSharingAllowed = false; coreIsAgent = false
         coreYoloEnabled = false; coreYoloControl = false
         coreGoalSubmission = false; coreStalledGoalResume = false; coreInputSubmission = false; coreInputActor = nil; coreGoalID = nil; coreGoalStatus = nil; coreGoalReason = nil; coreExecutionState = nil
         if purge {
             coreOutgoingMessages = []
+            observedDeletedCoreSessions.removeAll(); observedCatalogRevision = nil; loadedCatalogRevision = nil
             confirmedCorePair = false; state.corePairValidated = false
             do {
                 var scopes = state.coreCacheScopes ?? []
@@ -1648,13 +1750,17 @@ public final class RelayConnection {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 guard let self, self.coreMonitorEpoch == epoch, self.transport === transport,
                       transport.online, self.state.host != nil, !self.suspended else { return }
-                if self.coreConnected, !self.coreStarting, self.coreHealth.needsProbe(), let client = self.coreClient {
+                if self.coreConnected, !self.coreStarting,
+                   self.coreHealth.needsProbe() || self.observedCatalogRevision != nil && ProcessInfo.processInfo.systemUptime - self.catalogSnapshotUptime >= 4,
+                   let client = self.coreClient {
                     let generation = self.coreHealth.generation
                     do {
                         let snapshot = try await client.request("session.get", readTimeoutNanoseconds: 3_000_000_000)
                         guard self.coreMonitorEpoch == epoch, self.coreClient === client, !self.suspended else { continue }
                         guard snapshot["session"]["id"].string == self.coreSessionID else { throw CoreApplicationError("INVALID_RESPONSE") }
                         guard self.coreHealth.confirm(generation, scope: client.resource) else { continue }
+                        self.observeCatalogRevision(snapshot)
+                        if snapshot["capabilities"]["sessionDeleted"].bool == true { try self.observeDeletedCoreSession(self.coreSessionID) }
                     } catch {
                         guard self.coreMonitorEpoch == epoch, self.coreClient === client else { continue }
                         if (error as? CoreApplicationError)?.code != "CAPACITY" || !self.coreHealth.isOnline() {
@@ -1708,6 +1814,8 @@ public final class RelayConnection {
                             guard self.metricsEpoch == epoch, self.coreClient === client, !self.suspended,
                                   snapshot["session"]["id"].string == self.coreSessionID else { return }
                             self.coreHealth.confirm(generation, scope: client.resource)
+                            self.observeCatalogRevision(snapshot)
+                            if snapshot["capabilities"]["sessionDeleted"].bool == true { try self.observeDeletedCoreSession(self.coreSessionID) }
                         } catch {
                             guard self.metricsEpoch == epoch, self.coreClient === client else { return }
                             self.stopCore(purge: false)
@@ -1741,7 +1849,9 @@ public final class RelayConnection {
             let snapshot = try await client.request("session.get")
             guard coreClient === client else { return }
             guard snapshot["session"]["id"].string == coreSessionID else { throw RelayFailure("INVALID_MESSAGE") }
+            guard !observedDeletedCoreSessions.contains(coreSessionID) || snapshot["capabilities"]["sessionDeleted"].bool == true else { return }
             guard coreHealth.confirm(generation, scope: client.resource) else { return }
+            coreSessionDeleted = snapshot["capabilities"]["sessionDeleted"].bool == true
             coreSharingAllowed = snapshot["capabilities"]["shareAccess"].bool == true && (!coreIsAgent || coreAgentsAvailable)
             coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
             coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
@@ -1754,7 +1864,7 @@ public final class RelayConnection {
             coreGoalReason = snapshot["session"]["goal"]["reason"].string
             coreExecutionState = snapshot["execution"]["state"].string
             corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
-            try coreProjection?.saveSnapshot(snapshot)
+            if !coreSessionDeleted { try coreProjection?.saveSnapshot(snapshot) }
             try publishCoreSnapshot(snapshot)
             if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: leaseGeneration) { stopInputRenewal() }
             await reconcileCoreCommand()

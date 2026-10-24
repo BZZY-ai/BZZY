@@ -1,4 +1,6 @@
-import { terminalSession } from '@bzzy/core';
+import { BzzyCore, terminalSession } from '@bzzy/core';
+import { randomUUID } from 'node:crypto';
+import { newConversation } from '@bzzy/core/engine/host-commands.js';
 import { loadSession, sessions, setSessionAlias } from './store.js';
 import { shareTerminal } from './share-ui.js';
 
@@ -32,29 +34,96 @@ export function queueSessionBrowser(ui) {
 
 export async function chooseSavedSession(ui) {
   try {
-    const saved = namedTerminalSessions();
-    if (!saved.length) { ui.event('info', { message: 'No named terminal sessions yet. Use /alias NAME to name a chat.' }); return null; }
-    ui.openTerminal?.();
-    const aliases = new Map();
-    for (const session of saved) aliases.set(sessionLabel(session), (aliases.get(sessionLabel(session)) || 0) + 1);
-    const selected = await ui.chooseOne('Sessions', {
-      hint: 'Enter open · Right-click / F10 actions · Esc back',
-      descriptionRows: 1,
-      choices: saved.map(session => ({ value: session.id, label: sessionLabel(session),
-        ...(aliases.get(sessionLabel(session)) > 1 ? { description: session.cwd } : {}) })),
-    }, { scope: 'sessions' });
-    if (selected == null) return null;
-    const id = typeof selected === 'object' ? selected.value : selected;
-    const session = saved.some(item => item.id === id) && loadSession(id);
-    if (!session || !namedTerminalSessions([session]).length) { ui.event('info', { message: 'This named terminal is no longer available. Open Sessions to refresh.' }); return null; }
-    if (selected.action === 'share') { await shareSavedSession(ui, id); return null; }
-    return { session, action: 'attach' };
+    while (true) {
+      const saved = namedTerminalSessions();
+      if (!saved.length) { ui.event('info', { message: 'No named terminal sessions yet. Use /alias NAME to name a chat.' }); return null; }
+      ui.openTerminal?.();
+      const aliases = new Map();
+      for (const session of saved) aliases.set(sessionLabel(session), (aliases.get(sessionLabel(session)) || 0) + 1);
+      const selected = await ui.chooseOne('Sessions', {
+        hint: 'Enter open · Right-click / F10 actions · Esc back',
+        descriptionRows: 1,
+        choices: saved.map(session => ({ value: session.id, label: sessionLabel(session),
+          ...(aliases.get(sessionLabel(session)) > 1 ? { description: session.cwd } : {}) })),
+      }, { scope: 'sessions' });
+      if (selected == null) return null;
+      const id = typeof selected === 'object' ? selected.value : selected;
+      const session = saved.some(item => item.id === id) && loadSession(id);
+      if (!session || !namedTerminalSessions([session]).length) { ui.event('info', { message: 'This named terminal is no longer available. Open Sessions to refresh.' }); return null; }
+      if (selected.action === 'share') { await shareSavedSession(ui, id); return null; }
+      if (selected.action === 'delete') {
+        try { await deleteSavedSession(ui, id); }
+        catch (error) { ui.event('error', { message: error.message }); }
+        if (ui.nextSession) return null;
+        continue;
+      }
+      return { session, action: 'attach' };
+    }
   } finally {
     ui.tui?.setPanel('chat');
     const sessionId = ui.activeTab || ui.sessionId, draft = ui.sessionBrowserDrafts?.get(sessionId);
     ui.sessionBrowserDrafts?.delete(sessionId);
     if (draft && ui.tui) Object.assign(ui.tui, { value: draft.value, cursor: draft.cursor });
   }
+}
+
+// This local frontend action never removes files itself. Core owns the durable
+// tombstone, runtime/grant checks and idempotent deletion acceptance.
+export async function deleteSavedSession(ui, id, {
+  remove = (sessionId, options) => new BzzyCore().deleteConversation(sessionId, options),
+  fresh = previous => newConversation(previous, { cwd: previous.cwd }),
+} = {}) {
+  if (/VIEW/.test(ui.sessionMode || '') && !ui.permissionConnection?.acquire) throw new Error('This is a read-only view. Attach with control to delete a chat.');
+  const source = loadSession(id);
+  if (!source || !namedTerminalSessions([source]).length) throw new Error('Choose an existing named terminal.');
+  const alias = sessionLabel(source);
+  const selected = await ui.chooseOne(`Delete chat “${alias}”?`, {
+    warning: `“${alias}”\nRemove saved chat. Project files are kept.`,
+    descriptionRows: 6,
+    choices: [
+      { value: 'cancel', label: 'Cancel · Keep chat', selected: true },
+      { value: 'delete', label: 'Delete chat', tone: 'danger' },
+    ],
+  }, { kind: 'approval', scope: 'session-delete', presentation: 'context', minimumWidth: 62, detailLimit: 6 });
+  if (selected !== 'delete') return null;
+  const requests = ui.sessionDeleteRequests ||= new Map();
+  const requestId = requests.get(id) || randomUUID(); requests.set(id, requestId);
+  ui.tui?.notice('Deleting chat…');
+  let result;
+  try { result = await remove(id, { requestId }); }
+  catch (error) {
+    if (!['UNCERTAIN', 'CORE_MAINTENANCE', 'ECONNRESET', 'UND_ERR_SOCKET', 'AbortError', 'TimeoutError'].includes(error.code || error.name)) requests.delete(id);
+    throw error;
+  }
+  if (result?.state !== 'deleted' || result.sessionId !== id || !Array.isArray(result.deletedSessionIds) || !result.deletedSessionIds.includes(id)) throw new Error('Core did not confirm chat deletion.');
+  requests.delete(id);
+  forgetDeletedConversation(ui, source, result.deletedSessionIds, { fresh });
+  return result;
+}
+
+// Shared by the confirmed local action and a live reader learning that another
+// client deleted its conversation. This only changes frontend navigation/state.
+export function forgetDeletedConversation(ui, source, ids = [source.id], {
+  fresh = previous => newConversation(previous, { cwd: previous.cwd }),
+} = {}) {
+  const deleted = new Set(ids);
+  const currentDeleted = deleted.has(ui.sessionId);
+  for (const sessionId of deleted) {
+    ui.cursors?.delete(sessionId); ui.cursors?.delete(`${sessionId}:shared-room`);
+    ui.sessionBrowserDrafts?.delete(sessionId); ui.sessionPermissionStates?.delete(sessionId);
+    ui.tui?.drafts.delete(sessionId);
+  }
+  if (ui.tui) {
+    ui.tui.recentCache = null;
+    ui.tui.inputQueue = ui.tui.inputQueue.filter(item => !deleted.has(item.sessionId));
+    if (currentDeleted) { ui.tui.value = ''; ui.tui.cursor = 0; ui.clearHistory?.(); }
+    ui.tui.schedule();
+  }
+  if (currentDeleted) {
+    ui.pendingChatInputs = [];
+    ui.nextSession = fresh(source);
+  }
+  ui.tui?.notice(`Deleted chat · ${sessionLabel(source) || 'Conversation'}`);
 }
 
 // A host-only client action. Loading context for sharing never attaches to a

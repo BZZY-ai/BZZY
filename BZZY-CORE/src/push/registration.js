@@ -1,6 +1,6 @@
 import { getRecord, putRecord, listRecords, digest, now } from '../engine/database.js';
 import { activeAccess } from '../engine/session-access.js';
-import { loadSession } from '../engine/store.js';
+import { loadSession, sessionDeleted } from '../engine/store.js';
 import { terminalSession } from '../relay/terminal-catalog.js';
 import { object, fail } from '../validation.js';
 import { loadAPNsConfiguration, deviceToken } from './apns.js';
@@ -19,6 +19,7 @@ function agentSession(sessionId, expectedAgentId) {
 }
 
 export function authorizedPushRegistration(registration, eventSessionId) {
+  if (eventSessionId && sessionDeleted(eventSessionId)) return false;
   if (!['session', 'terminals', 'authorized'].includes(registration.scope)) return false;
   const parent = getRecord('core.relay.grant', registration.relayGrantId), pin = parent && getRecord('core.relay.pin', parent.peerId);
   if (!alive(parent) || !pin || pin.revokedAt || parent.peerId !== registration.peerId || parent.hostId !== registration.hostId ||

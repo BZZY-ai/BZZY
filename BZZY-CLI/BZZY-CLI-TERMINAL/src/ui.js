@@ -11,7 +11,7 @@ import { renderMessageContent } from './message-renderer.js';
 import { createTerminalTheme, palettes } from './terminal-theme.js';
 import { HostMetricsMonitor } from './host-metrics.js';
 import { ConnectionStatusMonitor } from './connection-status.js';
-import { shareSavedSession } from './session-browser.js';
+import { shareSavedSession, deleteSavedSession } from './session-browser.js';
 import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 export { clean } from './terminal-format.js';
 
@@ -124,10 +124,11 @@ export class UI {
     }
     if (input.trim() === '/yolo') { await this.toggleYolo(); return true; }
     if (/^\/session-action(?:\s|$)/.test(input)) {
-      const match = /^\/session-action share ([a-f0-9-]{36})$/.exec(input.trim());
+      const match = /^\/session-action (share|delete) ([a-f0-9-]{36})$/.exec(input.trim());
       try {
-        if (!match) throw new Error('Choose Share full context from a terminal’s menu.');
-        await shareSavedSession(this, match[1]);
+        if (!match) throw new Error('Choose an action from a terminal’s menu.');
+        if (match[1] === 'delete') await deleteSavedSession(this, match[2]);
+        else await shareSavedSession(this, match[2]);
       } catch (error) { this.event('error', { message: error.message }); }
       return true;
     }

@@ -6,7 +6,7 @@ import { delay } from './delegation.js';
 import { loadSession } from './store.js';
 import { chooseModel, assertModelIdle } from './models.js';
 import { chatHelp } from './terminal-commands.js';
-import { chooseSavedSession, promptSessionAlias } from './session-browser.js';
+import { chooseSavedSession, promptSessionAlias, forgetDeletedConversation } from './session-browser.js';
 import { exportProject } from './project-bundle.js';
 import { shareTerminal, importTerminal, forgetPrivateImportInput } from './share-ui.js';
 import { skillThat } from './skill-that.js';
@@ -367,6 +367,12 @@ async function watch(info, sessionId, owner, ui, options = {}) {
       if (!ui.interactive && !options.follow && !options.executionId) return 0;
       await delay(100);
       } catch (error) {
+        if (error.code === 'SESSION_DELETED') {
+          if (modalTask) { await delay(50); continue; }
+          if (options.allowControlOnInput) forgetDeletedConversation(ui, initial.session, [sessionId, ...children.map(child => child.id)]);
+          else { detached = true; ui.clearHistory?.(); ui.event('info', { message: 'This chat was deleted.' }); }
+          break;
+        }
         if (!reconnectable(error)) throw error;
         ui.tui?.notice('Reconnecting to Core… Active work continues.');
         await delay(500);
@@ -380,7 +386,12 @@ export async function viewSession(session, options, ui) {
   options = { ...options, cwd: session.cwd };
   const info = await ensureRuntime(); ui.setSession?.(session.id, 'VIEW');
   ui.event('info', { message: `Read-only session view. Attach to chat: bzzy --attach ${session.id}` });
-  const result = await watch(info, session.id, randomUUID(), ui, { follow: options.follow || ui.interactive, activeControl: false });
+  let result;
+  try { result = await watch(info, session.id, randomUUID(), ui, { follow: options.follow || ui.interactive, activeControl: false }); }
+  catch (error) {
+    if (error.code !== 'SESSION_DELETED') throw error;
+    ui.clearHistory?.(); ui.event('info', { message: 'This chat was deleted.' }); return 0;
+  }
   if (!ui.nextSession) return result;
   const selected = ui.nextSession; ui.nextSession = null;
   return attachSession(selected, options, ui);
@@ -415,6 +426,11 @@ export async function conversationInput(session, ui, connection) {
       }
       await delay(100);
       } catch (error) {
+        if (error.code === 'SESSION_DELETED') {
+          ui.reader?.close(); await input;
+          forgetDeletedConversation(ui, session);
+          return '';
+        }
         if (!reconnectable(error)) { ui.reader?.close(); await input; throw error; }
         ui.tui?.notice('Reconnecting to Core…');
         await delay(500);
@@ -446,6 +462,10 @@ export async function attachSession(session, options, ui) {
       activeControl: false, allowControlOnInput: true,
       follow: ui.interactive || options.follow, restoreInitial: true, executionOptions: options,
     });
+    next = ui.nextSession; ui.nextSession = null;
+  } catch (error) {
+    if (error.code !== 'SESSION_DELETED') throw error;
+    forgetDeletedConversation(ui, session);
     next = ui.nextSession; ui.nextSession = null;
   } finally { await api('POST', 'release', {}).catch(() => {}); }
   return next ? attachSession(next, options, ui) : result;
@@ -493,6 +513,9 @@ export async function watchRegistry(session, options, ui, kind) {
       if (!options.follow && !ui.interactive) break;
       await delay(150);
     } while (!stopped);
+  } catch (error) {
+    if (error.code !== 'SESSION_DELETED') throw error;
+    ui.clearHistory?.(); ui.event('info', { message: 'This chat was deleted.' });
   } finally { stopped = true; ui.reader?.close(); await inputLoop; process.removeListener('SIGINT', stop); }
   return selected ? attachSession(selected, options, ui) : 0;
 }

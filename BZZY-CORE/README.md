@@ -12,6 +12,12 @@ the same engine and private state.
 
 Implemented:
 
+- Local-owner deletion of saved terminal chats, shared by the CLI and iPhone
+  catalog. Durable tombstones prevent old snapshots from restoring a removed
+  conversation; active work must stop first. Project files and private execution/
+  evidence audits remain intact. See [chat deletion](docs/SESSION-DELETION.md).
+
+
 - Scoped newest/older event pages for the iPhone's bounded conversation cache,
   with an explicit persisted-tail bootstrap and delivered-only live ACKs.
   Optional exact-event chunk transfer preserves large messages instead of
@@ -259,6 +265,7 @@ cannot convert ordinary owner execution into a safe Agent sandbox.
 | `start()` / `status()` | Start/discover or inspect the shared engine |
 | `createConversation(input, { requestId })` | Persist an idle session; retry with identical input/key |
 | `sessions()` / `session(id)` / `usage(id)` | Observe the existing runtime |
+| `deleteConversation(id, { requestId })` | Local owner removes an inactive terminal chat and its descendants; stable retry identity |
 | `events(id, after, limit)` | Read an event page using a per-session sequence cursor |
 | `claim(id, owner, takeover)` / `release(id, owner)` | Existing input-ownership leases |
 | `execute(id, input)` | Existing execution queue; requires a stable `requestId` |

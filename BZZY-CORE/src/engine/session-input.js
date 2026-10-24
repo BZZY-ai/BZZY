@@ -1,5 +1,5 @@
 import { database, digest, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
-import { loadSession } from './store.js';
+import { loadSession, sessionDeleted } from './store.js';
 import { claimInput, effectiveInputOwner, requireOwner } from './runtime.js';
 import { enqueueExecution } from './execution-queue.js';
 import { enqueueGoalTurn } from './session-operations.js';
@@ -37,6 +37,7 @@ export function submitSessionInput(sessionId, input, requestId, context) {
 }
 
 async function dispatch(sessionId, input, requestId, { authorize, principal = 'owner', request, channel }) {
+  if (sessionDeleted(sessionId)) reject('This chat was deleted.', 'SESSION_DELETED', 404);
   const permission = input.operation === 'answer' ? 'answer' : input.operation === 'control' ? input.action : 'execute';
   if (!['execute', 'answer', 'pause', 'cancel', 'steer'].includes(permission)) reject('Unknown input permission.');
   authorize(permission);

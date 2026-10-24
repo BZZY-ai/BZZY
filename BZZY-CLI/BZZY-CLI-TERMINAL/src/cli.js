@@ -362,6 +362,7 @@ async function chat(provider, options, ui, existingSession) {
   if (session.mode === 'besties') ui.event('info', { message: describeBesties(session), welcome: true });
   const debateReply = focus => ui.onDebate(session.id, focus);
   while (true) {
+    if (ui.nextSession) { const selected = ui.nextSession; ui.nextSession = null; return await attachSession(selected, options, ui); }
     const input = (await conversationInput(session, ui))?.trim();
     if (ui.nextSession) { const selected = ui.nextSession; ui.nextSession = null; return await attachSession(selected, options, ui); }
     Object.assign(session, loadSession(session.id)); provider = getProvider(session.provider);

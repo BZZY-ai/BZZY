@@ -14,7 +14,7 @@ import { terminalSession } from '../../BZZY-CORE/src/relay/terminal-catalog.js';
 import { BzzyCore } from '../../BZZY-CORE/src/core.js';
 import { CoreAssistant } from '../../BZZY-CORE/src/assistant.js';
 import { CoreWorkspaces } from '../../BZZY-CORE/src/workspaces.js';
-import { getRecord, listRecords, putRecord } from '../../BZZY-CORE/src/engine.js';
+import { getRecord, listRecords, putRecord, appendEvent } from '../../BZZY-CORE/src/engine.js';
 import { prepareTask } from '../../BZZY-CORE/src/engine/task.js';
 import { newGoal } from '../../BZZY-CORE/src/engine/goals.js';
 import { runtimeInfo, runtimeRequest, clearOperatorStopIntent } from '../../BZZY-CORE/src/engine/runtime.js';
@@ -72,7 +72,7 @@ async function handle(input) {
     case 'start': {
       phone = verifyCertificate(input.certificate);
       await gateway.start();
-      session = core.createConversation({ provider: 'codex', model: 'pair-fixture', cwd: path.join(directory, 'project') }, { requestId: randomUUID() });
+      session = core.createConversation({ provider: 'codex', model: 'pair-fixture', ...(typeof input.alias === 'string' ? { alias: input.alias } : {}), cwd: path.join(directory, 'project') }, { requestId: randomUUID() });
       const pairing = await gateway.createPairing({ sessionId: session.id,
         permissions: ['observe', 'claim', 'takeover', 'execute', 'answer', 'pause', 'cancel', 'steer'].filter(permission => input.allowTakeover !== false || permission !== 'takeover'),
         sessionAccess: true, shareAccess: true, agentAccess: true });
@@ -98,6 +98,16 @@ async function handle(input) {
       const second = core.createConversation({ provider: 'codex', model: 'pair-fixture', alias: 'Second fixture terminal', cwd: path.join(directory, 'project') }, { requestId: randomUUID() });
       return { sessionId: second.id, catalogEligible: terminalSession(second), sessionCount: listRecords('session').length };
     }
+    case 'deletion-seed': {
+      appendEvent(session.id, 'message.user', { text: 'DELETION_SYNTHETIC_QUESTION' });
+      appendEvent(session.id, 'text', { text: 'DELETION_SYNTHETIC_ANSWER', itemId: 'deletion-reply' });
+      return { seeded: true };
+    }
+    case 'deletion-advisory': {
+      appendEvent(session.id, 'session.deleted', { source: 'synthetic-history-marker' });
+      return { appended: true };
+    }
+    case 'session-delete': return core.deleteConversation(input.sessionId || session.id, { requestId: randomUUID() });
     case 'goal-seed': {
       prepareTask(session, {}, 'Previous unfinished goal'); session.goal = newGoal('Previous unfinished goal');
       session.acceptance = { passed: true }; putRecord('session', session.id, session);

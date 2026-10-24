@@ -47,6 +47,7 @@ export function insertConversation(input, db, metadata = {}) {
 
 export function conversationExport(id) {
   const session = loadSession(id);
+  if (!session) fail('SESSION_DELETED', 'This chat is unavailable.', 404);
   // A retry refreshes the compatibility export from current authoritative state.
   writeJson(sessionPath(id), session);
   return session;

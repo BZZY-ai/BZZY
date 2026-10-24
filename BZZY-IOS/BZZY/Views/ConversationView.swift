@@ -253,6 +253,9 @@ struct ConversationCanvas: View {
         .onChange(of: canDictate) { _, allowed in if !allowed { cancelDictation() } }
         .onChange(of: scenePhase) { _, phase in if phase != .active { cancelDictation() } }
         .onChange(of: conversationID) { cancelDictation() }
+        .onChange(of: relay.coreConversationRemovalID) {
+            if isLive && relay.coreRemovedSessionID == conversationID { cancelDictation(); dismiss() }
+        }
         .onDisappear { cancelDictation() }
         .alert("Replace current goal?", isPresented: $showReplaceGoal) {
             Button("No", role: .cancel) { replacementDraft = nil; goalToReplace = nil; retryGoalMessageID = nil }

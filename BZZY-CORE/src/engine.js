@@ -1,6 +1,6 @@
 // Core owns the single shared execution engine and database.
 export { BzzyClient } from './engine/api-client.js';
-export { home, writeJson, sessionPath, loadSession, normalizeSessionAlias } from './engine/store.js';
+export { home, writeJson, sessionPath, loadSession, normalizeSessionAlias, sessionDeleted } from './engine/store.js';
 export { database, transaction, getRecord, putRecord, listRecords, appendEvent, reserveRequest, digest, now } from './engine/database.js';
 export { getProvider, providers, config, defaultSelection } from './engine/providers.js';
 export { schemaErrors, validateSchema } from './engine/contracts.js';

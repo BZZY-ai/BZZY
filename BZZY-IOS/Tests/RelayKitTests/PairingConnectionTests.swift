@@ -2,6 +2,10 @@ import XCTest
 @testable import RelayKit
 
 final class PairingConnectionTests: XCTestCase {
+    @MainActor func testCLIDeletionSynchronizesCatalogAndCacheWithoutLosingPhonePairing() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, deletionSync: true)
+    }
+
     @MainActor func testLegacyReceiptInAnotherSessionCannotBlockVisibleTerminalOrReplayWork() async throws {
         try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, resourceJournal: true)
     }
@@ -44,11 +48,13 @@ final class PairingConnectionTests: XCTestCase {
     }
 
     @MainActor private func checkPairing(ignoreDecisionEvent: Bool, backgroundBeforeApproval: Bool,
-                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false, allowTakeover: Bool = true, resourceJournal: Bool = false) async throws {
+                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false, allowTakeover: Bool = true, resourceJournal: Bool = false, deletionSync: Bool = false) async throws {
         let fixture = try PairingConnectionFixture()
         defer { fixture.shutdown() }
         let identity = try RelayIdentity.generate()
-        let configuration = try fixture.request(["op": .string("start"), "certificate": try RelayWire.object(identity.certificate), "allowTakeover": .bool(allowTakeover)])
+        var start: [String: WireValue] = ["op": .string("start"), "certificate": try RelayWire.object(identity.certificate), "allowTakeover": .bool(allowTakeover)]
+        if deletionSync { start["alias"] = .string("Deleted fixture terminal") }
+        let configuration = try fixture.request(start)
         XCTAssertEqual(configuration["coordinatorConfigured"].bool, false)
         let endpoint = try XCTUnwrap(URL(string: try XCTUnwrap(configuration["endpoint"].string)))
         let transport = try RelayTransport(identity: identity, loopbackEndpoint: endpoint)
@@ -59,6 +65,8 @@ final class PairingConnectionTests: XCTestCase {
             projectionDirectory: directory, loadAuthorization: { savedAuthorization }, saveAuthorization: { savedAuthorization = $0 })
         defer { connection.pause() }
         var streamed: [CoreJSONValue] = [], deliveryStates: [CoreOutgoingMessage.Status] = []
+        var terminals: [CoreJSONValue] = []
+        connection.onCoreSessions = { data in terminals = (try? JSONDecoder().decode([CoreJSONValue].self, from: data)) ?? [] }
         connection.onCoreEvents = { [weak connection] data in
             streamed = data.compactMap { try? JSONDecoder().decode(CoreJSONValue.self, from: $0) }
             deliveryStates += connection?.coreOutgoingMessages.map(\.status) ?? []
@@ -102,6 +110,48 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertFalse(connection.coreIsAssistant, "A terminal pair must not depend on coordinator setup")
         XCTAssertEqual(connection.corePermissions, Set(["observe", "claim", "takeover", "execute", "answer", "pause", "cancel", "steer"].filter { allowTakeover || $0 != "takeover" }))
         XCTAssertTrue(availabilityFailures.isEmpty, "Approval must not cancel its own initial Core read: \(availabilityFailures)")
+        if deletionSync {
+            let originalID = connection.coreSessionID
+            let viewing = Task { await connection.observeCoreSession(originalID) }
+            defer { viewing.cancel() }
+            let other = try fixture.request(["op": .string("second-session")])
+            let otherID = try XCTUnwrap(other["sessionId"].string)
+            await connection.refreshCoreSessions()
+            XCTAssertTrue(terminals.contains { $0["id"].string == otherID })
+            XCTAssertEqual(try fixture.request(["op": .string("session-delete"), "sessionId": .string(otherID)])["state"].string, "deleted")
+            // Metrics can keep the connection lease fresh. Catalog revision
+            // observation must still remove the other chat without manual refresh.
+            try await eventually { !terminals.contains { $0["id"].string == otherID } }
+            XCTAssertTrue(connection.corePairAuthorized); XCTAssertTrue(connection.coreActionsAvailable)
+            XCTAssertEqual(try fixture.request(["op": .string("deletion-seed")])["seeded"].bool, true)
+            try await eventually { streamed.contains { $0["data"]["text"].string == "DELETION_SYNTHETIC_ANSWER" } }
+            XCTAssertEqual(try fixture.request(["op": .string("deletion-advisory")])["appended"].bool, true)
+            try await eventually { streamed.contains { $0["type"].string == "session.deleted" } }
+            XCTAssertFalse(connection.coreSessionDeleted, "A historical deletion marker cannot replace Core's actual tombstone state")
+            XCTAssertTrue(streamed.contains { $0["data"]["text"].string == "DELETION_SYNTHETIC_ANSWER" })
+            XCTAssertEqual(try fixture.request(["op": .string("session-delete")])["state"].string, "deleted")
+            try await eventually { connection.coreSessionDeleted && connection.coreRemovedSessionID == originalID && !terminals.contains { $0["id"].string == originalID } }
+            XCTAssertTrue(connection.corePairAuthorized, "Deleting the pairing anchor must preserve its host authorization")
+            XCTAssertTrue(connection.coreActionsAvailable, "Catalog-only Core remains online after its chat is deleted")
+            XCTAssertFalse(connection.isCoreSessionReady(originalID))
+            XCTAssertNil(connection.desiredCoreSessionID, "Deleted view intent cannot reopen the chat")
+            XCTAssertTrue(streamed.isEmpty)
+            for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+                let contents = String(data: try Data(contentsOf: file), encoding: .utf8) ?? ""
+                XCTAssertFalse(contents.contains("DELETION_SYNTHETIC_ANSWER"), "Deleted chat bodies cannot remain in its phone cache")
+            }
+            let replacement = try fixture.request(["op": .string("second-session")])
+            let replacementID = try XCTUnwrap(replacement["sessionId"].string)
+            await connection.refreshCoreSessions()
+            let replacementView = Task { await connection.observeCoreSession(replacementID) }
+            defer { replacementView.cancel() }
+            try await eventually { connection.isCoreSessionReady(replacementID) }
+            let accepted = await connection.sendCoreMessage("SYNTHETIC_AFTER_DELETION", sessionID: replacementID)
+            XCTAssertTrue(accepted)
+            try await eventually { try fixture.request(["op": .string("state")])["executionCount"].integer == 1 }
+            XCTAssertTrue(connection.corePairAuthorized)
+            return
+        }
         if resourceJournal {
             var journalPhase = "create second session"
             var journalDiagnostics: () -> String = { "not restored" }

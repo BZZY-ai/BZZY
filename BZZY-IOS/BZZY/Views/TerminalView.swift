@@ -44,7 +44,7 @@ struct TerminalView: View {
                         }
                     }
                 }
-                if let session = store.liveSession, session.hasAlias, !store.liveTerminals.contains(where: { $0.id == session.id }) {
+                if !relay.coreCatalogAvailable, let session = store.liveSession, session.hasAlias, !store.liveTerminals.contains(where: { $0.id == session.id }) {
                     VStack(spacing: 0) {
                         NavigationLink {
                             ConversationCanvas(store: store, conversationID: session.id, title: session.title,
@@ -86,6 +86,7 @@ struct TerminalView: View {
                 }
             }.padding(.horizontal, 25).padding(.top, 26).padding(.bottom, 20)
         }.scrollIndicators(.hidden)
+            .task { if relay.coreCatalogAvailable { await relay.refreshCoreSessions() } }
             .sheet(isPresented: $showConnection) { ConnectView() }
             .navigationDestination(item: $notificationTerminal) { terminal in RemoteTerminalConversationView(store: store, terminal: terminal) }
             .onChange(of: store.notificationTerminalID) { _, id in

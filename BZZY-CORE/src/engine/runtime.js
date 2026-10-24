@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { home, privateDir, readJson, writeJson, loadSession, saveSession, findSession, lockFile, lockOwner } from './store.js';
+import { home, privateDir, readJson, writeJson, loadSession, saveSession, findSession, lockFile, lockOwner, sessionDeleted } from './store.js';
+import { deleteTerminalConversation } from './session-deletion.js';
 import { database, getRecord, putRecord, listRecords, removeRecord, appendEvent, events, eventsBefore, reserveRequest, transaction, now, digest } from './database.js';
 import { processIdentity, identityAlive, reconcileSession, recoverOrphanedVerification } from './recovery.js';
 import { root, runtimeEnv } from './process.js';
@@ -58,6 +59,7 @@ export function effectiveInputOwner(sessionId) {
 export function claimInput(sessionId, owner, takeover = false, principal = 'owner') {
   if (typeof owner !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(owner)) throw new Error('Invalid input-owner ID.');
   return transaction(db => {
+    if (sessionDeleted(sessionId)) throw Object.assign(new Error('This chat was deleted.'), { code: 'SESSION_DELETED', status: 404 });
     const previous = effectiveInputOwner(sessionId);
     if (previous && (previous.owner !== owner || (previous.principal || 'owner') !== principal) && !takeover) throw Object.assign(new Error('Another client owns input. Attach explicitly to transfer ownership.'), { code: 'CONFLICT' });
     const lease = { owner, principal, sessionId, expiresAt: Date.now() + 45000 };
@@ -94,8 +96,8 @@ export async function serveRuntime() {
   const listenerFile = path.join(home(), 'runtime', 'listener.json'), listener = readJson(listenerFile, {});
   const token = listener.token || randomUUID() + randomUUID(), identity = processIdentity();
   const environment = environmentFingerprint();
-  for (const run of listRecords('run')) if (['starting', 'running', 'waiting_for_input'].includes(run.state) && !identityAlive(run.runner)) reconcileSession(run.sessionId);
-  for (const session of listRecords('session')) if (session.goal?.status === 'verifying') recoverOrphanedVerification(session.id);
+  for (const run of listRecords('run')) if (!sessionDeleted(run.sessionId) && ['starting', 'running', 'waiting_for_input'].includes(run.state) && !identityAlive(run.runner)) reconcileSession(run.sessionId);
+  for (const session of listRecords('session')) if (!sessionDeleted(session.id) && session.goal?.status === 'verifying') recoverOrphanedVerification(session.id);
   superviseExecutions();
   const send = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(JSON.stringify(value)); };
   let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise; const streams = new Set();
@@ -154,7 +156,7 @@ export async function serveRuntime() {
       if (request.method === 'GET' && pathname === '/capabilities') { send(response, 200, { apiVersion: 1, managedExecutions: true, durableEvents: true, idempotentCommands: true, inputSubmission: true,
         scopedSessionAccess: true, revocableAccess: true, permissions: access?.permissions || sessionPermissions,
         isolation: { platform: process.platform, enforcedPolicies: sandboxSupport(), backendReadConfidentiality: false }, relay: false, portableSharing: false }); return; }
-      if (request.method === 'GET' && pathname === '/sessions') { send(response, 200, listRecords('session').filter(s => access ? s.id === access.sessionId : !s.parentSessionId)); return; }
+      if (request.method === 'GET' && pathname === '/sessions') { send(response, 200, listRecords('session').filter(s => !sessionDeleted(s.id) && (access ? s.id === access.sessionId : !s.parentSessionId))); return; }
       if (request.method === 'GET' && pathname === '/tokens') {
         if (!rootToken) { send(response, 403, { error: 'Only the local owner can manage session grants.' }); return; }
         send(response, 200, { items: listRecords('access-token').filter(a => a.id).map(publicAccess) }); return;
@@ -168,11 +170,18 @@ export async function serveRuntime() {
         send(response, 200, revokeSessionAccess(pathname.split('/')[2])); return;
       }
       if (request.method === 'POST' && pathname === '/shutdown') { if (!rootToken) { send(response, 403, { error: 'Only the local owner can stop the runtime.' }); return; } send(response, 200, { stopped: true, runningAgentsContinue: true }); setImmediate(() => shutdown()); return; }
-      const match = pathname.match(/^\/sessions\/([a-f0-9-]{36})(?:\/(events|usage|activities|traffic|claim|release|execute|control|answer|input))?$/);
+      const match = pathname.match(/^\/sessions\/([a-f0-9-]{36})(?:\/(events|usage|activities|traffic|claim|release|execute|control|answer|input|delete))?$/);
       if (!match) { send(response, 404, { error: 'Unknown endpoint.' }); return; }
-      const [, id, action] = match, session = loadSession(id);
+      const [, id, action] = match;
+      if (request.method === 'POST' && action === 'delete') {
+        if (!rootToken) { send(response, 403, { error: 'Only the local owner can delete saved chats.', code: 'FORBIDDEN' }); return; }
+        const body = await readBody(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'requestId')) throw new Error('Deleting a chat accepts no execution options.');
+        send(response, 200, deleteTerminalConversation(id, { requestId: request.headers['idempotency-key'] || body.requestId })); return;
+      }
+      const session = loadSession(id);
       if (access && !accessAllows(access, id)) { send(response, 403, { error: 'This token belongs to another session.' }); return; }
-      if (!session) { send(response, 404, { error: 'Unknown session.' }); return; }
+      if (!session) { send(response, 404, { error: sessionDeleted(id) ? 'This chat was deleted.' : 'Unknown session.', code: sessionDeleted(id) ? 'SESSION_DELETED' : 'NOT_FOUND' }); return; }
       if (request.method === 'GET' && action === 'usage') { send(response, 200, { sessionId: id, usage: session.usage || null, summary: session.summary || null, goal: session.goal ? { status: session.goal.status, tokensUsed: session.goal.tokensUsed, runtimeUsedSeconds: session.goal.runtimeUsedSeconds || 0 } : null }); return; }
       if (request.method === 'GET' && ['activities', 'traffic'].includes(action)) {
         const childIds = new Set([id, ...listRecords('session', { parentSessionId: id }).filter(s => !access || accessAllows(access, s.id)).map(s => s.id)]);
@@ -204,6 +213,7 @@ export async function serveRuntime() {
           let blocked = false;
           const pump = () => {
             if (response.destroyed) return;
+            if (sessionDeleted(id)) { response.end(); return; }
             if (access && !activeAccess(getRecord('access-token', accessKey))) { response.end(); return; }
             if (blocked) return;
             const batch = events(id, cursor, 100);

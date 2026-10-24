@@ -341,12 +341,13 @@ export class TerminalChat {
       backgroundFrame, single: true, loading: false, focus: 0, query: '', choices: [
         { value: 'open', label: 'Open terminal', description: 'Open the saved chat in its original project.' },
         { value: 'share', label: 'Share full context', description: this.ui.sessionMode === 'VIEW' ? 'Attach with control to share.' : 'Full project and saved chats · QR / expiring code · recipient approval', disabled: this.ui.sessionMode === 'VIEW' },
+        { value: 'delete', label: 'Delete chat', description: 'Remove this saved chat from BZZY. Project files are kept.', disabled: /VIEW/.test(this.ui.sessionMode || '') && !this.ui.permissionConnection?.acquire },
         { value: 'cancel', label: 'Cancel' },
       ], resolve: action => {
         this.selection = parent; this.ui.reader = reader;
-        if (!['open', 'share'].includes(action)) return;
-        if (parent) this.finishSelection(action === 'share' ? { value: id, action: 'share' } : id);
-        else this.localCommand(action === 'share' ? '/session-action share ' + id : '/open-session ' + id);
+        if (!['open', 'share', 'delete'].includes(action)) return;
+        if (parent) this.finishSelection(action === 'open' ? id : { value: id, action });
+        else this.localCommand(action === 'open' ? '/open-session ' + id : '/session-action ' + action + ' ' + id);
       } };
     this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule(); return true;
   }
@@ -529,7 +530,7 @@ export class TerminalChat {
     if ((button & 3) === 2) {
       const target = this.hitTargets?.findLast(hit => hit.row === y && x >= hit.left && x <= hit.right);
       if (target?.type === 'response') { if (this.openResponseMenu(target.entry, x, y)) this.feedback(target); return; }
-      const id = target?.type === 'saved-session' ? target.id : target?.type === 'alias' ? this.ui.activeTab || this.ui.sessionId
+      const id = target?.type === 'saved-session' ? target.id : target?.type === 'alias' ? this.ui.sessionId
         : target?.type === 'choice' && this.selection?.scope === 'sessions' ? this.selection.choices[target.index]?.value : null;
       if (id && this.openSessionMenu(id, x, y)) this.feedback(target);
       return;
@@ -642,7 +643,7 @@ export class TerminalChat {
       if (response) { this.openResponseMenu(response.entry, response.left, response.row); return; }
       const target = this.selection?.scope === 'sessions' ? this.hitTargets?.find(hit => hit.type === 'choice' && hit.index === this.selection.focus)
         : this.hitTargets?.find(hit => hit.type === 'alias');
-      const id = this.selection?.scope === 'sessions' ? this.selection.choices[this.selection.focus]?.value : this.ui.activeTab || this.ui.sessionId;
+      const id = this.selection?.scope === 'sessions' ? this.selection.choices[this.selection.focus]?.value : this.ui.sessionId;
       if (id) this.openSessionMenu(id, target?.left || 3, target?.row || Math.max(1, this.sceneHeaderLength || 2));
       return;
     }

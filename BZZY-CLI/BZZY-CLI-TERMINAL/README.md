@@ -85,13 +85,21 @@ chat does not claim input, and background lease renewals cannot compete with the
 phone. Read-only `--view` remains read-only. See
 [Core's input contract](../../BZZY-CORE/docs/SESSION-INPUT.md).
 Right-click a named terminal in **Sessions** or **Recent sessions**, or right-click
-the current alias, for **Open terminal** and **Share full context**. **F10**
+the current alias, for **Open terminal**, **Share full context**, and **Delete chat**. **F10**
 (or Shift+F10) opens the same menu for the focused session. Sharing uses the
 existing complete-project Relay flow: typed confirmation, QR/expiring code and
 recipient fingerprint approval. It never attaches to the source or replays work.
 The copy includes saved chats, project files, notes, memory and execution/evidence
 context; credentials and live permissions remain excluded. Escape or an outside
 click closes the menu. Terminals that reserve right-click can use F10 instead.
+
+**Delete chat** opens a confirmation naming the alias, with Cancel selected first.
+Core removes the confirmed terminal and its child conversations from saved chats
+and accessible history. Project files stay in place; internal execution/evidence
+audits remain private, so this is not secure erasure. Active work must be stopped
+or paused first. Deleting another chat keeps the current conversation and unsent
+draft. Deleting the current chat opens a fresh unnamed idle chat in the same
+project, retaining its model and effort without replaying work.
 
 Chat distinguishes **YOU** in teal cards from **AGENT** replies with lavender
 rails. Right-click anywhere on an agent reply for **Copy response**, including

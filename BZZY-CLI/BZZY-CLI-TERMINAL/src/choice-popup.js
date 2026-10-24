@@ -10,13 +10,14 @@ export function visibleChoices(picker) {
 
 export function choicePopup(picker, { width, height, anchor, minimumTop = 0, theme }) {
   const dropdown = ['dropdown', 'context'].includes(picker.presentation), searchable = picker.kind === 'model';
-  const desiredWidth = Math.max(36, ...picker.choices.map(choice => cellWidth(choice.label) + 8));
+  const desiredWidth = Math.max(36, Number.isFinite(picker.minimumWidth) ? picker.minimumWidth : 0, ...picker.choices.map(choice => cellWidth(choice.label) + 8));
   const size = Math.max(16, Math.min(width - 2, dropdown ? Math.min(62, desiredWidth) : Math.min(76, width - 6)));
   const inner = size - 2, filtered = visibleChoices(picker), found = filtered.findIndex(item => item.index === picker.focus);
   if (found < 0 && filtered.length) picker.focus = filtered[0].index;
   const focused = picker.choices[picker.focus];
   const details = picker.error || picker.warning || focused?.description || picker.description || '';
-  const detailLines = details ? wrap(details, inner - 4, Math.min(3, picker.descriptionRows || 2)) : [];
+  const detailLimit = Math.max(1, Math.min(8, picker.detailLimit || 3));
+  const detailLines = details ? wrap(details, inner - 4, Math.min(detailLimit, picker.descriptionRows || 2)) : [];
   const maxHeight = Math.max(7, Math.min(dropdown ? 20 : 25, height - (dropdown ? 0 : minimumTop) - 1));
   const reserved = 6 + (searchable ? 2 : 0) + detailLines.length + (dropdown ? 0 : 2);
   const rows = Math.max(1, Math.min(filtered.length || 1, maxHeight - reserved));

@@ -46,6 +46,7 @@ export class BzzyCore {
   }
   async sessions() { return (await this.#connection()).sessions(); }
   async session(id) { return (await this.#connection()).session(uuid(id)); }
+  async deleteConversation(id, { requestId } = {}) { return (await this.#connection()).deleteConversation(uuid(id), { requestId }); }
   async usage(id) { return (await this.#connection()).usage(uuid(id)); }
   async events(id, after = 0, limit = 200) { return (await this.#connection()).events(uuid(id), after, limit); }
   async claim(id, owner, takeover = false) { return (await this.#connection()).claim(uuid(id), owner, takeover); }
