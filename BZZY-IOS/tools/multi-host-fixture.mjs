@@ -20,6 +20,7 @@ if (worker) {
   const { BzzyCore } = await import('../../BZZY-CORE/src/core.js');
   const { appendEvent, listRecords, putRecord } = await import('../../BZZY-CORE/src/engine.js');
   const { runtimeInfo, runtimeRequest } = await import('../../BZZY-CORE/src/engine/runtime.js');
+  const { pauseRuntimeExecutions } = await import('../../BZZY-CORE/src/engine/runtime-processes.js');
   const { identityAlive } = await import('../../BZZY-CORE/src/engine/process-identity.js');
   putRecord('core.update.preferences', 'default', { monitoringEnabled: false });
   const core = new BzzyCore();
@@ -30,8 +31,15 @@ if (worker) {
     if (closed) return; closed = true;
     await gateway?.close().catch(() => {});
     const info = runtimeInfo();
-    if (info && identityAlive(info.identity)) await runtimeRequest(info, 'POST', '/shutdown', {}).catch(() => {});
+    // Runtime shutdown preserves durable work. This disposable fixture owns its
+    // intentionally held turns and must stop their verified runner/backend
+    // identities before the parent removes this worker's isolated private home.
+    if (info && identityAlive(info.identity)) {
+      await runtimeRequest(info, 'POST', '/operator-stop', { shutdown: false });
+      await runtimeRequest(info, 'POST', '/shutdown', {});
+    } else await pauseRuntimeExecutions({ timeoutMs: 4000 });
     for (let i = 0; info && identityAlive(info.identity) && i < 200; i++) await delay(20);
+    if (info && identityAlive(info.identity)) throw new Error('FIXTURE_CLEANUP_INCOMPLETE');
   };
   handle = async input => {
     switch (input.op) {
@@ -107,11 +115,15 @@ if (worker) {
   });
   cleanup = async () => {
     if (closed) return; closed = true;
-    await Promise.all(children.map(async child => {
-      await request(child, { op: 'stop' }).catch(() => {});
-      child.stdin.end();
+    const stopped = await Promise.allSettled(children.map(async child => {
+      try { await request(child, { op: 'stop' }); }
+      finally { child.stdin.end(); }
     }));
-    await relay.close(); store.close(); fs.rmSync(directory, { recursive: true, force: true });
+    await relay.close(); store.close();
+    // Keep the private fixture directory available for diagnosis if any worker
+    // could not verify shutdown; never delete a still-running worker's home.
+    if (stopped.some(result => result.status === 'rejected')) throw new Error('FIXTURE_CLEANUP_INCOMPLETE');
+    fs.rmSync(directory, { recursive: true, force: true });
   };
   handle = async input => {
     if (input.op === 'start') {
