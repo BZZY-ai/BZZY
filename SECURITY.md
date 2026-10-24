@@ -20,6 +20,19 @@ Imported Agent history is data, receives fresh identities and stays inactive.
 CLI terminals retain their existing native execution permissions and are not
 covered by this narrower Agent tool policy. See BZZY-CORE/docs/AGENT-EXECUTION.md.
 
+Knowledge recall filters engagement identity and session ancestry before search;
+historical text does not authorize execution. Learning reviews use an empty
+private cwd and adapter-enforced no-tool backend profiles, bounded sanitized
+records, token/time/daily reservations and durable pause/recovery. Models cannot
+administer profiles or activate skill candidates. Candidate evaluation withholds
+expected labels for host comparison against approved offline fixtures; passing
+these cases is not live vulnerability verification or script execution proof.
+Project imports retain historical provenance and cannot reuse old acceptance
+receipts as present verification. Global skill promotion is a separately reviewed
+generic text-only candidate; it never copies the private case bundle. Scanning
+supplements review and cannot prove arbitrary text contains no private detail.
+See BZZY-CORE/docs/KNOWLEDGE.md for implemented scope and limits.
+
 The user must be able to share reusable behavior without sharing private
 identity. Separate these layers from the beginning:
 1. Portable behavior: instructions, safe scripts, schemas, dependency declarations,

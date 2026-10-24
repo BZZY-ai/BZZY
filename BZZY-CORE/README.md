@@ -12,6 +12,12 @@ the same engine and private state.
 
 Implemented:
 
+- Project-scoped knowledge recall and reviewed learning: stable engagement IDs,
+  attributed/freshness-aware memory and public-history search, private approved
+  profiles, bounded idle lesson reviews, inactive skill proposals, held-out
+  fixture comparisons and revision-pinned owner activation. See
+  [knowledge and learning](docs/KNOWLEDGE.md).
+
 - Paused terminal conversations can switch between solo, Delegate and Debate through
   Core's owner operations, preserving chat/goal identity, history, policies and
   budgets. CLI `/delegate` and `/debate` use saved mode defaults or setup; `/solo` restores
@@ -54,7 +60,7 @@ Implemented:
 
 - Core-owned GitHub update discovery, durable update alerts and explicit full-phone remote update jobs. CLI and iOS use the same updater; see [combined updates](../BZZY-CLI/BZZY-CLI-TERMINAL/docs/UPDATES.md).
 
-- One versioned shared skills library with explicit enable/disable, folder/ZIP import, Codex skill sync on Linux/macOS, creation, bounded discovery/resource reads and provider-independent tools. Enabled skills stay available across model changes. See [skills](docs/SKILLS.md).
+- One versioned skills library with project and global scopes, explicit enable/disable, folder/ZIP import, Codex skill sync on Linux/macOS, creation, bounded discovery/resource reads and provider-independent tools. Enabled skills stay available across model changes within their approved scope. See [skills](docs/SKILLS.md).
 
 - Sample host CPU/RAM and Core process usage once per second in the daemon.
   CLI and paired iOS display this shared cached telemetry; see

@@ -18,6 +18,11 @@ Keep this directory layout when cloning: the Node packages use sibling file
 dependencies. Agent and sharing implementations live in Core and their clients.
 There is no separate Agent or sharing daemon.
 
+Core also owns [project knowledge and reviewed learning](BZZY-CORE/docs/KNOWLEDGE.md):
+attributed recall, evidence freshness, scoped skills, private approved profiles
+and bounded idle reviews with explicit candidate evaluation and activation.
+CLI `/memory` and `/learn` open its review controls in the existing Skills panel.
+
 ## Install Core and CLI
 
 On macOS or Linux, run the bundled installer from the terminal package:

@@ -70,15 +70,15 @@ export function contextFor(session) {
     }), contextBoundary: 'This bounded assignment has its own context. Parent conversation and project ledgers are not automatically included. Read selected evidence with read_artifact; ask the supervisor for missing context.' });
   if (session.bestiesSessionId) return JSON.stringify({ role: 'bestie', contract: session.contract, checkpoint: getRecord('checkpoint', session.id), recovery: getRecord('recovery', session.id),
     previousAcceptance: session.acceptance || null, projectRoot: session.projectRoot || session.cwd, agentNamespace: session.agentNamespace,
-    relevantMemory: recall(session.projectRoot || session.cwd, session.goal?.objective || session.contract?.objective || '', 8),
+    relevantMemory: recall(session.projectRoot || session.cwd, session.goal?.objective || session.contract?.objective || '', 8, { session }),
     collaboration: peerCollaborationState(session), contextBoundary: 'You and your fellow peers pursue the same full goal. Read peer_inbox for new messages, share decisive evidence through peer_message, and inspect evidence before peer_review. A peer claim or agreement alone is not proof.' });
   // Keep live/recent assignments discoverable over long goals without replaying
   // every report and historical artifact manifest in each model prompt.
   const history = assignmentContextPage(session, { limit: 12, prioritizeOpen: true, includeMoreIds: true });
   return JSON.stringify({ role: session.role || 'supervisor', mode: session.mode || 'solo', executor: session.executor || null, besties: session.besties || null, contract: session.contract, checkpoint: getRecord('checkpoint', session.id), recovery: getRecord('recovery', session.id),
     importedContext: session.importedContext || null,
-    relevantMemory: recall(session.projectRoot || session.cwd, session.goal?.objective || session.contract?.objective || '', 8),
-    projectContext: projectContext(session.projectRoot || session.cwd), peers: session.peers || [], agentNamespace: session.agentNamespace || null,
+    relevantMemory: recall(session.projectRoot || session.cwd, session.goal?.objective || session.contract?.objective || '', 8, { session }),
+    projectContext: projectContext(session.projectRoot || session.cwd, { session }), peers: session.peers || [], agentNamespace: session.agentNamespace || null,
     previousAcceptance: session.acceptance || null, pendingInput: session.pendingInput || [],
     assignments: history.items,
     assignmentHistory: { total: history.total, open: history.open, included: history.items.length, omitted: history.total - history.items.length,

@@ -1,6 +1,12 @@
 # Shared BZZY skills
 
 Core owns one host library at `$BZZY_HOME/skills` (normally `~/.bzzy/skills`).
+Entries have global or engagement scope. The default CLI view combines this
+project's workflows with approved global methods; a same-named project skill
+takes precedence. Qualified IDs distinguish projects. Ordinary model requests
+cannot select another project. Workers see global methods unless their host
+explicitly grants a particular project skill; persistent Agents retain their
+registered directory boundary. Scope remains independent of provider/model.
 Codex, Claude, API providers routed through the current adapters, and persistent
 Agents use the same enabled skills through Core tools. Provider-native skill
 folders are not required for this library. Future execution adapters must carry
@@ -15,7 +21,9 @@ description and instructions. To copy existing Codex workflows, choose **Sync
 Codex skills**, type `/skills sync`, or run `bzzy skills sync` from your project
 directory (`--cwd DIR` selects another project). Sync is local and one-way; it
 does not require Codex login or start inference. Imports and newly created skills
-start disabled.
+start disabled. New CLI imports/creation default to the current project, with an
+explicit global option. Legacy host-global packages that contain raw evidence or
+run records require scope review before they are exposed to models.
 Open a skill to read its instructions and text resources, then explicitly enable
 it for all models. Disabling takes effect on subsequent Core reads and the next
 request's catalog; instructions already in a provider's context cannot be erased
@@ -35,8 +43,13 @@ changes also require the displayed revision; concurrent edits cannot silently
 replace another owner's decision. Model tools cannot administer this library.
 
 `/skill_that` continues to produce a project-local skill from a completed goal.
-It does not automatically install or activate that output. Import its folder
+It includes a private project-scope marker and does not automatically install or activate that output. Import its folder
 through Skills after reviewing the workflow and its private evidence references.
+Version history and rollback are available in the same panel; restored versions
+start disabled. The knowledge/learning views stage inactive revisions, compare
+owner-approved offline fixtures and require explicit version-pinned acceptance.
+Global promotion creates a separate generic text-only candidate, never a copy of
+the original evidence/resources. See [reviewed learning](KNOWLEDGE.md).
 
 ## Sync from Codex
 
@@ -54,7 +67,10 @@ in order:
 The project/user/admin locations follow the [Codex skill discovery
 documentation](https://learn.chatgpt.com/docs/build-skills). Sync copies the whole
 validated package, including scripts, references, assets and `agents/openai.yaml`,
-into Core's shared library. The original Codex folders stay unchanged. Scripts
+into Core's shared library. The original Codex folders stay unchanged. Packages
+from project discovery retain that engagement's scope; user and machine sources
+are global. Exact legacy sync-managed project copies are narrowed to their
+project while their version archive and enable decision are preserved. Scripts
 and provider integrations do not run or install during sync or enable. Unsupported
 provider-specific dependencies still need an authorized BZZY runtime capability;
 copying their declarations does not create that capability.

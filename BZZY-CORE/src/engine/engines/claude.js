@@ -15,18 +15,26 @@ import { BackendTraffic } from '../backend-traffic.js';
 import { conversationPrompt, completeConversationHandoff } from '../conversation.js';
 import { recordClaudeQuota } from '../account-status.js';
 import { ActivityReporter } from '../live-activity.js';
+import { assertLearningWorkingDirectory } from '../learning-backend.js';
 
 export function claudeEnvironment(backendHomes) {
   return subscriptionEnvironment('claude', { backendHomes });
 }
 
 export function claudeArgs(session, options, mcpConfig, uid = process.getuid?.()) {
+  if (options.learningReview) assertLearningWorkingDirectory(session);
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--include-partial-messages', '--permission-prompt-tool', 'stdio'];
   if (session.engineThreadId) args.push('--resume', session.engineThreadId);
   else args.push('--session-id', session.engineSessionId || session.id);
   if (session.model) args.push('--model', session.model);
-  if (options.documentOnly) args.push('--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--setting-sources', '');
+  if (options.documentOnly && !options.learningReview) args.push('--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--setting-sources', '');
+  if (options.learningReview) {
+    if (mcpConfig || options.toolHost) throw new Error('Learning reviews cannot expose MCP tools.');
+    args.push('--safe-mode', '--restricted', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      '--disable-slash-commands', '--setting-sources', '', '--max-turns', '1', '--no-session-persistence', '--system-prompt-snapshot', 'off',
+      '--settings', JSON.stringify({ disableAllHooks: true, autoMemoryEnabled: false }));
+  }
   if (options.agentScope) args.push('--restricted', '--tools', '', '--strict-mcp-config', '--disable-slash-commands', '--setting-sources', '',
     '--settings', JSON.stringify({ disableAllHooks: true, autoMemoryEnabled: false }));
   const effort = reasoningEffort(session, options);
@@ -45,6 +53,7 @@ export class ClaudeEngine {
   constructor(provider, session, options, ui) { Object.assign(this, { provider, session, options, ui }); this.interrupted = false; this.traffic = new BackendTraffic(session, ui); this.progress = options.activityReporter || new ActivityReporter(session, ui); }
 
   async run(prompt, { goal = false } = {}) {
+    if (this.options.learningReview && (goal || this.options.toolHost)) throw new Error('Learning reviews cannot execute goals or expose tools.');
     this.options.goalMode = goal;
     this.progress.setPrompt(goal ? this.session.goal.objective : prompt);
     const env = { ...claudeEnvironment(this.session.backendHomes), ...this.options.networkEnv };
@@ -181,7 +190,7 @@ export class ClaudeEngine {
   }
 
   async handleControl(event) {
-    if (this.options.documentOnly) return { behavior: 'deny', message: 'Documentation drafting has no tool access.' };
+    if (this.options.documentOnly || this.options.learningReview) return { behavior: 'deny', message: 'Documentation drafting has no tool access.' };
     const request = event.request;
     if (request.subtype !== 'can_use_tool') throw new Error(`Unsupported Claude control request: ${request.subtype}`);
     if (this.options.agentScope) {

@@ -26,6 +26,8 @@ import { submitSessionInput } from './session-input.js';
 import { assertCoreAvailable } from './maintenance.js';
 import { HostMetricsSampler } from './host-metrics.js';
 import { authorizedOwnPhoneTerminalInput } from './update-access.js';
+import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, pauseAllLearning } from './learning.js';
+import { CoreKnowledge } from '../knowledge.js';
 
 const runtimeBuild = digest(['src', 'assets', 'bin'].flatMap(directory => fs.readdirSync(path.join(root, directory), { recursive: true })
   .filter(file => !file.split(path.sep).some(part => part.startsWith('._')) && fs.statSync(path.join(root, directory, file)).isFile()).sort()
@@ -100,9 +102,10 @@ export async function serveRuntime() {
   for (const run of listRecords('run')) if (!sessionDeleted(run.sessionId) && ['starting', 'running', 'waiting_for_input'].includes(run.state) && !identityAlive(run.runner)) reconcileSession(run.sessionId);
   for (const session of listRecords('session')) if (!sessionDeleted(session.id) && session.goal?.status === 'verifying') recoverOrphanedVerification(session.id);
   superviseExecutions();
+  recoverLearningJobs();
   const send = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(JSON.stringify(value)); };
-  let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise; const streams = new Set();
-  const metrics = new HostMetricsSampler();
+  let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise, learningPump; const streams = new Set();
+  const metrics = new HostMetricsSampler(), knowledge = new CoreKnowledge();
   let relayService, relayServicePromise;
   const relay = () => relayServicePromise ||= import('../relay/service.js')
     .then(({ CoreRelayService }) => relayService = new CoreRelayService());
@@ -129,7 +132,7 @@ export async function serveRuntime() {
         if (!rootToken) { send(response, 403, { error: 'Only the local owner can stop Core work.' }); return; }
         const input = await readBody(request);
         if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'shutdown') || input.shutdown !== undefined && typeof input.shutdown !== 'boolean') throw new Error('Choose only the operator shutdown mode.');
-        persistOperatorStopIntent(); quiescing = true;
+        persistOperatorStopIntent(); quiescing = true; pauseAllLearning('host_operator_stop');
         if (!operatorStopPromise) operatorStopPromise = pauseRuntimeExecutions().catch(error => { operatorStopPromise = undefined; throw error; });
         const result = await operatorStopPromise;
         // Queue the durable pause outcome before stopping connectivity. A slow
@@ -141,6 +144,11 @@ export async function serveRuntime() {
       }
       if (quiescing && !['/health', '/shutdown'].includes(pathname)) {
         throw Object.assign(new Error('Core was stopped by the local operator. Start Core explicitly before submitting new work.'), { code: 'CORE_STOPPED', status: 409 });
+      }
+      if (pathname.startsWith('/knowledge/')) {
+        if (!rootToken) { send(response, 403, { error: 'Only the local owner can administer knowledge and learning.' }); return; }
+        if (request.method !== 'POST') { send(response, 405, { error: 'Use an explicit knowledge operation.' }); return; }
+        send(response, 200, knowledge.request(pathname.slice('/knowledge/'.length), await readBody(request))); return;
       }
       if (pathname.startsWith('/relay/')) {
         if (!rootToken) { send(response, 403, { error: 'Only the local owner can administer the Core Relay gateway.' }); return; }
@@ -314,6 +322,7 @@ export async function serveRuntime() {
           if (body.action === 'steer') appendEvent(id, 'message.user', { text: body.text, kind: 'steering', controlId: control.id }, db);
           appendEvent(id, `control.${control.state}`, control, db); return { controlId: control.id };
         });
+        if (['pause', 'cancel'].includes(body.action)) pauseLearningForSession(id, 'user_' + body.action);
         const pending = getRecord('control', result.controlId);
         if (['pause', 'cancel'].includes(body.action) && ['queued', 'dispatched'].includes(pending?.state)) requestExecutionStop(id, result.controlId, body.action);
         send(response, 202, result); return;
@@ -335,6 +344,13 @@ export async function serveRuntime() {
     superviseExecutions();
     if (quiescing) return;
     const active = listRecords('execution', { states: ['launching', 'running'] });
+    const learningMayRun = () => !stopping && !quiescing && !operatorStopRequested()
+      && listRecords('execution', { states: ['queued', 'launching', 'running'], limit: 1 }).length === 0;
+    if (!learningPump) {
+      learningPump = processLearningReviews({ limit: 1, canRun: learningMayRun })
+        .catch(() => { /* Learning persists its own bounded failure status. */ })
+        .finally(() => { learningPump = undefined; });
+    }
     if (active.length >= 8) return;
     for (const candidate of listRecords('execution', { state: 'queued' }).filter(j => !j.stopAction).slice(0, 8 - active.length)) {
       const logPath = path.join(home(), 'runtime', `${candidate.id}-execution.log`);
@@ -368,7 +384,7 @@ export async function serveRuntime() {
     }
   }, 100, { label: 'Runtime scheduler' });
   const shutdown = () => {
-    if (stopping) return; stopping = true; clearInterval(scheduler);
+    if (stopping) return; stopping = true; clearInterval(scheduler); pauseAllLearning('host_shutdown');
     pushWorker.close(); updateWatcher.close();
     metrics.close();
     if (runtimeInfo()?.token === token) fs.rmSync(runtimeFile(), { force: true });
@@ -377,6 +393,7 @@ export async function serveRuntime() {
   };
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);
   await new Promise(resolve => server.once('close', resolve));
+  await learningPump;
   await relayServicePromise?.then(service => service.close());
   process.removeListener('SIGTERM', shutdown); process.removeListener('SIGINT', shutdown); unlock(); return 0;
 }

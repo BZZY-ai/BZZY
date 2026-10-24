@@ -14,6 +14,7 @@ import { conversationPrompt, completeConversationHandoff, conversationCursor } f
 import { codexQuota } from '../account-status.js';
 import { ActivityReporter } from '../live-activity.js';
 import { agentPermissionProfile, isolatedAgentCodexHome, tomlValue } from '../agent-execution.js';
+import { learningPermissionProfile, learningDisabledFeatures, learningCodexHome } from '../learning-backend.js';
 
 export { codexHome } from '../auth.js';
 
@@ -30,8 +31,8 @@ export function codexSandboxMode(options = {}) {
 export function codexLaunch(provider, session, options = {}) {
   // Old conversations remain resumable in the store where their thread lives.
   const legacy = path.join(home(), 'codex');
-  if (options.agentScope) {
-    const isolatedHome = isolatedAgentCodexHome(provider, session);
+  if (options.agentScope || options.learningReview) {
+    const isolatedHome = options.learningReview ? learningCodexHome(provider, session) : isolatedAgentCodexHome(provider, session);
     if (session.engineHome !== isolatedHome || session.agentToolPolicy !== 1) {
       session.engineThreadId = null;
       session.conversationHandoff = { pending: true, throughSeq: conversationCursor(session.id) };
@@ -40,15 +41,26 @@ export function codexLaunch(provider, session, options = {}) {
   }
   session.engineHome ||= session.engineThreadId && fs.existsSync(legacy) ? legacy : (provider.auth === 'api-key' ? session.backendHomes?.codexApi : session.backendHomes?.codex) || codexHome(provider);
   privateDir(session.engineHome);
-  const args = ['app-server', '--listen', 'stdio://', '--enable', 'goals'];
+  const args = ['app-server', '--listen', 'stdio://', ...(options.learningReview ? ['--strict-config'] : ['--enable', 'goals'])];
   const env = { ...subscriptionEnvironment('codex'), ...options.networkEnv, CODEX_HOME: session.engineHome };
   const override = (key, value) => args.push('-c', `${key}=${tomlValue(value)}`);
   if (options.documentOnly) {
     override('features.shell_tool', false); override('features.multi_agent', false);
     args.push('-c', 'mcp_servers={}');
   }
-  override('approval_policy', options.agentScope || options.yolo || options.scopedAutonomy ? 'never' : 'on-request');
-  if (options.agentScope) {
+  override('approval_policy', options.learningReview || options.agentScope || options.yolo || options.scopedAutonomy ? 'never' : 'on-request');
+  if (options.learningReview) {
+    const executable = fs.realpathSync(backendCommand('codex'));
+    override('default_permissions', learningPermissionProfile);
+    override(`permissions.${learningPermissionProfile}`, { filesystem: { ':root': 'deny', ':minimal': 'read',
+      [session.cwd]: 'read', [executable]: 'read', ':tmpdir': 'deny', ':slash_tmp': 'deny' }, network: { enabled: false } });
+    for (const feature of learningDisabledFeatures) override(`features.${feature}`, false);
+    override('features.skip_host_skill_discovery', true);
+    override('shell_environment_policy.inherit', 'none'); override('shell_environment_policy.set', { PATH: '/usr/bin:/bin' });
+    override('mcp_servers', {}); override('web_search', 'disabled');
+    override('project_doc_max_bytes', 0); override('project_doc_fallback_filenames', []);
+    override(`projects.${JSON.stringify(session.cwd)}.trust_level`, 'untrusted');
+  } else if (options.agentScope) {
     const executable = fs.realpathSync(backendCommand('codex'));
     override('default_permissions', agentPermissionProfile);
     override(`permissions.${agentPermissionProfile}`, { filesystem: { ':root': 'deny', ':minimal': 'read',
@@ -120,33 +132,36 @@ export class CodexEngine {
 
   async open() {
     if (this.rpc && !this.rpc.closed) return;
-    if (this.options.toolHost && this.session.coreSkillsProtocol !== 1) {
+    if (this.options.toolHost && this.session.coreSkillsProtocol !== 2) {
       if (this.session.engineThreadId) {
         this.session.engineThreadId = null;
         this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
       }
-      this.session.coreSkillsProtocol = 1;
+      this.session.coreSkillsProtocol = 2;
     }
     const installed = version('codex');
     assertCodexVersion(installed);
     const launchConfig = codexLaunch(this.provider, this.session, this.options);
     if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { directory: launchConfig.env.CODEX_HOME }).available) throw new Error(`Codex / ChatGPT subscription authentication is unavailable in ${launchConfig.env.CODEX_HOME}. Run bzzy auth codex with the same BZZY_CODEX_HOME to sign in.`);
     this.rpc = new Rpc(launch('codex', launchConfig.args, { env: launchConfig.env, cwd: this.session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
-      canonicalExecutable: Boolean(this.options.agentScope),
+      canonicalExecutable: Boolean(this.options.agentScope || this.options.learningReview),
       isolation: !this.options.agentScope && this.options.strictPolicy ? backendIsolation('codex', launchConfig.env, this.session.cwd, this.options.policy) : null }), (method, params) => this.request(method, params));
     this.session.backendProcess = processIdentity(this.rpc.child.pid); saveSession(this.session);
     this.rpc.on('notification', (method, params) => this.notification(method, params));
     this.rpc.on('failure', error => this.operation?.reject(error));
     await this.rpc.request('initialize', { clientInfo: { name: 'bzzy', title: 'bzzy', version: '0.2.0' }, capabilities: { experimentalApi: true } });
     this.rpc.notify('initialized');
-    if (this.options.agentScope) {
+    if (this.options.agentScope || this.options.learningReview) {
+      const profileId = this.options.learningReview ? learningPermissionProfile : agentPermissionProfile;
       const profiles = await this.rpc.request('permissionProfile/list', {});
-      if (!profiles.data?.some(profile => profile.id === agentPermissionProfile && profile.allowed === true)) throw new Error('This Codex backend cannot enforce persistent Agent isolation. No unrestricted fallback was started.');
+      if (!profiles.data?.some(profile => profile.id === profileId && profile.allowed === true)) throw new Error('This Codex backend cannot enforce the required isolated permission profile. No unrestricted fallback was started.');
     }
-    const policy = this.options.agentScope ? { approvalPolicy: 'never', permissions: agentPermissionProfile }
+    const policy = this.options.learningReview ? { approvalPolicy: 'never', permissions: learningPermissionProfile }
+      : this.options.agentScope ? { approvalPolicy: 'never', permissions: agentPermissionProfile }
       : { approvalPolicy: this.options.yolo || this.options.scopedAutonomy ? 'never' : 'on-request', sandbox: codexSandboxMode(this.options) };
     const params = { cwd: this.session.cwd, ...policy,
       developerInstructions: agentInstructions(this.session, this.options) };
+    if (this.options.learningReview) { params.dynamicTools = []; params.ephemeral = true; }
     const effort = reasoningEffort(this.session, this.options);
     if (effort) params.config = { model_reasoning_effort: effort };
     if (this.session.model) params.model = this.session.model;
@@ -178,10 +193,12 @@ export class CodexEngine {
   }
 
   assertAgentPermissions(result) {
+    if (this.options.learningReview && (result.activePermissionProfile?.id !== learningPermissionProfile || result.activePermissionProfile.extends != null)) throw new Error('Codex did not activate the isolated learning permission profile. No review was started.');
     if (this.options.agentScope && (result.activePermissionProfile?.id !== agentPermissionProfile || result.activePermissionProfile.extends != null)) throw new Error('Codex did not activate the isolated Agent permission profile. No turn was started.');
   }
 
   async run(prompt, { goal = false, resumeGoal = false } = {}) {
+    if (this.options.learningReview && (goal || resumeGoal || this.options.toolHost)) throw new Error('Learning reviews cannot execute goals or expose tools.');
     this.options.goalMode = goal;
     this.progress.setPrompt(goal ? this.session.goal.objective : prompt);
     await this.open();
@@ -304,7 +321,7 @@ export class CodexEngine {
   }
 
   async request(method, params) {
-    if (this.options.documentOnly) {
+    if (this.options.documentOnly || this.options.learningReview) {
       if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) return { decision: 'decline' };
       throw new Error('Documentation drafting has no tool access.');
     }

@@ -1,3 +1,39 @@
+# Project knowledge and reviewed learning (2026-10-24)
+
+Final full suites on Node.js 24/macOS: **314 Core tests passed, 1 skipped**
+(315 total); **476 CLI tests passed, 21 skipped** (497 total), with zero failures.
+Both product syntax checks and `git diff --check` passed. Existing platform and
+sandbox capability skips remain explicit in the test output.
+
+Coverage includes project identity/nested directories/moves/copies, imported
+historical truth, rejection of imported verification authority, scoped public
+history and stale-source recall, contradictions, structured legacy checkpoints,
+revision history/rollback, worker/Agent boundaries, approved profiles and host
+expiration, cross-model skills, disabled candidates and sanitized promotion.
+Frontend fixtures exercise review previews, stale revision refusal, draft
+retention and conversation changes while an owner decision is open.
+
+The native-protocol fixture drives actual Core scheduling and adapter isolation:
+foreground work prevents review, meaningful ToolHost outcomes queue it, host stop
+pauses running/pending jobs and terminates the verified backend process, restart
+does not replay them, and explicit owner resume permits the pending review.
+Other learning cases cover bounded/daily reservations, deduplication, interrupted
+publication, orphan recovery, held-out labels, fixture revocation/tamper and
+scope-pinned baseline comparison. These use synthetic backends and observations;
+they do not establish live model compliance or real vulnerability verdicts.
+
+An isolated combined CLI/Core tarball was built and installed outside the
+workspace. It contains the public `@bzzy/core/knowledge` export, CLI views,
+learning runtime and docs. Installed-package status/search worked without sibling
+source or inference. Source dependency links and the running installation were
+not replaced. No private Codex skills or live provider/target accounts were used.
+
+Local logs: `/private/tmp/bzzy-release-core-learning.log`,
+`/private/tmp/bzzy-release-cli-learning.log`,
+`/private/tmp/bzzy-release-core-check.log`,
+`/private/tmp/bzzy-release-cli-check.log`, and
+`/private/tmp/bzzy-learning-package.log`.
+
 # Terminal iOS appearance and navigation, build 20 (2026-10-24)
 
 All **86 native Swift tests**, model/chat checks and plist checks passed on

@@ -5,13 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { exportProject, importProject } from '../src/project-bundle.js';
+import { exportProject, importProject, collectProjectState } from '../src/project-bundle.js';
 import { createSession, saveSession, loadSession, sessions } from '../src/store.js';
 import { BUILTINS, saveKey } from '../src/providers.js';
 import { appendEvent, getRecord, putRecord, listRecords } from '../src/database.js';
 import { captureEvidence, snapshotWorkspace, readArtifact } from '../src/evidence.js';
 import { initializeProject, issue } from '../src/project.js';
-import { remember, checkpoint, recall } from '../src/memory.js';
+import { remember, checkpoint, recall, reviewMemory } from '../src/memory.js';
 import { newGoal } from '../src/goals.js';
 import { conversationMessages, conversationCursor, conversationPrompt } from '../src/conversation.js';
 import { parseArgs } from '../src/cli.js';
@@ -108,6 +108,30 @@ test('an imported project can be exported again with its evidence and generated 
   assert.equal(readArtifact(evidence.id).content, 'original evidence');
   assert.equal(second.primarySession.cwd, secondTarget);
   assert.equal(recall(secondTarget)[0].statement, 'A candidate control assumption');
+});
+
+test('engagement imports use fresh identity and historical truth without transferring profiles, learning jobs or verification authority', async () => {
+  const { session, evidence } = original();
+  const lesson = remember(session, { kind: 'observation', statement: 'The controlled offline fixture contains original evidence.', evidence: [evidence.id] });
+  reviewMemory(session, lesson.id, { truth: 'confirmed', expectedRevision: lesson.revision, rationale: 'Owner reviewed the supplied fixture.', explicit: true });
+  for (const kind of ['core.learning.job', 'core.learning.fixtures', 'core.knowledge.profile', 'core.skill.candidate', 'core.memory.revision']) {
+    putRecord(kind, randomUUID(), { sessionId: session.id, project: work, text: 'PRIVATE_CONTROL_PLANE_FIXTURE' });
+  }
+  const receiptId = randomUUID(); putRecord('acceptance', receiptId, { id: receiptId, sessionId: session.id, passed: true });
+  const sourceId = JSON.parse(fs.readFileSync(path.join(work, '.bzzy', 'project.json'))).id;
+  const state = collectProjectState(work, session.id);
+  assert.ok(!JSON.stringify(state).includes('PRIVATE_CONTROL_PLANE_FIXTURE'));
+  const exported = await exportProject(session, path.join(directory, 'knowledge.zip'));
+  const restored = await importProject(exported.path, target), imported = restored.primarySession;
+  assert.notEqual(imported.projectId, sourceId); assert.equal(imported.goal.importedHistorical, true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(target, '.bzzy', 'project.json'))).id, imported.projectId);
+  const importedLesson = recall(target).find(item => item.statement === lesson.statement); assert.equal(importedLesson.truth, 'stale'); assert.equal(importedLesson.stale, true);
+  assert.equal(getRecord('memory', importedLesson.id).truth, 'inconclusive');
+  assert.equal(importedLesson.importProvenance.previousTruth, 'confirmed'); assert.equal(importedLesson.verification, undefined);
+  const projected = JSON.parse(fs.readFileSync(path.join(target, '.bzzy', 'memory', importedLesson.id + '.json')));
+  assert.equal(projected.truth, 'inconclusive'); assert.equal(projected.projectId, imported.projectId);
+  const receipt = listRecords('acceptance').find(item => item.sessionId === imported.id); assert.equal(receipt.importProvenance.observation, 'imported-history');
+  const packed = fs.readFileSync(path.join(imported.importedContext.directory, 'bundle.json'), 'utf8'); assert.doesNotMatch(packed, /PRIVATE_CONTROL_PLANE_FIXTURE/);
 });
 
 test('export refuses active project runs and never replaces an existing archive', async () => {

@@ -2,62 +2,121 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { privateDir, readJson, writeJson } from './files.js';
-import { digest, now, getRecord, putRecord } from './database.js';
+import { database, digest, now, getRecord, putRecord, transaction } from './database.js';
 import { inside } from './evidence.js';
+import { projectIdentityForSession, resolveProjectIdentity, recordBelongsToProject, sessionBelongsToProject } from './project-identity.js';
+import { knowledgeAccess, allowedKnowledgeSessionIds, indexKnowledgeRecord, assertKnowledgeText, cleanKnowledgeValue } from './knowledge-index.js';
+import { memoryFreshness, knowledgeVerificationBudget } from './memory.js';
 
+const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
+const canProjectWrite = session => !['executor', 'reviewer', 'learning-review', 'skill-writer', 'knowledge-review'].includes(session.role) && session.policy?.mode !== 'read-only';
 export function projectDirectory(session) {
-  const base = path.join(session.projectRoot || session.cwd, '.bzzy');
+  const project = projectIdentityForSession(session), base = path.join(project.root, '.bzzy');
   if (session.agentNamespace && !/^[a-zA-Z0-9_-]{1,80}$/.test(session.agentNamespace)) throw new Error('Invalid agent namespace.');
   return session.agentNamespace ? path.join(base, 'agents', session.agentNamespace) : base;
 }
 export function initializeProject(session) {
-  if (session.role === 'executor' || session.role === 'reviewer' || session.policy?.mode === 'read-only') return;
+  const project = projectIdentityForSession(session, { create: canProjectWrite(session) });
+  session.projectRoot = project.root; session.projectId = project.id;
+  if (!canProjectWrite(session)) return project;
   const dir = projectDirectory(session); privateDir(dir);
-  const file = path.join(dir, 'project.json');
-  if (!fs.existsSync(file)) writeJson(file, { version: 1, id: randomUUID(), createdAt: now(), description: 'bzzy project knowledge. No credentials or private account tokens belong here.' });
-  const constraints = path.join(session.projectRoot || session.cwd, '.bzzy', 'constraints.json');
+  const constraints = path.join(project.root, '.bzzy', 'constraints.json');
   if (!fs.existsSync(constraints)) writeJson(constraints, { version: 1, constraints: session.contract?.constraints || [], scope: { allowedTargets: [], excludedTargets: [], allowedActions: [], excludedActions: [], accountReferences: [], cleanupObligations: [], ...session.contract?.scope } });
   const ignore = path.join(dir, '.gitignore');
   if (!fs.existsSync(ignore) || fs.readFileSync(ignore, 'utf8') === 'runtime/\n*.sqlite*\n') fs.writeFileSync(ignore, '*\n', { mode: 0o600 });
+  return project;
 }
 export function writeProjectRecord(session, kind, id, record) {
-  if (session.role === 'executor' || session.role === 'reviewer' || session.policy?.mode === 'read-only') return;
+  if (!canProjectWrite(session)) return;
+  if (!/^[a-z][a-z0-9-]{0,40}$/.test(kind) || !/^[a-zA-Z0-9-]{1,128}$/.test(id)) throw new Error('Invalid project record locator.');
+  const project = projectIdentityForSession(session);
+  record = { id, project: project.root, projectId: project.id, ...record };
   const dir = path.join(projectDirectory(session), kind); privateDir(dir);
-  writeJson(path.join(dir, `${id}.json`), record);
+  const file = path.join(dir, `${id}.json`);
+  if (fs.existsSync(file) && digest(readJson(file)) === digest(record)) return;
+  writeJson(file, record);
   const ledger = path.join(projectDirectory(session), 'ledger'); privateDir(ledger);
   fs.appendFileSync(path.join(ledger, now().slice(0, 10) + '.jsonl'), JSON.stringify({ version: 1, id: randomUUID(), kind, recordId: id, sessionId: session.id,
     occurredAt: now(), sha256: digest(record), record }) + '\n', { mode: 0o600 });
 }
 function recordsIn(dir) {
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter(file => /^[a-zA-Z0-9-]+\.json$/.test(file)).map(file => readJson(inside(dir, file)));
+  let directory;
+  try { directory = fs.lstatSync(dir); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Project record directories cannot be links.');
+  const result = []; let bytes = 0;
+  for (const file of fs.readdirSync(dir).filter(file => /^[a-zA-Z0-9-]+\.json$/.test(file)).slice(0, 10000)) {
+    const absolute = inside(dir, file), info = fs.lstatSync(absolute);
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 128 * 1024) continue;
+    if ((bytes += info.size) > 16 * 1024 * 1024) break;
+    // Projections are compatibility copies, never authority. One malformed
+    // legacy copy must not disable indexed recall or ordinary conversation.
+    try { const record = JSON.parse(fs.readFileSync(absolute, 'utf8')); if (record && typeof record === 'object' && !Array.isArray(record)) result.push(record); }
+    catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+  }
+  return result;
 }
-export function projectRecords(root, kind) { return recordsIn(path.join(root, '.bzzy', kind)); }
+export function projectRecords(root, kind) {
+  if (!/^[a-z][a-z0-9-]{0,40}$/.test(kind)) throw new Error('Invalid project record category.');
+  const project = resolveProjectIdentity(root, { boundary: root });
+  return recordsIn(path.join(project.root, '.bzzy', kind)).map(record => {
+    // Older checkpoint/goal projections lacked their project locator. Attribute
+    // only through a saved session already belonging to this engagement; a
+    // copied anonymous file cannot claim the receiving project's history.
+    if (!record.project && !record.projectRoot && record.sessionId && sessionBelongsToProject(getRecord('session', record.sessionId), project)) return { ...record, project: project.root, projectId: project.id, provenance: 'project-file' };
+    return record;
+  });
+}
 export function agentRecords(root, kind) {
-  const dir = path.join(root, '.bzzy', 'agents');
+  if (!/^[a-z][a-z0-9-]{0,40}$/.test(kind)) throw new Error('Invalid project record category.');
+  const project = resolveProjectIdentity(root, { boundary: root }), dir = path.join(project.root, '.bzzy', 'agents');
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).flatMap(e => recordsIn(inside(dir, e.name) + path.sep + kind).map(record => ({ ...record, agent: e.name })));
+  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('Project agent ledgers cannot be links.');
+  return fs.readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isDirectory()).slice(0, 256)
+    .flatMap(entry => recordsIn(inside(dir, entry.name) + path.sep + kind).map(record => ({ ...record, agent: entry.name })));
 }
 export function issue(session, input) {
-  if (!['open', 'investigating', 'resolved', 'blocked', 'inconclusive', 'disproved'].includes(input.status || 'open') || !input.title?.trim()) throw new Error('Issue needs a title and valid status.');
-  const id = input.id || randomUUID();
+  const access = knowledgeAccess(session), project = access.project, allowed = allowedKnowledgeSessionIds(session, access);
+  if (access.disabled || !['open', 'investigating', 'resolved', 'blocked', 'inconclusive', 'disproved'].includes(input.status || 'open')) throw new Error('Issue needs a title and valid status.');
+  const title = assertKnowledgeText(input.title, 1000), id = input.id || randomUUID();
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid issue ID.');
-  const previous = getRecord('issue', id) || projectRecords(session.projectRoot || session.cwd, 'issues').find(i => i.id === id);
-  if (previous && (previous.project !== (session.projectRoot || session.cwd) || previous.agent !== session.agentNamespace)) throw new Error('Issue belongs to another project or agent ledger. Reference it in a new attributed issue.');
+  const previous = getRecord('issue', id) || projectRecords(project.root, 'issues').find(record => record.id === id);
+  if (previous && (!recordBelongsToProject(previous, project) || previous.agent !== session.agentNamespace || access.restricted && previous.sessionId !== session.id)) throw new Error('Issue belongs to another project or agent ledger. Reference it in a new attributed issue.');
   const evidence = input.evidence || previous?.evidence || [];
-  if (evidence.some(ref => !getRecord('artifact', ref))) throw new Error('Issue evidence must use recorded artifact IDs.');
+  if (!Array.isArray(evidence) || evidence.length > 32 || evidence.some(ref => {
+    const artifact = getRecord('artifact', ref);
+    return !artifact || !(allowed.includes(artifact.sessionId) || access.restricted && (session.allowedArtifactIds || []).includes(ref));
+  })) throw new Error('Issue evidence must use authorized recorded artifact IDs.');
   if (['resolved', 'disproved'].includes(input.status) && !evidence.length) throw new Error('Resolved or disproved issues need evidence.');
-  const record = { ...previous, id, project: session.projectRoot || session.cwd, agent: session.agentNamespace, sessionId: session.id, title: input.title, status: input.status || 'open',
-    details: input.details || '', evidence, resolution: input.resolution || '', createdAt: previous?.createdAt || now(), updatedAt: now() };
-  putRecord('issue', id, record); writeProjectRecord(session, 'issues', id, record); return record;
+  const details = input.details ? assertKnowledgeText(input.details, 6000) : '', resolution = input.resolution ? assertKnowledgeText(input.resolution, 4000) : '';
+  const record = atomic(db => {
+    const current = getRecord('issue', id) || previous;
+    if (input.expectedRevision != null && (current?.revision || (current ? 1 : 0)) !== input.expectedRevision) throw new Error('Issue changed. Refresh its revision before updating.');
+    const saved = { ...current, id, project: project.root, projectId: project.id, agent: session.agentNamespace, sessionId: session.id, title,
+      status: input.status || 'open', details, evidence, resolution, truth: 'inconclusive', claimedTruth: input.status === 'disproved' ? 'disproved' : input.status === 'resolved' ? 'confirmed' : 'hypothesis',
+      revision: (current?.revision || (current ? 1 : 0)) + 1, createdAt: current?.createdAt || now(), updatedAt: now(), provenance: 'agent-recorded' };
+    if (current) putRecord('core.issue.revision', `${id}:${current.revision || 1}`, current, db);
+    putRecord('issue', id, saved, db); putRecord('core.issue.revision', `${id}:${saved.revision}`, saved, db); return saved;
+  });
+  writeProjectRecord(session, 'issues', id, record);
+  indexKnowledgeRecord(project, 'issue', id, session.id, `${title}\n${details}\n${resolution}`, record); return record;
 }
-export function projectContext(root) {
-  const agentDir = path.join(root, '.bzzy', 'agents');
-  const agents = fs.existsSync(agentDir) ? fs.readdirSync(agentDir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name) : [];
-  return { project: readJson(path.join(root, '.bzzy', 'project.json'), null),
-    constraints: readJson(path.join(root, '.bzzy', 'constraints.json'), null), agents,
-    issues: [...projectRecords(root, 'issues'), ...agentRecords(root, 'issues')].filter(i => i.status !== 'resolved').slice(-30),
-    notes: [...projectRecords(root, 'memory'), ...agentRecords(root, 'memory')].slice(-30),
-    recentGoals: projectRecords(root, 'goals').sort((a, b) => (b.summary?.finishedAt || '').localeCompare(a.summary?.finishedAt || '')).slice(0, 5),
-    checkpoints: projectRecords(root, 'checkpoints').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 3) };
+export function projectContext(root, { session } = {}) {
+  const context = session || { id: 'owner-project-context', cwd: root }, access = knowledgeAccess(context), project = access.project;
+  if (access.disabled) return { project: { id: project.id }, agents: [], issues: [], notes: [], recentGoals: [], checkpoints: [] };
+  const allowed = allowedKnowledgeSessionIds(context, access), filtered = records => records.filter(record =>
+    typeof record.sessionId === 'string' && /^[a-f0-9-]{36}$/.test(record.sessionId) && !getRecord('session-deletion', record.sessionId) &&
+    recordBelongsToProject(record, project) && (!access.restricted || allowed.includes(record.sessionId)))
+    .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+  const records = (kind, plural) => {
+    const rows = database().prepare(`SELECT data FROM records WHERE kind=? AND (json_extract(data,'$.projectId')=? OR COALESCE(json_extract(data,'$.project'),json_extract(data,'$.projectRoot')) IN (SELECT value FROM json_each(?))) LIMIT 10000`).all(kind, project.id, JSON.stringify(project.aliases));
+    const merged = new Map([...projectRecords(project.root, plural), ...agentRecords(project.root, plural)].map(record => [record.id || record.sessionId, record]));
+    for (const row of rows) { const record = JSON.parse(row.data); merged.set(record.id || record.sessionId, record); }
+    return filtered([...merged.values()]).filter(record => !['memory', 'issue'].includes(kind) || typeof record.id === 'string' && /^[a-f0-9-]{36}$/.test(record.id));
+  };
+  const budget = knowledgeVerificationBudget();
+  return cleanKnowledgeValue({ project: { id: project.id },
+    constraints: readJson(path.join(project.root, '.bzzy', 'constraints.json'), null),
+    agents: access.restricted ? [] : [...new Set(records('memory', 'memory').map(record => record.agent).filter(Boolean))],
+    issues: records('issue', 'issues').filter(record => record.status !== 'resolved').slice(0, 30).map(record => memoryFreshness(record, project, context, { budget })),
+    notes: records('memory', 'memory').slice(0, 30).map(record => memoryFreshness(record, project, context, { budget })), recentGoals: records('goal-history', 'goals').slice(0, 5), checkpoints: records('checkpoint', 'checkpoints').slice(0, 3) });
 }

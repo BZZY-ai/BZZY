@@ -26,7 +26,8 @@ const records = () => {
 };
 const sessions = () => {
   const dir = path.join(env.BZZY_HOME, 'sessions');
-  return fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith('.json')).map(name => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'))) : [];
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith('.json')).map(name => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')))
+    .filter(session => !['skill-writer', 'learning-review', 'knowledge-review'].includes(session.role)) : [];
 };
 
 function launch(args, { extraEnv = {}, pty = false } = {}) {

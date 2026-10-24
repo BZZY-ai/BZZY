@@ -41,7 +41,8 @@ const clientFor = (owner, grant) => new BzzyClient({ url: owner.url, token: gran
 test('generation instructions include the mandatory policy in chat, goals, workers and document drafting', () => {
   const s = session();
   for (const [fields, options] of [[{}, {}], [{}, { goalMode: true }], [{ role: 'executor' }, {}], [{ role: 'reviewer' }, {}], [{ role: 'bestie' }, { goalMode: true }], [{}, { documentOnly: true }]]) {
-    assert.ok(agentInstructions({ ...s, ...fields }, options).includes(generationSecurityPolicy));
+    const current = { ...s, ...fields }; saveSession(current);
+    assert.ok(agentInstructions(current, options).includes(generationSecurityPolicy));
   }
   const platformPolicy = new URL('../../../SECURITY.md', import.meta.url);
   if (fs.existsSync(platformPolicy)) assert.ok(fs.readFileSync(platformPolicy, 'utf8').includes('"' + generationSecurityPolicy + '"'));

@@ -20,6 +20,8 @@ import { activeAssignmentsFor, delegationUsage } from './delegation-usage.js';
 import { duration } from './format-duration.js';
 import { delegationTokenLines } from './delegation-format.js';
 import { agentExecutionScope } from './agent-execution.js';
+import { learningForTurn } from './learning-hooks.js';
+import { pauseLearningForSession } from './learning.js';
 
 export function classifyFailure(error) {
   const message = String(error.message || error);
@@ -46,6 +48,7 @@ export function printGoalSummary(session, ui) {
 }
 export async function runSession(provider, session, options, ui, prompt, { goal = false, resumeGoal = false } = {}) {
   if (session.modelSelectionRequired) throw new Error('Select a model before sending a message.');
+  pauseLearningForSession(session.id, 'foreground_work');
   const agentScope = agentExecutionScope(session);
   if (agentScope) {
     if (session.contract?.verification?.length || session.contract?.artifacts?.length) throw Object.assign(new Error('Persistent Agent acceptance commands and file assertions need an authorized isolated integration; no host command was started.'), { code: 'UNSUPPORTED_POLICY' });
@@ -54,7 +57,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   } else options = { ...options, agentScope: null };
   const policy = effectivePolicy(session, options);
   const unlock = lockSession(session), started = Date.now(), indicator = ui.executionIndicator?.(options.pet !== false && !ui.persistsEvents) || { start() {}, stop() {} }, abort = new AbortController();
-  let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, controls, processing = false;
+  let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, controls, processing = false, failedThisTurn = false;
   options = { ...options, goalMode: goal, policy, strictPolicy: Boolean(options.strictPolicy || options.readOnly || session.strictPolicy) }; session.policy = policy; session.captureNetwork = Boolean(options.captureNetwork);
   const run = { sessionId: session.id, state: 'running', runner: processIdentity(), startedAt: now(), heartbeatAt: now() };
   const stop = (reason = 'interrupted') => {
@@ -159,6 +162,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     } else session.executionState = 'idle';
     return stopping ? ['interrupted', 'user_pause', 'cancelled'].includes(stopping) ? 130 : 2 : goal && session.goal.status !== 'complete' ? 2 : 0;
   } catch (error) {
+    failedThisTurn = true;
     const failure = classifyFailure(error); session.failure = failure; session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping ? 'paused' : 'failed';
     const budgetLimited = ['runtime_limit', 'token_limit'].includes(stopping);
     if (goal && !['complete', 'cancelled'].includes(session.goal.status)) {
@@ -190,6 +194,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
       saveSession(session); putRecord('run', session.id, { ...getRecord('run', session.id), state: session.executionState, finishedAt: now() });
       closeOpenActivities(session);
       writeProjectRecord(session, 'goals', session.goal?.id || session.id, { sessionId: session.id, goal: session.goal, summary: session.summary, acceptance: session.acceptance || null });
+      learningForTurn(session, prompt, { goal, stopped: Boolean(stopping || failedThisTurn) });
       if (goal) {
         printGoalSummary(session, recorded);
         try { await new NotificationHub({ ui: recorded }).publish(session); } catch (error) { recorded.event('error', { message: `Goal notification failed: ${error.message}` }); }

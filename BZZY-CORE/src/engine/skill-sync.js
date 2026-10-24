@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { importSkill } from './skills.js';
+import { importSkill, skillStorageId, scopeSkillToProject } from './skills.js';
+import { resolveProjectIdentity } from './project-identity.js';
 import { getRecord, putRecord, digest, now } from './database.js';
 
 const limits = { directories: 4096, skills: 512, bytes: 128 * 1024 * 1024 };
@@ -69,24 +70,43 @@ export function discoverCodexSkills(options = {}) {
 // Source deletions never delete a BZZY skill; scripts/hooks are never executed.
 export function syncCodexSkills(options = {}) {
   const discovery = discoverCodexSkills(options), results = [], names = new Map(); let bytes = 0;
-  const counts = { imported: 0, updated: 0, unchanged: 0, conflicts: 0, rejected: 0, duplicates: 0 };
+  const counts = { imported: 0, updated: 0, unchanged: 0, conflicts: 0, rejected: 0, duplicates: 0, scoped: 0 };
+  let project;
   for (const candidate of discovery.candidates) {
+    const selected = candidate.scope === 'project'
+      ? { scope: 'project', projectId: (project ||= resolveProjectIdentity(options.cwd || process.cwd(), { create: true })).id }
+      : { scope: 'global' };
     let preview;
-    try { preview = importSkill(candidate.source, { preview: true }); }
+    try { preview = importSkill(candidate.source, { ...selected, preview: true }); }
     catch (error) { counts.rejected++; results.push({ ...candidate, status: 'rejected', reason: issue(error) }); continue; }
     bytes += preview.files.reduce((sum, file) => sum + file.bytes, 0);
     if (bytes > limits.bytes) { discovery.truncated = true; break; }
-    const first = names.get(preview.name);
+    const key = skillStorageId(preview.name, selected), first = names.get(key);
     if (first) {
       const duplicate = first.version === preview.version;
       counts[duplicate ? 'duplicates' : 'conflicts']++;
       results.push({ ...candidate, name: preview.name, status: duplicate ? 'duplicate' : 'conflict', reason: duplicate ? 'Same skill already discovered.' : 'Same name has different content in an earlier skill location.' });
       continue;
     }
-    names.set(preview.name, preview);
-    const sourceId = digest(candidate.source), saved = getRecord('core.skill', preview.name), binding = getRecord(bindingKind, preview.name);
+    names.set(key, preview);
+    const sourceId = digest(candidate.source);
+    // Older sync stored project discoveries globally. Narrow only its exact
+    // managed copy; retain the original payload, version history and archive.
+    if (selected.scope === 'project' && !getRecord('core.skill', key)) {
+      const legacy = getRecord('core.skill', preview.name), legacyBinding = getRecord(bindingKind, preview.name);
+      if (legacy && legacyBinding?.sourceId === sourceId && legacyBinding.version === legacy.version) {
+        try {
+          const migrated = scopeSkillToProject(preview.name, legacy.revision, selected);
+          putRecord(bindingKind, key, { sourceId, version: migrated.version, updatedAt: now() }); counts.scoped++;
+        } catch (error) { counts.rejected++; results.push({ ...candidate, name: preview.name, status: 'rejected', reason: issue(error) }); continue; }
+      }
+    }
+    const saved = getRecord('core.skill', key), binding = getRecord(bindingKind, key);
     if (saved?.version === preview.version) {
-      putRecord(bindingKind, preview.name, { sourceId, version: saved.version, updatedAt: now() });
+      // Label unchanged legacy global imports as an explicitly re-discovered
+      // global origin, without changing their review/enable decision.
+      if (!saved.scope && selected.scope === 'global') putRecord('core.skill', key, { ...saved, id: key, scope: 'global', provenance: { kind: 'codex-sync' } });
+      putRecord(bindingKind, key, { sourceId, version: saved.version, updatedAt: now() });
       counts.unchanged++; results.push({ ...candidate, name: preview.name, status: 'unchanged', enabled: saved.enabled }); continue;
     }
     if (saved && (binding?.sourceId !== sourceId || binding.version !== saved.version)) {
@@ -95,8 +115,8 @@ export function syncCodexSkills(options = {}) {
     try {
       // A changed package is disabled by Core for review. Unchanged versions
       // never alter the owner's current enabled/disabled decision.
-      const imported = importSkill(candidate.source, { expectedRevision: saved?.revision || 0, expectedVersion: preview.version });
-      putRecord(bindingKind, preview.name, { sourceId, version: imported.version, updatedAt: now() });
+      const imported = importSkill(candidate.source, { ...selected, provenance: { kind: 'codex-sync' }, expectedRevision: saved?.revision || 0, expectedVersion: preview.version });
+      putRecord(bindingKind, key, { sourceId, version: imported.version, updatedAt: now() });
       const status = saved ? 'updated' : 'imported'; counts[status]++;
       results.push({ ...candidate, name: imported.name, status, enabled: false });
     } catch (error) { counts.rejected++; results.push({ ...candidate, name: preview.name, status: 'rejected', reason: issue(error) }); }
@@ -105,7 +125,7 @@ export function syncCodexSkills(options = {}) {
     unavailable: discovery.issues.length, truncated: discovery.truncated, results, issues: discovery.issues };
 }
 
-export const skillSyncSummary = result => `Codex → BZZY · ${result.imported} new · ${result.updated} updated · ${result.unchanged} unchanged · ${result.conflicts} conflicts · ${result.rejected + result.unavailable} skipped${result.truncated ? ' · scan limit reached' : ''}. New and changed skills need review and enable once for all models.`;
+export const skillSyncSummary = result => `Codex → BZZY · ${result.imported} new · ${result.updated} updated · ${result.unchanged} unchanged${result.scoped ? ` · ${result.scoped} project scopes repaired` : ''} · ${result.conflicts} conflicts · ${result.rejected + result.unavailable} skipped${result.truncated ? ' · scan limit reached' : ''}. Project discoveries stay in this project; new and changed skills need review and enable once for all models.`;
 
 // Safe CLI/report metadata. Absolute discovery paths are local binding data,
 // not reusable skill metadata and never enter model prompts or public reports.

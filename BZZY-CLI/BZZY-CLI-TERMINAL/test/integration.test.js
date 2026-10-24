@@ -26,7 +26,8 @@ function run(args, env = {}, onOutput) {
     child.once('close', code => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
   });
 }
-const stored = () => fs.readdirSync(path.join(dir, 'home', 'sessions')).filter(f => f.endsWith('.json')).map(f => JSON.parse(fs.readFileSync(path.join(dir, 'home', 'sessions', f), 'utf8')));
+const stored = () => fs.readdirSync(path.join(dir, 'home', 'sessions')).filter(f => f.endsWith('.json')).map(f => JSON.parse(fs.readFileSync(path.join(dir, 'home', 'sessions', f), 'utf8')))
+  .filter(session => !['skill-writer', 'learning-review', 'knowledge-review'].includes(session.role));
 const logs = () => fs.readFileSync(path.join(dir, 'backend.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
 
 test('native Codex goal waits across automatic continuation turns and persists completion', async () => {

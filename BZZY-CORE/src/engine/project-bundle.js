@@ -13,10 +13,11 @@ import { codexHome, claudeHome, claudeAuthHomes } from './auth.js';
 import { conversationCursor } from './conversation.js';
 import { sharedKinds, portableState, sharedSecrets, assertShareText, validateSharedManifest, SHARE_LIMITS } from './share-bundle-policy.js';
 import { canonicalPath } from '../paths.js';
+import { resolveProjectIdentity, sessionBelongsToProject } from './project-identity.js';
 
 const helper = fileURLToPath(new URL('./archive.py', import.meta.url));
 const uuid = /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi;
-const ephemeral = kind => /^(?:telegram-|access-token$|input-owner$|account-status$|outbox$|notification|run$|control$|assignment-control$)/.test(kind);
+const ephemeral = kind => /^(?:telegram-|access-token$|input-owner$|account-status$|outbox$|notification|run$|control$|assignment-control$|core\.(?:learning|skill|knowledge|project|memory|checkpoint|issue)(?:\.|$))/.test(kind);
 const within = (file, root) => file === root || file.startsWith(root + path.sep);
 const present = file => { try { fs.lstatSync(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
 
@@ -50,14 +51,23 @@ function withoutTokens(value) {
 
 export function collectProjectState(root, sessionId, { shared = false, sessionTreeOnly = false } = {}) {
   sessions(); // Reconcile compatibility exports before taking one consistent database snapshot.
+  const project = resolveProjectIdentity(root);
   return transaction(db => {
-    const rows = db.prepare('SELECT kind,id,data FROM records').all().filter(row => shared ? sharedKinds.has(row.kind) : !ephemeral(row.kind)).map(row => ({ ...row, data: withoutTokens(JSON.parse(row.data)) }));
-    const selected = new Set(rows.filter(row => row.kind === 'session' && (row.id === sessionId || !sessionTreeOnly && (row.data.projectRoot === root || within(row.data.cwd || '', root)))).map(row => row.id));
-    if (sessionTreeOnly) for (let previous = -1; previous !== selected.size;) {
+    const candidates = db.prepare('SELECT kind,id,data FROM records').all().filter(row => shared ? sharedKinds.has(row.kind) : !ephemeral(row.kind)).map(row => ({ ...row, data: withoutTokens(JSON.parse(row.data)) }));
+    const eligible = row => row.kind === 'session' && !['skill-writer', 'learning-review', 'knowledge-review'].includes(row.data.role);
+    const selected = new Set(candidates.filter(row => eligible(row) && (row.id === sessionId || !sessionTreeOnly && sessionBelongsToProject(row.data, project))).map(row => row.id));
+    // Legacy workers can have a private cwd and only a parent session binding.
+    // Preserve that trusted ancestry without pulling in a separately scoped Agent
+    // or another engagement merely because it sits under this directory.
+    for (let previous = -1; previous !== selected.size;) {
       previous = selected.size;
-      for (const row of rows) if (row.kind === 'session' && selected.has(row.data.parentSessionId)) selected.add(row.id);
+      for (const row of candidates) if (eligible(row) && selected.has(row.data.parentSessionId) &&
+        (sessionBelongsToProject(row.data, project) || !row.data.projectId && !row.data.projectRoot && row.data.purpose !== 'agent')) selected.add(row.id);
     }
-    const allSessions = new Set(rows.filter(row => row.kind === 'session').map(row => row.id));
+    const allSessions = new Set(candidates.filter(row => row.kind === 'session').map(row => row.id));
+    const rows = candidates.filter(row => row.kind !== 'session' || selected.has(row.id))
+      .filter(row => !row.data.sessionId || !allSessions.has(row.data.sessionId) || selected.has(row.data.sessionId))
+      .filter(row => !['memory', 'issue', 'checkpoint'].includes(row.kind) || !row.data.projectId || row.data.projectId === project.id);
     const included = new Set(), related = new Set(selected);
     let changed = true;
     while (changed) {
@@ -174,6 +184,26 @@ function rewriteProjectMetadata(dir, convert) {
   }
 }
 
+function markImportedKnowledge(metadata, projectId, bundleId) {
+  const roots = [metadata], agents = path.join(metadata, 'agents');
+  if (present(agents)) for (const entry of fs.readdirSync(agents, { withFileTypes: true })) if (entry.isDirectory()) roots.push(path.join(agents, entry.name));
+  for (const root of roots) for (const kind of ['memory', 'issues', 'checkpoints', 'goals']) {
+    const directory = path.join(root, kind);
+    if (!present(directory)) continue;
+    if (!fs.lstatSync(directory).isDirectory() || fs.lstatSync(directory).isSymbolicLink()) throw new Error('Imported knowledge must use real directories.');
+    for (const name of fs.readdirSync(directory).filter(value => /^[a-f0-9-]{36}\.json$/.test(value))) {
+      const file = path.join(directory, name), stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 4 * 1024 * 1024) throw new Error('Imported knowledge must use bounded regular records.');
+      let record;
+      try { record = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new Error('Imported knowledge record is invalid.'); }
+      if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('Imported knowledge record is invalid.');
+      record.importProvenance = { sourceRecordId: record.id || record.sessionId, bundleId, importedAt: new Date().toISOString(), observation: 'imported-history', previousTruth: record.truth || null };
+      record.projectId = projectId; record.truth = 'inconclusive'; delete record.verification; delete record.verificationId;
+      writeJson(file, record);
+    }
+  }
+}
+
 function checkMerge(source, target) {
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
     const from = path.join(source, entry.name), to = path.join(target, entry.name);
@@ -245,8 +275,17 @@ export async function importProject(filename, directory, ui, { shared = false, k
     if (present(metadata) && !fs.lstatSync(metadata).isDirectory()) throw new Error('The bundle’s .bzzy metadata must be a real directory.');
     if (present(path.join(metadata, 'imports')) && !fs.lstatSync(path.join(metadata, 'imports')).isDirectory()) throw new Error('The bundle’s import directory must be a real directory.');
     for (const name of ['private', 'native']) if (present(path.join(stage, name)) && !fs.lstatSync(path.join(stage, name)).isDirectory()) throw new Error(`The bundle’s ${name} context must be a real directory.`);
-    const bundleId = randomUUID(), relativeContext = path.join('.bzzy', 'imports', bundleId), context = path.join(root, relativeContext), privateRoot = path.join(context, 'private');
+    const bundleId = randomUUID(), importedProjectId = randomUUID(), relativeContext = path.join('.bzzy', 'imports', bundleId), context = path.join(root, relativeContext), privateRoot = path.join(context, 'private');
     const ids = new Map([...new Set(JSON.stringify([manifest.records, manifest.events]).match(uuid) || [])].map(id => [id, randomUUID()]));
+    for (const row of manifest.records) if (typeof row.data?.projectId === 'string') ids.set(row.data.projectId, importedProjectId);
+    const sourceMarker = path.join(metadata, 'project.json');
+    if (present(sourceMarker)) {
+      const stat = fs.lstatSync(sourceMarker);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384) throw new Error('Imported project identity must be a bounded regular file.');
+      let value;
+      try { value = JSON.parse(fs.readFileSync(sourceMarker, 'utf8')); } catch { throw new Error('Imported project identity is invalid.'); }
+      if (typeof value.id === 'string') ids.set(value.id, importedProjectId);
+    }
     for (const row of manifest.records) if (typeof row.id === 'string' && row.id && !(row.id.match(uuid) || []).length) ids.set(row.id, randomUUID());
     const replaceIds = value => ids.get(value) || value.replace(uuid, id => ids.get(id) || id);
     const convert = value => {
@@ -260,6 +299,11 @@ export async function importProject(filename, directory, ui, { shared = false, k
       return replaceIds(value.split(manifest.sourceRoot).join(root));
     };
     rewriteProjectMetadata(metadata, convert);
+    const projectMarker = path.join(workspace, '.bzzy', 'project.json');
+    privateDir(path.dirname(projectMarker));
+    writeJson(projectMarker, { version: 1, id: importedProjectId, createdAt: new Date().toISOString(),
+      description: 'Imported BZZY engagement. Historical observations require current validation.' });
+    markImportedKnowledge(metadata, importedProjectId, bundleId);
     const stagedContext = path.join(workspace, relativeContext); privateDir(stagedContext);
     for (const name of ['private', 'native']) if (present(path.join(stage, name))) fs.renameSync(path.join(stage, name), path.join(stagedContext, name));
     relocateLinks(workspace, convert);
@@ -267,7 +311,13 @@ export async function importProject(filename, directory, ui, { shared = false, k
     const records = manifest.records.filter(row => shared ? sharedKinds.has(row.kind) : !ephemeral(row.kind)).map(row => {
       if (typeof row.kind !== 'string' || typeof row.id !== 'string' || !row.data || typeof row.data !== 'object') throw new Error('Invalid saved context record.');
       const record = transform(row, convert);
-      if (shared) record.data.importProvenance = { sourceRecordId: row.id, bundleId, importedAt: new Date().toISOString(), observation: 'imported-history' };
+      if (['session', 'memory', 'issue', 'checkpoint'].includes(row.kind)) record.data.projectId = importedProjectId;
+      record.data.importProvenance = { sourceRecordId: row.id, bundleId, importedAt: new Date().toISOString(), observation: 'imported-history' };
+      if (['memory', 'issue', 'checkpoint'].includes(row.kind)) {
+        record.data.importProvenance = { ...record.data.importProvenance, sourceRecordId: row.id, bundleId,
+          importedAt: new Date().toISOString(), observation: 'imported-history', previousTruth: record.data.truth || null };
+        record.data.truth = 'inconclusive'; delete record.data.verification; delete record.data.verificationId;
+      }
       if (row.kind === 'snapshot') record.data.manifest = row.data.manifest;
       delete record.data.runner; delete record.data.launcher; delete record.data.token; delete record.data.nonce;
       if (['queued', 'launching', 'running', 'starting', 'waiting_for_input'].includes(record.data.state)) { record.data.state = 'interrupted'; record.data.reason = 'Imported project; explicit resume required.'; }
@@ -290,7 +340,7 @@ export async function importProject(filename, directory, ui, { shared = false, k
         session.conversationHandoff = { pending: true, throughSeq: 0 };
         session.engineTokenOffset = session.usage?.tokens || 0;
         if (session.goal) {
-          if (shared) session.goal.importedHistorical = true;
+          session.goal.importedHistorical = true;
           if (['active', 'verifying'].includes(session.goal.status)) { session.goal.status = 'paused'; session.goal.reason = 'imported'; }
           delete session.goal.nativeGoalId; delete session.goal.nativeStatus; delete session.goal.nativeTokensUsed;
           session.goal.nativeTokenOffset = session.goal.supervisorTokensUsed ?? session.goal.tokensUsed ?? 0;

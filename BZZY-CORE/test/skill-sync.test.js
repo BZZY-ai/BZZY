@@ -93,11 +93,13 @@ test('duplicate names are reported without merging, and invalid/linked/secret pa
   const project = path.join(options.cwd, '.agents', 'skills'), user = path.join(options.userHome, '.agents', 'skills');
   skill(project, 'duplicate-skill', 'Project instructions.'); skill(user, 'duplicate-skill', 'Different user instructions.');
   skill(path.join(options.codexHome, 'skills'), 'duplicate-skill', 'Project instructions.');
+  skill(options.adminRoot, 'duplicate-skill', 'Different user instructions.');
   const unsafe = skill(user, 'unsafe-skill'); fs.writeFileSync(path.join(unsafe, 'binding.txt'), 'sk-' + 'fixturesecret'.repeat(3));
   const target = skill(path.join(directory, 'links'), 'linked-skill'); fs.symlinkSync(target, path.join(user, 'linked-skill'));
   const malformed = skill(user, 'malformed'); fs.writeFileSync(path.join(malformed, 'SKILL.md'), 'no metadata');
-  const result = syncCodexSkills(options); assert.equal(result.imported, 1); assert.equal(result.conflicts, 1); assert.equal(result.duplicates, 1); assert.equal(result.rejected, 2); assert.equal(result.unavailable, 1);
-  assert.match(readSkill('duplicate-skill', { enabledOnly: false }).text, /Project instructions/);
+  const result = syncCodexSkills(options); assert.equal(result.imported, 2); assert.equal(result.conflicts, 1); assert.equal(result.duplicates, 1); assert.equal(result.rejected, 2); assert.equal(result.unavailable, 1);
+  assert.match(readSkill('duplicate-skill', { enabledOnly: false, projectRoot: options.cwd }).text, /Project instructions/);
+  assert.match(readSkill('duplicate-skill', { enabledOnly: false, scope: 'global' }).text, /Different user instructions/);
   assert.equal(JSON.stringify(skillSyncReport(result)).includes('fixturesecret'), false);
 });
 

@@ -8,7 +8,7 @@ import { codexHome } from './auth.js';
 import { agentProjectFilesystemIntegration } from '../filesystem.js';
 
 export const agentPermissionProfile = 'bzzy_agent_isolated_v1';
-export const agentToolNames = new Set(['list_skills', 'read_skill', 'activity', 'get_task_state', 'checkpoint', 'remember', 'recall', 'issue',
+export const agentToolNames = new Set(['list_skills', 'read_skill', 'activity', 'get_task_state', 'checkpoint', 'remember', 'recall', 'search_knowledge', 'issue',
   'get_goal', 'update_goal', 'assess_requirement', 'read_project_file']);
 const denied = () => { throw Object.assign(new Error('Persistent Agents can use only their isolated project tools. Account access requires a separately authorized host integration.'), { code: 'FORBIDDEN' }); };
 const contains = (root, child) => child === root || child.startsWith(root + path.sep);

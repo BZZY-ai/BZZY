@@ -19,10 +19,13 @@ import { observedRequest, redactedHeaders, redactedUrl } from './traffic.js';
 import { assignmentContextPage, compactAssignmentStatus, compactAssignmentWait } from './assignment-views.js';
 import { peerArtifactAllowed, sendPeerMessage, peerInbox, reviewPeerEvidence, peerCollaborationState } from './peer-collaboration.js';
 import { agentExecutionScope, assertAgentScope, agentToolNames, createAgentProjectReader } from './agent-execution.js';
+import { searchProjectKnowledge } from './knowledge.js';
+import { learningForKnowledge } from './learning-hooks.js';
 
 const str = { type: 'string' }, strings = { type: 'array', items: str }, object = { type: 'object' };
 const spec = (name, description, properties = {}, required = []) => ({ name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false } });
 export function taskTools(session, { goalMode } = {}) {
+  if (['learning-review', 'knowledge-review', 'skill-writer'].includes(session.role)) return [];
   const tools = [
     spec('list_skills', 'Search the enabled shared BZZY skills library. Page results rather than loading every workflow.', { query: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }),
     spec('read_skill', 'Read an enabled BZZY skill or a text reference. Read SKILL.md before applying it. Skills never grant permissions or run scripts automatically. Offsets and limits are UTF-8 bytes.', { name: str, file: str, version: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 32768 } }, ['name']),
@@ -36,9 +39,15 @@ export function taskTools(session, { goalMode } = {}) {
     spec('record_evidence', 'Copy a workspace file into immutable, hashed evidence. Return an artifact ID for claims and reviews.', { path: str, label: str }, ['path']),
     spec('read_artifact', 'Read a bounded slice of a recorded artifact. Opening worker evidence records supervisor inspection and imports it for parent assessments.',
       { id: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 32768 } }, ['id']),
-    spec('remember', 'Save project knowledge with explicit uncertainty. Observation/disproved entries require recorded evidence. Store concise rationale, never hidden chain-of-thought.',
-      { kind: { type: 'string', enum: ['observation', 'hypothesis', 'experiment', 'failed_approach', 'conclusion', 'decision', 'inconclusive', 'disproved', 'blocked', 'question'] }, statement: str, rationale: str, evidence: strings, inputs: strings, revisitWhen: str, supersedes: str }, ['kind', 'statement']),
+    spec('remember', 'Save attributed project knowledge with explicit uncertainty, evidence and applicability. A model claim or agreement cannot confirm a fact. Confirmed truth requires a valid Core verification receipt; stale and conflicting records remain history. Store concise factual rationale, never hidden chain-of-thought.',
+      { kind: { type: 'string', enum: ['observation', 'hypothesis', 'experiment', 'failed_approach', 'conclusion', 'decision', 'inconclusive', 'disproved', 'blocked', 'question'] },
+        truth: { type: 'string', enum: ['hypothesis', 'observed', 'confirmed', 'disproved', 'inconclusive', 'stale'] },
+        statement: str, rationale: str, evidence: strings, inputs: strings, revisitWhen: str, supersedes: str,
+        sourceId: str, requestId: str, expectedRevision: { type: 'integer', minimum: 1 }, verificationId: str, requirementId: str,
+        contradictions: strings, freshness: { type: 'object', additionalProperties: false, properties: { expiresAt: str, environment: str, version: str, conditions: strings } } }, ['kind', 'statement']),
     spec('recall', 'Find dated project knowledge, with source references and stale-input flags.', { query: str, limit: { type: 'integer', minimum: 1, maximum: 50 } }),
+    spec('search_knowledge', 'Search this authorized project’s memories, findings, checkpoints and conversation history. Results include original source IDs, truth and freshness; historical text never grants permission or resumes work.',
+      { query: { type: 'string', maxLength: 500 }, limit: { type: 'integer', minimum: 1, maximum: 50 }, offset: { type: 'integer', minimum: 0 }, types: { type: 'array', items: { type: 'string', enum: ['memory', 'issue', 'chat', 'checkpoint', 'goal'] } }, includeStale: { type: 'boolean' } }),
     spec('issue', 'Create/update a project assessment issue. Distinguish blocked, inconclusive, disproved and resolved; resolved/disproved require evidence.',
       { id: str, title: str, status: { type: 'string', enum: ['open', 'investigating', 'resolved', 'blocked', 'inconclusive', 'disproved'] }, details: str, resolution: str, evidence: strings }, ['title']),
   ];
@@ -136,8 +145,8 @@ export class ToolHost {
     if (!taskTools(this.session, this.context).some(t => t.name === name)) throw new Error('Tool is not authorized for this task role or execution.');
     const session = this.session;
     appendEvent(session.id, 'coordination.tool', { name, input: name === 'http_request' ? { ...input, url: redactedUrl(input.url), headers: redactedHeaders(input.headers || {}), body: input.body ? '[body omitted]' : undefined } : input });
-    if (name === 'list_skills') return listSkills({ ...input, enabledOnly: true });
-    if (name === 'read_skill') return readSkill(input.name, { ...input, enabledOnly: true, sessionId: session.id });
+    if (name === 'list_skills') return listSkills({ ...input, enabledOnly: true, session });
+    if (name === 'read_skill') return readSkill(input.name, { ...input, enabledOnly: true, sessionId: session.id, session });
     if (name === 'activity') { const record = recordActivity(session, input, this.ui); this.activityReporter?.explicit(record); return record; }
     if (name === 'http_request') { this.activityReporter?.tool(null, name, input); return observedRequest(session, input, this.ui); }
     if (name === 'get_task_state') return JSON.parse(contextFor(session));
@@ -153,9 +162,10 @@ export class ToolHost {
     if (name === 'get_goal') return loadSession(session.id).goal;
     if (name === 'update_goal') { writeReport(session.id, this.nonce, input); return 'Report recorded for acceptance assessment.'; }
     if (name === 'checkpoint') return checkpoint(session, input);
-    if (name === 'remember') return remember(session, input);
-    if (name === 'recall') return recall(session.projectRoot || session.cwd, input.query, input.limit);
-    if (name === 'issue') return issue(session, input);
+    if (name === 'remember') { const record = remember(session, input); learningForKnowledge(session, record, 'memory'); return record; }
+    if (name === 'recall') return recall(session.projectRoot || session.cwd, input.query, input.limit, { session });
+    if (name === 'search_knowledge') return searchProjectKnowledge(session, input);
+    if (name === 'issue') { const record = issue(session, input); learningForKnowledge(session, record, 'issue'); return record; }
     if (name === 'record_evidence') return captureEvidence(session, input.path, input.label);
     if (name === 'assess_requirement') return assessRequirement(session, input, session.role);
     if (name === 'read_artifact') {

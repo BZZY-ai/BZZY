@@ -105,6 +105,22 @@ test('Relay administration is local-owner-only and daemon startup stays offline 
   await core.revokeSession(grant.id);
 });
 
+test('knowledge administration is local-owner-only and reading status never queues inference', async () => {
+  const info = runtimeInfo(), session = create();
+  const grant = await core.grantSession({ sessionId: session.id, recipient: randomUUID(), permissions: ['observe', 'claim', 'execute', 'pause'], expiresInSeconds: 60 });
+  const before = listRecords('execution').length, jobs = listRecords('core.learning.job').length;
+  const status = await runtimeRequest(info, 'POST', '/v1/knowledge/status', { sessionId: session.id });
+  assert.ok(status.project.id); assert.ok(status.settings.tokenBudget > 0);
+  assert.equal(listRecords('execution').length, before); assert.equal(listRecords('core.learning.job').length, jobs);
+  for (const [operation, input] of [['status', { sessionId: session.id }], ['profile.update', { target: 'user', text: 'Unapproved change.', reviewed: true }], ['learning.queue', { sessionId: session.id, requestId: randomUUID() }]]) {
+    const response = await fetch(`${info.url}/v1/knowledge/${operation}`, { method: 'POST', headers: { authorization: `Bearer ${grant.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input) });
+    assert.equal(response.status, 403); assert.match((await response.json()).error, /local owner/);
+  }
+  const get = await fetch(`${info.url}/v1/knowledge/status`, { headers: { authorization: `Bearer ${info.token}` } }); assert.equal(get.status, 405);
+  assert.equal(listRecords('core.learning.job').length, jobs);
+  await core.revokeSession(grant.id);
+});
+
 test('metrics are authenticated, cached daemon observations and revoked observers immediately lose access', async () => {
   const info = runtimeInfo(), url = `${info.url}/v1/metrics`;
   for (const headers of [{}, { authorization: 'Bearer invalid' }]) assert.equal((await fetch(url, { headers })).status, 401);

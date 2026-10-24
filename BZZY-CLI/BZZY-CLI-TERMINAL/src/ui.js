@@ -1,5 +1,6 @@
 import { updateCommand } from './update-checker.js';
 import { skillsCommand } from './skills-ui.js';
+import { knowledgeCommand } from './knowledge-ui.js';
 import readline from 'node:readline';
 import { TerminalChat } from './tui.js';
 import { clean, cellWidth, clip } from './terminal-format.js';
@@ -89,7 +90,11 @@ export class UI {
   }
 
   setSession(id, mode = 'CONTROL') {
-    if (this.sessionId !== id) { this.tabs = null; this.activeTab = null; this.tui?.clear(); }
+    if (this.sessionId !== id) {
+      this.tabs = null; this.activeTab = null; this.tui?.clear();
+      this.skillPreview = null; this.skillHistoryState = null; this.skillPromotionDraft = null; this.skillSyncDetails = false;
+      this.knowledgeView = null; this.knowledgeState = null; this.knowledgeHits = null; this.knowledgeContextKey = null;
+    }
     this.sessionId = id; this.sessionMode = mode;
     if (this.interactive) { this.openTerminal(); this.renderFooter(); }
     else this.event('session', { sessionId: id, message: `Session: ${id} · ${mode}` });
@@ -133,6 +138,7 @@ export class UI {
       return true;
     }
     if (input.trim() === '/update') { await updateCommand(this); return true; }
+    if (await knowledgeCommand(input, this)) return true;
     if (await skillsCommand(input, this)) return true;
     if (!/^\/settings(?:\s|$)/.test(input)) return false;
     this.openSettings();

@@ -5,6 +5,7 @@ import { home, normalizeSessionAlias, getProvider, providers, putRecord, appendE
 import { fail, object } from './validation.js';
 import { canonicalPath, contains } from './paths.js';
 import { providerModelCapabilities } from './engine/providers.js';
+import { projectIdentityForSession } from './engine/project-identity.js';
 
 export function workspaceDirectory(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value)) fail('INVALID_REQUEST', 'Choose an absolute local workspace directory.');
@@ -39,6 +40,8 @@ export function insertConversation(input, db, metadata = {}) {
   const session = { version: 1, id: randomUUID(), provider: provider.id, backend: provider.backend, cwd: input.cwd, model: input.model,
     engineThreadId: null, createdAt: now(), updatedAt: now(), turns: 0, goal: null, executionState: 'idle', selectedEffort: input.effort,
     ...(input.alias === undefined ? {} : { alias: input.alias }), ...metadata };
+  const project = projectIdentityForSession(session, metadata.purpose === 'agent' ? { boundary: input.cwd } : {});
+  session.projectRoot = project.root; session.projectId = project.id;
   putRecord('session', session.id, session, db);
   appendEvent(session.id, 'lifecycle', { status: null, executionState: 'idle', reason: null }, db);
   appendEvent(session.id, 'session.created', { provider: session.provider, model: session.model }, db);

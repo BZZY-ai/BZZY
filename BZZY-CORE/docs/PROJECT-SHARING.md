@@ -16,6 +16,12 @@ and ordinary project files can contain private information. Provider accounts,
 host identities, credential stores, private bindings and unsafe host records are
 excluded or rejected by the strict shared archive policy.
 
+An import also creates a fresh engagement identity. Memory, findings and old
+acceptance receipts remain historical until revalidated in the recipient's
+environment. Private user/host profiles, learning jobs, evaluation fixtures and
+skill activation control state are not part of the transfer. See
+[knowledge and learning](KNOWLEDGE.md).
+
 Known credential files, raw Git metadata and shell startup/direnv files are
 excluded with an inventory. Embedded known keys/private-key/token patterns block
 export. These checks cannot prove arbitrary project data secret-free; review

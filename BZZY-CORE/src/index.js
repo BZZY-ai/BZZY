@@ -2,6 +2,7 @@ export { BzzyCore } from './core.js';
 export { CoreAssistant } from './assistant.js';
 export { CoreAgents } from './agents.js';
 export { CoreMetricsClient } from './metrics.js';
+export { CoreKnowledge } from './knowledge.js';
 export { BzzyClient } from './client.js';
 export { createToolBroker } from './tool-broker.js';
 export { filesystemIntegration } from './filesystem.js';

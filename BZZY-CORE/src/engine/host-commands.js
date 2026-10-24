@@ -18,6 +18,7 @@ import { applyDelegationSelection } from './delegation-setup.js';
 import { applyBestiesSelection } from './besties-setup.js';
 import { applyParallelSelection } from './parallel-setup.js';
 import { applyDebateSelection } from './debate-setup.js';
+import { projectIdentityForSession } from './project-identity.js';
 
 // Trusted local host operations. UI adapters collect input and display results;
 // the engine owns durable state, execution setup, recovery and provider calls.
@@ -55,6 +56,8 @@ function applySelections(session, options) {
 
 export function createChatSession(provider, options) {
   const session = createSession(provider, options.cwd, options.model, options.alias);
+  const project = projectIdentityForSession(session);
+  session.projectRoot = project.root; session.projectId = project.id;
   applySelections(session, options);
   if (options.modelSelectionRequired) { session.modelSelectionRequired = true; session.model = null; }
   saveSession(session);
@@ -63,6 +66,8 @@ export function createChatSession(provider, options) {
 
 export function newConversation(previous, options) {
   const session = createSession(getProvider(previous.provider), options.cwd, previous.model);
+  const project = projectIdentityForSession(session);
+  session.projectRoot = project.root; session.projectId = project.id;
   Object.assign(session, { selectedEffort: previous.selectedEffort, modelCapabilities: previous.modelCapabilities, modelSelectionRequired: previous.modelSelectionRequired, mode: previous.mode,
     executor: previous.executor, besties: previous.besties, parallelAgents: previous.parallelAgents, debateAgents: previous.debateAgents });
   saveSession(session); return session;

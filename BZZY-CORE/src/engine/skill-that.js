@@ -12,6 +12,7 @@ import { ClaudeEngine } from './engines/claude.js';
 import { inside } from './evidence.js';
 import { processIdentity } from './recovery.js';
 import { generationSecurityPolicy } from './instructions.js';
+import { projectIdentityForSession } from './project-identity.js';
 
 const sensitive = /^(?:authorization|proxy-authorization|cookie|set-cookie|password|secret|(?:api|access|refresh|bot)[_-]?(?:key|token))$/i;
 function portable(value) {
@@ -49,7 +50,7 @@ export function goalSkillSources(source) {
   }
   const records = all.records.filter((_row, index) => selected.has(index));
   const events = all.events.filter(event => family.has(event.sessionId));
-  return { session, goal, root, records, events };
+  return { session, goal, root, projectId: projectIdentityForSession(session, { create: true }).id, records, events };
 }
 
 export function validateGeneratedSkill(text, name) {
@@ -63,7 +64,7 @@ export function validateGeneratedSkill(text, name) {
 
 async function documentModel(source, prompt, ui) {
   const provider = getProvider(source.provider), draft = createSession(provider, source.cwd, source.model);
-  Object.assign(draft, { parentSessionId: source.id, projectRoot: source.projectRoot || source.cwd, role: 'skill-writer',
+  Object.assign(draft, { parentSessionId: source.id, projectRoot: source.projectRoot || source.cwd, projectId: projectIdentityForSession(source).id, role: 'skill-writer',
     selectedEffort: source.selectedEffort, modelCapabilities: source.modelCapabilities, backendHomes: source.backendHomes, executionState: 'running' });
   saveSession(draft); appendEvent(draft.id, 'message.user', { text: prompt, kind: 'documentation' });
   const run = { sessionId: draft.id, state: 'running', runner: processIdentity(), startedAt: new Date().toISOString() };
@@ -152,11 +153,12 @@ The deliverable has SKILL.md with YAML frontmatter name: ${name} and a concise s
     }
     if (!markdown.includes(generationSecurityPolicy)) markdown += `\n## Credential isolation\n\n${generationSecurityPolicy}\n`;
     fs.writeFileSync(path.join(stage, 'SKILL.md'), markdown, { mode: 0o600 });
+    writeJson(path.join(stage, 'project-scope.json'), { format: 'bzzy-project-skill', version: 1, projectId: run.projectId, containsPrivateCaseReferences: true });
     writeJson(path.join(stage, 'references', 'source-goal.json'), { sessionId: run.session.id, goalId: run.goal.id, objective: goal, createdAt: new Date().toISOString(), evidence: evidence.map(item => item.id) });
     fs.renameSync(stage, destination);
-    const record = { id: randomUUID(), sessionId: run.session.id, goalId: run.goal.id, name, path: path.join(destination, 'SKILL.md'), createdAt: new Date().toISOString() };
+    const record = { id: randomUUID(), sessionId: run.session.id, goalId: run.goal.id, projectId: run.projectId, scope: 'project', name, path: path.join(destination, 'SKILL.md'), createdAt: new Date().toISOString() };
     putRecord('skill', record.id, record); appendEvent(run.session.id, 'skill.created', record);
-    ui?.event('info', { message: `Skill created: ${record.path}\nReview the skill and its recorded task references for private data before reuse.` });
+    ui?.event('info', { message: `Skill created: ${record.path}\nThis project skill includes private case references. Review and import it for this project; global promotion creates a separate generic workflow.` });
     return record;
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }

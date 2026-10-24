@@ -6,6 +6,7 @@ import { agentChoice } from './delegation.js';
 import { childPolicy } from './policy.js';
 import { codexHome, claudeAuthHomes } from './auth.js';
 import { configuredParallel } from './parallel-setup.js';
+import { projectIdentityForSession } from './project-identity.js';
 
 export function readContextFile(file, cwd) {
   const resolved = path.resolve(cwd, file);
@@ -29,24 +30,30 @@ export function readContextFile(file, cwd) {
 }
 
 export function prepareTask(session, options, objective, { persist = true } = {}) {
-  const project = session.projectRoot || session.cwd;
+  const existingProject = projectIdentityForSession(session);
+  const project = existingProject.root;
   const persistent = readJson(path.join(project, '.bzzy', 'constraints.json'), {});
   const provided = options.contract ? loadContract(path.resolve(options.contract), objective) : normalizeContract({}, objective);
   const initialContext = typeof options.initialContext === 'string' ? options.initialContext.trim() : '';
+  const requestedPolicy = options.readOnly ? { ...(options.contract ? provided.policy : persistent.policy || provided.policy), mode: 'read-only', writablePaths: [] }
+    : options.contract ? provided.policy : undefined;
   const context = [provided.context, options.contextFileText,
     initialContext && `Initial instruction supplied before this goal:\n${initialContext}`].filter(Boolean).join('\n\n');
   const contract = normalizeContract({ ...provided,
     context,
     constraints: [...new Set([...(persistent.constraints || []), ...provided.constraints])],
     scope: { ...(persistent.scope || {}), ...provided.scope },
-    policy: persistent.policy ? childPolicy(persistent.policy, options.readOnly ? { ...provided.policy, mode: 'read-only' } : provided.policy) : options.readOnly ? { mode: 'read-only' } : provided.policy,
+    policy: persistent.policy ? childPolicy(persistent.policy, requestedPolicy) : requestedPolicy || provided.policy,
     limits: { ...provided.limits, ...(options.runtimeSeconds ? { runtimeSeconds: options.runtimeSeconds } : {}), ...(options.tokenBudget ? { tokenBudget: options.tokenBudget } : {}),
       ...(options.maxRetries != null ? { maxRetries: options.maxRetries } : {}), ...(options.concurrency ? { concurrency: options.concurrency } : {}) } }, objective);
   validateContractPaths(contract, session.cwd);
   session.contract = contract; session.policy = contract.policy;
   session.backendHomes ||= { codex: codexHome(), codexApi: codexHome({ auth: 'api-key' }), ...claudeAuthHomes() };
   session.strictPolicy = Boolean(options.contract || options.readOnly || persistent.policy);
-  session.mode = options.mode || session.mode || 'solo'; session.projectRoot = project;
+  const identity = projectIdentityForSession({ ...session, projectRoot: project }, {
+    create: contract.policy.mode !== 'read-only' && !['executor', 'reviewer', 'learning-review', 'skill-writer', 'knowledge-review'].includes(session.role),
+  });
+  session.mode = options.mode || session.mode || 'solo'; session.projectRoot = identity.root; session.projectId = identity.id;
   if (session.mode === 'delegate') {
     const previous = session.executor;
     const selected = options.executor ? agentChoice(options.executor, options.executorModel)

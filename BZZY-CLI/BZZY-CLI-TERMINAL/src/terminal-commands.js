@@ -22,6 +22,8 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /share             Share this complete terminal through Relay with an expiring QR/code.
 /import [CODE]     Import a terminal copy here; omit CODE for hidden entry.
 /skills            Browse shared workflows; /skills sync copies Codex skills for all models.
+/memory [query]    Search this engagement's findings, memory and past conversations.
+/learn             Review learning jobs, candidate skills and private user/host preferences.
 --import FILE.zip|CODE Restore a project ZIP or Relay terminal copy here; keeps work paused.
 /skill_that [name] Turn the last completed goal into SKILL.md with detailed steps and references.
 /doctor            Test the current subscription login, backend connection and model reply.
@@ -42,6 +44,8 @@ export const chatCommands = [
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/debate', description: 'Switch this paused chat to Debate; add a focus to challenge a reply' },
   { command: '/models', description: 'Choose a model and reasoning effort' },
+  { command: '/memory', description: 'Search project knowledge and past conversations', argument: true },
+  { command: '/learn', description: 'Review learning jobs, fixtures, candidates and preferences' },
   { command: '/color', description: 'Switch the full palette: blue, black or white', argument: true },
   { command: '/providers', description: 'Choose a provider and model from Core' },
   { command: '/default', description: 'Save this mode’s provider, models, efforts and full agent combo' },

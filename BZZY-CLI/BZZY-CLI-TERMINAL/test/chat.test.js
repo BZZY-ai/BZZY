@@ -45,6 +45,7 @@ test('besties instructions require visible evidence exchange and mutual review o
   prepareTask(session, { mode: 'besties', besties: [{ provider: 'codex' }, { provider: 'claude' }] }, 'Verify the supplied challenge');
   assert.doesNotMatch(agentInstructions(session), /TWO OR THREE EQUAL COLLABORATORS/);
   session.role = 'bestie'; session.bestiesSessionId = session.id;
+  saveSession(session);
   const instructions = agentInstructions(session, { goalMode: true });
   assert.match(instructions, /TWO OR THREE EQUAL COLLABORATORS/);
   assert.match(instructions, /Read peer_inbox/);
