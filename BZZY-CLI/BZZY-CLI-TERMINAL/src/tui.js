@@ -1,6 +1,7 @@
 import { skillRows } from './skills-ui.js';
 import { namedTerminalSessions } from './session-browser.js';
 import readline from 'node:readline';
+import { renderCanvas } from './canvas-view.js';
 import { clean, cellWidth, clip, wrap, wrapProse, duration } from './terminal-format.js';
 import { mascotCells, mascotLine } from './mascot.js';
 import { commandSuggestions, privateChatCommand } from './terminal-commands.js';
@@ -61,7 +62,7 @@ export class TerminalChat {
       const instant = performance.now(), previous = this.frame;
       this.animationTime = (instant - this.animationStarted) / 1000; this.frame = Math.floor(this.animationTime * 10);
       if (!this.copyMode && !this.outputBlocked) {
-        if (previous !== this.frame && (this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated)) this.schedule();
+        if (previous !== this.frame && (this.canvasVisible() && this.ui.pet !== false && !this.selection || this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated)) this.schedule();
         if (!this.renderTimer && this.ui.pet !== false) this.paintEyes();
       }
       const interval = this.ui.pet === false ? 100 : animationInterval;
@@ -373,7 +374,8 @@ export class TerminalChat {
     else if (answer != null) { this.value = ''; this.cursor = 0; }
     this.hidden = false; resolve(answer); this.schedule();
   }
-  canCompose() { return this.selection || this.renderingPicker || ['settings', 'skills'].includes(this.panel) && !this.promptDraft ? false : Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft); }
+  canvasVisible() { return Boolean(this.ui.canvas && this.ui.canvasView && !this.ui.canvasView.drawer && this.panel === 'chat' && !this.promptDraft && !this.hidden && !this.ui.privateView); }
+  canCompose() { return this.canvasVisible() || this.selection || this.renderingPicker || ['settings', 'skills'].includes(this.panel) && !this.promptDraft ? false : Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft); }
   submitMessage() {
     if (this.resolveInput) { this.finish(this.value); return; }
     if (!this.value.trim()) return;
@@ -489,6 +491,7 @@ export class TerminalChat {
     finally { this.pastePending = false; }
   }
   mouse(button, x, y, released = false) {
+    if (this.canvasVisible() && !this.selection && !this.textSelection) { this.ui.canvasView.onMouse?.(button, x, y, released); return; }
     if (this.copyMode) return;
     const originalFrame = this.textSelection?.frame;
     if (released) {
@@ -621,6 +624,10 @@ export class TerminalChat {
       key.bzzyHandled = true;
       if (key.name === 'escape' || key.ctrl && key.name === 'c') this.ui.privateView.onCancel?.();
       return;
+    }
+    if (!this.selection && !this.hidden && !this.promptDraft && !this.aliasEdit && !this.copyMode && !this.textSelection && this.panel === 'chat' && this.ui.canvasView) {
+      if (this.canvasVisible() && this.ui.canvasView.onKey?.(key)) { key.bzzyHandled = true; return; }
+      if (this.ui.canvasView.drawer && key.name === 'escape') { key.bzzyHandled = true; this.localCommand('/canvas back'); return; }
     }
     if (this.aliasEdit) {
       key.bzzyHandled = true;
@@ -1284,7 +1291,8 @@ export class TerminalChat {
   }
   renderScene({ force = false } = {}) {
     if (this.closed || this.outputBlocked || this.copyMode && !force) return;
-    if (!this.ui.minimal && !this.dashboardRendering && !this.ui.privateView && !this.ui.settings?.qrView && (this.output.columns || 80) >= 100 && (this.output.rows || 24) >= 28 && !this.textSelection) { this.renderDashboard((this.output.columns || 80) - 1, this.output.rows || 24); return; }
+    if (this.canvasVisible()) { renderCanvas(this, Math.max(16, (this.output.columns || 80) - 1), Math.max(8, this.output.rows || 24)); return; }
+    if (!this.ui.canvas && !this.ui.minimal && !this.dashboardRendering && !this.ui.privateView && !this.ui.settings?.qrView && (this.output.columns || 80) >= 100 && (this.output.rows || 24) >= 28 && !this.textSelection) { this.renderDashboard((this.output.columns || 80) - 1, this.output.rows || 24); return; }
     if (!this.dashboardRendering) { this.dashboardActive = false; this.composerLeft = 0; this.dashboardFrame = null; }
     this.privateFrame = false; this.hitTargets = [];
     if (this.ui.privateView) {

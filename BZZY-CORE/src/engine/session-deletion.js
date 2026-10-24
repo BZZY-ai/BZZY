@@ -31,14 +31,20 @@ export function deleteTerminalConversation(sessionId, { requestId } = {}) {
     }
     const root = loadSession(sessionId);
     if (!root) reject('This chat is unavailable.', 'SESSION_DELETED', 404);
-    if (root.parentSessionId || root.purpose && root.purpose !== 'terminal'
+    if (root.parentSessionId || root.canvasParentId || root.purpose && root.purpose !== 'terminal'
         || listRecords('core.agent').some(agent => agent.sessionId === sessionId)) {
       reject('Only terminal chats can be deleted here.', 'FORBIDDEN', 403);
     }
     const all = [...new Map([[root.id, root], ...listRecords('session').map(item => [item.id, item])]).values()], ids = new Set([sessionId]);
     const children = new Map(), pending = [sessionId];
-    for (const item of all) if (item.parentSessionId) {
-      const siblings = children.get(item.parentSessionId) || []; siblings.push(item.id); children.set(item.parentSessionId, siblings);
+    for (const item of all) {
+      const canvas = item.canvasParentId && getRecord('terminal.canvas', item.canvasParentId);
+      // Canvas ownership affects deletion only. It never broadens a phone or
+      // observer grant's ordinary parent/child authorization scope.
+      const canvasParent = canvas && [...canvas.nodes, ...(canvas.archivedNodes || [])].some(node => node.sessionId === item.id) ? canvas.id : null;
+      const parent = item.parentSessionId || canvasParent;
+      if (!parent) continue;
+      const siblings = children.get(parent) || []; siblings.push(item.id); children.set(parent, siblings);
     }
     for (let index = 0; index < pending.length; index++) {
       for (const id of children.get(pending[index]) || []) if (!ids.has(id)) { ids.add(id); pending.push(id); }

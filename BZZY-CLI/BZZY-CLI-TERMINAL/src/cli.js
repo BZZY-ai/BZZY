@@ -11,6 +11,7 @@ import { skillThat } from './skill-that.js';
 import { root } from './process.js';
 import { checkConnections } from './connection-check.js';
 import { UI } from './ui.js';
+import { canvasWorkspace } from './canvas-workspace.js';
 import { Pet } from './mascot.js';
 import { NotificationHub } from './notifications.js';
 import { executeManaged, submitManagedGoal, viewSession, attachSession, changeSessionModel, conversationModeCommand, controlSession } from './runtime-client.js';
@@ -46,7 +47,7 @@ import { selectedProvider, authenticateSubscription, applyLaunchDefault, createC
 const HELP = `bzzy 0.2.0 · a persistent coding agent
 
 Usage:
-  bzzy [options]                         Open the terminal chat
+  bzzy [options]                         Open the character canvas
   bzzy "initial context" --goal "task"  Send context first, then start a durable goal
   bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
@@ -346,6 +347,7 @@ async function resume(session, options, ui, requireGoal = false) {
 }
 
 async function executeFromCommand(provider, session, options, ui, prompt, flags) {
+  if (ui.canvas && ui.interactive && !options.detach) return canvasWorkspace(options, ui, session, { prompt, flags });
   const code = await executeManaged(provider, session, options, ui, prompt, flags);
   if (ui.coreLifecycleInterrupted) return 0;
   if (ui.nextSession) { const selected = ui.nextSession; ui.nextSession = null; return await attachSession(selected, options, ui); }
@@ -357,6 +359,7 @@ async function executeFromCommand(provider, session, options, ui, prompt, flags)
 
 async function chat(provider, options, ui, existingSession) {
   if (!ui.interactive) throw new Error('Use bzzy run "task" or bzzy goal "objective" when stdin is not a terminal.');
+  if (ui.canvas) return canvasWorkspace(options, ui, existingSession);
   const pet = new Pet(ui, options.pet);
   let session = existingSession || createChatSession(provider, options);
   ui.setSession(session.id);
@@ -504,7 +507,7 @@ export async function main(argv) {
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
-  const ui = new UI({ ...options, hostMetrics: true, updateHandoff });
+  const ui = new UI({ ...options, canvas: !options.minimal, hostMetrics: true, updateHandoff });
   ui.accountStatusEnabled = ui.interactive;
   ui.onDebate = (id, focus) => debateConversation(loadSession(id), focus, ui.executionOptions(options, { id }), ui);
   ui.onProvider = (id, argument, connection) => changeConversationProvider(loadSession(id), argument, ui, connection);

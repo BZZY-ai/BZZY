@@ -1,5 +1,10 @@
 # BZZY Core
 
+The CLI character canvas uses Core-owned composition records and the existing
+goal, input and multi-model engines. Model slots, links, appearance and positions
+persist locally. Editing links requires paused, stopped work and never starts
+inference. See [canvas behavior and limits](../BZZY-CLI/BZZY-CLI-TERMINAL/docs/CANVAS.md).
+
 Core is BZZY's single source of execution state: persistent conversations, runs,
 goals, evidence, permissions and replayable events. Persistent agents can remain
 idle between interactions; schedules are optional. Clients attach to this state

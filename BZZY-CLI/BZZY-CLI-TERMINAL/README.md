@@ -47,7 +47,13 @@ conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
-In an existing solo, Delegate or Debate chat, pause with `/pause` or `/goal pause`,
+`bzzy` now opens a character canvas: insert model/effort characters, set goals,
+and connect them for Delegate, Debate, Besties or Parallel. Right-click or F10
+opens the context menu; Enter opens the full conversation and Esc returns to
+the canvas. Links pause affected work before reconfiguration. `bzzy --minimal`
+keeps the transcript interface described below. See [canvas controls and limits](docs/CANVAS.md).
+
+In a minimal solo, Delegate or Debate chat, pause with `/pause` or `/goal pause`,
 then use `/delegate`, `/debate` or `/solo` (`/singular` is an alias). Delegate and
 Debate use their saved agent presets, or open setup if none exists. Solo restores
 the model and effort used before either mode; chats launched in these modes use the saved

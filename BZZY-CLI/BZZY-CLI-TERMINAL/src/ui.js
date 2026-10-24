@@ -17,10 +17,11 @@ import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, minimal = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
+  constructor({ json = false, pet = true, minimal = false, canvas = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
     this.json = json;
     this.pet = pet;
     this.minimal = minimal;
+    this.canvas = canvas && !minimal;
     this.colorPalette = updateHandoff?.colorPalette || 'blue';
     this.input = input;
     this.output = output;

@@ -115,14 +115,14 @@ test('Debate uses its own 2–3 agent default in a paused chat and retains focus
   assert.deepEqual(modeDefault('debate'), agents); noExecution();
 });
 
-test('plain interactive CLI requires /pause and switches modes without leaving or executing its chat', { timeout: 20000 }, () => {
+test('minimal interactive CLI requires /pause and switches modes without leaving or executing its chat', { timeout: 20000 }, () => {
   saveDefaultSelection({ provider: 'codex', model: 'fixture-solo', selectedEffort: 'high' });
   saveModeDefault('delegate', combo); saveModeDefault('debate', combo);
   const code = String.raw`
 import fcntl, json, os, pathlib, pty, select, sqlite3, struct, subprocess, sys, termios, time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 140, 0, 0))
-child = subprocess.Popen([sys.argv[1], sys.argv[2], '--no-pet'], stdin=slave, stdout=slave, stderr=slave, cwd=sys.argv[3], env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
+child = subprocess.Popen([sys.argv[1], sys.argv[2], '--minimal', '--no-pet'], stdin=slave, stdout=slave, stderr=slave, cwd=sys.argv[3], env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
 os.close(slave)
 output = b''
 def drain():
@@ -177,4 +177,41 @@ finally:
   assert.equal(result.status, 0, result.stderr); noExecution();
   assert.equal(sessions().length, 1);
   assert.equal(events(sessions()[0].id).filter(event => event.type === 'mode.changed').length, 3);
+});
+
+test('default CLI opens the character canvas, enters chat and returns with Esc without inference', { timeout: 20000 }, () => {
+  saveDefaultSelection({ provider: 'codex', model: 'fixture-canvas', selectedEffort: 'high' });
+  const code = String.raw`
+import fcntl, os, pty, select, struct, subprocess, sys, termios, time
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
+child = subprocess.Popen([sys.argv[1], sys.argv[2], '--no-pet'], stdin=slave, stdout=slave, stderr=slave, cwd=sys.argv[3], env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
+os.close(slave)
+output = b''
+def until(check):
+    global output
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        if select.select([master], [], [], .03)[0]:
+            try: output = (output + os.read(master, 65536))[-150000:]
+            except OSError: pass
+        if check(): return
+    raise AssertionError(output[-2500:].decode(errors='replace'))
+try:
+    until(lambda: b'Right-click / F10' in output and b'fixture-canvas' in output)
+    os.write(master, b'\r')
+    until(lambda: b'Esc returns to the canvas' in output)
+    output = b''
+    os.write(master, b'\x1b')
+    until(lambda: b'Right-click / F10' in output)
+    os.write(master, b'\x04')
+    until(lambda: child.poll() is not None)
+    assert child.returncode == 0
+finally:
+    if child.poll() is None: child.terminate()
+    child.wait(timeout=5)
+    os.close(master)
+`;
+  const result = spawnSync('python3', ['-I', '-c', code, process.execPath, path.join(root, 'bin/bzzy.js'), directory], { env: process.env, encoding: 'utf8', timeout: 18000 });
+  assert.equal(result.status, 0, result.stderr); noExecution(); assert.equal(sessions().length, 1);
 });

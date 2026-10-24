@@ -10,7 +10,7 @@ BZZY CLI ↔ BZZY Core ↔ BZZY Relay ↔ BZZY iOS
 | Product | Implementation |
 | --- | --- |
 | [Core](BZZY-CORE/README.md) | Sessions, providers/auth, tools, goals, persistent Agents, sharing and the host Relay gateway. |
-| [CLI](BZZY-CLI/BZZY-CLI-TERMINAL/README.md) | Terminal chat, aliased sessions, Settings, pairing and local Core controls. |
+| [CLI](BZZY-CLI/BZZY-CLI-TERMINAL/README.md) | Character canvas for model goals and links; `--minimal` transcript, aliased sessions, Settings, pairing and local Core controls. |
 | [Relay](BZZY-RELAY/README.md) | Authenticated encrypted transport and expiring QR/import codes; no model execution or provider credentials. |
 | [iOS](BZZY-IOS/README.md) | Pairing, Agent management, terminal chat/history, activity, on-device dictation and voice chat. |
 

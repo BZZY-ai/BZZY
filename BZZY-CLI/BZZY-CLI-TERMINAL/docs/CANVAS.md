@@ -1,0 +1,60 @@
+# Character canvas
+
+`bzzy` opens the canvas by default in an interactive terminal. `bzzy --minimal`
+retains the transcript and message input, including the existing slash-command
+mode setup. JSON, detached execution and noninteractive commands keep their
+existing behavior.
+
+Right-click the workspace, or press **F10**, for New chat, Open chat and Settings.
+A new chat is empty. Insert BZZY opens Core's model catalog with its supported
+efforts. Saved solo defaults and explicit launch selections populate the initial
+cast; workflow flags continue to use their existing setup and defaults.
+Click the centered title to rename the chat. Only named chats appear in the saved
+terminal catalog, and they reopen in their original directory without inference.
+
+Each character is a saved model slot with its own provider/model/effort and an
+original, randomly assigned silhouette. Appearance stays stable when reopening
+or changing the model. Bodies are shaded with terminal colors; monochrome and
+small terminals have readable fallbacks. `--no-pet` disables character motion.
+
+- **Tab / arrows** select a character; **Enter** opens its conversation.
+- **F10 / right-click** opens the selected character's actions.
+- **Esc** closes a conversation and returns to its canvas; work continues.
+- **Set goal**, **Pause work** and **Resume paused goal** use Core's existing
+  durable goal and input admission operations. Chat remains available in the
+  expanded conversation, including approvals, typed answers, sharing and skills.
+- **Link to another BZZY** selects a target and Delegate, Debate, Besties or
+  Parallel. The affected conversations pause and workers must stop before the
+  link is applied. Linking does not resume work or change tool permissions.
+- **Move character** places it with the next click. Positions persist and scale
+  with the terminal. Tab changes pages when the entire cast cannot fit.
+
+Delegate links are directed: the source is BRAIN and the target is HANDS. The
+brain plans, delegates bounded assignments, reviews evidence and controls the
+goal. Tall terminals show the brain above its hands. Debate's **Review achieved
+goal + evidence** creates a separate review of the source's original objective,
+achieved claim and complete evidence inventory; it does not overwrite that goal.
+Parallel and Besties use the existing independent and collaborative Core engines.
+
+Status comes from authenticated Core snapshots. Speech bubbles use recorded
+model messages, assignments and peer exchanges. Curved link highlights occur
+only for newly observed exchanges; loading old history does not animate past
+work. Completion is Core's goal outcome, not an animation or a model's text claim.
+Offline controls remain locked until Core responds again.
+
+You can insert up to eight characters. A mode configured in another client can
+also project its actual Core model slots into the canvas. Delegate groups contain two; the other
+linked modes contain two or three. Groups cannot overlap or nest. Pause and
+unlink before changing a linked model or moving it into another group. Unlinking
+retains the conversations, budgets, evidence and worker history, and keeps work
+paused. Removing a character preserves its records; deleting a named canvas
+requires every companion and worker to be inactive.
+
+Core stores composition under `terminal.canvas`. Independent characters have
+separate unnamed terminal sessions in the canvas directory; assigned characters
+show the actual worker thread produced by the mode engine. **Work history** opens
+recorded threads without resuming them. These characters are not persistent Core
+Agents. iPhone and Relay retain their existing terminal protocol and grants;
+the canvas graph is a CLI presentation and does not widen phone/observer access.
+Portable project sharing retains its existing history and evidence behavior;
+canvas layout, private bindings and active graph connections are not transferred.
