@@ -56,6 +56,10 @@ the same chat, working directory, history and goal. Work stays paused until you
 send a message or explicitly run `/goal resume`. Wait for active replies and
 workers to finish stopping before switching; idle alone is not a pause.
 `/debate <focus>` retains the one-off challenge of the latest reply.
+Delegate keeps **BRAIN · model · effort** and **HANDS · model · effort** pinned
+above the conversation, including minimal mode. These labels show the current
+models and their independent efforts without provider names, stay visible while
+scrolling or paused, and disappear when switching out of Delegate.
 
 Core's coordinator has its own provider/model/effort configuration, editable with
 `bzzy-core assistant set`. `/default` and

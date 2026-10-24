@@ -17,10 +17,10 @@ const source = file => new URL(file, new URL('../', import.meta.url)).href;
 const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const delegated = { id: sessionId, mode: 'delegate', provider: 'codex', model: 'strong-model', selectedEffort: 'high', executor: { provider: 'deepseek', model: 'routine-model', effort: 'low' } };
 
-function terminal() {
+function terminal(options = {}) {
   const input = new PassThrough(); input.isTTY = true; input.setRawMode = () => {};
   const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 32, columns: 100 }); output.resume();
-  const ui = new UI({ input, output, error: output }); ui.setSession(sessionId);
+  const ui = new UI({ ...options, input, output, error: output }); ui.setSession(sessionId);
   return { ui, output, input };
 }
 
@@ -103,6 +103,40 @@ test('delegate fixed counters retain independent usage and explicitly mark incom
     ui.clearHistory(); ui.updateSession({ ...delegated, executionState: 'idle' }); ui.tui.render();
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /brain — · hands — · total — tokens/);
   } finally { ui.close(); }
+});
+
+test('pinned brain/hands models and efforts survive streaming, resizing and minimal mode without replacing the draft', () => {
+  const previous = process.env.BZZY_HOME, directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-role-header-'));
+  process.env.BZZY_HOME = path.join(directory, 'private');
+  try {
+    for (const minimal of [false, true]) {
+      const { ui, output } = terminal({ minimal });
+      try {
+        const selected = { ...delegated, provider: 'brain-provider', model: 'brain-model', selectedEffort: 'xhigh', executionState: 'running',
+          executor: { provider: 'hands-provider', model: 'hands-model', effort: 'low' } };
+        ui.updateSession(selected); ui.tui.value = 'Keep my draft'; ui.tui.cursor = 7;
+        for (let index = 0; index < 40; index++) ui.event('text', { text: `Streaming line ${index}\n`, itemId: 'stream' });
+        for (const [columns, rows] of [[160, 44], [100, 32], [80, 24], [64, 20]]) {
+          Object.assign(output, { columns, rows }); ui.tui.scroll = 5; ui.tui.render();
+          const frame = ui.tui.lastFrame.map(clean), roles = frame.filter(line => /BRAIN|HANDS/.test(line)).join('\n');
+          assert.match(roles, /BRAIN\s+brain-model · xhigh/); assert.match(roles, /HANDS\s+hands-model · low/);
+          assert.doesNotMatch(roles, /brain-provider|hands-provider/);
+          assert.ok(frame.findIndex(line => line.includes('HANDS')) < ui.tui.textRegion.top - 1, 'both roles stay above the scrollable body');
+          assert.ok(frame.every(line => cellWidth(line) < columns)); assert.equal(frame.length, rows);
+          assert.ok(ui.tui.composerRow <= rows); assert.equal(ui.tui.value, 'Keep my draft'); assert.equal(ui.tui.cursor, 7);
+        }
+        ui.updateSession({ ...selected, model: 'new-brain', selectedEffort: 'high', executionState: 'paused', executor: { ...selected.executor, model: 'new-hands', effort: 'default' } });
+        ui.tui.render(); const updated = ui.tui.lastFrame.map(clean).join('\n');
+        assert.match(updated, /BRAIN\s+new-brain · high/); assert.match(updated, /HANDS\s+new-hands · default/);
+        ui.updateSession({ ...selected, mode: 'solo', executor: undefined }); ui.tui.render();
+        assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /BRAIN|HANDS/);
+        assert.equal(ui.tui.value, 'Keep my draft');
+      } finally { ui.close(); }
+    }
+  } finally {
+    if (previous == null) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('terminal navigation keeps the views, session ID and composer without persistent shortcut clutter', () => {

@@ -290,7 +290,7 @@ test('a compact pairing QR renders completely inside an 80 by 24 TUI', async () 
   ui.settings = new ClientSettings(ui, { relayLoader: async () => fixture.module }); ui.openSettings();
   Object.assign(output, { rows: 24, columns: 80 }); await ui.settings.run('pair');
   ui.pet = true;
-  ui.updateSession({ id: ui.sessionId, provider: 'codex', model: 'qr-model', executionState: 'idle', usage: { tokens: 1234, available: true } });
+  ui.updateSession({ id: ui.sessionId, provider: 'codex', model: 'qr-model', mode: 'delegate', executor: { provider: 'claude', model: 'qr-hands', effort: 'high' }, executionState: 'idle', usage: { tokens: 1234, available: true } });
   ui.hostMetrics = { host: { cpuPercent: 12, memory: { totalBytes: 16 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 } } };
   assert.equal(ui.settings.qrLines().length, 18);
   const start = term.written.length; ui.tui.render(); const frame = term.written.slice(start);

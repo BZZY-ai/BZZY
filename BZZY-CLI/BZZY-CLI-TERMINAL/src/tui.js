@@ -946,6 +946,21 @@ export class TerminalChat {
     }
     lines.push(line); return lines;
   }
+  delegateHeader(width) {
+    if (this.mode !== 'delegate') return [];
+    const color = this.theme.color, available = Math.max(1, width - 2);
+    const roles = [
+      { label: 'BRAIN', model: this.model === 'Provider default' ? 'Default model' : this.model, effort: this.effort, tone: palette.accent },
+      { label: 'HANDS', model: this.executor ? this.executor.model || 'Default model' : 'Not set', effort: this.executor?.effort, tone: palette.user },
+    ].map(role => ({ ...role, model: clean(role.model), effort: clean(role.effort || 'default').replace(/^effort /, '') }));
+    const render = (role, budget) => {
+      const label = role.label + '  ', effort = ' · ' + role.effort;
+      return color(label, role.tone, true) + color(clip(role.model, Math.max(1, budget - cellWidth(label + effort))), palette.text, true) + color(effort, palette.muted);
+    };
+    const sizes = roles.map(role => cellWidth(role.label + '  ' + role.model + ' · ' + role.effort));
+    if (sizes[0] + sizes[1] + 5 <= available) return ['  ' + roles.map((role, index) => render(role, sizes[index])).join(color('  │  ', palette.border))];
+    return roles.map(role => '  ' + render(role, available));
+  }
   persistentHeader(width, height, { compact = false, controls = '' } = {}) {
     if (this.dashboardRendering && !compact) {
       const color = this.theme.color, title = this.aliasEdit ? [...this.aliasEdit.value].slice(0, this.aliasEdit.cursor).join('') + '▏' + [...this.aliasEdit.value].slice(this.aliasEdit.cursor).join('') : this.alias || 'Untitled project';
@@ -967,6 +982,7 @@ export class TerminalChat {
       }
       if (this.ui.accountStatusEnabled) header.push(color('  ' + clip(accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width - 3), palette.accent));
       header.push(color('  ' + clip([this.provider, this.tokenLabel(), hostMetricsLabel(this.ui.hostMetrics, width - 4)].filter(Boolean).join('  ·  '), width - 3), palette.muted));
+      header.push(...this.delegateHeader(width));
       if (this.ui.tabs?.length > 1) {
         let column = 1; header.push(this.ui.tabs.map((tab, index) => { const label = ` [${index} ${agentLabel(tab.agent)}] `; this.hitTargets.push({ type: 'tab', id: tab.id, row: header.length + 1, left: column, right: column + cellWidth(label) - 1 }); column += cellWidth(label); return color(label, tab.id === this.ui.activeTab ? palette.accent : palette.muted); }).join(''));
       }
@@ -983,11 +999,14 @@ export class TerminalChat {
     const provider = this.provider || 'agent';
     const modelWidth = Math.max(1, textWidth - 9 - cellWidth(provider) - cellWidth('effort ' + effort) - 6);
     let brand = accent('bzzy') + muted('  /  ') + color(provider + ' · ' + clip(this.model, modelWidth), palette.text, true) + muted(' · ') + color('effort ' + effort, palette.accent, true);
-    const context = this.mode === 'delegate' && this.executor ? `Hands: ${this.executor.provider} · ${this.executor.model || 'default'} · ${this.executor.effort || 'default'}`
+    const context = this.mode === 'delegate' ? 'Delegate · plan, execute, review'
       : this.mode === 'besties' || this.bestiesGroupId ? 'Besties · shared evidence, messages and peer reviews' : 'Type / for commands';
     const directory = this.cwd || 'Your project, your agent.';
     const shownAlias = this.aliasEdit ? [...this.aliasEdit.value].slice(0, this.aliasEdit.cursor).join('') + '▏' + [...this.aliasEdit.value].slice(this.aliasEdit.cursor).join('') : this.alias;
-    let text = [brand, muted(clip(shownAlias ? `${shownAlias} · ${directory}` : directory, textWidth)), muted(clip(this.aliasEdit ? 'Enter save name · Esc cancel' : context, textWidth))];
+    let text = [brand, muted(clip(shownAlias ? `${shownAlias} · ${directory}` : directory, textWidth)),
+      ...(this.mode === 'delegate' && !compact ? [
+        ...(this.aliasEdit ? [muted(clip('Enter save name · Esc cancel', textWidth))] : []), ...this.delegateHeader(textWidth),
+      ] : [muted(clip(this.aliasEdit ? 'Enter save name · Esc cancel' : context, textWidth))])];
     if (compact) {
       const controlWidth = cellWidth(controls), modelSpace = Math.max(1, textWidth - controlWidth - 2);
       brand = color(clip(`bzzy / ${provider} · ${this.model}`, modelSpace), palette.accent, true);
@@ -1007,7 +1026,8 @@ export class TerminalChat {
         suffixes.push(' '.repeat(gap) + (text[row - textStart] || ''));
         header.push(' '.repeat(left) + mascotLine(cells[row], this.theme) + suffixes[row]);
       }
-    } else header.push(...text.slice(0, 2).map(line => ' '.repeat(left) + line));
+      if (this.mode === 'delegate' && !compact) for (const line of text.slice(eyeRows)) header.push(' '.repeat(left + eyeWidth + gap) + line);
+    } else header.push(...(this.mode === 'delegate' && !compact ? text : text.slice(0, 2)).map(line => ' '.repeat(left) + line));
     if (!compact && this.alias) {
       const column = left + (eyeRows ? eyeWidth + gap : 0) + 1;
       this.hitTargets.push({ type: 'alias', row: eyeRows ? this.eyeRegion.top + Math.max(0, Math.floor((eyeRows - text.length) / 2)) + 1 : 2,
@@ -1287,7 +1307,7 @@ export class TerminalChat {
     const pinned = this.pinned && this.panel !== 'settings' && (!this.dashboardRendering || this.busy || this.scroll > 0 || this.goal) ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
     const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
     if (this.ui.minimal) this.eyeRegion = null;
-    const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme)] : this.persistentHeader(width, height);
+    const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme), ...this.delegateHeader(width)] : this.persistentHeader(width, height);
     if (pinned.length && !this.ui.minimal) {
       header.push(color('  YOU ASKED', palette.user, true));
       for (const [index, line] of pinned.slice(0, maximumPinned).entries()) header.push(color('  │ ' + clip(line + (index === maximumPinned - 1 && pinned.length > maximumPinned ? ' …' : ''), width - 5), palette.accent));
