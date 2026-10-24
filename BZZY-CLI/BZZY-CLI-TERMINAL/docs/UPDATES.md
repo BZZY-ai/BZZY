@@ -107,8 +107,15 @@ or stashed before updating.” It cannot acquire its own fix through that blocke
 check. As your usual BZZY user, run this once from any directory:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BZZY-ai/BZZY/main/BZZY-CORE/scripts/repair-updater.py | python3
+bzzy_repair_dir=$(mktemp -d) &&
+git clone --depth 1 --filter=blob:none --sparse https://github.com/BZZY-ai/BZZY.git "$bzzy_repair_dir/BZZY" &&
+git -C "$bzzy_repair_dir/BZZY" sparse-checkout set --no-cone /BZZY-CORE/scripts/repair-updater.py &&
+python3 "$bzzy_repair_dir/BZZY/BZZY-CORE/scripts/repair-updater.py"
 ```
+
+The repository is private. Use the same account/environment whose GitHub
+authentication already works for BZZY. An unauthenticated raw-file download
+returns 404; it does not use credentials configured for Git.
 
 The repair reads the installed managed launcher to find its package and Node 24+
 runtime, downloads the official updater at a verified commit and invokes the same
