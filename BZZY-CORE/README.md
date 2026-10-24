@@ -12,6 +12,12 @@ the same engine and private state.
 
 Implemented:
 
+- Hardened Debate and Delegate handoffs: automatic source-pinned mission briefs,
+  durable requests for missing context, mandatory challenge rounds, retained
+  minority objections, evidence inspection coverage and original-goal/severity
+  assessment through Core's acceptance gate. See
+  [orchestration](docs/ORCHESTRATION.md).
+
 - Project-scoped knowledge recall and reviewed learning: stable engagement IDs,
   attributed/freshness-aware memory and public-history search, private approved
   profiles, bounded idle lesson reviews, inactive skill proposals, held-out

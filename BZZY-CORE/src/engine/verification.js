@@ -5,6 +5,9 @@ import { schemaErrors } from './contracts.js';
 import { putRecord, getRecord, listRecords, appendEvent, now } from './database.js';
 import { spawnBounded, stopProcess } from './policy.js';
 import { assignmentsFor } from './delegation-usage.js';
+import { pendingAssignmentContext } from './delegation.js';
+import { missionSourceRevision, missionResultRevision, missionContextCurrent, missionEvidenceCurrent } from './mission-context.js';
+import { assessDebateGoal, assessObjectionDispositions, assessDebateEvidenceCoverage } from './debate-format.js';
 
 export function assessRequirement(session, input, role = 'supervisor') {
   if (role === 'executor' || role === 'reviewer') throw new Error('Only the supervisor can accept parent requirements.');
@@ -15,7 +18,7 @@ export function assessRequirement(session, input, role = 'supervisor') {
     const item = getRecord('artifact', id);
     if (!item || item.sessionId !== session.id) throw new Error('Assessment evidence must belong to the current session. Inspect or copy worker evidence first.');
   }
-  const assessment = { id: randomUUID(), sessionId: session.id, goalId: session.goal?.id || null, criterionId: input.id, status: input.status, rationale: input.rationale, evidence: input.evidence, role, createdAt: now(), provenance: role === 'group-assessment' ? 'aggregate-peer-assessment' : role === 'bestie' ? 'peer-judgment' : 'supervisor-judgment' };
+  const assessment = { id: randomUUID(), sessionId: session.id, goalId: session.goal?.id || null, missionRevision: missionSourceRevision(session), criterionId: input.id, status: input.status, rationale: input.rationale, evidence: input.evidence, role, createdAt: now(), provenance: role === 'debate-review' ? 'debate-evidence-review' : role === 'group-assessment' ? 'aggregate-peer-assessment' : role === 'bestie' ? 'peer-judgment' : 'supervisor-judgment' };
   putRecord('assessment', `${session.id}:${session.goal?.id || 'chat'}:${input.id}`, assessment); appendEvent(session.id, 'assessment', assessment); return assessment;
 }
 export async function runCheck(session, check, { signal } = {}) {
@@ -45,7 +48,7 @@ export async function runCheck(session, check, { signal } = {}) {
   Object.assign(op, { state: 'observed', code, timedOut, truncated, passed: !timedOut && !signal?.aborted && code === (check.expectedExitCode ?? 0), evidence: evidence.id, finishedAt: now() });
   putRecord('operation', op.id, op); appendEvent(session.id, 'verification.completed', op); return op;
 }
-export async function assessCompletion(session, { signal, prerequisite = true } = {}) {
+export async function assessCompletion(session, { signal, prerequisite = true, settledAssignmentIds = [] } = {}) {
   if (!session.contract) return { passed: true, level: 'legacy-model-judgment', requirements: [], artifacts: [], checks: [] };
   const requiredArtifacts = [];
   for (const required of session.contract.artifacts) {
@@ -72,7 +75,7 @@ export async function assessCompletion(session, { signal, prerequisite = true } 
       if (legacy && (!session.goal || legacy.goalId === session.goal.id || legacy.goalId == null && legacy.createdAt >= session.goal.createdAt)) assessment = legacy;
     }
     if (assessment) {
-      const stale = assessment.evidence.some(id => {
+      const stale = Boolean(assessment.missionRevision && assessment.missionRevision !== missionSourceRevision(session)) || assessment.evidence.some(id => {
         const item = getRecord('artifact', id);
         if (!item) return true;
         // Recorded observations remain usable after temporary source cleanup.
@@ -85,22 +88,89 @@ export async function assessCompletion(session, { signal, prerequisite = true } 
       return { id: c.id, description: c.description, passed: assessment.status === 'supported' && !stale, stale, assessment };
     }
     // A free-text goal has no independently specified acceptance contract. Label its limit honestly.
-    if (c.modelJudgment) return { id: c.id, description: c.description, passed: true, provenance: 'backend-model-judgment', evidence: artifactsFor(session.id).filter(a => a.label === 'agent-output').map(a => a.id) };
+    if (c.modelJudgment) return { id: c.id, description: c.description, passed: true, provenance: 'backend-model-judgment', evidence: artifactsFor(session.id).filter(a => a.label === 'agent-output' &&
+      (!session.goal || (a.goalId ? a.goalId === session.goal.id : !session.goal.createdAt || a.createdAt >= session.goal.createdAt))).map(a => a.id) };
     return { id: c.id, description: c.description, passed: false, reason: 'Supervisor has not assessed this requirement with recorded evidence.' };
   });
-  const assignments = assignmentsFor(session), openAssignments = assignments.filter(a => a.closure === 'open');
+  const assignments = assignmentsFor(session), settled = new Set(settledAssignmentIds);
+  const openAssignments = assignments.filter(a => a.closure === 'open' && !(settled.has(a.id) &&
+    getRecord('round', `${a.id}:${a.currentRound}`)?.state === 'awaiting_review' && a.latestReport?.report?.status !== 'needs_context'));
   const delegation = session.mode === 'delegate' && session.goal && !['executor', 'reviewer'].includes(session.role) ? {
     required: true, assignmentCount: assignments.filter(a => a.role === 'executor').length,
     reviewedAssignments: assignments.filter(a => a.role === 'executor' && ['accepted', 'inconclusive', 'abandoned'].includes(a.closure)).length,
   } : null;
   if (delegation) {
-    delegation.passed = delegation.reviewedAssignments > 0;
-    if (!delegation.passed) delegation.reason = 'Delegate mode requires a bounded executor assignment for this goal and brain review of its result. Use delegate, inspect the evidence, then review_assignment before completing.';
+    delegation.pendingContext = pendingAssignmentContext(session);
+    delegation.declinedContext = listRecords('assignment-context', { sessionId: session.id }).filter(request => request.sourceGoalId === session.goal.id && request.state === 'declined').map(request => request.id);
+    const explicitSupport = requirements.every(requirement => requirement.passed && requirement.assessment?.status === 'supported' && requirement.assessment.evidence?.length);
+    delegation.passed = delegation.reviewedAssignments > 0 && !delegation.pendingContext.length && (!delegation.declinedContext.length || explicitSupport);
+    if (delegation.pendingContext.length) delegation.reason = 'An executor needs missing task context. Answer or explicitly resolve its context request before completing this goal.';
+    else if (delegation.declinedContext.length && !explicitSupport) delegation.reason = 'Declining missing worker context does not establish the parent goal. Record current evidence-backed assessments for every original requirement.';
+    else if (!delegation.passed) delegation.reason = 'Delegate mode requires a bounded executor assignment for this goal and brain review of its result. Use delegate, inspect the evidence, then review_assignment before completing.';
   }
   const passed = prerequisite && !signal?.aborted && requiredArtifacts.every(a => a.passed) && checks.length === session.contract.verification.length && checks.every(c => c.passed) && requirements.every(r => r.passed) && !openAssignments.length && (!delegation || delegation.passed);
   const result = { id: randomUUID(), sessionId: session.id, goalId: session.goal?.id || null, passed, level: session.contract.acceptanceCriteria.some(c => c.modelJudgment) ? 'model-judgment-with-declared-checks' : 'evidence-and-supervisor-assessment',
     requirements, artifacts: requiredArtifacts, checks, openAssignments: openAssignments.map(a => a.id), ...(delegation ? { delegation } : {}), createdAt: now() };
   putRecord('acceptance', result.id, result); appendEvent(session.id, 'acceptance', result); return result;
+}
+
+// Debate completion is an assessment of the original task, subject to the
+// same declared artifacts/checks as ordinary work. Votes are never a bypass.
+export async function assessDebateCompletion(session, record, { signal } = {}) {
+  const assessment = record?.assessment || {}, reasons = [];
+  const defender = assessment.defenderSessionId && getRecord('session', assessment.defenderSessionId);
+  const defenderJob = assessment.defenderAssignmentId && getRecord('assignment', assessment.defenderAssignmentId);
+  const actualChallengeRounds = (record?.transcript || []).filter(round => Array.isArray(round.assessments) && round.assessments.length > 0 && round.assessments.every(item => item.assignmentId && item.report) && round.mainResponse?.decision).length;
+  const ids = new Set([record?.opening?.assignmentId, assessment.defenderAssignmentId,
+    ...(record?.investigation?.reports || []).map(report => report.assignmentId),
+    ...(record?.transcript || []).flatMap(round => (round.assessments || []).map(report => report.assignmentId))].filter(Boolean));
+  const jobs = [...ids].map(id => getRecord('assignment', id));
+  if (assessment.passed !== true || actualChallengeRounds < 1 || assessment.challengeRounds !== actualChallengeRounds || record.goalSatisfaction !== 'supported') reasons.push('The original goal has no complete supported challenge-and-response assessment.');
+  if (!defender || !defenderJob || defender.parentSessionId !== session.id || defenderJob.parentSessionId !== session.id || defenderJob.goalId !== session.goal?.id ||
+    defenderJob.workerSessionId !== defender.id || defender.assignmentId !== defenderJob.id || defender.assignmentRound !== defenderJob.currentRound) reasons.push('The final reviewer is not bound to this goal.');
+  if (jobs.some(job => !job || job.parentSessionId !== session.id || job.goalId !== session.goal?.id || getRecord('round', `${job.id}:${job.currentRound}`)?.state !== 'awaiting_review')) reasons.push('A debate participant is missing, still running or belongs to another goal.');
+  if (record?.missionContext && !missionContextCurrent(session, record.missionContext)) reasons.push('The original instructions or mission evidence changed during review.');
+  if (session.reviewSource) {
+    const source = getRecord('session', session.reviewSource.sessionId);
+    if (!source || (source.goal?.id || null) !== session.reviewSource.goalId || missionSourceRevision(source) !== session.reviewSource.sourceRevision ||
+      (source.goal?.status || 'reply') !== session.reviewSource.claimedStatus || session.reviewSource.resultRevision && missionResultRevision(source) !== session.reviewSource.resultRevision ||
+      session.reviewSource.missionContextId && !missionContextCurrent(source, session.reviewSource.missionContextId)) reasons.push('The source goal or its achieved claim changed during review.');
+  }
+  const allowedArtifactIds = [...new Set([...(defender?.allowedArtifactIds || []), ...artifactsFor(defender?.id || session.id).map(item => item.id)])];
+  const evidenceContext = { sessionId: session.id, defenderSessionId: defender?.id, allowedArtifactIds };
+  const goalReview = assessDebateGoal(session, record?.decision, evidenceContext);
+  const objectionReview = assessObjectionDispositions(record?.objectionLedger || [], record?.decision, evidenceContext);
+  const coverage = assessDebateEvidenceCoverage(session.reviewSource?.evidenceIds || [], evidenceContext);
+  if (!goalReview.passed) reasons.push(...goalReview.reasons);
+  if (!objectionReview.complete || objectionReview.unresolved.length) reasons.push('Some objections lack an inspected, evidence-backed disposition.');
+  if (!coverage.complete) reasons.push('The final reviewer did not inspect all original goal evidence.');
+  if (record?.unresolvedDisagreement?.length || record?.decision?.nextVerificationSteps?.length) reasons.push('The result still has unresolved disagreement or required verification.');
+  const entries = goalReview.inspectedEvidence.map(id => getRecord('artifact', id)).filter(Boolean);
+  if (entries.length !== goalReview.inspectedEvidence.length || !missionEvidenceCurrent(entries)) reasons.push('Cited decision evidence is missing, changed or stale.');
+  // Model assessments remain labeled as such. Host checks establish provenance,
+  // inspection and contract compliance, not universal semantic truth.
+  if (!reasons.length) {
+    const copies = new Map();
+    for (const item of entries) {
+      let imported = item;
+      if (item.sessionId !== session.id) {
+        imported = artifact(session, fs.readFileSync(item.path), `debate-reviewed:${item.label}`, item.mediaType);
+        Object.assign(imported, { importedFrom: item.id, importedSha256: item.sha256,
+          ...(item.source ? { source: item.source, sourceWorkspace: item.sourceWorkspace, sourceSha256: item.sourceSha256 } : {}) });
+        putRecord('artifact', imported.id, imported);
+      }
+      copies.set(item.id, imported.id);
+    }
+    for (const criterion of goalReview.assessment.criteria) assessRequirement(session, {
+      id: criterion.id, status: 'supported', rationale: criterion.rationale,
+      evidence: criterion.evidence.map(id => copies.get(id)),
+    }, 'debate-review');
+  }
+  const result = await assessCompletion(session, { signal, prerequisite: reasons.length === 0, settledAssignmentIds: [...ids] });
+  Object.assign(result, { debate: { passed: reasons.length === 0, reasons, sourceGoalId: session.reviewSource?.goalId || session.goal?.id,
+    goalSatisfaction: goalReview.goalSatisfaction, evidenceCoverage: coverage, semanticVerification: 'not-automated' } });
+  putRecord('acceptance', result.id, result);
+  return result;
 }
 
 // A group must also deliver the contract in the user's original workspace.

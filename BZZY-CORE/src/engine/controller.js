@@ -82,7 +82,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
     putRecord('run', session.id, run); saveSession(session);
     options.activityReporter = new ActivityReporter(session, recorded, goal ? session.goal.objective : prompt);
-    host = await new ToolHost(session, recorded, { goalMode: goal, agentScope }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
+    host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, onNeedsContext: () => stop('needs_context') }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
     if (options.captureNetwork) { traffic = await new TrafficRecorder(session, provider, recorded).open(); options.networkEnv = traffic.env; }
     if (options.yolo) recorded.event('info', { message: provider.backend === 'codex' ? 'YOLO · approvals off · Codex sandbox disabled' : 'YOLO · Claude permission checks bypassed' });
     const limit = options.runtimeSeconds || session.contract?.limits.runtimeSeconds;
@@ -95,6 +95,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
       try {
         const cancellation = session.assignmentId && getRecord('assignment-control', session.assignmentId);
         if (cancellation?.action === 'cancel' && (cancellation.round == null || cancellation.round === session.assignmentRound)) stop('cancelled');
+        if (session.assignmentId && getRecord('worker-report', session.id)?.status === 'needs_context') stop('needs_context');
         if (goal && session.mode === 'delegate') {
           const usage = delegationUsage(session), key = JSON.stringify([usage.supervisorTokens, usage.delegatedTokens, usage.complete]);
           if (key !== lastUsageKey && Date.now() - lastUsageAt >= 2000) {
@@ -189,7 +190,8 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
       session.summary = { usage: usageSummary(session), elapsedSeconds: elapsed, finishedAt: now() };
       if (session.mode === 'delegate') { session.delegationUsage = session.summary.usage; recorded.event('delegation.usage', session.summary.usage); }
       if (goal) { session.goal.delegatedTokensUsed = session.summary.usage.delegatedTokens; session.goal.tokensUsed = session.summary.usage.totalTokens; }
-      if (goal) session.goal.evidence = [...new Set([...(session.goal.evidence || []), ...artifactsFor(session.id).filter(a => a.label === 'agent-output').map(a => a.id)])];
+      if (goal) session.goal.evidence = [...new Set([...(session.goal.evidence || []), ...artifactsFor(session.id).filter(a => a.label === 'agent-output' &&
+        (a.goalId ? a.goalId === session.goal.id : !session.goal.createdAt || a.createdAt >= session.goal.createdAt)).map(a => a.id)])];
       delete session.deferTerminalNotification;
       saveSession(session); putRecord('run', session.id, { ...getRecord('run', session.id), state: session.executionState, finishedAt: now() });
       closeOpenActivities(session);

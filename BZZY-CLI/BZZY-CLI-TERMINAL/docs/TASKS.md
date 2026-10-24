@@ -251,8 +251,9 @@ bzzy --codex --debate
 ```
 
 `--artifact` accepts a workspace file or recorded artifact UUID; without it, the
-goal and source workspace are the selected material. `/debate [objective]` selects
-the latest final reply and its user request. An agent roster selects the main agent and one or two challengers, each with its own provider, model and effort;
+goal and source workspace are the selected material. `/debate [objective]` reviews
+the original goal, its achieved claim, requirements and complete goal evidence;
+ordinary chat replies retain the focused latest-reply review. An agent roster selects the main agent and one or two challengers, each with its own provider, model and effort;
 `--participant` selects them directly. The original chat, thread and permissions
 are preserved, and its next turn can read the debate decision.
 
@@ -266,9 +267,8 @@ Debate has three phases:
    evidence bundle, with an index of reports and omissions. At least two agents
    must return a complete or partial conclusion backed by preserved evidence;
    otherwise debate stops here instead of manufacturing an opening case.
-   A strict majority of complete, evidence-backed `real` or `false_positive`
-   verdicts finishes the goal immediately: 2/2 with two agents or 2/3 with three.
-   Failed, timed-out and inconclusive reports remain recorded as abstentions.
+   Majority votes describe agreement and never skip challenge. Minority findings,
+   uncertainty and failed reports remain in the durable objection ledger.
 2. **Opening case.** After all independent work is finished, the main agent reads
    the reports and checked evidence for the first time and publishes a supported
    case that preserves contrary findings and uncertainty.
@@ -278,6 +278,10 @@ Debate has three phases:
    retains assignment history. New tests and changes needed during discussion are
    listed as separate verification work. The main agent records an accepted,
    resolved, rejected or unresolved disposition for every objection.
+   Host checks require actual scoped evidence inspection and intact/current
+   sources, preserve previous objections and assess the original criteria and
+   requested severity separately. All original source evidence needs complete
+   read coverage. Declared artifact and verification checks still gate completion.
 
 The default and maximum are **five discussion rounds** (`--rounds 1` through `5`).
 Discussion stops after the first challenge round when every objection is resolved

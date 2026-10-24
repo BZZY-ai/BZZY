@@ -109,13 +109,25 @@ async function work() {
     const evidence = await call('record_evidence', { path: reviewer ? 'BZZY_SELECTED_MATERIAL.txt' : 'result.txt', label: 'worker-evidence' });
     const main = context.contract?.context?.includes('main agent responding');
     const agreement = process.env.BZZY_TEST_ADVANCED === 'debate-agreement';
-    await call('finish_assignment', { status: reviewer ? 'inconclusive' : 'complete', summary: reviewer ? 'The claim needs an account-control test.' : 'Created and inspected the requested output.', evidence: [evidence.id],
+    let ledger = [];
+    if (main) {
+      await call('read_artifact', { id: evidence.id });
+      try {
+        const followup = JSON.parse(currentPrompt.split('FOLLOW-UP:\n').at(-1));
+        const match = /PERSISTENT OBJECTION LEDGER(?: \([^\n]*\))?:\n([\s\S]*)$/.exec(followup.feedback || context.contract.context);
+        if (match) ledger = JSON.parse(match[1]);
+      } catch { /* The opening case has no challenge dispositions. */ }
+    }
+    const original = context.mission?.goal?.objective || context.contract.objective;
+    const goalAssessment = { objective: original, rationale: agreement ? 'The inspected synthetic evidence supports the declared fixture goal.' : 'The independent account-control prerequisite remains unverified.', evidence: [evidence.id],
+      criteria: (context.mission?.acceptanceCriteria || []).map(item => ({ id: item.id, status: agreement ? 'supported' : 'inconclusive', rationale: 'The synthetic recorded comparison was inspected.', evidence: [evidence.id] })) };
+    await call('finish_assignment', { status: agreement ? 'complete' : reviewer ? 'inconclusive' : 'complete', summary: reviewer ? 'The claim needs an account-control test.' : 'Created and inspected the requested output.', evidence: [evidence.id],
       ...(context.contract?.context?.includes('Independently investigate') ? { verdict: agreement ? 'real' : 'inconclusive' } : {}),
       objections: agreement ? [] : [{ id: 'missing-control', claim: 'An independent account control is not present.', evidence: [evidence.id] }], conclusions: agreement ? ['The supplied conclusion is supported.'] : [], position: agreement ? 'Supported' : 'Requires additional verification',
       ...(main ? { decision: agreement
-        ? { acceptedConclusions: ['The supplied conclusion is supported.'], rejectedClaims: [], corrections: [], remainingObjections: [], nextVerificationSteps: [], objectionDispositions: [] }
+        ? { acceptedConclusions: ['The supplied conclusion is supported.'], rejectedClaims: [], corrections: [], remainingObjections: [], nextVerificationSteps: [], objectionDispositions: [], goalSatisfaction: 'supported', goalAssessment }
         : { acceptedConclusions: [], rejectedClaims: ['The evidence conclusively establishes IDOR'], corrections: ['Classify the result as unverified'], remainingObjections: ['missing-control'], nextVerificationSteps: ['Run a separately authorized account-control test'],
-          objectionDispositions: [{ id: 'missing-control', status: 'unresolved', rationale: 'The required independent account control is still absent.', evidence: [evidence.id] }] } } : {}) });
+          objectionDispositions: (ledger.length ? ledger : [{ id: 'missing-control' }]).map(item => ({ id: item.id, status: 'unresolved', rationale: 'The required independent account control is still absent.', evidence: [evidence.id] })), goalSatisfaction: 'inconclusive', goalAssessment } } : {}) });
   } else if (has('peer_status')) {
     const peers = await call('peer_status'); log({ peers: peers.length, objective: context.contract?.objective });
     const evidence = await call('record_evidence', { path: 'source.txt', label: 'peer-evidence' });

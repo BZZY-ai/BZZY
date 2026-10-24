@@ -1,3 +1,45 @@
+# Debate and Delegate hardening (2026-10-24)
+
+Final full suites on Node.js 24/macOS: **353 Core tests passed, 1 skipped**
+(354 total), and **476 CLI tests passed, 21 skipped** (497 total), zero failures.
+Both product syntax checks and `git diff --check` passed. Existing platform and
+sandbox capability skips remain explicitly reported.
+
+New offline evaluations drive real Core persistence, assignments, reports,
+inspection receipts, follow-up controls and parent acceptance using synthetic
+actors. Cases cover misleading majority agreement, retained minority evidence,
+unread/changed sources, wrong severity despite a claimed supported outcome,
+original achieved-goal evidence inventories, later casual replies, source
+instruction races, missing deliverables, imported execution authority, pending
+and declined context, positive supported completion and legitimate brain takeover.
+Declared budgets and the one-to-five challenge-round bounds remain enforced.
+Goal IDs bind new artifacts and automatic output/acceptance evidence collection.
+A two-goal daemon regression proves old replies do not enter the next goal's
+evidence. Completed-goal directive snapshots exclude later casual messages;
+unrelated usage summaries cannot invalidate the completed result.
+
+A native provider fixture deliberately ignores interrupt, TERM and input EOF.
+The actual assignment runner stops its verified backend, durably settles
+`needs_context`, preserves the pending question and leaves the parent active.
+The regression exposed duplicate backend-close timers; Codex transport cleanup
+is now idempotent per RPC instance. Answering questions alone dispatches no work;
+explicit pinned follow-ups reuse the same worker conversation.
+
+The combined CLI/Core package was built and installed in an isolated directory.
+Its installed mission context, missing-context tool and Debate acceptance gate
+loaded and passed a local no-inference smoke check without sibling source.
+The user's running installation and private reference checkout were not updated.
+Fixtures do not measure live-provider reasoning accuracy or prove a real
+vulnerability/severity; host checks enforce provenance, inspection and declared
+acceptance requirements.
+
+Local logs: `/private/tmp/bzzy-publish-robust-core.log`,
+`/private/tmp/bzzy-publish-robust-cli.log`,
+`/private/tmp/bzzy-complete-robust-compat-corrected.log`,
+`/private/tmp/bzzy-robust-core-check.log`,
+`/private/tmp/bzzy-robust-cli-check.log`, and
+`/private/tmp/bzzy-robust-package-verified.log`.
+
 # Project knowledge and reviewed learning (2026-10-24)
 
 Final full suites on Node.js 24/macOS: **314 Core tests passed, 1 skipped**

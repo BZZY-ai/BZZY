@@ -68,12 +68,13 @@ unresolved objections and next verification steps. Agreement alone is not proof.
 At least two evidence-bearing independent reports are required before an opening
 case. Fully dispositioned objections with no remaining verification stop the
 debate after its first challenge round.
-A matching strict majority of complete Phase 1 verdicts backed by recorded
-evidence finishes before the opening case. With three agents, two matching votes
-are sufficient and a failed or timed-out third agent is an abstention.
+Majority agreement cannot skip the opening/challenge round or erase minority
+evidence. Original goal criteria and requested severity need separate supported
+assessments with actual evidence inspection and the normal acceptance checks.
 `--review-only` skips new investigation and reviews fixed material. `/debate
-[focus]` in a chat selects the latest final assistant reply and its user request,
-runs a separate debate, and returns its decision to the original conversation.
+[focus]` reviews the supplied goal, corresponding achieved claim and all recorded
+goal evidence, runs a separate debate, and returns its assessment to the original
+conversation. Ordinary chat replies retain focused latest-reply review.
 
 Delegate: `bzzy --delegate`.
 Choose one strong supervisor/brain and one cheaper executor/hands model, then

@@ -11,6 +11,7 @@ import { NotificationHub } from './notifications.js';
 import { artifact } from './evidence.js';
 import { cancelAssignment, delay } from './delegation.js';
 import { supervisorTokens, budgetUsage, delegationUsage } from './delegation-usage.js';
+import { assessDebateCompletion } from './verification.js';
 
 export class Coordinator {
   constructor(session, ui, options) {
@@ -50,6 +51,19 @@ export class Coordinator {
   async finish(status, record, usage) {
     clearInterval(this.timer); process.removeListener('SIGINT', this.onInterrupt); process.removeListener('SIGTERM', this.onInterrupt);
     try {
+    if (this.session.mode === 'debate' && status === 'complete' && !this.stopping) {
+      this.session.acceptance = await assessDebateCompletion(this.session, record, { signal: this.abort.signal });
+      record.acceptance = this.session.acceptance;
+      if (!this.session.acceptance.passed) {
+        status = 'awaiting_review'; record.outcome = 'unresolved';
+        record.stopReason = 'goal_acceptance_unsatisfied';
+        record.reportedGoalSatisfaction = record.goalSatisfaction;
+        record.goalSatisfaction = 'inconclusive'; record.assessment = { ...record.assessment, passed: false, acceptancePassed: false };
+        record.decision = { ...record.decision, reportedGoalSatisfaction: record.decision?.goalSatisfaction, goalSatisfaction: 'inconclusive' };
+        record.unresolvedDisagreement = [...new Set([...(record.unresolvedDisagreement || []), ...(this.session.acceptance.debate?.reasons || []), 'Original goal acceptance checks remain unsatisfied.'])];
+      }
+      putRecord('debate', this.session.id, record);
+    }
     if (this.stopping) {
       status = this.stopping === 'cancelled' ? 'cancelled' : ['runtime_limit', 'token_limit'].includes(this.stopping) ? 'budget_limited' : this.stopping === 'coordination_failure' ? 'awaiting_review' : 'paused';
       for (const job of listRecords('assignment').filter(j => j.parentSessionId === this.session.id)) cancelAssignment(this.session.id, job.id, this.stopping);
@@ -98,6 +112,7 @@ export class Coordinator {
       const consensus = record.investigationConsensus || record.decision?.consensus || null;
       const text = item => typeof item === 'string' ? item : item?.claim || item?.summary || item?.description || JSON.stringify(item);
       this.session.modeResult = { goalId: this.session.goal.id, kind: 'debate', outcome: record.outcome || null, stopReason: record.stopReason || null,
+        goalSatisfaction: record.goalSatisfaction || 'inconclusive', sourceGoalId: this.session.reviewSource?.goalId || null,
         consensus: consensus ? { verdict: consensus.verdict, required: consensus.required, total: consensus.total, counts: consensus.counts, votes: consensus.votes } : null,
         conclusions: (record.decision?.acceptedConclusions || []).slice(0, 8).map(text),
         unresolved: (record.unresolvedDisagreement || []).slice(0, 8).map(text) };

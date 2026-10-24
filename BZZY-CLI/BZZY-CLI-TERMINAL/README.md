@@ -55,7 +55,12 @@ solo default, or their current primary model if none exists. Both switches keep
 the same chat, working directory, history and goal. Work stays paused until you
 send a message or explicitly run `/goal resume`. Wait for active replies and
 workers to finish stopping before switching; idle alone is not a pause.
-`/debate <focus>` retains the one-off challenge of the latest reply.
+`/debate <focus>` reviews a supplied goal against its achieved claim and complete
+recorded evidence; ordinary chat replies retain the focused review flow.
+Debate requires challenge/response, preserves minority objections and checks the
+original criteria and requested severity. Delegate automatically passes a pinned
+mission brief and can request missing context without guessing or silently
+resuming. See [orchestration](../../BZZY-CORE/docs/ORCHESTRATION.md).
 Delegate keeps **BRAIN · model · effort** and **HANDS · model · effort** pinned
 above the conversation, including minimal mode. These labels show the current
 models and their independent efforts without provider names, stay visible while

@@ -7,7 +7,7 @@ import readline from 'node:readline';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { home, privateDir } from './files.js';
 import { loadSession } from './store.js';
-import { getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
+import { getRecord, putRecord, listRecords, appendEvent, now, digest } from './database.js';
 import { checkpoint, remember, recall } from './memory.js';
 import { issue } from './project.js';
 import { captureEvidence, readArtifact, artifact, projectArtifact } from './evidence.js';
@@ -54,7 +54,10 @@ export function taskTools(session, { goalMode } = {}) {
   if (!['executor', 'reviewer'].includes(session.role)) tools.push(spec('assess_requirement', 'Assess a declared acceptance requirement using evidence you inspected. This is supervisor judgment; automated checks are also enforced before completion.',
     { id: str, status: { type: 'string', enum: ['supported', 'partial', 'unsupported', 'inconclusive'] }, rationale: str, evidence: strings }, ['id', 'status', 'rationale', 'evidence']));
   if (['executor', 'reviewer', 'peer'].includes(session.role)) tools.push(spec('finish_assignment', 'Return your bounded worker claim for supervisor review. This never completes the parent goal. Save full supporting evidence first.',
-    { status: { type: 'string', enum: ['complete', 'partial', 'blocked', 'inconclusive'] }, summary: str, evidence: strings,
+    { status: { type: 'string', enum: ['complete', 'partial', 'blocked', 'inconclusive', 'needs_context'] }, summary: str, evidence: strings,
+      requestId: { type: 'string', maxLength: 160, description: 'Stable ID required for needs_context so retries cannot create duplicate questions.' },
+      questions: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'object', additionalProperties: false,
+        properties: { id: { type: 'string', maxLength: 64 }, question: { type: 'string', maxLength: 1000 }, reason: { type: 'string', maxLength: 500 } }, required: ['id', 'question'] } },
       verdict: { type: 'string', enum: ['real', 'false_positive', 'inconclusive'] }, nextSteps: strings, uncertainties: strings,
       objections: { type: 'array', items: object }, conclusions: strings, position: str, changedBecause: str, decision: object }, ['status', 'summary', 'evidence']));
   if (session.goal && goalMode !== false && !['executor', 'reviewer'].includes(session.role)) tools.push(
@@ -70,10 +73,19 @@ export function taskTools(session, { goalMode } = {}) {
     spec('assignment_status', 'Read a saved assignment report without invoking a model.', { id: str }, ['id']),
     spec('wait_assignment', 'Wait up to 30 seconds for a specific assignment round. Wait timeout never cancels the worker.', { id: str, round: { type: 'integer', minimum: 1 }, timeoutSeconds: { type: 'integer', minimum: 0, maximum: 30 } }, ['id']),
     spec('followup_assignment', 'Send a focused follow-up in the same worker conversation; preserve boundaries and full round history. Return the compact result after waiting, without a separate status call.', { id: str, requestId: str, feedback: str, objective: str,
+      contextRequestId: str, expectedContextRevision: { type: 'integer', minimum: 1 },
+      contextAnswers: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'object', additionalProperties: false,
+        properties: { questionId: str, text: { type: 'string', maxLength: 2000 }, evidence: { type: 'array', items: str, maxItems: 16 } }, required: ['questionId', 'text'] } },
       evidence: { type: 'array', items: str, maxItems: 32, description: 'Additional recorded evidence IDs to share. Existing selected evidence remains available; at most 32 distinct IDs per assignment.' },
       waitSeconds: { type: 'integer', minimum: 0, maximum: 30, description: 'Default 20 seconds; 0 starts asynchronously.' } }, ['id', 'requestId', 'feedback', 'objective']),
     spec('review_assignment', 'Close a finished assignment as accepted/inconclusive/abandoned. Acceptance requires evidence IDs opened with read_artifact. A failed assignment alone cannot complete or block the parent goal.',
       { id: str, outcome: { type: 'string', enum: ['accepted', 'inconclusive', 'abandoned'] }, rationale: str, evidence: strings }, ['id', 'outcome', 'rationale']),
+    spec('answer_assignment_context', 'Answer the exact outstanding worker questions without starting execution, or explicitly decline unavailable context with a rationale. Declined context cannot authorize accepting that assignment. Use followup_assignment only when ready to run the same worker again.',
+      { id: str, requestId: str, contextRequestId: str, expectedContextRevision: { type: 'integer', minimum: 1 },
+        contextAnswers: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'object', additionalProperties: false,
+          properties: { questionId: str, text: { type: 'string', maxLength: 2000 }, evidence: { type: 'array', items: str, maxItems: 16 } }, required: ['questionId', 'text'] } },
+        contextDisposition: { type: 'string', enum: ['declined'] }, contextRationale: { type: 'string', maxLength: 1500 },
+        expectedSourceGoalRevision: { type: 'string', maxLength: 64, description: 'Required to explicitly decline an old request after the owner changes this goal’s instructions. Never permits running or accepting stale work.' } }, ['id', 'requestId', 'contextRequestId', 'expectedContextRevision']),
     spec('apply_assignment', 'Apply an accepted worker patch after checking all source hashes for conflicts. Never overwrites concurrent changes.', { id: str }, ['id']),
     spec('cancel_assignment', 'Request cancellation of one bounded assignment; retain partial results.', { id: str, reason: str }, ['id']),
   );
@@ -171,8 +183,13 @@ export class ToolHost {
     if (name === 'read_artifact') {
       const { item, job } = authorizedArtifact(session, input.id);
       const result = readArtifact(input.id, input.offset, input.limit);
+      const receipt = { sessionId: session.id, assignmentId: session.assignmentId || job?.id || null,
+        assignmentRound: session.assignmentRound || job?.currentRound || null, artifactId: item.id, sha256: item.sha256,
+        offset: input.offset || 0, nextOffset: result.nextOffset,
+        bytesRead: Math.max(0, result.nextOffset - (input.offset || 0)) };
+      const receiptId = digest(receipt);
+      if (!getRecord('artifact-read', receiptId)) putRecord('artifact-read', receiptId, { ...receipt, createdAt: now() });
       if (job || item.sessionId !== session.id) {
-        putRecord('artifact-read', randomUUID(), { sessionId: session.id, assignmentId: job?.id || null, artifactId: input.id, offset: input.offset || 0, nextOffset: result.nextOffset, createdAt: now() });
         const key = `${session.id}:${item.id}:${item.sha256}`, previous = getRecord('artifact-import', key);
         let copy = previous && getRecord('artifact', previous.importedEvidenceId);
         if (!copy || !fs.existsSync(copy.path)) {
@@ -187,10 +204,9 @@ export class ToolHost {
       return result;
     }
     if (name === 'finish_assignment') {
-      if (!['complete', 'partial', 'blocked', 'inconclusive'].includes(input.status) || !input.summary?.trim() || !Array.isArray(input.evidence)) throw new Error('Assignment report needs status, summary and evidence IDs.');
-      if (input.evidence.some(id => getRecord('artifact', id)?.sessionId !== session.id)) throw new Error('Report evidence must belong to this worker session.');
-      const report = { ...input, sessionId: session.id, reportedAt: now(), provenance: 'worker-claim' };
-      putRecord('worker-report', session.id, report); return { recorded: true, requiresSupervisorReview: true };
+      const result = (await import('./delegation.js')).recordWorkerReport(session, input);
+      if (input.status === 'needs_context') this.context.onNeedsContext?.();
+      return result;
     }
     const d = await import('./delegation.js');
     if (name === 'delegate') {
@@ -214,13 +230,15 @@ export class ToolHost {
     if (name === 'followup_assignment') {
       const waitSeconds = assignmentWaitSeconds(input.waitSeconds), { waitSeconds: ignoredWait, ...assignmentInput } = input;
       if (input.evidence != null && (!Array.isArray(input.evidence) || input.evidence.length > 32 || input.evidence.some(id => typeof id !== 'string'))) throw new Error('Assignment evidence must contain at most 32 recorded artifact IDs.');
-      const sharedEvidence = input.evidence == null ? undefined : [...new Set([...(job.sharedEvidence || []), ...input.evidence])];
+      const answerEvidence = (input.contextAnswers || []).flatMap(answer => answer.evidence || []);
+      const sharedEvidence = input.evidence == null && !answerEvidence.length ? undefined : [...new Set([...(job.sharedEvidence || []), ...(input.evidence || []), ...answerEvidence])];
       if (sharedEvidence?.length > 32) throw new Error('An assignment can share at most 32 distinct evidence IDs; start a new bounded assignment for additional work.');
       for (const id of sharedEvidence || []) authorizedArtifact(session, id);
       const started = d.followupAssignment(session, input.id, assignmentInput, { sharedEvidence });
       return compactAssignmentWait(await d.waitAssignment(session.id, started.id, waitSeconds, started.round));
     }
     if (name === 'review_assignment') return d.reviewAssignment(session, input.id, input);
+    if (name === 'answer_assignment_context') return d.answerAssignmentContext(session, input.id, input);
     if (name === 'apply_assignment') return d.applyAssignment(session, input.id);
     if (name === 'cancel_assignment') return d.cancelAssignment(session.id, input.id, input.reason);
     throw new Error('Unknown task tool.');

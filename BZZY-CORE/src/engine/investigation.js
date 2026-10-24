@@ -5,7 +5,7 @@ import { getRecord, putRecord, digest, now } from './database.js';
 import { fileInfo, artifact } from './evidence.js';
 import { formatInvestigation } from './debate-format.js';
 
-export function investigationReadiness(investigation, totalAgents) {
+export function investigationReadiness(investigation, totalAgents, { sessionId } = {}) {
   const reports = investigation?.reports || [], required = Math.min(2, totalAgents);
   const usable = [], reasons = [];
   for (let index = 0; index < totalAgents; index++) {
@@ -19,6 +19,12 @@ export function investigationReadiness(investigation, totalAgents) {
     else {
       const imported = new Set(entry.artifacts?.flatMap(item => [item.id, item.originalId]).filter(Boolean));
       if (entry.report.evidence.some(id => !imported.has(id))) reason = 'report evidence was not preserved in the fixed bundle';
+      if (!reason && sessionId) for (const id of entry.report.evidence) {
+        const reference = entry.artifacts.find(item => item.id === id || item.originalId === id), copy = reference && getRecord('artifact', reference.id);
+        try {
+          if (!copy || copy.sessionId !== sessionId || copy.sha256 !== reference.sha256 || fileInfo(copy.path).sha256 !== copy.sha256) { reason = 'preserved investigation evidence failed its scope or integrity check'; break; }
+        } catch { reason = 'preserved investigation evidence is unavailable'; break; }
+      }
     }
     if (reason) reasons.push(`${label}: ${reason}`); else usable.push(entry);
   }
@@ -38,7 +44,7 @@ export function investigationConsensus(investigation, totalAgents) {
   });
   const counts = { real: votes.filter(vote => vote.verdict === 'real').length, false_positive: votes.filter(vote => vote.verdict === 'false_positive').length };
   const verdict = counts.real >= required ? 'real' : counts.false_positive >= required ? 'false_positive' : null;
-  return { reached: Boolean(verdict), verdict, required, total: totalAgents, counts, votes };
+  return { reached: Boolean(verdict), verdict, required, total: totalAgents, counts, votes, assessmentOnly: true, maySkipChallenge: false };
 }
 
 export async function investigate(session, choices, snapshot, options, ui, coordinator) {
@@ -50,10 +56,10 @@ export async function investigate(session, choices, snapshot, options, ui, coord
     while (next < choices.length && pending.size < concurrency) {
       const index = next++, selection = choices[index];
       const job = startAssignment(session, { requestId: `investigate-${session.id}-${index}`, objective: session.goal.objective,
-        context: `Independently investigate the selected material in BZZY_SELECTED_MATERIAL.txt and this workspace. Start by locating and reading the relevant workspace files. When BZZY_SELECTED_MATERIAL.txt contains only the goal, the workspace is the supplied material; the absence of an explicit --artifact is not missing context. Analyze the actual claim and run useful, bounded tests when permitted by the task policy and declared scope. Do not contact unlisted targets or use unspecified accounts. Do not inspect other agents' work during this independent phase. Preserve uncertainty: a failed test does not disprove a hypothesis. Save decisive files and test results using record_evidence. Use status complete when recorded evidence supports a real/false-positive classification, partial when it supports only part of that classification, and inconclusive only when it cannot classify the claim. Set verdict to real, false_positive or inconclusive; a real/false_positive vote counts toward consensus only with status complete and recorded evidence. Return finish_assignment with status, verdict, summary, evidence, objections, conclusions, position and uncertainties. Do not start a debate or claim the parent objective is satisfied. Source edits stay in your isolated workspace.`,
+        context: `Independently investigate the ORIGINAL user goal, acceptance conditions, achieved-goal claim and ALL its original evidence in BZZY_SELECTED_MATERIAL.txt and the immutable mission brief. Read every original source evidence artifact with read_artifact, paginating until complete; identify missing ranges rather than silently substituting a summary. Start by locating and reading relevant workspace files. When the selected material contains only the goal, the workspace is supplied material; absence of --artifact is not missing context. Analyze the actual vulnerability and claimed impact/severity separately: a real low-impact issue does not satisfy a HIGH-severity goal. Run useful, bounded re-tests only when permitted by the inherited task policy and original declared scope. Do not contact unlisted targets, use unspecified accounts or inspect other agents' work during this independent phase. Preserve uncertainty: a failed test does not disprove a hypothesis. Save decisive files and test results using record_evidence. Use status complete when recorded evidence supports a real/false-positive classification, partial when it supports only part, and inconclusive when it cannot classify the claim. Set verdict real, false_positive or inconclusive; matching votes describe agreement and never replace adversarial challenge or original-goal verification. Return finish_assignment with status, verdict, summary, evidence, objections with stable IDs, conclusions, position and uncertainties. Do not start a debate or claim the parent objective is satisfied. Source edits stay in your isolated workspace.`,
         acceptanceCriteria: ['Report actual analysis and permitted tests, cite recorded evidence, and identify what remains unverified.'],
         limits: { runtimeSeconds: Math.min(options.runtimeSeconds || 300, session.contract.limits.assignmentSeconds || 300) } },
-      { executor: selection, snapshot, role: 'executor', allowDebate: true });
+      { executor: selection, snapshot, role: 'executor', allowDebate: true, independent: true, sharedEvidence: session.reviewSource?.evidenceIds || [] });
       pending.set(index, job.id);
       ui.event('info', { message: `${selection.provider} · independent investigation · assignment ${job.id}` });
     }
@@ -86,6 +92,8 @@ export async function investigate(session, choices, snapshot, options, ui, coord
       fs.copyFileSync(item.path, path.join(snapshot.directory, relative));
       snapshot.manifest[relative] = { size: info.size, sha256: info.sha256 }; bytes += info.size;
       const imported = artifact(session, fs.readFileSync(item.path), `investigation:${report.participant.provider}:${item.label}`, item.mediaType);
+      Object.assign(imported, { importedFrom: item.id, importedSha256: item.sha256,
+        ...(item.source ? { source: item.source, sourceWorkspace: item.sourceWorkspace, sourceSha256: item.sourceSha256 } : {}) }); putRecord('artifact', imported.id, imported);
       entry.artifacts.push({ id: imported.id, originalId: item.id, path: relative, sha256: item.sha256, label: item.label });
     }
     evidenceIndex.push(entry);

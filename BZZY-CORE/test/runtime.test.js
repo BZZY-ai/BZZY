@@ -73,6 +73,21 @@ test('two clients and lost acknowledgments still queue exactly one execution', a
   await assert.rejects(core.execute(session.id, { ...input, prompt: 'Different request' }), /own input/);
 });
 
+test('successive goals in one chat attach their own model outputs without inheriting an earlier achieved claim', async () => {
+  const session = core.createConversation({ provider: 'codex', model: 'fixture-model', cwd: workspace }, { requestId: randomUUID() });
+  const info = runtimeInfo(), owner = randomUUID(); let previousOutput = [];
+  for (const objective of ['Assess the first supplied offline observation', 'Assess the second independent offline observation']) {
+    const accepted = await runtimeRequest(info, 'POST', `/sessions/${session.id}/input`, { operation: 'goal', owner, objective }, randomUUID());
+    const execution = await finished(accepted.executionId); assert.equal(execution.exitCode, 0, execution.error);
+    const saved = getRecord('session', session.id); assert.equal(saved.goal.status, 'complete');
+    const outputs = listRecords('artifact', { sessionId: session.id }).filter(item => item.label === 'agent-output' && item.goalId === saved.goal.id);
+    assert.ok(outputs.length > 0); assert.ok(outputs.every(item => saved.goal.evidence.includes(item.id)));
+    assert.ok(previousOutput.every(id => !saved.goal.evidence.includes(id)), 'old goal replies are not evidence for the new goal');
+    assert.ok(previousOutput.every(id => !(saved.acceptance?.requirements || []).some(requirement => requirement.evidence?.includes(id))), 'old replies are not reused by implicit model-judgment acceptance');
+    previousOutput = outputs.map(item => item.id);
+  }
+});
+
 test('observer subscriptions replay the same events, fail control and stop after revocation', async () => {
   const session = create(), other = create();
   const grant = await core.grantSession({ sessionId: session.id, expiresInSeconds: 60 });

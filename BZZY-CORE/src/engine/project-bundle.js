@@ -17,7 +17,7 @@ import { resolveProjectIdentity, sessionBelongsToProject } from './project-ident
 
 const helper = fileURLToPath(new URL('./archive.py', import.meta.url));
 const uuid = /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi;
-const ephemeral = kind => /^(?:telegram-|access-token$|input-owner$|account-status$|outbox$|notification|run$|control$|assignment-control$|core\.(?:learning|skill|knowledge|project|memory|checkpoint|issue)(?:\.|$))/.test(kind);
+const ephemeral = kind => /^(?:telegram-|access-token$|input-owner$|account-status$|outbox$|notification|run$|control$|assignment-control$|assignment-context$|core\.(?:learning|skill|knowledge|project|memory|checkpoint|issue|mission)(?:\.|$))/.test(kind);
 const within = (file, root) => file === root || file.startsWith(root + path.sep);
 const present = file => { try { fs.lstatSync(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
 
@@ -320,6 +320,7 @@ export async function importProject(filename, directory, ui, { shared = false, k
       }
       if (row.kind === 'snapshot') record.data.manifest = row.data.manifest;
       delete record.data.runner; delete record.data.launcher; delete record.data.token; delete record.data.nonce;
+      delete record.data.missionContext; delete record.data.contextRequest; delete record.data.contextRequestId;
       if (['queued', 'launching', 'running', 'starting', 'waiting_for_input'].includes(record.data.state)) { record.data.state = 'interrupted'; record.data.reason = 'Imported project; explicit resume required.'; }
       if (row.kind === 'question' && record.data.state === 'pending') { record.data.state = 'expired'; record.data.reason = 'Imported project; original runner is no longer attached.'; }
       if (row.kind === 'operation' && ['planned', 'dispatched'].includes(record.data.state)) record.data.state = 'uncertain';

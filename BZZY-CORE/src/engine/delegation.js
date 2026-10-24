@@ -8,11 +8,129 @@ import { getRecord, putRecord, listRecords, removeRecord, reserveRequest, append
 import { normalizeContract } from './contracts.js';
 import { childPolicy } from './policy.js';
 import { snapshotWorkspace, inspectWorkspace, inside, captureEvidence, artifactsFor, artifact, fileInfo } from './evidence.js';
-import { home, privateDir, writeJson } from './files.js';
+import { home, privateDir, writeJson, readJson } from './files.js';
 import { root, runtimeEnv } from './process.js';
 import { identityAlive, processIdentity, reconcileSession } from './recovery.js';
 import { assignmentCounts, activeAssignmentsFor, budgetUsage, currentAssignmentUsage } from './delegation-usage.js';
 import { compactAssignmentRound } from './assignment-views.js';
+import { createMissionContext, missionSourceRevision, missionContextCurrent } from './mission-context.js';
+import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
+
+const contextKind = 'assignment-context';
+const contextText = (value, limit, label) => {
+  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > limit || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error(`Invalid ${label}.`);
+  if (/(?:["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)["']?)\s*[=:]\s*["']?(?!<|\$\{|\[redacted\])[^\s"']+/i.test(value)) throw new Error('Context answers must use authorized host setup, never credential values.');
+  assertShareText(value, sharedSecrets()); return value.trim();
+};
+const parentStopped = parent => ['paused', 'cancelled'].includes(parent.executionState) || ['paused', 'cancelled'].includes(parent.goal?.status)
+  || readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
+function currentSource(parent, job) {
+  const saved = parent?.id && loadSession(parent.id);
+  if (!saved || (saved.goal?.id || null) !== (parent.goal?.id || null) || missionSourceRevision(saved) !== missionSourceRevision(parent)) throw new Error('The source goal objective or instructions changed. Refresh this conversation.');
+  if (job && (job.parentSessionId !== saved.id || job.goalId !== (saved.goal?.id || null) || job.missionContext && !missionContextCurrent(saved, job.missionContext))) throw new Error('The assignment source goal or instructions changed. Create a new bounded assignment with the current mission.');
+  return saved;
+}
+export function assignmentContextRequest(job) {
+  return job?.contextRequestId ? getRecord(contextKind, job.contextRequestId) : null;
+}
+const compactContext = request => request && ({ id: request.id, revision: request.revision, state: request.state,
+  assignmentId: request.assignmentId, round: request.round, sourceGoalId: request.sourceGoalId, sourceGoalRevision: request.sourceGoalRevision,
+  questions: request.questions, answers: request.answers || [], rationale: request.rationale || null });
+export function pendingAssignmentContext(parent) {
+  return listRecords(contextKind, { sessionId: parent.id }).filter(request => request.state === 'pending' && request.sourceGoalId === (parent.goal?.id || null))
+    .slice(0, 32).map(compactContext);
+}
+
+// This is a saved request for information, never permission to run a tool or
+// resume a worker. Only the assigned current worker can create it.
+export function recordWorkerReport(session, input) {
+  if (!['complete', 'partial', 'blocked', 'inconclusive', 'needs_context'].includes(input.status) || !input.summary?.trim() || !Array.isArray(input.evidence) || input.evidence.length > 32) throw new Error('Assignment report needs status, summary and bounded evidence IDs.');
+  if (input.evidence.some(id => getRecord('artifact', id)?.sessionId !== session.id)) throw new Error('Report evidence must belong to this worker session.');
+  if (!session.assignmentId) {
+    if (input.status === 'needs_context') throw new Error('Context requests need a current bounded assignment.');
+    const report = { ...input, sessionId: session.id, reportedAt: now(), provenance: 'worker-claim' };
+    putRecord('worker-report', session.id, report); return { recorded: true, requiresSupervisorReview: true };
+  }
+  const job = getRecord('assignment', session.assignmentId), saved = loadSession(session.id);
+  if (!job || job.workerSessionId !== session.id || saved?.assignmentId !== job.id || saved.assignmentRound !== session.assignmentRound || job.currentRound !== session.assignmentRound || job.closure !== 'open' || !['starting', 'running'].includes(getRecord('round', `${job.id}:${job.currentRound}`)?.state)) throw new Error('This worker no longer owns the active assignment round.');
+  const parent = currentSource(loadSession(job.parentSessionId), job);
+  if (parentStopped(parent)) throw new Error('The parent conversation is paused. No new worker result was published.');
+  const previous = assignmentContextRequest(job);
+  if (previous?.state === 'pending' && input.status !== 'needs_context') throw new Error('Outstanding context questions must be answered by the supervisor before another completion claim.');
+  if (input.status !== 'needs_context') {
+    const report = { ...input, sessionId: session.id, round: job.currentRound, reportedAt: now(), provenance: 'worker-claim' };
+    return transaction(db => {
+      const live = getRecord('assignment', job.id), source = currentSource(loadSession(parent.id), live);
+      if (parentStopped(source) || live.currentRound !== session.assignmentRound || live.workerSessionId !== session.id ||
+          !['starting', 'running'].includes(getRecord('round', `${live.id}:${live.currentRound}`)?.state) || assignmentContextRequest(live)?.state === 'pending') throw new Error('The worker round or context changed before its report was saved.');
+      putRecord('worker-report', session.id, report, db); return { recorded: true, requiresSupervisorReview: true };
+    });
+  }
+  if (typeof input.requestId !== 'string' || !input.requestId.trim() || input.requestId.length > 160 || !Array.isArray(input.questions) || !input.questions.length || input.questions.length > 6) throw new Error('A context request requires a stable requestId and one to six questions.');
+  const questions = input.questions.map((question, index) => {
+    if (!question || Object.keys(question).some(key => !['id', 'question', 'reason'].includes(key))) throw new Error('Invalid context question fields.');
+    const id = question.id || `q${index + 1}`;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) throw new Error('Invalid context question ID.');
+    return { id, question: contextText(question.question, 1000, 'context question'), ...(question.reason ? { reason: contextText(question.reason, 500, 'context reason') } : {}) };
+  });
+  if (new Set(questions.map(question => question.id)).size !== questions.length) throw new Error('Context question IDs must be unique.');
+  return reserveRequest(`assignment-context:${job.id}:${job.currentRound}`, input.requestId,
+    { questions, summary: input.summary, evidence: input.evidence, sourceGoalRevision: missionSourceRevision(parent) }, db => {
+      const latest = getRecord('assignment', job.id), pending = assignmentContextRequest(latest);
+      const source = currentSource(loadSession(parent.id), latest);
+      if (pending?.state === 'pending') throw new Error('This assignment already has an outstanding context request.');
+      if (parentStopped(source) || latest.currentRound !== job.currentRound || latest.workerSessionId !== session.id || !['starting', 'running'].includes(getRecord('round', `${job.id}:${job.currentRound}`)?.state)) throw new Error('Assignment changed before the context request was saved.');
+      const id = digest([job.id, job.currentRound, input.requestId]);
+      const request = { id, sessionId: parent.id, parentSessionId: parent.id, assignmentId: job.id, workerSessionId: session.id,
+        round: job.currentRound, requestId: input.requestId, revision: 1, state: 'pending', sourceGoalId: parent.goal?.id || null,
+        sourceGoalRevision: missionSourceRevision(parent), questions, answers: [], createdAt: now() };
+      const report = { ...input, questions, contextRequestId: id, sessionId: session.id, round: job.currentRound, reportedAt: now(), provenance: 'worker-claim' };
+      putRecord(contextKind, id, request, db); putRecord('assignment', job.id, { ...latest, contextRequestId: id, contextRequest: compactContext(request) }, db);
+      putRecord('worker-report', session.id, report, db); appendEvent(parent.id, 'assignment.needs_context', compactContext(request), db);
+      return { recorded: true, requiresSupervisorReview: true, contextRequest: compactContext(request) };
+    });
+}
+
+export function answerAssignmentContext(parent, id, input) {
+  const job = getRecord('assignment', id); parent = currentSource(parent, input.contextDisposition === 'declined' ? undefined : job);
+  if (!job || job.parentSessionId !== parent.id || job.goalId !== (parent.goal?.id || null)) throw new Error('Context request belongs to another objective.');
+  if (parentStopped(parent)) throw new Error('Resume the parent conversation before answering its worker.');
+  return reserveRequest(`assignment-context-answer:${id}`, input.requestId || digest(input), input,
+    db => answerContextInTransaction(parent, job, input, db));
+}
+function answerContextInTransaction(parent, job, input, db) {
+  const latest = getRecord('assignment', job.id), request = assignmentContextRequest(latest);
+  const declined = input.contextDisposition === 'declined';
+  parent = currentSource(parent, declined ? undefined : latest);
+  if (parentStopped(parent)) throw new Error('The parent conversation is paused. Its worker context was not changed.');
+  const sourceChanged = request?.sourceGoalRevision !== missionSourceRevision(parent);
+  if (!request || request.id !== input.contextRequestId || request.revision !== input.expectedContextRevision || request.state !== 'pending' ||
+      sourceChanged && (!declined || input.expectedSourceGoalRevision !== request.sourceGoalRevision)) throw new Error('Context request or source goal changed. Reload the exact request before answering; declining stale context also requires its source revision.');
+  if (input.contextDisposition !== undefined && !declined) throw new Error('Choose only an explicit declined context disposition.');
+  const answers = declined ? [] : input.contextAnswers;
+  if (!declined && (!Array.isArray(answers) || answers.length !== request.questions.length || new Set(answers.map(answer => answer.questionId)).size !== answers.length)) throw new Error('Answer every outstanding context question exactly once.');
+  const normalized = (answers || []).map(answer => {
+    if (!answer || Object.keys(answer).some(key => !['questionId', 'text', 'evidence'].includes(key)) || !request.questions.some(question => question.id === answer.questionId)) throw new Error('Answer references an unknown context question.');
+    const evidence = answer.evidence || [];
+    if (!Array.isArray(evidence) || evidence.length > 16 || evidence.some(id => typeof id !== 'string')) throw new Error('Context answer evidence must contain at most 16 IDs.');
+    for (const id of evidence) {
+      const item = getRecord('artifact', id);
+      if (!item || item.sessionId !== parent.id && !listRecords('artifact-read').some(read => read.sessionId === parent.id && read.artifactId === id && read.sha256 === item.sha256)) throw new Error('Context answers can share only parent or inspected evidence.');
+      if (fileInfo(item.path).sha256 !== item.sha256) throw new Error('Context answer evidence changed after inspection.');
+    }
+    return { questionId: answer.questionId, text: contextText(answer.text, 2000, 'context answer'), evidence };
+  });
+  const requestId = digest([job.id, request.id, input.requestId || digest({ revision: request.revision, answers: normalized, declined })]);
+  const previousReceipt = getRecord('assignment-context-answer', requestId);
+  if (previousReceipt) throw new Error('This answer receipt was already applied. Reload the current request.');
+  const changed = { ...request, state: declined ? 'declined' : 'answered', answers: normalized,
+    rationale: declined ? contextText(input.contextRationale, 1500, 'context decline rationale') : null,
+    revision: request.revision + 1, answeredAt: now() };
+  putRecord(contextKind, request.id, changed, db); putRecord('assignment-context-answer', requestId,
+    { id: requestId, requestId: request.id, revision: changed.revision, sha256: digest(changed) }, db);
+  putRecord('assignment', job.id, { ...latest, contextRequest: compactContext(changed) }, db);
+  appendEvent(parent.id, 'assignment.context_answered', compactContext(changed), db); return compactContext(changed);
+}
 
 export const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 export function agentChoice(value, model) {
@@ -35,14 +153,16 @@ export function assignmentStatus(id) {
     });
     return assignmentStatus(id);
   }
-  return { ...job, round };
+  return { ...job, contextRequest: compactContext(assignmentContextRequest(job)), round };
 }
 function checkLimits(parent) {
   const { total, active } = assignmentCounts(parent);
   if (active >= (parent.contract?.limits.concurrency || 1)) throw new Error('Assignment concurrency limit reached. Wait for or cancel the active assignment.');
   if (parent.contract?.limits.maxAssignments != null && total >= parent.contract.limits.maxAssignments) throw new Error('Assignment count limit reached.');
 }
-export function startAssignment(parent, input, { executor, snapshot, role = 'executor', allowDebate = false, sharedEvidence = [] } = {}) {
+export function startAssignment(parent, input, { executor, snapshot, role = 'executor', allowDebate = false, sharedEvidence = [], launch = launchAssignment, independent = false } = {}) {
+  const source = currentSource(parent);
+  if (parentStopped(source)) throw new Error('The parent conversation is paused. No assignment was launched.');
   if (parent.mode !== 'delegate' && !allowDebate) throw new Error('Delegation was not enabled for this task.');
   const selection = executor || parent.executor;
   if (!selection) throw new Error('Choose an executor provider/model.');
@@ -54,17 +174,30 @@ export function startAssignment(parent, input, { executor, snapshot, role = 'exe
   if (!input.context?.trim() || !input.acceptanceCriteria?.length) throw new Error('An assignment needs context and acceptanceCriteria in addition to its objective.');
   for (const job of activeAssignmentsFor(parent)) assignmentStatus(job.id);
   const id = randomUUID(), requestId = input.requestId || randomUUID();
-  const result = reserveRequest(`assignment:${parent.id}:${parent.goal?.id || 'chat'}`, requestId, { input, selection, role, snapshot: snapshot?.id }, db => {
+  const missionContext = createMissionContext(source, { purpose: allowDebate ? 'debate' : 'delegate', independent, evidenceIds: sharedEvidence });
+  const result = reserveRequest(`assignment:${parent.id}:${parent.goal?.id || 'chat'}`, requestId, { input, selection, role, snapshot: snapshot?.id, sourceGoalRevision: missionContext.sourceRevision, sharedEvidence }, db => {
     checkLimits(parent);
     const remaining = parent.goal?.tokenBudget == null ? null : parent.goal.tokenBudget - budgetUsage(parent);
     if (remaining != null && remaining <= 0) throw new Error('Parent usage budget is exhausted.');
     if (remaining != null) contract.limits.tokenBudget = Math.min(contract.limits.tokenBudget || remaining, remaining);
-    const job = { id, parentSessionId: parent.id, goalId: parent.goal?.id || null, selection, contract, role, closure: 'open', currentRound: 1, createdAt: now(), snapshotId: snapshot?.id || null, workspace: null, sharedEvidence, captureNetwork: Boolean(parent.captureNetwork) };
+    const job = { id, parentSessionId: parent.id, goalId: parent.goal?.id || null, missionContext, selection, contract, role, closure: 'open', currentRound: 1, createdAt: now(), snapshotId: snapshot?.id || null, workspace: null, sharedEvidence, captureNetwork: Boolean(parent.captureNetwork) };
     putRecord('assignment', id, job, db);
     putRecord('round', `${id}:1`, { assignmentId: id, number: 1, state: 'starting', requestId, createdAt: now(), feedback: null }, db);
     appendEvent(parent.id, 'assignment.created', job, db); return { id, round: 1 };
   });
-  launchAssignment(result.id, result.round); return assignmentStatus(result.id);
+  dispatchAssignment(result.id, result.round, launch); return assignmentStatus(result.id);
+}
+function dispatchAssignment(id, number, launch) {
+  const dispatched = transaction(db => {
+    const job = getRecord('assignment', id), round = getRecord('round', `${id}:${number}`);
+    if (!job || !round || round.state !== 'starting' || round.dispatchRequestedAt) return false;
+    const parent = loadSession(job.parentSessionId);
+    if (!parent || parentStopped(parent)) {
+      putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: 'Parent conversation paused before dispatch.' }, db); return false;
+    }
+    putRecord('round', `${id}:${number}`, { ...round, dispatchRequestedAt: now() }, db); return true;
+  });
+  if (dispatched) launch(id, number);
 }
 function launchAssignment(id, number) {
   const child = spawn(process.execPath, [path.join(root, 'bin/bzzy-engine.js'), 'internal-assignment', id, String(number)], { env: runtimeEnv(), detached: true, stdio: 'ignore' });
@@ -77,26 +210,42 @@ function launchAssignment(id, number) {
     if (round?.state === 'starting') putRecord('round', `${id}:${number}`, { ...round, state: 'failed', reason: error.message });
   });
 }
-export function followupAssignment(parent, id, input, { sharedEvidence } = {}) {
+export function followupAssignment(parent, id, input, { sharedEvidence, launch = launchAssignment } = {}) {
   const job = assignmentStatus(id);
+  const source = currentSource(parent, job);
+  if (parentStopped(source)) throw new Error('The parent conversation is paused. No follow-up was launched.');
   if (job.parentSessionId !== parent.id || job.goalId != null && job.goalId !== parent.goal?.id) throw new Error('Assignment belongs to another objective.');
   if (!input.feedback?.trim() || !input.objective?.trim()) throw new Error('Follow-up needs supervisor feedback and a focused objective.');
   const maxRounds = (parent.contract?.limits.maxRetries ?? 2) + 1;
   const result = reserveRequest(`followup:${id}`, input.requestId || randomUUID(), input, db => {
     const latest = getRecord('assignment', id);
+    currentSource(source, latest);
+    if (parentStopped(loadSession(parent.id))) throw new Error('The parent conversation is paused. No follow-up was launched.');
     if (latest.currentRound !== job.currentRound || latest.closure !== 'open' || ['starting', 'running'].includes(getRecord('round', `${id}:${latest.currentRound}`)?.state)) throw new Error('Assignment is not ready for a follow-up.');
     if (job.currentRound >= maxRounds) throw new Error('Assignment follow-up limit reached; take over directly or record the unresolved result.');
     if (parent.goal?.tokenBudget != null && budgetUsage(parent) >= parent.goal.tokenBudget) throw new Error('Parent usage budget is exhausted.');
     if (job.contract.limits.tokenBudget != null && (currentAssignmentUsage(job).tokens || 0) >= job.contract.limits.tokenBudget) throw new Error('Assignment usage budget is exhausted.');
+    let contextRequest = assignmentContextRequest(latest);
+    if (contextRequest?.state === 'pending') {
+      if (!input.contextRequestId) throw new Error('Answer the outstanding context questions in this follow-up before restarting the worker.');
+      contextRequest = answerContextInTransaction(source, latest, input, db);
+      if (contextRequest.state === 'declined') throw new Error('A declined context request cannot launch more worker execution. Review the bounded result as inconclusive or abandoned.');
+    } else if (input.contextRequestId) {
+      if (contextRequest?.id !== input.contextRequestId || contextRequest.state !== 'answered') throw new Error('The follow-up context answer changed. Reload its request.');
+    }
     const previousControl = getRecord('assignment-control', id);
     if (previousControl?.action === 'cancel' && (previousControl.round == null || previousControl.round <= latest.currentRound)) db.prepare("DELETE FROM records WHERE kind='assignment-control' AND id=?").run(id);
     const number = latest.currentRound + 1;
-    putRecord('round', `${id}:${number}`, { assignmentId: id, number, state: 'starting', createdAt: now(), feedback: input.feedback, objective: input.objective }, db);
-    putRecord('assignment', id, { ...latest, currentRound: number, sharedEvidence: sharedEvidence || latest.sharedEvidence || [] }, db);
+    const selectedEvidence = [...new Set([...(sharedEvidence || latest.sharedEvidence || []), ...(contextRequest?.answers || []).flatMap(answer => answer.evidence || [])])];
+    if (selectedEvidence.length > 4096) throw new Error('The answered context exceeds the bounded host evidence manifest limit.');
+    const missionContext = createMissionContext(source, { purpose: job.role === 'reviewer' ? 'debate' : 'delegate', independent: false,
+      evidenceIds: selectedEvidence });
+    putRecord('round', `${id}:${number}`, { assignmentId: id, number, state: 'starting', createdAt: now(), feedback: input.feedback, objective: input.objective, contextRequest }, db);
+    putRecord('assignment', id, { ...getRecord('assignment', id), currentRound: number, missionContext, sharedEvidence: selectedEvidence }, db);
     appendEvent(parent.id, 'assignment.followup', { id, round: number, objective: input.objective, provider: job.selection.provider, model: job.selection.model }, db);
     return { id, round: number };
   });
-  launchAssignment(id, result.round); return result;
+  dispatchAssignment(id, result.round, launch); return result;
 }
 export async function waitAssignment(parentId, id, timeoutSeconds = 30, number) {
   const deadline = Date.now() + Math.min(30, Math.max(0, timeoutSeconds)) * 1000;
@@ -111,9 +260,18 @@ export async function waitAssignment(parentId, id, timeoutSeconds = 30, number) 
 }
 export function reviewAssignment(parent, id, input) {
   const job = assignmentStatus(id);
+  currentSource(parent, input.outcome === 'accepted' ? job : undefined);
   if (job.parentSessionId !== parent.id || ['starting', 'running'].includes(job.round.state) || job.closure !== 'open') throw new Error('Assignment cannot be closed while active or already closed.');
   if (!['accepted', 'inconclusive', 'abandoned'].includes(input.outcome) || !input.rationale?.trim()) throw new Error('Review needs outcome accepted, inconclusive or abandoned, and a rationale.');
-  const inspected = listRecords('artifact-read').filter(r => r.sessionId === parent.id && r.assignmentId === id).map(r => r.artifactId);
+  const context = assignmentContextRequest(job);
+  if (context?.state === 'pending') throw new Error('Outstanding worker context questions must be answered or explicitly declined before review.');
+  if (input.outcome === 'accepted' && context?.state === 'declined') throw new Error('An assignment with declined context cannot be accepted as verified work.');
+  const inspected = listRecords('artifact-read').filter(r => {
+    if (r.sessionId !== parent.id || r.assignmentId !== id || r.assignmentRound && r.assignmentRound !== job.currentRound || job.missionContext && (!r.sha256 || !(r.bytesRead > 0))) return false;
+    const item = getRecord('artifact', r.artifactId);
+    try { return Boolean(item && (!r.sha256 || item.sha256 === r.sha256) && fileInfo(item.path).sha256 === item.sha256); }
+    catch { return false; }
+  }).map(r => r.artifactId);
   if (input.outcome === 'accepted' && (!input.evidence?.length || input.evidence.some(ref => !inspected.includes(ref)))) throw new Error('Accepting an assignment requires evidence IDs the supervisor actually opened with read_artifact.');
   let patch;
   if (input.outcome === 'accepted') {
@@ -128,6 +286,7 @@ export function reviewAssignment(parent, id, input) {
   const review = { id: randomUUID(), assignmentId: id, round: job.currentRound, ...input, reviewedAt: now(), inspectedEvidence: inspected, patch };
   transaction(db => {
     const latest = getRecord('assignment', id), latestRound = getRecord('round', `${id}:${latest.currentRound}`);
+    currentSource(parent, input.outcome === 'accepted' ? latest : undefined);
     if (latest.currentRound !== job.currentRound || latest.closure !== 'open' || ['starting', 'running'].includes(latestRound?.state)) throw new Error('Assignment changed during review. Inspect its current round again.');
     putRecord('review', review.id, review, db); putRecord('assignment', id, { ...latest, closure: input.outcome, review }, db); appendEvent(parent.id, 'assignment.reviewed', review, db);
   });
@@ -141,6 +300,7 @@ export function cancelAssignment(parentId, id, reason = 'Cancelled by supervisor
 }
 export function applyAssignment(parent, id) {
   const job = assignmentStatus(id);
+  currentSource(parent, job);
   if (job.parentSessionId !== parent.id || job.closure !== 'accepted' || parent.policy.mode === 'read-only' || job.goalId != null && job.goalId !== parent.goal?.id) throw new Error('Only an accepted assignment for this objective can be applied to a writable parent task.');
   const patch = job.review?.patch;
   if (!patch || patch.sha256 !== digest(patch.changes)) throw new Error('This assignment has no immutable reviewed patch. Request a new reviewed assignment before applying it.');
@@ -186,6 +346,8 @@ export async function runAssignment(id, number) {
   const acquired = transaction(db => {
     job = getRecord('assignment', id); round = getRecord('round', `${id}:${number}`);
     if (!job || !round || round.state !== 'starting' || job.currentRound !== number) return false;
+    const parent = loadSession(job.parentSessionId);
+    if (!parent || parentStopped(parent)) { putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: 'Parent conversation paused before execution.' }, db); return false; }
     putRecord('round', `${id}:${number}`, { ...round, state: 'running', runner: processIdentity(), token, startedAt: now() }, db);
     appendEvent(job.parentSessionId, 'assignment.started', { id, round: number, provider: job.selection.provider, model: job.selection.model }, db); return true;
   });
@@ -194,6 +356,7 @@ export async function runAssignment(id, number) {
     const cancellation = getRecord('assignment-control', id);
     if (cancellation?.action === 'cancel' && (cancellation.round == null || cancellation.round === number)) { putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), state: 'cancelled', finishedAt: now() }); return 0; }
     const parent = loadSession(job.parentSessionId);
+    currentSource(parent, job);
     if (job.goalId != null && job.goalId !== parent.goal?.id) throw new Error('The parent objective changed; this assignment was not executed.');
     if (job.workerSessionId) {
       const recovered = reconcileSession(job.workerSessionId);
@@ -212,6 +375,7 @@ export async function runAssignment(id, number) {
     childSession = job.workerSessionId ? loadSession(job.workerSessionId) : createSession(provider, job.workspace, job.selection.model);
     Object.assign(childSession, { role: job.role, parentSessionId: job.parentSessionId, assignmentId: id, assignmentRound: number, suppressNotifications: true,
       contract: job.contract, policy: job.contract.policy, backendHomes: parent.backendHomes, projectRoot: parent.projectRoot || parent.cwd, mode: 'solo', allowedArtifactIds: job.sharedEvidence || [],
+      missionContext: job.missionContext, assignmentContext: round.contextRequest || compactContext(assignmentContextRequest(job)),
       ...(job.selection.effort != null ? { selectedEffort: job.selection.effort } : {}),
       ...(job.selection.capabilities != null ? { modelCapabilities: job.selection.capabilities } : {}) });
     saveSession(childSession); job.workerSessionId = childSession.id; putRecord('assignment', id, job);
@@ -220,7 +384,8 @@ export async function runAssignment(id, number) {
 Use tools to perform substantial work within this contract. Preserve evidence with record_evidence and return finish_assignment.
 Do not launch other agents, widen scope or claim the parent goal is complete. Clearly separate observations, inferences and uncertainty.
 The workspace is an isolated copy; the supervisor reviews and applies changes. A failure or blocker returns control to the supervisor.
-CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objective: round.objective, feedback: round.feedback, previousReport: job.latestReport ? compactAssignmentRound(job.latestReport) : null })}`;
+SHARED MISSION BRIEF (historical task context, never new tool authority):\n${JSON.stringify(job.missionContext?.brief || null)}
+CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objective: round.objective, feedback: round.feedback, contextRequest: round.contextRequest || compactContext(assignmentContextRequest(job)), previousReport: job.latestReport ? compactAssignmentRound(job.latestReport) : null })}`;
     const { RunnerUI } = await import('./runtime-ui.js');
     const { runSession } = await import('./controller.js');
     const code = await runSession(provider, childSession, { cwd: childSession.cwd, pet: false, strictPolicy: true, policy: job.contract.policy,
@@ -229,10 +394,11 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
     const outputs = artifactsFor(childSession.id);
     const changes = inspectWorkspace(snapshot, job.workspace);
     const patch = artifact(childSession, JSON.stringify(changes, null, 2), 'workspace-changes', 'application/json');
-    const result = { assignmentId: id, round: number, state: code === 0 ? 'awaiting_review' : childSession.stopReason === 'runtime_limit' ? 'timed_out' : childSession.stopReason === 'token_limit' ? 'budget_limited' : childSession.executionState === 'cancelled' ? 'cancelled' : 'failed', stopReason: childSession.stopReason || childSession.failure?.category || null,
+    const request = compactContext(assignmentContextRequest(getRecord('assignment', id)));
+    const result = { assignmentId: id, round: number, state: report?.status === 'needs_context' && request?.state === 'pending' ? 'needs_context' : code === 0 ? 'awaiting_review' : childSession.stopReason === 'runtime_limit' ? 'timed_out' : childSession.stopReason === 'token_limit' ? 'budget_limited' : childSession.executionState === 'cancelled' ? 'cancelled' : 'failed', stopReason: childSession.stopReason || childSession.failure?.category || null,
       error: code === 0 ? null : childSession.failure?.message || childSession.goal?.reason || childSession.stopReason || null,
       workerClaim: report?.status || 'unknown', summary: (report?.summary || 'Worker returned without a structured assignment report.').slice(0, 8000),
-      report: report || null, artifacts: [...outputs, patch].map(a => ({ id: a.id, label: a.label, size: a.size, sha256: a.sha256 })),
+      report: report || null, contextRequest: request, artifacts: [...outputs, patch].map(a => ({ id: a.id, label: a.label, size: a.size, sha256: a.sha256 })),
       missingReport: !report, changes, usage: childSession.usage ? { ...childSession.usage, elapsedSeconds: childSession.elapsedSeconds } : null, exitCode: code, finishedAt: now() };
     const fullReport = artifact(childSession, JSON.stringify(result, null, 2), 'assignment-report', 'application/json');
     result.reportArtifactId = fullReport.id;

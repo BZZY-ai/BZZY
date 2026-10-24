@@ -132,12 +132,13 @@ export class CodexEngine {
 
   async open() {
     if (this.rpc && !this.rpc.closed) return;
-    if (this.options.toolHost && this.session.coreSkillsProtocol !== 2) {
+    this.closing = null;
+    if (this.options.toolHost && this.session.coreSkillsProtocol !== 3) {
       if (this.session.engineThreadId) {
         this.session.engineThreadId = null;
         this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
       }
-      this.session.coreSkillsProtocol = 2;
+      this.session.coreSkillsProtocol = 3;
     }
     const installed = version('codex');
     assertCodexVersion(installed);
@@ -369,7 +370,12 @@ export class CodexEngine {
     this.settle();
   }
 
-  async close() { await this.rpc?.close(); this.session.backendProcess = null; }
+  async close() {
+    // Stop's kill grace and finally cleanup may both close the same native
+    // transport. One close owns its TERM/KILL timers and process identity.
+    this.closing ||= this.rpc?.close() || Promise.resolve();
+    await this.closing; this.session.backendProcess = null;
+  }
 
   async steer(text) {
     const turnId = [...this.activeTurns][0];

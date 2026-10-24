@@ -85,7 +85,7 @@ test('free-text completion accepts intact observation snapshots after cleanup wh
   session.contract.artifacts = [{ path: 'source.txt' }];
   result = await assessCompletion(session);
   assert.equal(result.passed, false, 'a required deliverable cannot be replaced by a snapshot');
-  assert.equal(result.requirements[0].passed, true);
+  assert.equal(result.requirements[0].passed, false, 'a changed declared contract requires a current assessment');
   session.contract.artifacts = [];
   fs.writeFileSync(path.join(dir, 'source.txt'), 'changed observation');
   result = await assessCompletion(session);

@@ -136,10 +136,10 @@ test('debate opens only when independent reports contain a usable conclusion and
   assert.equal(stopped.passed, false); assert.equal(stopped.usable, 0); assert.match(stopped.reasons.join('\n'), /inconclusive|timed_out|blocked/);
 });
 
-test('resolved objections permit immediate agreement while missing dispositions remain unresolved', () => {
+test('resolved objections require inspected evidence while missing dispositions remain unresolved', () => {
   const reports = [{ report: { objections: [{ id: 'severity', claim: 'Severity should be Medium.' }] } }];
   const resolved = assessObjectionDispositions(reports, { remainingObjections: [], objectionDispositions: [{ id: 'severity', status: 'accepted', rationale: 'Severity corrected to Medium.' }] });
-  assert.equal(resolved.complete, true); assert.deepEqual(resolved.unresolved, []);
+  assert.equal(resolved.complete, false); assert.ok(resolved.unresolved.length, 'a model-written acceptance without evidence cannot resolve an objection');
   const missing = assessObjectionDispositions(reports, { remainingObjections: [], objectionDispositions: [] });
   assert.equal(missing.complete, false); assert.match(missing.unresolved[0], /no main-agent disposition/);
 });

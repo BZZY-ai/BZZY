@@ -77,7 +77,7 @@ test('debating a chat freezes the final reply without replacing the original thr
   assert.ok(debate.session.contract.constraints.includes('Keep the original source intact'));
   assert.equal(debate.session.contract.limits.runtimeSeconds, 60);
   const selected = getRecord('artifact', debate.options.artifact);
-  assert.match(fs.readFileSync(selected.path, 'utf8'), /ASSISTANT REPLY\nThe ownership claim is unverified/);
+  assert.equal(JSON.parse(fs.readFileSync(selected.path, 'utf8')).achievedClaim, 'The ownership claim is unverified.');
   assert.doesNotMatch(fs.readFileSync(selected.path, 'utf8'), /Looking at/);
   assert.equal(latestReply(source.id).text, 'The ownership claim is unverified.');
   const decision = { acceptedConclusions: [], rejectedClaims: [], corrections: [], remainingObjections: ['Needs independent evidence'], nextVerificationSteps: [] };

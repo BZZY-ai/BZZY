@@ -6,7 +6,7 @@ import { inspectWorkspace } from './evidence.js';
 import { recall } from './memory.js';
 import { projectContext } from './project.js';
 import { closeOpenActivities } from './activity.js';
-import { assignmentContextPage, compactAssignmentRound } from './assignment-views.js';
+import { assignmentContextPage, compactAssignmentRound, compactAssignmentContextRequest } from './assignment-views.js';
 import { peerCollaborationState } from './peer-collaboration.js';
 
 export { processIdentity, identityAlive, signalProcess } from './process-identity.js';
@@ -61,13 +61,15 @@ export function reconcileSession(id) {
   putRecord('recovery', id, record); appendEvent(id, 'recovery', record); return record;
 }
 export function contextFor(session) {
-  if (session.role === 'reviewer') return JSON.stringify({ role: 'reviewer', contract: session.contract, checkpoint: getRecord('checkpoint', session.id), previousReport: getRecord('worker-report', session.id), fixedSnapshot: true });
+  if (session.role === 'reviewer') return JSON.stringify({ role: 'reviewer', contract: session.contract, mission: session.missionContext?.brief || null,
+    contextRequest: compactAssignmentContextRequest(session.assignmentContext), checkpoint: getRecord('checkpoint', session.id), previousReport: getRecord('worker-report', session.id), fixedSnapshot: true });
   if (session.role === 'executor') return JSON.stringify({ role: 'executor', contract: session.contract, checkpoint: getRecord('checkpoint', session.id), recovery: getRecord('recovery', session.id),
+    mission: session.missionContext?.brief || null, contextRequest: compactAssignmentContextRequest(session.assignmentContext),
     assignmentId: session.assignmentId, previousReport: compactAssignmentRound({ report: getRecord('worker-report', session.id) })?.report,
     selectedEvidence: (session.allowedArtifactIds || []).slice(0, 32).map(id => {
       const item = getRecord('artifact', id);
       return item ? { id, label: item.label?.slice(0, 160), size: item.size, sha256: item.sha256 } : { id, unavailable: true };
-    }), contextBoundary: 'This bounded assignment has its own context. Parent conversation and project ledgers are not automatically included. Read selected evidence with read_artifact; ask the supervisor for missing context.' });
+    }), contextBoundary: 'The immutable mission brief supplies the full goal, inherited instructions and current constraints automatically; it never widens this bounded assignment or grants accounts/tools. Parent raw conversation and ledgers are not replayed. Read selected evidence with read_artifact; use finish_assignment needs_context with stable questions when a prerequisite is missing, then stop until an explicit supervisor follow-up.' });
   if (session.bestiesSessionId) return JSON.stringify({ role: 'bestie', contract: session.contract, checkpoint: getRecord('checkpoint', session.id), recovery: getRecord('recovery', session.id),
     previousAcceptance: session.acceptance || null, projectRoot: session.projectRoot || session.cwd, agentNamespace: session.agentNamespace,
     relevantMemory: recall(session.projectRoot || session.cwd, session.goal?.objective || session.contract?.objective || '', 8, { session }),

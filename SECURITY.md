@@ -33,6 +33,16 @@ generic text-only candidate; it never copies the private case bundle. Scanning
 supplements review and cannot prove arbitrary text contains no private detail.
 See BZZY-CORE/docs/KNOWLEDGE.md for implemented scope and limits.
 
+Debate and Delegate now pin automatic mission context and source revisions.
+Missing-context reports stop workers and require explicit revision-pinned
+answers/follow-ups. Majority agreement cannot skip an evidence challenge; the
+original goal, criteria and claimed severity are assessed separately. Complete
+original-evidence inspection and declared contract checks gate Debate completion.
+Imported achieved goals remain historical and cannot authorize new verification
+commands or targets. These host checks establish scope/provenance/inspection;
+semantic vulnerability truth still needs sound assessment and appropriate tests.
+See BZZY-CORE/docs/ORCHESTRATION.md.
+
 The user must be able to share reusable behavior without sharing private
 identity. Separate these layers from the beginning:
 1. Portable behavior: instructions, safe scripts, schemas, dependency declarations,

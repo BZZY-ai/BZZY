@@ -28,7 +28,7 @@ export function artifact(session, text, label = 'report', mediaType = 'text/plai
   privateDir(dir);
   const file = path.join(dir, `${id}.txt`);
   fs.writeFileSync(file, text, { mode: 0o600, flag: 'wx' });
-  const result = { id, sessionId: session.id, projectRoot: session.projectRoot || session.cwd, label, path: file, mediaType, ...fileInfo(file), createdAt: now(), provenance: 'host-recorded' };
+  const result = { id, sessionId: session.id, ...(session.goal?.id ? { goalId: session.goal.id } : {}), projectRoot: session.projectRoot || session.cwd, label, path: file, mediaType, ...fileInfo(file), createdAt: now(), provenance: 'host-recorded' };
   if (label !== 'agent-output' && !label.startsWith('http-response:') && !['executor', 'reviewer'].includes(session.role) && session.policy?.mode !== 'read-only') {
     const namespace = session.agentNamespace ? path.join('agents', session.agentNamespace) : '';
     const projectPath = path.join(session.projectRoot || session.cwd, '.bzzy', namespace, 'evidence', `${id}.txt`);
