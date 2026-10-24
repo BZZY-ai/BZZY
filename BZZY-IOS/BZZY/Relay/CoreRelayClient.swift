@@ -20,9 +20,10 @@ import Foundation
         let continuation: CheckedContinuation<CoreJSONValue, Error>
         let timer: Task<Void, Never>
     }
-    private struct Subscription { var cursor: Int64; var delivered: Set<Int64> = [] }
+    private struct Subscription { var cursor: Int64; var delivered: Set<Int64> = []; var deliveredEvents: [CoreEvent] = [] }
     private var pending: [String: Pending] = [:]
     private var subscriptions: [String: Subscription] = [:]
+    private var inputActor: String?
 
     init(transport: RelayTransport, hostID: String, grantID: String, resource: String, expectedShareKind: RelayShareKind = .terminal) {
         self.hostID = hostID; self.grantID = grantID; self.resource = resource
@@ -105,8 +106,11 @@ import Foundation
         case "events":
             guard let subID = frame["subscriptionId"].string, var subscription = subscriptions[subID], let sessionID else { throw CoreApplicationError("INVALID_CURSOR") }
             let batch = try CoreEventBatch(frame, resource: resource, sessionID: sessionID, cursor: subscription.cursor)
-            guard subscription.delivered.isEmpty else { throw CoreApplicationError("INVALID_CURSOR") }
-            subscription.delivered = Set(batch.events.map(\.seq)); subscriptions[subID] = subscription
+            if !subscription.delivered.isEmpty {
+                guard subscription.deliveredEvents == batch.events else { throw CoreApplicationError("INVALID_CURSOR") }
+            }
+            subscription.delivered = Set(batch.events.map(\.seq)); subscription.deliveredEvents = batch.events; subscriptions[subID] = subscription
+            try acceptInputReceipts(batch)
             onEvents?(batch)
         case "subscription.closed":
             try frame.record(["v", "protocol", "type", "subscriptionId", "resource", "code"])
@@ -122,6 +126,26 @@ import Foundation
         connected = false; subscriptions.removeAll()
         let abandoned = pending; pending.removeAll()
         for row in abandoned.values { row.timer.cancel(); row.continuation.resume(throwing: CoreApplicationError("UNCERTAIN")) }
+    }
+
+    private func acceptInputReceipts(_ batch: CoreEventBatch) throws {
+        guard let inputActor else { return }
+        for event in batch.events where ["input.accepted", "message.user"].contains(event.type) {
+            let proof = event.type == "input.accepted" ? event.data : event.data["channel"]
+            guard proof["actor"].string == inputActor,
+                  let id = proof["requestId"].string, let row = pending[id], row.params["coordinateInput"]?.bool == true,
+                  ["execution.execute", "task.submit", "question.answer", "permissions.set", "control.request"].contains(row.op) else { continue }
+            var result = event.type == "input.accepted" ? event.data["result"].object ?? [:]
+                : ["sessionId": .string(event.sessionId), "executionId": event.data["executionId"]]
+            result["state"] = .string("accepted")
+            if row.op == "task.submit" {
+                guard let taskID = proof["taskId"].string else { continue }
+                result = ["state": .string("accepted"), "taskId": .string(taskID)]
+            }
+            let receipt = CoreJSONValue.object(result)
+            try acceptResult(receipt, op: row.op, params: row.params)
+            finish(id, result: .success(receipt))
+        }
     }
 
     private func acceptResult(_ result: CoreJSONValue, op: String, params: [String: CoreJSONValue]) throws {
@@ -154,6 +178,7 @@ import Foundation
             if result["execution"] != .null { guard result["execution"]["sessionId"].string == id else { throw CoreApplicationError("FORBIDDEN") } }
             if result["inputOwner"] != .null { guard result["inputOwner"]["sessionId"].string == id else { throw CoreApplicationError("FORBIDDEN") } }
             sessionID = id
+            inputActor = result["capabilities"]["inputSubmission"].bool == true ? result["capabilities"]["inputActor"].string : nil
         case "events.subscribe":
             try result.record(["subscriptionId", "consumerId", "processedCursor"])
             guard let subID = result["subscriptionId"].string, result["consumerId"].string == params["consumerId"]?.string,
@@ -166,7 +191,7 @@ import Foundation
                   let cursor = result["processedCursor"].integer, cursor == params["seq"]?.integer else { throw CoreApplicationError("INVALID_CURSOR") }
             // Repeating the already processed cursor must not consume a newer
             // outstanding batch; Core preserves that batch in the same case.
-            if cursor > sub.cursor { sub.cursor = cursor; sub.delivered = [] }
+            if cursor > sub.cursor { sub.cursor = cursor; sub.delivered = []; sub.deliveredEvents = [] }
             subscriptions[subID] = sub
         case "events.unsubscribe":
             try result.record(["unsubscribed"])

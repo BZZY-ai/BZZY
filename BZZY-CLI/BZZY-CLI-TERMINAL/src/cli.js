@@ -13,7 +13,7 @@ import { checkConnections } from './connection-check.js';
 import { UI } from './ui.js';
 import { Pet } from './mascot.js';
 import { NotificationHub } from './notifications.js';
-import { executeManaged, viewSession, attachSession, changeSessionModel } from './runtime-client.js';
+import { executeManaged, submitManagedGoal, viewSession, attachSession, changeSessionModel } from './runtime-client.js';
 import { ensureRuntime, runtimeInfo, runtimeRequest } from './runtime.js';
 import { agentChoice } from './delegation.js';
 import { readContextFile } from './task.js';
@@ -399,8 +399,7 @@ async function chat(provider, options, ui, existingSession) {
           await goalControl(objective || 'status', session.id, { ...options, provider: session.provider, inChat: true }, ui);
           session = findSession(session.id);
         } else {
-          startConversationGoal(session, options, objective);
-          await executeManaged(provider, session, options, ui, session.goal.objective, { goal: true });
+          await submitManagedGoal(session, options, ui, objective);
         }
       } else if (input.startsWith('/')) throw new Error('Unknown command. Use /help.');
       else {

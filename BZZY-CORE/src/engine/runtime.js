@@ -21,6 +21,7 @@ import { sandboxSupport } from './policy.js';
 import { diagnosticError } from './diagnostic-error.js';
 import { CorePushWorker } from '../push/worker.js';
 import { terminalYolo } from './terminal-permissions.js';
+import { submitSessionInput } from './session-input.js';
 import { HostMetricsSampler } from './host-metrics.js';
 
 const runtimeBuild = digest(['src', 'assets', 'bin'].flatMap(directory => fs.readdirSync(path.join(root, directory), { recursive: true })
@@ -141,7 +142,7 @@ export async function serveRuntime() {
       if (request.method === 'GET' && pathname === '/health') { send(response, 200, { ok: true, identity, runtimeBuild, environment, version: '0.2.0', apiVersion: 1, codexBaseline: '0.162.0' }); return; }
       if (request.method === 'GET' && pathname === '/metrics') { send(response, 200, metrics.read()); return; }
       if (request.method === 'GET' && pathname === '/schema') { send(response, 200, readJson(path.join(root, 'assets', 'events.schema.json'))); return; }
-      if (request.method === 'GET' && pathname === '/capabilities') { send(response, 200, { apiVersion: 1, managedExecutions: true, durableEvents: true, idempotentCommands: true,
+      if (request.method === 'GET' && pathname === '/capabilities') { send(response, 200, { apiVersion: 1, managedExecutions: true, durableEvents: true, idempotentCommands: true, inputSubmission: true,
         scopedSessionAccess: true, revocableAccess: true, permissions: access?.permissions || sessionPermissions,
         isolation: { platform: process.platform, enforcedPolicies: sandboxSupport(), backendReadConfidentiality: false }, relay: false, portableSharing: false }); return; }
       if (request.method === 'GET' && pathname === '/sessions') { send(response, 200, listRecords('session').filter(s => access ? s.id === access.sessionId : !s.parentSessionId)); return; }
@@ -158,7 +159,7 @@ export async function serveRuntime() {
         send(response, 200, revokeSessionAccess(pathname.split('/')[2])); return;
       }
       if (request.method === 'POST' && pathname === '/shutdown') { if (!rootToken) { send(response, 403, { error: 'Only the local owner can stop the runtime.' }); return; } send(response, 200, { stopped: true, runningAgentsContinue: true }); setImmediate(() => shutdown()); return; }
-      const match = pathname.match(/^\/sessions\/([a-f0-9-]{36})(?:\/(events|usage|activities|traffic|claim|release|execute|control|answer))?$/);
+      const match = pathname.match(/^\/sessions\/([a-f0-9-]{36})(?:\/(events|usage|activities|traffic|claim|release|execute|control|answer|input))?$/);
       if (!match) { send(response, 404, { error: 'Unknown endpoint.' }); return; }
       const [, id, action] = match, session = loadSession(id);
       if (access && !accessAllows(access, id)) { send(response, 403, { error: 'This token belongs to another session.' }); return; }
@@ -211,6 +212,20 @@ export async function serveRuntime() {
       }
       if (request.method !== 'POST') { send(response, 405, { error: 'Method not allowed.' }); return; }
       const body = await readBody(request);
+      if (action === 'input') {
+        if (access && (body.preparedGoalId !== undefined || body.operation === 'execute' && body.goal === true)) throw Object.assign(new Error('Scoped goals must use the canonical goal submission operation.'), { status: 403 });
+        if (access && (body.environment !== undefined || body.options != null && (typeof body.options !== 'object' || Array.isArray(body.options) || Object.keys(body.options).length))) throw Object.assign(new Error('Scoped input uses saved host execution settings.'), { status: 403 });
+        if (access && access.includeChildren === false && ['parallel', 'besties', 'debate'].includes(session.mode)) throw Object.assign(new Error('Group input requires the approved child-session scope.'), { status: 403 });
+        const requestId = request.headers['idempotency-key'] || body.requestId;
+        const { requestId: ignored, ...input } = body;
+        const info = { url: `http://127.0.0.1:${server.address().port}`, token: request.headers.authorization.slice(7) };
+        const result = await submitSessionInput(id, input, requestId, { principal, authorize: permission => {
+          if (quiescing || operatorStopRequested()) throw Object.assign(new Error('Core was stopped by its owner.'), { code: 'CORE_STOPPED', status: 409 });
+          requireAccess(permission);
+        },
+          request: (method, suffix = '', data, key) => runtimeRequest(info, method, `/sessions/${id}${suffix ? '/' + suffix : ''}`, data ? { ...data, owner: body.owner } : undefined, key) });
+        send(response, 202, result); return;
+      }
       requireAccess(action === 'control' ? body.action : action === 'release' ? 'claim' : action);
       if (access && access.includeChildren === false && ['parallel', 'besties', 'debate'].includes(session.mode) && (action === 'execute' || action === 'control' || action === 'claim' && body.takeover)) throw Object.assign(new Error('Group controls require a grant that includes child sessions.'), { status: 403 });
       if (action === 'claim') {
@@ -323,7 +338,7 @@ export async function serveRuntime() {
   process.removeListener('SIGTERM', shutdown); process.removeListener('SIGINT', shutdown); unlock(); return 0;
 }
 export async function runtimeRequest(info, method, endpoint, body, requestId) {
-  if (method === 'POST' && /\/execute$/.test(endpoint)) body = { ...body, environment: body?.environment || captureEnvironment() };
+  if (method === 'POST' && (/\/execute$/.test(endpoint) || /\/input$/.test(endpoint) && ['execute', 'goal'].includes(body?.operation))) body = { ...body, environment: body?.environment || captureEnvironment() };
   const retryable = method === 'GET' || Boolean(requestId) || /\/(claim|release)$/.test(endpoint);
   for (let attempt = 0; ; attempt++) {
     let response, value;

@@ -409,6 +409,7 @@ test('unknown protocol operations and remote environment/options/URL injection f
     const reply = await f.rpc(paired, 'execution.execute', { owner: 'phone', prompt: 'Do not execute', [field]: {} });
     assert.equal(reply.error.code, 'INVALID_REQUEST');
   }
+  assert.equal((await f.rpc(paired, 'execution.execute', { owner: 'phone', prompt: 'Do not execute', coordinateInput: 'yes' })).error.code, 'INVALID_REQUEST');
   assert.equal((await f.rpc(paired, 'session.get', {}, { extra: { v: 2 } })).error.code, 'PROTOCOL_UNSUPPORTED');
   assert.equal(listRecords('execution').length, 0);
 });
@@ -438,12 +439,14 @@ test('mobile slash goals require replacement confirmation and complete through t
   const f = await fixture(t), session = f.createSession(), paired = await f.pair(session.id, controls), owner = 'phone-goal';
   prepareTask(session, {}, 'Old goal'); session.goal = newGoal('Old goal'); session.acceptance = { passed: true };
   putRecord('session', session.id, session);
-  assert.equal((await f.rpc(paired, 'input.claim', { owner })).ok, true);
+  await f.rpc(paired, 'session.get');
+  await runtimeRequest(runtimeInfo(), 'POST', `/sessions/${session.id}/claim`, { owner: 'cli-streaming' });
   assert.equal((await f.rpc(paired, 'session.get')).result.capabilities.goalSubmission, true);
-  const input = { owner, prompt: '/goal Entirely new objective' };
+  const input = { owner, prompt: '/goal Entirely new objective', coordinateInput: true };
   const denied = await f.rpc(paired, 'execution.execute', input);
   assert.equal(denied.error?.code, 'CONFIRMATION_REQUIRED');
   assert.equal(listRecords('execution', { sessionId: session.id }).length, 0);
+  assert.equal((await f.core.session(session.id)).inputOwner.owner, 'cli-streaming');
   const id = randomUUID(), confirmed = { ...input, replaceGoalId: session.goal.id };
   const first = await f.rpc(paired, 'execution.execute', confirmed, { id });
   assert.equal(first.ok, true, JSON.stringify(first));
@@ -459,6 +462,31 @@ test('mobile slash goals require replacement confirmation and complete through t
   const notifications = listRecords('outbox').filter(item => item.event.sessionId === session.id && item.event.type === 'goal.completed');
   assert.equal(notifications.length, 1); assert.equal(notifications[0].event.objective, changed.goal.objective);
   assert.equal(listRecords('execution', { sessionId: session.id }).length, 1);
+});
+
+test('resubscribing before an ACK replays the exact pending frame without waiting for expiration', async t => {
+  const f = await fixture(t), session = f.createSession(), paired = await f.pair(session.id);
+  appendEvent(session.id, 'text', { text: 'A saved reply that must survive reconnect.' });
+  const frame = () => new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { paired.peer.removeListener('message', receive); reject(new Error('No replayed frame')); }, 2000);
+    const receive = message => {
+      if (message.payload.type !== 'events') return;
+      clearTimeout(timeout); paired.peer.removeListener('message', receive); resolve(message.payload);
+    };
+    paired.peer.on('message', receive);
+  });
+  const firstFrame = frame();
+  const first = await f.rpc(paired, 'events.subscribe', { consumerId: 'same-device-cache' });
+  const delivered = await firstFrame;
+  // Simulate a phone that saved the frame but lost its ACK during suspension.
+  const replayFrame = frame();
+  const next = await f.rpc(paired, 'events.subscribe', { consumerId: 'same-device-cache' });
+  assert.equal(next.result.subscriptionId, first.result.subscriptionId);
+  const replayed = await replayFrame;
+  assert.deepEqual(replayed.events, delivered.events);
+  assert.equal(replayed.nextCursor, delivered.nextCursor);
+  const ack = await f.rpc(paired, 'events.ack', { subscriptionId: next.result.subscriptionId, seq: replayed.nextCursor });
+  assert.equal(ack.result.processedCursor, delivered.nextCursor);
 });
 
 test('only the full own phone can change terminal YOLO and accept its exact pending approval idempotently', async t => {

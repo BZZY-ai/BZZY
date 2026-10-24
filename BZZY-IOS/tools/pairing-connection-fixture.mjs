@@ -31,11 +31,14 @@ putRecord('core.update.preferences', 'default', { monitoringEnabled: false });
 const store = new RelayStore(), host = createIdentity();
 store.provisionHost(host.certificate);
 const relay = await startRelay({ store, allowInsecureLocal: true });
-let metricsFailure = false, metricsFailures = 0;
+let metricsFailure = false, metricsFailures = 0, inputClaimRequests = 0;
 const gateway = new RelayGateway({ identity: host, url: relay.audience, allowInsecureLocal: true,
   clientFactory: options => {
     const client = new RelayClient(options), metricsRequests = new Set(), send = client.send.bind(client);
-    client.on('message', data => { if (data.payload.op === 'host.metrics') metricsRequests.add(data.payload.id); });
+    client.on('message', data => {
+      if (data.payload.op === 'host.metrics') metricsRequests.add(data.payload.id);
+      if (data.payload.op === 'input.claim') inputClaimRequests++;
+    });
     client.send = (grantId, payload) => {
       if (payload.type === 'response' && metricsRequests.delete(payload.id) && metricsFailure) {
         metricsFailures++;
@@ -47,7 +50,7 @@ const gateway = new RelayGateway({ identity: host, url: relay.audience, allowIns
     return client;
   } });
 const core = new BzzyCore();
-let phone, session, stopping = false, cliTask, closeCLI, cliOwner, cliReady = false, cliClosed = false;
+let phone, session, stopping = false, cliTask, closeCLI, cliOwner, cliReady = false, cliClosed = false, cliFinished = false, cliMode = '', cliText = '';
 
 async function stop() {
   if (stopping) return;
@@ -89,33 +92,36 @@ async function handle(input) {
       return { pendingCount: gateway.pendingPairings().length, activeGrants: gateway.status().activeGrants,
         subscriptions: gateway.status().subscriptions, gateway: gateway.status().gateway,
         coordinatorConfigured: new CoreAssistant().settings().configured, executionCount: listRecords('execution').length,
-        metricsFailures, cliReady };
+        metricsFailures, cliReady, cliFinished, cliMode, inputClaimRequests };
     case 'goal-seed': {
       prepareTask(session, {}, 'Previous unfinished goal'); session.goal = newGoal('Previous unfinished goal');
       session.acceptance = { passed: true }; putRecord('session', session.id, session);
       return { goalID: session.goal.id };
     }
     case 'goal-state': {
-      const current = listRecords('session').find(row => row.id === session.id), jobs = listRecords('execution');
+      const current = listRecords('session').find(row => row.id === session.id), jobs = listRecords('execution').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       return { goalID: current.goal?.id, objective: current.goal?.objective, status: current.goal?.status,
         goalExecution: jobs[0]?.goal, executionCount: jobs.length,
         inputHeldByCLI: Boolean(cliOwner && getRecord('input-owner', session.id)?.owner === cliOwner),
+        cliFinished, cliMode, cliText, latestExecution: jobs.at(-1) ? { state: jobs.at(-1).state, prompt: jobs.at(-1).prompt, exitCode: jobs.at(-1).exitCode, error: jobs.at(-1).error } : null,
         notificationCount: listRecords('outbox').filter(row => row.event.type === 'goal.completed').length };
     }
     case 'cli-attach': {
       if (cliTask) throw new Error('CLI_ALREADY_ATTACHED');
       let signalReady;
       const ready = new Promise(resolve => { signalReady = resolve; });
-      const ui = { interactive: true, cursors: new Map(), setSession() {}, updateSession() {}, event() {},
+      const ui = { interactive: true, cursors: new Map(), setSession(_id, mode) { if (mode) cliMode = mode; }, updateSession() {}, event(type, data) { if (type === 'text') cliText += data.text || ''; },
         ask() {
           if (cliClosed) return Promise.resolve(null);
           cliReady = true; signalReady();
           return new Promise(resolve => { closeCLI = resolve; ui.reader = { close: () => resolve(null) }; });
         } };
-      cliTask = attachSession(session, {}, ui);
+      cliTask = attachSession(session, {}, ui).finally(() => { cliFinished = true; });
+      void cliTask.catch(() => {});
       await Promise.race([ready, cliTask.then(() => { throw new Error('CLI_DID_NOT_ATTACH'); })]);
+      cliOwner = ui.permissionConnection.owner;
+      await runtimeRequest(runtimeInfo(), 'POST', `/sessions/${session.id}/input`, { operation: 'control', owner: cliOwner, action: 'pause' }, randomUUID());
       const snapshot = await runtimeRequest(runtimeInfo(), 'GET', `/sessions/${session.id}`);
-      cliOwner = snapshot.inputOwner?.owner;
       return { attached: cliReady, ownsInput: snapshot.inputOwner != null };
     }
     case 'cli-close': {
@@ -124,6 +130,10 @@ async function handle(input) {
       closeCLI(null); await cliTask;
       const snapshot = await runtimeRequest(runtimeInfo(), 'GET', `/sessions/${session.id}`);
       return { closed: true, ownsInput: snapshot.inputOwner != null };
+    }
+    case 'cli-send': {
+      if (!closeCLI || cliFinished || cliClosed) throw new Error('CLI_NOT_ATTACHED');
+      closeCLI(input.text); return { sent: true };
     }
     case 'metrics-failure': metricsFailure = true; return { enabled: true };
     case 'voice-configure':

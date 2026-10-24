@@ -125,6 +125,9 @@ struct LiveSessionDetailsView: View {
                         if let directory = session.directory { Text(directory).bzzyFont(12, design: .monospaced).textSelection(.enabled) }
                         Text("Execution: \(session.execution)").bzzyFont(13)
                         if let goal = session.goalStatus { Text("Goal: \(goal)").bzzyFont(13) }
+                        if relay.coreInputSubmission {
+                            Text("Live session · Core coordinates input").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+                        } else {
                         Text("Permissions: \(session.permissions.sorted().joined(separator: ", "))").bzzyFont(12)
                         Text(relay.coreOwnsInput ? "Input: this device" : session.inputOwner == nil ? "Input: available" : "Input: another client").bzzyFont(12)
                         if relay.corePermissions.contains("claim") {
@@ -134,6 +137,7 @@ struct LiveSessionDetailsView: View {
                         }
                         if relay.corePermissions.contains("takeover") && !relay.coreOwnsInput {
                             Button("Take over input") { confirmTakeover = true }.disabled(!relay.coreConnected)
+                        }
                         }
                         HStack(spacing: 20) {
                             if relay.corePermissions.contains("pause") {

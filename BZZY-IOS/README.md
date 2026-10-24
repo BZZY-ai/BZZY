@@ -6,17 +6,16 @@ Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen
 
 Open [BZZY.xcodeproj](BZZY.xcodeproj), select **BZZY** and an iPhone simulator, then Run. Simulator runs use Xcode’s local signing; do not disable signing when testing Keychain. For a physical iPhone, select your Apple development team. Push notifications require a push-enabled App ID and a matching provisioning profile. Debug uses the development APNs environment; Release uses production.
 
-The current verified device installation is **Debug 0.1.0 (10)**, installed in place
-and launched on the connected iPhone 15 Pro Max. The device reports build 10;
-development APNs metadata, privacy declarations and the signed artifact passed
-validation. No uninstall or data reset was performed. Build 10 fixes input handoff
-when confirming a goal replacement while CLI still owns the session. Build 9
-added canonical goal dispatch, the green command chip and replacement
-confirmation alongside build 8’s chat
-permission controls. Update the host separately through CLI before goal
-submission or YOLO is available. The actual phone approval interaction remains a manual
-check. TestFlight is deferred. The CLI updater installs host CLI/Core updates;
-iPhone app changes require a separately built and installed iOS binary.
+Build **Debug 0.1.0 (11)** adds Core-coordinated input, persistent outgoing
+message states and explicit Retry. CLI/Core must also be updated through the CLI
+updater to enable this path. The iPhone binary is built and installed separately;
+the CLI updater does not replace iOS. Builds 9–10 introduced goal submission and
+replacement confirmation; build 11 replaces their client lease handling with
+Core-owned admission. TestFlight is deferred.
+
+The signed build 11 passed the development APNs/privacy/signature artifact
+checks and was installed in place on the connected iPhone. Automatic launch
+was blocked by the device lock; opening the installed app remains a device check.
 
 Build 7 previously added send-on-release, fluid 64-band audio, independent
 speech-language settings and alias-only terminal rows to build 6's animated
@@ -47,22 +46,34 @@ Existing local drafts remain labelled inactive. Samples and demo sessions are li
 
 ## Chat and response formatting
 
-Build 9 displays `/goal` as a separate green command chip while composing;
-the objective remains editable and removing the chip preserves its text.
-Sending `/goal <objective>` enters Core's goal lifecycle and notification path.
-If another goal is active, verifying or paused, **Replace current goal?** offers
-No/Yes before submission. Confirmation is bound to the exact goal ID; a newer
-goal cannot be silently overwritten. Build 10 uses this same confirmation to
-transfer session input to the iPhone using its existing host-approved takeover
-permission, so CLI can remain open. There is no second permission dialog. No
-keeps the existing goal and input owner; a grant without takeover permission
-cannot take control from another client. Resume uses Core's saved
-checkpoint operation. Update the host through CLI first; older Core versions
-reject goal submission locally with an update message instead of sending chat.
-Validation covers 55 passing native Swift tests and a passing simulator UI test
-for continued typing and chip removal. The signed development app and privacy/
-APNs metadata also passed artifact checks; no production push delivery is claimed
-by these isolated fixtures.
+The top-left heading reads **BZZY** in the shared strong celeste accent.
+The native composer highlights `/goal` inline in green while keeping one text
+editor, selection and keyboard. Sending `/goal <objective>` enters Core's goal
+lifecycle and durable notification path. If another goal is active, verifying or
+paused, **Replace current goal?** offers No/Yes; confirmation binds to that exact
+goal ID. No preserves the existing goal and input. Resume uses the saved checkpoint.
+
+With updated Core, iPhone streams the session and submits explicit input through
+Core's admission coordinator. No preclaim/lease-renewal loop or second permission
+dialog is needed. Existing host-approved claim/takeover/execute permissions are
+still enforced. CLI stays open and receives the same reply; either client can
+continue by sending its next input. Old Core retains its legacy lease controls.
+
+Outgoing messages appear gray while sending and turn teal after authenticated
+Core admission. Failed/uncertain messages offer **Retry**. Private local storage
+preserves their exact request IDs and parameters across backgrounding/relaunch.
+Retry first reconciles the receipt; uncertain delivery uses the original ID,
+while a definitive rejection permits a new ID. Reconnect never sends messages
+automatically. A matching Core event can confirm admission if the response was
+lost, and event replay cannot create duplicate chat bubbles. Admission does not
+mean the execution or goal succeeded. See [Core's input contract](../BZZY-CORE/docs/SESSION-INPUT.md).
+
+Validation includes a real loopback Relay/Core and attached CLI, bidirectional
+handoff across the former renewal intervals, exact-ID retries, scope denial,
+reply replay and native keyboard checks. These isolated fixtures do not claim
+production APNs delivery. All 61 native Swift tests, model/format checks and the
+simulator typing/deleting `/goal` keyboard test passed. The separate denied
+Retry check also passed without executing work or taking the existing input.
 
 Build 8 adds a gray **YOLO OFF** / pink **YOLO ON** control to live terminal chats,
 using the same Core-owned permission setting as CLI. Enabling it while a request

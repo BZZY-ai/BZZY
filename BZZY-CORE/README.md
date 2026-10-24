@@ -12,6 +12,10 @@ the same engine and private state.
 
 Implemented:
 
+- Central session input admission for CLI and iOS, with authenticated handoff,
+  durable request deduplication and uninterrupted reply observation. Clients
+  submit explicit input without preclaiming a lease; see [shared input](docs/SESSION-INPUT.md).
+
 - Own-phone voice conversations use Core's independent default assistant and
   managed folder through encrypted text-only requests, durable acceptance and
   read-only reply recovery. Apple Speech/TTS remain in iOS; see [voice](docs/VOICE.md).

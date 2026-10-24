@@ -183,6 +183,8 @@ public final class RelayConnection {
     public private(set) var coreYoloEnabled = false
     public private(set) var coreYoloControl = false
     public private(set) var coreGoalSubmission = false
+    public private(set) var coreInputSubmission = false
+    private var coreInputActor: String?
     public private(set) var coreGoalID: String?
     public private(set) var coreGoalStatus: String?
     @ObservationIgnored private var recentCoreShares: [String: CoreShareReference] = [:]
@@ -195,6 +197,8 @@ public final class RelayConnection {
     @ObservationIgnored private var catalogEntries: [CoreJSONValue] = []
     @ObservationIgnored private var coreOfferedPermissions: Set<String> = []
     @ObservationIgnored private var coreRefreshEpoch = UUID()
+    @ObservationIgnored private var sessionReadID: UUID?
+    @ObservationIgnored private var sessionReadAgain = false
     @ObservationIgnored private var inputRenewalEpoch = UUID()
     @ObservationIgnored private var pollingEpoch = UUID()
 
@@ -217,9 +221,12 @@ public final class RelayConnection {
     public private(set) var coreSessionID = ""
     public private(set) var coreIsAssistant = false
     public private(set) var corePermissions: Set<String> = []
-    public private(set) var coreOwnsInput = false
+    private var inputLease = CoreInputLeaseState()
+    public var coreOwnsInput: Bool { inputLease.ownerID != nil }
+    public var coreInputStatus: String? { inputLease.viewing ? "Viewing · Send to continue here" : nil }
     public private(set) var coreBusy = false
     public private(set) var coreError: String?
+    public private(set) var coreOutgoingMessages: [CoreOutgoingMessage] = []
     public private(set) var coreCommandStatus = ""
     public private(set) var coreCommandUncertain = false
     public private(set) var coreTaskStatus = ""
@@ -231,7 +238,6 @@ public final class RelayConnection {
     @ObservationIgnored private var coreStarting = false
     @ObservationIgnored private var coreRefresh: Task<Void, Never>?
     @ObservationIgnored private var inputRenewal: Task<Void, Never>?
-    @ObservationIgnored private var claimedOwnerID: String?
     @ObservationIgnored private var lastCommandAccepted = false
 
     public let networkingEnabled: Bool
@@ -606,6 +612,9 @@ public final class RelayConnection {
                     try projection.apply(batch)
                     self.publishCoreEvents()
                     _ = try await client.request("events.ack", params: ["subscriptionId": .string(batch.subscriptionId), "seq": .number(Double(batch.nextCursor))])
+                    if batch.events.contains(where: { ["goal.completed", "goal.stalled", "execution.finished"].contains($0.type) }) {
+                        await self.refreshCore()
+                    }
                 } catch {
                     guard self.coreClient === client else { return }
                     self.stopCore(purge: false)
@@ -643,12 +652,12 @@ public final class RelayConnection {
         coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
         coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
         coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
+        coreInputSubmission = snapshot["capabilities"]["inputSubmission"].bool == true
+        coreInputActor = snapshot["capabilities"]["inputActor"].string
         coreGoalID = snapshot["session"]["goal"]["id"].string
         coreGoalStatus = snapshot["session"]["goal"]["status"].string
         corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
-        if let claimedOwnerID, snapshot["inputOwner"]["owner"].string != claimedOwnerID {
-            coreOwnsInput = false; self.claimedOwnerID = nil; inputRenewal?.cancel(); inputRenewal = nil
-        }
+        if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: inputLease.generation) { stopInputRenewal() }
         onCoreSnapshot?(try JSONEncoder().encode(snapshot)); publishCoreEvents()
         if coreSubscriptionID == nil, let projection = coreProjection {
             let subscription = try await client.request("events.subscribe", params: ["consumerId": .string(projection.consumerID)])
@@ -1252,6 +1261,7 @@ public final class RelayConnection {
 
     private func publishCoreEvents() {
         guard let projection = coreProjection else { return }
+        coreOutgoingMessages = projection.outgoing
         onCoreEvents?(projection.events.compactMap { try? JSONEncoder().encode($0) })
     }
 
@@ -1265,18 +1275,20 @@ public final class RelayConnection {
         coreAgentImportSnapshot = nil
         coreAgentImportRecoveredAgent = nil
         coreRefreshEpoch = UUID(); coreRefresh?.cancel(); coreRefresh = nil
-        inputRenewalEpoch = UUID(); inputRenewal?.cancel(); inputRenewal = nil
+        sessionReadID = nil; sessionReadAgain = false
+        stopInputRenewal()
         coreClient?.onEvents = nil; coreClient?.onSubscriptionClosed = nil
         if coreClient !== catalogClient || !preserveCatalog { coreClient?.disconnected() }
         coreClient = nil
         if !preserveCatalog { pushRegistrationHash = nil }
         if !preserveCatalog { catalogClient?.disconnected(); catalogClient = nil; coreCatalogReady = false }
         coreCommandUncertain = state.pendingCoreCommand != nil || state.pendingAgentCommand != nil
-        coreConnected = false; coreOwnsInput = false; claimedOwnerID = nil
+        coreConnected = false; inputLease.reset()
         coreSubscriptionID = nil; corePermissions = []; coreIsAssistant = false; coreSharingAllowed = false; coreIsAgent = false
         coreYoloEnabled = false; coreYoloControl = false
-        coreGoalSubmission = false; coreGoalID = nil; coreGoalStatus = nil
+        coreGoalSubmission = false; coreInputSubmission = false; coreInputActor = nil; coreGoalID = nil; coreGoalStatus = nil
         if purge {
+            coreOutgoingMessages = []
             confirmedCorePair = false; state.corePairValidated = false
             do {
                 var scopes = state.coreCacheScopes ?? []
@@ -1390,7 +1402,16 @@ public final class RelayConnection {
 
     public func refreshCore() async {
         guard coreConnected, let client = coreClient else { return }
+        if sessionReadID != nil { sessionReadAgain = true; return }
+        let readID = UUID(); sessionReadID = readID
+        defer {
+            if sessionReadID == readID {
+                sessionReadID = nil
+                if sessionReadAgain { sessionReadAgain = false; Task { [weak self] in await self?.refreshCore() } }
+            }
+        }
         let generation = coreHealth.generation
+        let leaseGeneration = inputLease.generation
         do {
             let snapshot = try await client.request("session.get")
             guard coreClient === client else { return }
@@ -1400,13 +1421,13 @@ public final class RelayConnection {
             coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
             coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
             coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
+            coreInputSubmission = snapshot["capabilities"]["inputSubmission"].bool == true
+            coreInputActor = snapshot["capabilities"]["inputActor"].string
             coreGoalID = snapshot["session"]["goal"]["id"].string
             coreGoalStatus = snapshot["session"]["goal"]["status"].string
             corePermissions.formIntersection(Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []))
             onCoreSnapshot?(try JSONEncoder().encode(snapshot))
-            if let claimedOwnerID, snapshot["inputOwner"]["owner"].string != claimedOwnerID {
-                coreOwnsInput = false; self.claimedOwnerID = nil; inputRenewal?.cancel(); inputRenewal = nil
-            }
+            if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: leaseGeneration) { stopInputRenewal() }
             await reconcileCoreCommand()
             guard coreClient === client else { return }
             if let taskID = state.taskID, coreIsAssistant {
@@ -1423,34 +1444,39 @@ public final class RelayConnection {
         }
     }
 
-    /// Observation never claims input. Call after an explicit send/control/takeover action.
+    /// Only explicit user actions acquire input. Renewal never takes over and
+    /// its outcome cannot disconnect event observation or overwrite a new claim.
     public func claimCoreInput(takeover: Bool = false) async -> Bool {
         guard coreActionsAvailable, corePermissions.contains("claim"), !takeover || corePermissions.contains("takeover"),
               let client = coreClient, let projection = coreProjection else { return false }
+        stopInputRenewal()
+        let generation = inputLease.beginClaim()
         do {
             let lease = try await client.request("input.claim", params: ["owner": .string(projection.ownerID), "takeover": .bool(takeover)])
             guard coreActionsAvailable, coreClient === client, coreProjection === projection,
-                  state.host?.certificate.id == client.hostID, coreResource == client.resource, !suspended else { return false }
-            claimedOwnerID = lease["owner"].string
-            coreOwnsInput = claimedOwnerID != nil
-            coreError = nil
-            scheduleInputRenewal()
-            return coreOwnsInput
+                  state.host?.certificate.id == client.hostID, coreResource == client.resource, !suspended,
+                  let owner = lease["owner"].string, inputLease.accept(owner: owner, at: generation) else { return false }
+            coreError = nil; scheduleInputRenewal()
+            return true
         } catch {
-            guard coreClient === client else { return false }
-            coreOwnsInput = false; claimedOwnerID = nil
-            coreError = "Input is unavailable or owned by another client. Explicit takeover requires host permission."
+            guard coreClient === client, inputLease.fail(at: generation, viewing: (error as? CoreApplicationError)?.code == "CONFLICT") else { return false }
+            coreError = (error as? CoreApplicationError)?.code == "CONFLICT"
+                ? "Another client controls input. This phone can still read the conversation."
+                : "Core could not confirm input control. Your draft is preserved."
             return false
         }
     }
 
     public func releaseCoreInput() async {
-        inputRenewal?.cancel(); inputRenewal = nil
-        guard coreActionsAvailable else { coreOwnsInput = false; claimedOwnerID = nil; return }
-        guard let client = coreClient, let projection = coreProjection else { return }
-        defer { if coreClient === client { coreOwnsInput = false; claimedOwnerID = nil } }
+        stopInputRenewal(); inputLease.reset()
+        guard coreActionsAvailable, let client = coreClient, let projection = coreProjection else { return }
+        let generation = inputLease.generation
         do { _ = try await client.request("input.release", params: ["owner": .string(projection.ownerID)]) }
-        catch { if coreClient === client { coreError = "Release was not confirmed. The input lease expires automatically." } }
+        catch { if coreClient === client, generation == inputLease.generation { coreError = "Release was not confirmed. The input lease expires automatically." } }
+    }
+
+    private func stopInputRenewal() {
+        inputRenewalEpoch = UUID(); inputRenewal?.cancel(); inputRenewal = nil
     }
 
     private func scheduleInputRenewal() {
@@ -1460,8 +1486,21 @@ public final class RelayConnection {
             defer { if self?.inputRenewalEpoch == epoch { self?.inputRenewal = nil } }
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(15)) } catch { return }
-                guard let self, self.inputRenewalEpoch == epoch, self.coreConnected, self.coreOwnsInput, !self.suspended else { return }
-                guard await self.claimCoreInput() else { return }
+                guard let self, self.inputRenewalEpoch == epoch, self.coreConnected, !self.suspended,
+                      !self.inputLease.claimPending, let owner = self.inputLease.ownerID,
+                      let client = self.coreClient, let projection = self.coreProjection else { return }
+                let generation = self.inputLease.generation
+                do {
+                    let lease = try await client.request("input.claim", params: ["owner": .string(projection.ownerID), "takeover": .bool(false)])
+                    guard self.inputRenewalEpoch == epoch, self.coreClient === client, self.inputLease.generation == generation else { return }
+                    guard lease["owner"].string == owner else { self.inputLease.fail(at: generation, viewing: true); return }
+                } catch {
+                    guard self.inputRenewalEpoch == epoch, self.coreClient === client else { return }
+                    self.inputLease.fail(at: generation, viewing: true)
+                    // A lost input lease is a control transition, not a failed
+                    // response. History, subscription and goal work remain live.
+                    return
+                }
             }
         }
     }
@@ -1483,13 +1522,10 @@ public final class RelayConnection {
             }
             var params: [String: CoreJSONValue] = ["prompt": .string(objective), "goal": .bool(true)]
             if let replaceGoalID { params["replaceGoalId"] = .string(replaceGoalID) }
-            // The replacement confirmation is the explicit control handoff.
-            // Core still requires this device's existing takeover grant.
-            return await mutateCore("execution.execute", params: params,
-                takeover: replaceGoalID != nil && corePermissions.contains("takeover"))
+            return await mutateCore("execution.execute", params: params, outgoingText: text)
         }
         return await mutateCore(coreIsAssistant ? "task.submit" : "execution.execute",
-            params: [coreIsAssistant ? "instruction" : "prompt": .string(text)])
+            params: [coreIsAssistant ? "instruction" : "prompt": .string(text)], outgoingText: text)
     }
 
     @discardableResult public func answerCoreQuestion(_ id: String, answer: String, sessionID: String? = nil) async -> Bool {
@@ -1524,21 +1560,31 @@ public final class RelayConnection {
         return await mutateCore("execution.execute", params: ["prompt": .string("Continue the existing goal."), "goal": .bool(true), "resumeGoal": .bool(true)])
     }
 
-    private func mutateCore(_ op: String, params: [String: CoreJSONValue], takeover: Bool = false) async -> Bool {
+    private func mutateCore(_ op: String, params: [String: CoreJSONValue], outgoingText: String? = nil) async -> Bool {
         guard !coreBusy, coreActionsAvailable, !coreCommandUncertain, state.pendingCoreCommand == nil,
               let client = coreClient, let projection = coreProjection, let hostID = state.host?.certificate.id else { return false }
         let resource = coreResource
         coreBusy = true; coreError = nil; lastCommandAccepted = false
         defer { coreBusy = false }
-        if takeover || !coreOwnsInput, !(await claimCoreInput(takeover: takeover)) { return false }
+        if !coreInputSubmission {
+            guard await claimCoreInput(takeover: corePermissions.contains("takeover")) else { return false }
+        } else {
+            stopInputRenewal(); inputLease.reset()
+        }
         guard coreClient === client, coreProjection === projection, state.host?.certificate.id == hostID,
               coreResource == resource, coreActionsAvailable, !suspended else { return false }
         var params = params; params["owner"] = .string(projection.ownerID)
+        if coreInputSubmission { params["coordinateInput"] = .bool(true) }
         let pending = PendingCoreCommand(hostID: hostID, resource: resource,
             id: CoreRelayClient.commandID(), op: op, params: params)
         do {
             state.pendingCoreCommand = pending
             try save() // Persist exact request identity and parameters before any dispatch.
+            if let outgoingText {
+                var outgoing = CoreOutgoingMessage(id: pending.id, text: outgoingText, operation: op, params: params)
+                outgoing.actor = coreInputActor
+                try projection.putOutgoing(outgoing); publishCoreEvents()
+            }
         } catch {
             state.pendingCoreCommand = nil; coreError = "Command could not be saved securely; nothing was sent."; return false
         }
@@ -1553,17 +1599,77 @@ public final class RelayConnection {
                   state.host?.certificate.id == pending.hostID, coreResource == pending.resource else { return false }
             guard receipt["state"].string == "accepted" else { throw RelayFailure("UNCERTAIN") }
             if let taskID = receipt["taskId"].string { state.taskID = taskID }
+            try await updateOutgoing(pending, status: .accepted, receipt: receipt)
             try clearSavedCoreCommand(expectedID: pending.id)
             coreCommandUncertain = false; lastCommandAccepted = true; coreCommandStatus = "Accepted by Core; awaiting outcome"
             await refreshCore()
             return true
         } catch {
             guard coreClient === client, state.pendingCoreCommand?.id == pending.id else { return false }
+            try? await updateOutgoing(pending, status: .uncertain)
             coreCommandUncertain = true
-            coreCommandStatus = "Command status uncertain. Reconcile before sending more."
+            coreCommandStatus = "Checking delivery with Core…"
             await reconcileCoreCommand()
             return lastCommandAccepted
         }
+    }
+
+    private func updateOutgoing(_ command: PendingCoreCommand, status: CoreOutgoingMessage.Status,
+                                receipt: CoreJSONValue = .null, errorCode: String? = nil) async throws {
+        guard let projection = coreProjection, command.resource == coreResource,
+              command.hostID == state.host?.certificate.id,
+              var message = projection.outgoing.first(where: { $0.requestID == command.id }) else { return }
+        message.status = status; message.errorCode = errorCode
+        if let execution = receipt["executionId"].string { message.executionID = execution }
+        if message.executionID == nil, let taskID = receipt["taskId"].string, let client = coreClient,
+           let task = try? await client.request("task.get", params: ["taskId": .string(taskID)]), coreProjection === projection {
+            message.executionID = task["execution"]["id"].string
+        }
+        guard coreProjection === projection else { return }
+        try projection.putOutgoing(message); publishCoreEvents()
+    }
+
+    /// Manual retry first reconciles the saved receipt. Unknown delivery reuses
+    /// the exact ID; a new ID is permitted only after definitive rejection.
+    public func retryOutgoingMessage(_ id: String, replacementGoalID: String? = nil) async {
+        guard !coreBusy, coreActionsAvailable, let projection = coreProjection,
+              let hostID = state.host?.certificate.id,
+              let original = projection.outgoing.first(where: { $0.id == id }), original.status != .accepted,
+              state.pendingCoreCommand == nil || state.pendingCoreCommand?.id == original.requestID else { return }
+        coreBusy = true; defer { coreBusy = false }
+        do {
+            if state.pendingCoreCommand == nil {
+                state.pendingCoreCommand = PendingCoreCommand(hostID: hostID, resource: coreResource,
+                    id: original.requestID, op: original.operation, params: original.params)
+                try save()
+            }
+            await reconcileCoreCommand()
+            guard coreProjection === projection, coreActionsAvailable,
+                  var message = projection.outgoing.first(where: { $0.id == id }), message.status != .accepted else { return }
+            if state.pendingCoreCommand == nil {
+                // Core explicitly rejected it; the old ID must never be reused
+                // with edited content or an updated goal confirmation.
+                message.requestID = CoreRelayClient.commandID()
+                if let replacementGoalID { message.params["replaceGoalId"] = .string(replacementGoalID) }
+                else if !CoreGoalDraft.needsReplacement(status: coreGoalStatus) { message.params.removeValue(forKey: "replaceGoalId") }
+                state.pendingCoreCommand = PendingCoreCommand(hostID: hostID, resource: coreResource,
+                    id: message.requestID, op: message.operation, params: message.params)
+                try save()
+            }
+            guard let command = state.pendingCoreCommand else { return }
+            message.status = .sending; message.errorCode = nil
+            try projection.putOutgoing(message); publishCoreEvents()
+            if !coreInputSubmission { guard await claimCoreInput(takeover: corePermissions.contains("takeover")) else { return } }
+            _ = await dispatchCore(command)
+        } catch { coreError = "Retry could not be saved. Your message is preserved." }
+    }
+
+    public func removeFailedOutgoingMessage(_ id: String) {
+        guard let projection = coreProjection,
+              let message = projection.outgoing.first(where: { $0.id == id }), message.status == .failed,
+              state.pendingCoreCommand?.id != message.requestID else { return }
+        do { try projection.removeFailedOutgoing(id); publishCoreEvents() }
+        catch { coreError = "The failed message could not be removed from this device." }
     }
 
     private func clearSavedCoreCommand(expectedID: String) throws {
@@ -1585,16 +1691,21 @@ public final class RelayConnection {
             switch result["state"].string {
             case "accepted":
                 if let taskID = result["acceptance"]["taskId"].string { state.taskID = taskID }
+                try await updateOutgoing(pending, status: .accepted, receipt: result["acceptance"])
                 try clearSavedCoreCommand(expectedID: pending.id)
                 coreCommandUncertain = false; lastCommandAccepted = true; coreCommandStatus = "Accepted by Core; awaiting outcome"
             case "rejected":
+                try await updateOutgoing(pending, status: .failed, errorCode: result["code"].string)
                 try clearSavedCoreCommand(expectedID: pending.id)
                 coreCommandUncertain = false; coreCommandStatus = "Rejected by Core"
                 if result["code"].string == "CONFIRMATION_REQUIRED" || result["code"].string == "CONFLICT" {
-                    coreError = "The current goal or input owner changed. Refresh, review it, then send again."
+                    coreError = result["code"].string == "CONFIRMATION_REQUIRED"
+                        ? "The goal changed. Confirm its replacement before retrying."
+                        : "Core could not apply that input. Your message is saved; retry or edit it."
                     await refreshCore()
                 }
             default:
+                try await updateOutgoing(pending, status: .uncertain)
                 coreCommandStatus = "Command \(result["state"].string ?? "uncertain"). No automatic retry."
             }
         } catch {
@@ -1607,7 +1718,7 @@ public final class RelayConnection {
     public func retryCoreCommand() async {
         guard !coreBusy, coreActionsAvailable, let pending = state.pendingCoreCommand, let client = coreClient else { return }
         coreBusy = true; defer { coreBusy = false }
-        if !coreOwnsInput, !(await claimCoreInput()) { return }
+        if !coreInputSubmission { guard await claimCoreInput(takeover: corePermissions.contains("takeover")) else { return } }
         guard coreActionsAvailable, coreClient === client, state.pendingCoreCommand?.id == pending.id,
               coreResource == pending.resource, state.host?.certificate.id == pending.hostID else { return }
         _ = await dispatchCore(pending)
@@ -1648,7 +1759,10 @@ public final class RelayConnection {
         attempts += 1
         reconnect = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-            guard let self, !self.suspended else { return }
+            guard let self, !self.suspended, !Task.isCancelled else { return }
+            // connect cancels a scheduled retry. Detach the running attempt first
+            // so it cannot cancel its own handshake or authorization requests.
+            self.reconnect = nil
             await self.connect()
         }
     }

@@ -59,7 +59,7 @@ export class UI {
   async toggleYolo() {
     const tui = this.tui, id = this.sessionId;
     if (!this.interactive || !id || !tui || tui.selection || tui.renderingPicker || tui.hidden || tui.promptDraft || this.privateView) return false;
-    if (this.sessionMode === 'VIEW' || this.readOnlyExecution || tui.executionPolicy?.mode === 'read-only') { tui.notice('YOLO is unavailable in read-only mode.', true); return false; }
+    if (this.sessionMode === 'VIEW' && !this.permissionConnection?.acquire || this.readOnlyExecution || tui.executionPolicy?.mode === 'read-only') { tui.notice('YOLO is unavailable in read-only mode.', true); return false; }
     if (this.coreLifecycleInterrupted || this.permissionSubmitting) return false;
     this.permissionSubmitting = true; tui.schedule();
     try {
@@ -74,7 +74,7 @@ export class UI {
   }
   async answerApproval(answer) {
     const question = this.tui?.pendingApproval;
-    if (!question || question.kind !== 'approval' || !['yes', 'no'].includes(answer) || this.sessionMode === 'VIEW' || !this.onAnswerApproval || this.tui.approvalSubmitting) return;
+    if (!question || question.kind !== 'approval' || !['yes', 'no'].includes(answer) || this.sessionMode === 'VIEW' && !this.permissionConnection?.acquire || !this.onAnswerApproval || this.tui.approvalSubmitting) return;
     this.tui.approvalSubmitting = true; this.tui.schedule();
     try { await this.onAnswerApproval(question, answer); }
     catch (error) { this.tui.notice(error.message, true); }

@@ -11,6 +11,7 @@ export class BzzyClient {
   metrics() { return this.request('GET', '/v1/metrics'); }
   sessions() { return this.request('GET', '/sessions'); }
   session(id) { return this.request('GET', `/sessions/${id}`); }
+  submitInput(id, { requestId, ...input }) { return this.request('POST', `/sessions/${id}/input`, input, requestId); }
   usage(id) { return this.request('GET', `/sessions/${id}/usage`); }
   activities(id, { after = '', limit = 100 } = {}) { return this.request('GET', `/sessions/${id}/activities?after=${encodeURIComponent(after)}&limit=${limit}`); }
   traffic(id, { after = '', limit = 100 } = {}) { return this.request('GET', `/sessions/${id}/traffic?after=${encodeURIComponent(after)}&limit=${limit}`); }

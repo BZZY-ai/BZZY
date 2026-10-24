@@ -13,6 +13,7 @@ public final class CoreEventProjectionStore {
         let ownerID: String
         var cursor: Int64
         var events: [CoreEvent]
+        var outgoing: [CoreOutgoingMessage]?
     }
     private var saved: Saved
     private let file: URL
@@ -22,6 +23,7 @@ public final class CoreEventProjectionStore {
     public var cursor: Int64 { saved.cursor }
     public var consumerID: String { saved.consumerID }
     public var ownerID: String { saved.ownerID }
+    public var outgoing: [CoreOutgoingMessage] { saved.outgoing ?? [] }
 
     public init(directory: URL, hostID: String, resource: String, sessionID: String) throws {
         file = try Self.fileURL(directory: directory, hostID: hostID, resource: resource, sessionID: sessionID)
@@ -32,13 +34,25 @@ public final class CoreEventProjectionStore {
             if FileManager.default.fileExists(atPath: file.path) {
                 let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
                 guard (attributes[.size] as? NSNumber)?.intValue ?? Int.max <= maximumBytes else { throw CoreApplicationError("PROJECTION_CAPACITY") }
-                let existing = try JSONDecoder().decode(Saved.self, from: Data(contentsOf: file))
+                var existing = try JSONDecoder().decode(Saved.self, from: Data(contentsOf: file))
                 guard existing.version == 1, existing.hostID == hostID, existing.resource == resource,
                       existing.sessionID == sessionID, existing.cursor >= 0, existing.events.count <= maximumEvents else { throw CoreApplicationError("PROJECTION_UNAVAILABLE") }
                 try CoreApplicationProtocol.opaque(existing.consumerID); try CoreApplicationProtocol.opaque(existing.ownerID)
                 var previous: Int64 = 0
                 for event in existing.events { try event.validate(sessionID: sessionID); guard event.seq > previous else { throw CoreApplicationError("PROJECTION_UNAVAILABLE") }; previous = event.seq }
                 guard previous == existing.cursor else { throw CoreApplicationError("PROJECTION_UNAVAILABLE") }
+                let outgoing = existing.outgoing ?? []
+                guard outgoing.count <= 128, Set(outgoing.map(\.id)).count == outgoing.count else { throw CoreApplicationError("PROJECTION_UNAVAILABLE") }
+                for message in outgoing {
+                    guard ["execution.execute", "task.submit"].contains(message.operation), UUID(uuidString: message.id) != nil,
+                          !message.text.isEmpty, message.text.utf8.count <= 16 * 1024 else { throw CoreApplicationError("PROJECTION_UNAVAILABLE") }
+                    _ = try CoreApplicationProtocol.request(op: message.operation, params: message.params, id: message.requestID, resource: resource)
+                }
+                existing.outgoing = existing.outgoing?.map { message in
+                    var recovered = message
+                    if recovered.status == .sending { recovered.status = .uncertain }
+                    return recovered
+                }
                 saved = existing
             } else { try persist(saved) }
         } catch let error as CoreApplicationError { throw error }
@@ -57,7 +71,38 @@ public final class CoreEventProjectionStore {
             else { guard event.seq > next.cursor else { throw CoreApplicationError("INVALID_CURSOR") }; next.events.append(event); next.cursor = event.seq }
         }
         guard batch.events.last?.seq == batch.nextCursor, next.events.count <= maximumEvents else { throw CoreApplicationError("PROJECTION_CAPACITY") }
+        pruneDelivered(&next)
         try persist(next); saved = next
+    }
+
+    public func putOutgoing(_ message: CoreOutgoingMessage) throws {
+        guard ["execution.execute", "task.submit"].contains(message.operation), UUID(uuidString: message.id) != nil,
+              !message.text.isEmpty, message.text.utf8.count <= 16 * 1024 else { throw CoreApplicationError("INVALID_REQUEST") }
+        _ = try CoreApplicationProtocol.request(op: message.operation, params: message.params, id: message.requestID, resource: saved.resource)
+        var next = saved
+        var messages = next.outgoing ?? []
+        if let index = messages.firstIndex(where: { $0.id == message.id }) { messages[index] = message }
+        else { guard messages.count < 128 else { throw CoreApplicationError("PROJECTION_CAPACITY") }; messages.append(message) }
+        next.outgoing = messages; pruneDelivered(&next)
+        try persist(next); saved = next
+    }
+
+    public func removeFailedOutgoing(_ id: String) throws {
+        var next = saved
+        next.outgoing = next.outgoing?.filter { $0.id != id || $0.status != .failed }
+        try persist(next); saved = next
+    }
+
+    private func pruneDelivered(_ value: inout Saved) {
+        let delivered = Set(value.events.filter { $0.type == "message.user" }.compactMap { $0.data["executionId"].string })
+        value.outgoing = value.outgoing?.filter { message in
+            if let actor = message.actor, value.events.contains(where: {
+                $0.type == "input.accepted" && $0.data["actor"].string == actor && $0.data["requestId"].string == message.requestID
+                || $0.type == "message.user" && $0.data["channel"]["actor"].string == actor && $0.data["channel"]["requestId"].string == message.requestID
+            }) { return false }
+            guard message.status == .accepted, let executionID = message.executionID else { return true }
+            return !delivered.contains(executionID)
+        }
     }
 
     /// Forgetting/revoking a host removes its private local projection. Reusing

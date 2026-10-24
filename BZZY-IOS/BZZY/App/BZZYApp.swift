@@ -108,7 +108,7 @@ struct WorkspaceView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    Text(store.selectedTab.rawValue).bzzyFont(22, weight: .medium)
+                    Text("BZZY").bzzyFont(22, weight: .bold).foregroundStyle(BZZYTheme.accent)
                     Spacer()
                     RoundButton(symbol: "square.and.arrow.down", label: "Import \(store.selectedTab == .agents ? "agent" : "terminal")") {
                         importKind = store.selectedTab == .agents ? .agent : .terminal

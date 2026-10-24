@@ -643,7 +643,9 @@ export class RelayGateway extends EventEmitter {
           questions: snapshot.questions.filter(question => question.sessionId === row.sessionId).map(question => pick(question, ['id', 'sessionId', 'question', 'text', 'kind', 'options', 'createdAt', 'expiresAt'])),
           inputOwner: pick(snapshot.inputOwner, ['owner', 'sessionId', 'expiresAt']),
           capabilities: { activeSteering: Boolean(snapshot.capabilities.activeSteering && row.permissions.includes('steer')),
-            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true,
+            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true, inputSubmission: true,
+            inputOwnedByDevice: snapshot.inputOwner?.principal === `grant:${row.coreGrantId}`,
+            inputActor: digest(`grant:${row.coreGrantId}`),
             durableEvents: true, permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
             relay: true, portableSharing: row.shareAccess === true, shareKind: row.kind === 'agent' ? 'AGENT' : 'TERMINAL' } };
       }
@@ -689,6 +691,21 @@ export class RelayGateway extends EventEmitter {
         }
       }
       const kind = { 'execution.execute': 'execute', 'task.submit': 'execute', 'question.answer': 'answer', 'permissions.set': 'permissions', 'control.request': 'control' }[record.op];
+      const intent = getRecord('input-intent', digest({ sessionId: row.sessionId, principal: `grant:${row.coreGrantId}`, requestId: `relay.${record.id}` }));
+      if (intent?.state === 'accepted') {
+        record = { ...record, state: 'accepted', result: intent.result, reconciledAt: now() };
+        putRecord('core.relay.command', record.id, record);
+      }
+      else if (intent) {
+        const receipt = database().prepare('SELECT response FROM requests WHERE scope=? AND id=?')
+          .get(`${kind}:${row.sessionId}`, `input.${intent.id}`);
+        if (receipt?.response) {
+          const result = JSON.parse(receipt.response);
+          putRecord('input-intent', intent.id, { ...intent, state: 'accepted', result, reconciledAt: now() });
+          record = { ...record, state: 'accepted', result, reconciledAt: now() };
+          putRecord('core.relay.command', record.id, record);
+        }
+      }
       const core = database().prepare('SELECT response FROM requests WHERE scope=? AND id=?').get(`${kind}:${row.sessionId}`, `relay.${record.id}`);
       if (core?.response) {
         record = { ...record, state: 'accepted', result: JSON.parse(core.response), reconciledAt: now() };
@@ -743,7 +760,17 @@ export class RelayGateway extends EventEmitter {
     try {
       const requestId = `relay.${key}`;
       let result;
-      if (request.op === 'task.submit') result = await client.execute(row.sessionId, { owner, prompt: params.instruction, goal: false, resumeGoal: false, requestId });
+      if (params.coordinateInput === true) {
+        const input = request.op === 'task.submit' ? { operation: 'execute', prompt: params.instruction }
+          : request.op === 'execution.execute' ? { operation: params.goal === true ? 'goal' : 'execute',
+            ...(params.goal === true ? { objective: params.prompt } : { prompt: params.prompt }),
+            resumeGoal: params.resumeGoal === true, replaceGoalId: params.replaceGoalId }
+          : request.op === 'question.answer' ? { operation: 'answer', questionId: params.questionId, answer: params.answer }
+          : request.op === 'permissions.set' ? { operation: 'permissions', enabled: params.enabled, questionId: params.questionId }
+          : { operation: 'control', action: params.action, text: params.text };
+        result = await client.submitInput(row.sessionId, { ...input, owner, requestId, clientRequestId: request.id });
+      }
+      else if (request.op === 'task.submit') result = await client.execute(row.sessionId, { owner, prompt: params.instruction, goal: false, resumeGoal: false, requestId });
       else if (request.op === 'execution.execute') {
         const command = parseGoalCommand(params.prompt);
         if (command?.action && command.action !== 'resume') fail('INVALID_REQUEST', 'Use the goal status and pause/cancel controls; supply an objective or /goal resume.');
@@ -800,7 +827,14 @@ export class RelayGateway extends EventEmitter {
   #cursorKey(row, consumerId) { return digest({ hostId: row.hostId, peerId: row.peerId, resource: row.resource, sessionId: row.sessionId, consumerId }); }
   #subscribe(row, consumerId) {
     const key = this.#cursorKey(row, consumerId), existing = [...this.#subscriptions.values()].find(item => item.key === key);
-    if (existing) return { subscriptionId: existing.id, consumerId, processedCursor: existing.cursor };
+    if (existing) {
+      // A reconnected client may have persisted a frame whose ACK was lost.
+      // Replay that exact pending frame instead of waiting for its timeout.
+      if (existing.pending) { existing.pending.replay = true; existing.pending.until = Date.now() + LIMITS.ackTimeoutMs; }
+      clearTimeout(existing.timer);
+      existing.timer = setTimeout(() => { void this.#pump(existing); }, this.#pollIntervalMs);
+      return { subscriptionId: existing.id, consumerId, processedCursor: existing.cursor };
+    }
     if (this.#subscriptions.size >= LIMITS.subscriptions || [...this.#subscriptions.values()].filter(item => item.peerId === row.peerId).length >= LIMITS.subscriptionsPerPeer) fail('CAPACITY', 'Subscription capacity reached.');
     const cursor = getRecord('core.relay.cursor', key)?.seq || 0;
     const subscription = { id: randomUUID(), key, grantId: row.id, peerId: row.peerId, resource: row.resource, consumerId,
@@ -834,16 +868,22 @@ export class RelayGateway extends EventEmitter {
     return { processedCursor: params.seq };
   }
   async #pump(subscription) {
-    if (subscription.closed) return;
+    if (subscription.closed || subscription.pumping) return;
+    subscription.pumping = true;
     try {
       const row = this.#authorize(subscription.grantId, subscription.peerId, subscription.resource);
       if (subscription.pending) {
         if (subscription.pending.until <= Date.now()) fail('INVALID_CURSOR', 'Subscription acknowledgment timed out.');
+        if (subscription.pending.replay) {
+          subscription.pending.replay = false;
+          await this.#send(row, { v: VERSION, protocol: PROTOCOL, type: 'events', subscriptionId: subscription.id,
+            resource: row.resource, sessionId: row.sessionId, ...subscription.pending.page });
+        }
       } else {
         const page = await this.#eventPage(row, subscription.cursor, LIMITS.pageLimit, await this.#clientFor(row));
         if (subscription.closed) return;
         if (page.events.length) {
-          subscription.pending = { sequences: page.events.map(event => event.seq), until: Date.now() + LIMITS.ackTimeoutMs };
+          subscription.pending = { sequences: page.events.map(event => event.seq), until: Date.now() + LIMITS.ackTimeoutMs, page, replay: false };
           await this.#send(row, { v: VERSION, protocol: PROTOCOL, type: 'events', subscriptionId: subscription.id,
             resource: row.resource, sessionId: row.sessionId, ...page });
         }
@@ -856,7 +896,11 @@ export class RelayGateway extends EventEmitter {
           subscriptionId: subscription.id, resource: row.resource, code: errorCode(error) });
       } catch { /* A disconnect/revocation cannot authorize a final disclosure. */ }
     }
-    if (!subscription.closed) subscription.timer = setTimeout(() => { void this.#pump(subscription); }, this.#pollIntervalMs);
+    subscription.pumping = false;
+    if (!subscription.closed) {
+      clearTimeout(subscription.timer);
+      subscription.timer = setTimeout(() => { void this.#pump(subscription); }, this.#pollIntervalMs);
+    }
   }
   #stopSubscription(subscription) {
     subscription.closed = true; clearTimeout(subscription.timer); this.#subscriptions.delete(subscription.id);

@@ -66,6 +66,12 @@ first. Use ↑/↓ and Enter to open the existing chat and history in its origin
 directory; Esc returns without changing it. Rows show the alias, with a directory
 hint only when names repeat. Opening a session never resumes a paused goal or
 starts another execution.
+An open terminal keeps streaming when iPhone submits input; it becomes a viewer
+without closing the chat. Sending the next message routes through Core's shared
+input coordinator using the host's existing authorization. Opening/restoring a
+chat does not claim input, and background lease renewals cannot compete with the
+phone. Read-only `--view` remains read-only. See
+[Core's input contract](../../BZZY-CORE/docs/SESSION-INPUT.md).
 Right-click a named terminal in **Sessions** or **Recent sessions**, or right-click
 the current alias, for **Open terminal** and **Share full context**. **F10**
 (or Shift+F10) opens the same menu for the focused session. Sharing uses the

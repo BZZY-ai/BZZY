@@ -19,9 +19,11 @@ import XCTest
         try CoreJSONValue.object(["v": .number(1), "protocol": .string("bzzy-core"), "type": .string("response"),
             "id": .string(id), "ok": .bool(true), "result": result]).wire()
     }
-    func bind() async throws {
+    func bind(inputActor: String? = nil) async throws {
+        var capabilities: [String: CoreJSONValue] = ["relay": .bool(true), "durableEvents": .bool(true)]
+        if let inputActor { capabilities["inputActor"] = .string(inputActor); capabilities["inputSubmission"] = .bool(true) }
         result = .object(["session": .object(["id": .string(session)]), "execution": .null, "inputOwner": .null,
-            "questions": .array([]), "capabilities": .object(["relay": .bool(true), "durableEvents": .bool(true)])])
+            "questions": .array([]), "capabilities": .object(capabilities)])
         _ = try await client.request("session.get")
     }
     func subscribe() async throws {
@@ -40,6 +42,37 @@ import XCTest
 }
 
 final class CoreApplicationTests: XCTestCase {
+    @MainActor func testAuthoritativeAdmissionEventConfirmsLostRPCWithoutRetryAndRejectsOtherActors() async throws {
+        let h = CoreHarness(timeout: 2_000_000_000)
+        try await h.bind(inputActor: "this-device"); try await h.subscribe()
+        h.result = nil
+        var completed = false
+        let request = Task { @MainActor in
+            defer { completed = true }
+            return try await h.client.request("execution.execute", params: ["owner": .string("phone"), "prompt": .string("Hello"), "coordinateInput": .bool(true)], id: "message-request")
+        }
+        while h.sent.count < 3 { await Task.yield() }
+        let execution = UUID().uuidString
+        func frame(_ seq: Int64, actor: String) throws -> WireValue {
+            var value = h.batch([seq]).object!
+            value["events"] = .array([.object(["version": .number(1), "id": .string("\(h.session):\(seq)"), "seq": .number(Double(seq)),
+                "sessionId": .string(h.session), "type": .string("input.accepted"), "createdAt": .string("2026-10-24T00:00:00Z"),
+                "data": .object(["actor": .string(actor), "requestId": .string("message-request"),
+                    "result": .object(["executionId": .string(execution), "sessionId": .string(h.session)])])])])
+            return try CoreJSONValue.object(value).wire()
+        }
+        let wrongActor = try frame(1, actor: "another-device")
+        try h.client.receive(from: "host", grantID: "grant", payload: wrongActor)
+        try h.client.receive(from: "host", grantID: "grant", payload: wrongActor) // exact pending-frame replay
+        await Task.yield(); XCTAssertFalse(completed)
+        XCTAssertThrowsError(try h.client.receive(from: "host", grantID: "grant", payload: frame(1, actor: "altered")))
+        h.result = .object(["processedCursor": .number(1)])
+        _ = try await h.client.request("events.ack", params: ["subscriptionId": .string("subscription"), "seq": .number(1)])
+        try h.client.receive(from: "host", grantID: "grant", payload: frame(2, actor: "this-device"))
+        let receipt = try await request.value
+        XCTAssertEqual(receipt["executionId"].string, execution)
+        XCTAssertEqual(h.sent.filter { $0["op"].string == "execution.execute" }.count, 1)
+    }
     @MainActor func testStoppedCoreIsTypedAndReadTimeoutNeverChangesMutationSemantics() async throws {
         let h = CoreHarness(); try await h.bind(); h.result = nil
         let task = Task { try await h.client.request("host.metrics") }

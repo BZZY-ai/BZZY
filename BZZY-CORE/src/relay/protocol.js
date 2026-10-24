@@ -20,14 +20,14 @@ const fields = Object.freeze({
   'agents.import': ['code', 'expectedSenderFingerprint', 'provider', 'model', 'effort', 'name'],
   'agents.import.status': ['importId'], 'agents.import.cancel': ['importId'],
   'share.create': [], 'share.status': ['shareId'], 'share.approve': ['shareId', 'claimId', 'confirmedFingerprint'], 'share.revoke': ['shareId'],
-  'assistant.status': [], 'task.submit': ['owner', 'instruction'], 'task.get': ['taskId'],
+  'assistant.status': [], 'task.submit': ['owner', 'instruction', 'coordinateInput'], 'task.get': ['taskId'],
   'events.list': ['after', 'limit'], 'events.subscribe': ['consumerId'],
   'events.ack': ['subscriptionId', 'seq'], 'events.unsubscribe': ['subscriptionId'],
   'input.claim': ['owner', 'takeover'], 'input.release': ['owner'],
-  'execution.execute': ['owner', 'prompt', 'goal', 'resumeGoal', 'replaceGoalId'],
-  'question.answer': ['owner', 'questionId', 'answer'],
-  'permissions.set': ['owner', 'enabled', 'questionId'],
-  'control.request': ['owner', 'action', 'text'], 'command.status': ['requestId'],
+  'execution.execute': ['owner', 'prompt', 'goal', 'resumeGoal', 'replaceGoalId', 'coordinateInput'],
+  'question.answer': ['owner', 'questionId', 'answer', 'coordinateInput'],
+  'permissions.set': ['owner', 'enabled', 'questionId', 'coordinateInput'],
+  'control.request': ['owner', 'action', 'text', 'coordinateInput'], 'command.status': ['requestId'],
 });
 export const COMMANDS = new Set(['voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
   'agents.create', 'agents.update', 'agents.archive', 'agents.open', 'agents.import', 'agents.import.cancel']);
@@ -45,6 +45,7 @@ export function validateRequest(value) {
   opaque(value.id); opaque(value.resource);
   if (!Object.hasOwn(fields, value.op)) fail('OPERATION_DENIED', 'This operation is not exposed by the gateway.', 403);
   object(value.params, fields[value.op], 'Operation parameters');
+  if (value.params.coordinateInput !== undefined && typeof value.params.coordinateInput !== 'boolean') fail('INVALID_REQUEST', 'Input coordination must be boolean.');
   return value;
 }
 

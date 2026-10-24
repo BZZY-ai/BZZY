@@ -1,23 +1,25 @@
 import XCTest
 
 final class BZZYUITests: XCTestCase {
-    func testGoalComposerSeparatesGreenCommandAndPreservesObjectiveWhenRemoved() {
+    func testGoalComposerKeepsKeyboardAndSelectionWhileStylingCommand() {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--reset-ui-testing"]
         app.launch()
-        XCTAssertTrue(app.buttons["agent-COOL"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["BZZY"].waitForExistence(timeout: 10))
         app.buttons["agent-COOL"].tap()
-        let draft = app.descendants(matching: .any).matching(identifier: "message-draft").firstMatch
+        let draft = app.textViews["message-draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 3))
         draft.tap(); draft.typeText("/goal")
-        let pill = app.buttons["goal-command-pill"]
-        XCTAssertTrue(pill.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
         draft.typeText(" tell me Messi age")
-        XCTAssertEqual((draft.value as? String)?.trimmingCharacters(in: .whitespaces), "tell me Messi age")
-        pill.tap()
-        XCTAssertFalse(pill.exists)
-        XCTAssertEqual(draft.value as? String, "tell me Messi age")
-        attach(app, name: "Goal command composer")
+        XCTAssertEqual(draft.value as? String, "/goal tell me Messi age")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        attach(app, name: "Stable native goal editor")
+        draft.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "/goal tell me Messi age".count))
+        draft.typeText("A normal message")
+        XCTAssertEqual(draft.value as? String, "A normal message")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
     }
     #if !DEBUG
     func testReleaseIgnoresPreviewArgumentsAndRequiresApprovedCorePair() {

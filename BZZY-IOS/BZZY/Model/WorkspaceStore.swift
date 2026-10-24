@@ -274,7 +274,7 @@ final class WorkspaceStore {
             } else if type == "debate.result", let text = payload["message"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))
             }
-            if !["text", "message.user"].contains(type) {
+            if !["text", "message.user", "input.accepted"].contains(type) {
                 let details = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
                     .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
                 activity.append(LiveActivity(id: id, type: type, details: details, date: date))

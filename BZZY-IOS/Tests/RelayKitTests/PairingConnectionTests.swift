@@ -54,6 +54,11 @@ final class PairingConnectionTests: XCTestCase {
         let connection = try RelayConnection(isolatedIdentity: identity, loopbackTransport: transport,
             projectionDirectory: directory, loadAuthorization: { savedAuthorization }, saveAuthorization: { savedAuthorization = $0 })
         defer { connection.pause() }
+        var streamed: [CoreJSONValue] = [], deliveryStates: [CoreOutgoingMessage.Status] = []
+        connection.onCoreEvents = { [weak connection] data in
+            streamed = data.compactMap { try? JSONDecoder().decode(CoreJSONValue.self, from: $0) }
+            deliveryStates += connection?.coreOutgoingMessages.map(\.status) ?? []
+        }
         var availabilityFailures: [String] = []
         connection.onCoreAvailability = { available, message in
             if !available && message.hasPrefix("Core session unavailable") { availabilityFailures.append(message) }
@@ -94,6 +99,8 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertEqual(connection.corePermissions, Set(["observe", "claim", "takeover", "execute", "answer", "pause", "cancel", "steer"].filter { allowTakeover || $0 != "takeover" }))
         XCTAssertTrue(availabilityFailures.isEmpty, "Approval must not cancel its own initial Core read: \(availabilityFailures)")
         if goals {
+            var phase = "seed"
+            do {
             let seed = try fixture.request(["op": .string("goal-seed")])
             XCTAssertEqual(try fixture.request(["op": .string("cli-attach")])["ownsInput"].bool, true)
             await connection.refreshCore()
@@ -103,6 +110,7 @@ final class PairingConnectionTests: XCTestCase {
             XCTAssertFalse(rejected)
             XCTAssertEqual(try fixture.request(["op": .string("goal-state")])["executionCount"].integer, 0)
             XCTAssertEqual(try fixture.request(["op": .string("goal-state")])["inputHeldByCLI"].bool, true, "An unconfirmed goal never takes input")
+            phase = "goal acceptance"
             let accepted = await connection.sendCoreMessage("/goal New mobile objective", replaceGoalID: seed["goalID"].string)
             XCTAssertEqual(accepted, allowTakeover)
             if allowTakeover {
@@ -115,15 +123,58 @@ final class PairingConnectionTests: XCTestCase {
                 XCTAssertEqual(result["inputHeldByCLI"].bool, false)
                 XCTAssertNotEqual(result["goalID"].string, seed["goalID"].string)
                 XCTAssertTrue(connection.coreOwnsInput)
+                try await eventually { streamed.contains(where: { $0["type"].string == "text" && ($0["data"]["text"].string ?? "").contains("Verified the full objective") }) }
+                XCTAssertTrue(deliveryStates.contains(.sending))
+                XCTAssertTrue(connection.coreOutgoingMessages.isEmpty)
+                // Cross both clients' former lease/heartbeat boundaries while
+                // the actual CLI stays attached and receives the full reply.
+                phase = "watch after completion"
+                try await Task.sleep(for: .seconds(16))
+                let watched = try fixture.request(["op": .string("goal-state")])
+                XCTAssertEqual(watched["cliFinished"].bool, false)
+                XCTAssertEqual(watched["cliMode"].string, "VIEW")
+                XCTAssertTrue(watched["cliText"].string?.contains("Verified the full objective") == true)
+                XCTAssertNil(connection.coreError)
+                phase = "CLI followup"
+                XCTAssertEqual(try fixture.request(["op": .string("cli-send"), "text": .string("CLI_STREAM_FOLLOWUP")])["sent"].bool, true)
+                try await eventually {
+                    let progress = try fixture.request(["op": .string("goal-state")])
+                    return progress["executionCount"].integer == 2 && progress["latestExecution"]["state"].string == "finished"
+                }
+                try await Task.sleep(for: .seconds(16))
+                XCTAssertTrue(connection.coreActionsAvailable); XCTAssertNil(connection.coreError)
+                XCTAssertFalse(connection.coreOwnsInput)
+                XCTAssertTrue(streamed.contains { $0["type"].string == "message.user" && $0["data"]["text"].string == "CLI_STREAM_FOLLOWUP" })
+                phase = "phone followup"
+                let followup = await connection.sendCoreMessage("PHONE_STREAM_FOLLOWUP")
+                XCTAssertTrue(followup)
+                try await eventually {
+                    let progress = try fixture.request(["op": .string("goal-state")])
+                    return progress["executionCount"].integer == 3 && progress["latestExecution"]["state"].string == "finished"
+                }
+                XCTAssertEqual(try fixture.request(["op": .string("goal-state")])["cliFinished"].bool, false)
+                XCTAssertEqual(try fixture.request(["op": .string("state")])["inputClaimRequests"].integer, 0, "The phone submits to Core; it never preclaims a lease")
+                try await eventually { connection.coreOutgoingMessages.isEmpty }
             } else {
                 let result = try fixture.request(["op": .string("goal-state")])
                 XCTAssertEqual(result["goalID"].string, seed["goalID"].string)
                 XCTAssertEqual(result["executionCount"].integer, 0)
                 XCTAssertEqual(result["inputHeldByCLI"].bool, true)
                 XCTAssertFalse(connection.coreOwnsInput)
+                let failed = try XCTUnwrap(connection.coreOutgoingMessages.first)
+                XCTAssertEqual(failed.status, .failed)
+                await connection.retryOutgoingMessage(failed.id)
+                let retried = try XCTUnwrap(connection.coreOutgoingMessages.first)
+                XCTAssertEqual(retried.id, failed.id, "Retry preserves the same visible bubble")
+                XCTAssertNotEqual(retried.requestID, failed.requestID, "A definitive rejection needs a new admission ID")
+                XCTAssertEqual(retried.status, .failed, "Retry cannot manufacture missing grant permissions")
+                XCTAssertEqual(try fixture.request(["op": .string("goal-state")])["executionCount"].integer, 0)
+                XCTAssertEqual(try fixture.request(["op": .string("goal-state")])["inputHeldByCLI"].bool, true)
             }
+            phase = "close CLI viewer"
             _ = try fixture.request(["op": .string("cli-close")])
             XCTAssertEqual(connection.coreOwnsInput, allowTakeover, "Closing CLI cannot release the phone's transferred lease")
+            } catch { print("HANDOFF failure phase:", phase, "error:", String(describing: error)); throw error }
         }
         if voiceChat {
             await connection.prepareVoiceChat()
@@ -200,9 +251,10 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertTrue(connection.corePairAuthorized)
         XCTAssertFalse(connection.coreActionsAvailable)
         await connection.resume()
-        try await eventually { connection.coreActionsAvailable }
+        do { try await eventually { connection.coreActionsAvailable } }
+        catch { print("HANDOFF reconnect failed:", connection.coreError ?? "none", connection.hostStatus, connection.status, connection.errorMessage ?? "none"); throw error }
         let state = try fixture.request(["op": .string("state")])
-        XCTAssertEqual(state["executionCount"].integer, voiceChat || goals && allowTakeover ? 1 : 0, "Pairing and reconnecting observe only")
+        XCTAssertEqual(state["executionCount"].integer, goals && allowTakeover ? 3 : voiceChat ? 1 : 0, "Pairing and reconnecting observe only")
         XCTAssertEqual(state["coordinatorConfigured"].bool, voiceChat)
         XCTAssertEqual(state["activeGrants"].integer, 1)
         if failMetrics {

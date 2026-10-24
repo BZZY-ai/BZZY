@@ -123,12 +123,12 @@ enum CoreApplicationProtocol {
         "notifications.register": ["deviceToken", "environment", "enabled", "scope"], "notifications.update": ["enabled"], "notifications.revoke": [],
         "share.create": [], "share.status": ["shareId"], "share.approve": ["shareId", "claimId", "confirmedFingerprint"], "share.revoke": ["shareId"],
         "session.get": [], "session.usage": [], "sessions.list": ["after", "limit"], "sessions.open": ["sessionId"],
-        "assistant.status": [], "voice.status": [], "voice.send": ["text"], "voice.poll": ["requestId", "cursor"], "voice.cancel": ["requestId"], "task.submit": ["owner", "instruction"], "task.get": ["taskId"],
+        "assistant.status": [], "voice.status": [], "voice.send": ["text"], "voice.poll": ["requestId", "cursor"], "voice.cancel": ["requestId"], "task.submit": ["owner", "instruction", "coordinateInput"], "task.get": ["taskId"],
         "events.list": ["after", "limit"], "events.subscribe": ["consumerId"], "events.ack": ["subscriptionId", "seq"],
         "events.unsubscribe": ["subscriptionId"], "input.claim": ["owner", "takeover"], "input.release": ["owner"],
-        "execution.execute": ["owner", "prompt", "goal", "resumeGoal", "replaceGoalId"], "question.answer": ["owner", "questionId", "answer"],
-        "permissions.set": ["owner", "enabled", "questionId"],
-        "control.request": ["owner", "action", "text"], "command.status": ["requestId"]]
+        "execution.execute": ["owner", "prompt", "goal", "resumeGoal", "replaceGoalId", "coordinateInput"], "question.answer": ["owner", "questionId", "answer", "coordinateInput"],
+        "permissions.set": ["owner", "enabled", "questionId", "coordinateInput"],
+        "control.request": ["owner", "action", "text", "coordinateInput"], "command.status": ["requestId"]]
     static func opaque(_ value: String) throws {
         guard value.range(of: "^[A-Za-z0-9_-]{1,80}$", options: .regularExpression) != nil else { throw CoreApplicationError("INVALID_REQUEST") }
     }
@@ -138,7 +138,7 @@ enum CoreApplicationProtocol {
     static func request(op: String, params: [String: CoreJSONValue], id: String, resource: String) throws -> CoreJSONValue {
         try opaque(id); try opaque(resource)
         guard let allowed = fields[op], Set(params.keys).isSubset(of: allowed) else { throw CoreApplicationError("OPERATION_DENIED") }
-        var optional: Set<String> = ["after", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "text", "scope", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
+        var optional: Set<String> = ["coordinateInput", "after", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "text", "scope", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
         if op == "voice.send" { optional.remove("text") }
         if op == "voice.poll" { guard let cursor = params["cursor"]?.integer, cursor >= 0 && cursor <= 2_000_000 else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "voice.send" { guard let text = params["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CoreApplicationError("INVALID_REQUEST") } }
@@ -148,7 +148,7 @@ enum CoreApplicationProtocol {
         for key in ["owner", "consumerId", "subscriptionId", "requestId", "taskId", "claimId", "confirmedFingerprint"] where params[key] != nil {
             guard let text = params[key]?.string else { throw CoreApplicationError("INVALID_REQUEST") }; try opaque(text)
         }
-        for key in ["takeover", "goal", "resumeGoal", "enabled", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
+        for key in ["coordinateInput", "takeover", "goal", "resumeGoal", "enabled", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"] where params[key] != nil {
             guard params[key]?.bool != nil else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         for key in ["prompt", "instruction", "answer", "text"] where params[key] != nil {

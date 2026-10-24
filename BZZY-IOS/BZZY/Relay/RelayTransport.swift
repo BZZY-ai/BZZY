@@ -11,7 +11,7 @@ private final class RelaySessionDelegate: NSObject, URLSessionTaskDelegate, @unc
 final class RelayTransport {
     private let identity: RelayIdentity
     let endpoint: URL
-    private let session: URLSession
+    private var session: URLSession?
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
     private var generation = UUID()
@@ -50,12 +50,14 @@ final class RelayTransport {
     private init(identity: RelayIdentity, validatedEndpoint: URL) {
         self.identity = identity
         self.endpoint = validatedEndpoint
+    }
+
+    private func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 10
-        config.timeoutIntervalForResource = 30
         config.urlCache = nil
         config.httpCookieStorage = nil
-        session = URLSession(configuration: config, delegate: RelaySessionDelegate(), delegateQueue: nil)
+        return URLSession(configuration: config, delegate: RelaySessionDelegate(), delegateQueue: nil)
     }
 
     func connect() async throws -> String {
@@ -65,6 +67,8 @@ final class RelayTransport {
         epoch = RelayWire.encoded(try RelayWire.random())
         replay = ReplayWindow()
         revoked.removeAll()
+        let session = makeSession()
+        self.session = session
         let task = session.webSocketTask(with: endpoint, protocols: [RelayWire.subprotocol])
         task.maximumMessageSize = 65_536
         socket = task
@@ -127,6 +131,10 @@ final class RelayTransport {
         reader = nil
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
+        // Tear down the underlying connection too. A close handshake alone can
+        // leave an authenticated socket alive during an immediate foreground.
+        session?.invalidateAndCancel()
+        session = nil
         outboundBytes = 0
         let abandoned = pending
         pending.removeAll()

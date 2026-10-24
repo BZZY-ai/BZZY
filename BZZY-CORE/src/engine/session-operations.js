@@ -22,7 +22,7 @@ export function executionRecord(id) {
   return getRecord('execution', id);
 }
 
-export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume = false, objective, requestId = randomUUID(), info, authorize, request, replaceGoalId } = {}) {
+export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume = false, objective, requestId = randomUUID(), info, authorize, request, replaceGoalId, channel, environment } = {}) {
   const permit = (permission = 'execute') => { requireOwner(sessionId, owner); authorize?.(permission); };
   const confirmReplacement = fresh => {
     if (!resume && needsGoalReplacement(fresh.goal) && replaceGoalId !== fresh.goal.id) {
@@ -37,7 +37,7 @@ export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume =
   // A duplicate request must reach the queue's digest check before cancellation
   // or recovery: it may be the very execution currently being observed.
   const accepted = database().prepare('SELECT response FROM requests WHERE scope=? AND id=?').get(`execute:${sessionId}`, requestId);
-  if (accepted?.response) return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId }, requestId, { authorize: permit });
+  if (accepted?.response) return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId, environment }, requestId, { authorize: permit });
   confirmReplacement(loadSession(sessionId));
   if (!resume) {
     if (!objective?.trim()) throw new Error('Supply an objective to start persistent work.');
@@ -67,8 +67,9 @@ export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume =
     if (recovery.state === 'cleanup_required') throw new Error(recovery.reason);
     if (recovery.live) throw new Error('This goal is already running. Watch its current execution instead of starting another.');
   }
-  return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId }, requestId, {
+  return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId, environment }, requestId, {
     authorize: permit,
+    channel,
     prepare: (fresh, db) => {
       confirmReplacement(fresh);
       if (resume) {

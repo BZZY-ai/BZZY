@@ -144,6 +144,13 @@ the same ID/input returns an already recorded acceptance. A conflict is rejected
 After a crash, `command.status` can reconcile the Core request reservation; an
 uncertain command without durable acceptance is never redispatched automatically.
 
+`session.get.capabilities.inputSubmission` enables Core-coordinated input through
+`coordinateInput: true` on existing mutations. Updated clients submit messages,
+answers and controls directly; Core checks the approved claim/takeover rights
+and serializes admission. Observation never transfers input. Actor-bound event
+receipts can confirm acceptance when a response is lost. See
+[shared session input](SESSION-INPUT.md) for retry and crash semantics.
+
 `session.get.capabilities.goalSubmission` advertises canonical goal handling.
 `execution.execute` with `goal: true` creates a fresh goal/contract from `prompt`;
 `resumeGoal: true` resumes its saved checkpoint instead. Legacy `/goal objective`

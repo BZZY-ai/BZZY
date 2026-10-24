@@ -1,5 +1,8 @@
 import SwiftUI
 import RelayKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct ConversationView: View {
     @Bindable var store: WorkspaceStore
@@ -30,6 +33,7 @@ struct ConversationCanvas: View {
     @State private var goalToReplace: String?
     @State private var replacementDraft: String?
     @State private var showReplaceGoal = false
+    @State private var retryGoalMessageID: String?
     @State private var showShare = false
     @State private var voice = VoiceCapture()
     @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var recognitionLanguage = SpeechLanguage.preferred.rawValue
@@ -38,15 +42,16 @@ struct ConversationCanvas: View {
     @GestureState private var voiceHeld = false
     @State private var showDetails = false
     @State private var showActivity = false
+    #if canImport(UIKit)
+    @State private var composerFocused = false
+    #else
     @FocusState private var composerFocused: Bool
+    #endif
     private var isDemo: Bool { store.demoConversation(conversationID) != nil }
     private var isLive: Bool { remoteSession || store.liveSession?.id == conversationID }
     private var canSubmit: Bool {
         voiceDraft == nil && !voice.isBusy && !voiceHeld && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (!isLive || relay.coreConnected && relay.coreSessionID == conversationID && relay.corePermissions.contains("execute") && !relay.coreBusy && !relay.coreCommandUncertain)
-    }
-    private var composerText: Binding<String> {
-        Binding(get: { CoreGoalDraft.body(draft) }, set: { draft = CoreGoalDraft.isGoal(draft) ? CoreGoalDraft.replacingBody($0) : $0 })
     }
     private func submit(_ submitted: String, replacing goalID: String? = nil) {
         pendingSubmittedDraft = submitted
@@ -104,6 +109,21 @@ struct ConversationCanvas: View {
                                        speaker: message.isUser ? "You" : (assistantName ?? title))
                                 .id(message.id)
                         }
+                        if isLive, relay.coreSessionID == conversationID {
+                            ForEach(relay.coreOutgoingMessages) { outgoing in
+                                OutgoingMessageBubble(message: outgoing, retryEnabled: relay.coreActionsAvailable && !relay.coreBusy) {
+                                    if outgoing.status == .failed, CoreGoalDraft.isNewGoal(outgoing.text),
+                                       CoreGoalDraft.needsReplacement(status: relay.coreGoalStatus), let goalID = relay.coreGoalID,
+                                       outgoing.params["replaceGoalId"]?.string != goalID {
+                                        retryGoalMessageID = outgoing.id; goalToReplace = goalID; showReplaceGoal = true
+                                    } else { Task { await relay.retryOutgoingMessage(outgoing.id) } }
+                                }.contextMenu {
+                                    if outgoing.status == .failed {
+                                        Button("Remove failed message", role: .destructive) { relay.removeFailedOutgoingMessage(outgoing.id) }
+                                    }
+                                }
+                            }
+                        }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 16)
                 }.scrollIndicators(.hidden).scrollDismissesKeyboard(.interactively)
@@ -113,6 +133,14 @@ struct ConversationCanvas: View {
                         // after appearance. Place the first frame at the latest
                         // entry without animating through the entire history.
                         await Task.yield()
+                        var transaction = Transaction(); transaction.disablesAnimations = true
+                        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
+                    }
+                    .onChange(of: relay.coreOutgoingMessages) {
+                        var transaction = Transaction(); transaction.disablesAnimations = true
+                        withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
+                    }
+                    .onChange(of: messages.last?.text) {
                         var transaction = Transaction(); transaction.disablesAnimations = true
                         withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
                     }
@@ -129,6 +157,12 @@ struct ConversationCanvas: View {
         .bzzyScreen().toolbar(.hidden)
         .onChange(of: relay.coreCommandStatus) { _, status in
             if isLive, status.hasPrefix("Accepted"), let submitted = pendingSubmittedDraft, draft == submitted {
+                draft = ""; pendingSubmittedDraft = nil
+            }
+        }
+        .onChange(of: relay.coreOutgoingMessages.map(\.id)) {
+            if let submitted = pendingSubmittedDraft, draft == submitted,
+               relay.coreOutgoingMessages.contains(where: { $0.text == submitted.trimmingCharacters(in: .whitespacesAndNewlines) }) {
                 draft = ""; pendingSubmittedDraft = nil
             }
         }
@@ -154,13 +188,15 @@ struct ConversationCanvas: View {
         .onChange(of: conversationID) { cancelDictation() }
         .onDisappear { cancelDictation() }
         .alert("Replace current goal?", isPresented: $showReplaceGoal) {
-            Button("No", role: .cancel) { replacementDraft = nil; goalToReplace = nil }
+            Button("No", role: .cancel) { replacementDraft = nil; goalToReplace = nil; retryGoalMessageID = nil }
             Button("Yes, replace goal", role: .destructive) {
-                if let submitted = replacementDraft, let goalID = goalToReplace { submit(submitted, replacing: goalID) }
-                replacementDraft = nil; goalToReplace = nil
+                if let retryID = retryGoalMessageID, let goalID = goalToReplace {
+                    Task { await relay.retryOutgoingMessage(retryID, replacementGoalID: goalID) }
+                } else if let submitted = replacementDraft, let goalID = goalToReplace { submit(submitted, replacing: goalID) }
+                replacementDraft = nil; goalToReplace = nil; retryGoalMessageID = nil
             }
         } message: {
-            Text("Take control of this session and replace the current goal with the new objective?")
+            Text("Replace the current goal with this objective? Its active run will stop.")
         }
         .sheet(isPresented: $showDetails) {
             if isLive { LiveSessionDetailsView(store: store).coreAvailabilityGate() }
@@ -199,23 +235,17 @@ struct ConversationCanvas: View {
                 if let error = relay.coreError { Text(error).bzzyFont(11).foregroundStyle(BZZYTheme.danger) }
             }
             HStack(alignment: .bottom, spacing: 10) {
-                if CoreGoalDraft.isGoal(draft) {
-                    Button { draft = CoreGoalDraft.body(draft) } label: {
-                        HStack(spacing: 5) {
-                            Text("/goal").bzzyFont(12, weight: .bold, design: .monospaced)
-                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
-                        }.foregroundStyle(BZZYTheme.success).padding(.horizontal, 10).padding(.vertical, 9)
-                            .background(BZZYTheme.success.opacity(0.14), in: Capsule())
-                            .overlay(Capsule().stroke(BZZYTheme.success.opacity(0.4), lineWidth: 0.7))
-                    }.buttonStyle(BZZYPressStyle()).padding(.leading, 10).padding(.bottom, 10)
-                        .accessibilityLabel("Remove goal command").accessibilityIdentifier("goal-command-pill")
-                }
-                TextField(CoreGoalDraft.isGoal(draft) ? "Goal objective" : "Message", text: composerText, axis: .vertical)
-                    .id(CoreGoalDraft.isGoal(draft))
+                #if canImport(UIKit)
+                GoalMessageEditor(text: $draft, focused: Binding(get: { composerFocused }, set: { composerFocused = $0 }))
+                    .padding(.vertical, 14).padding(.leading, 16)
+                    .disabled(voiceDraft != nil || voice.isBusy || voiceHeld)
+                #else
+                TextField("Message", text: $draft, axis: .vertical)
                     .bzzyFont(14).lineLimit(1...5).textFieldStyle(.plain)
-                    .focused($composerFocused).padding(.vertical, 14).padding(.leading, CoreGoalDraft.isGoal(draft) ? 0 : 16)
+                    .focused($composerFocused).padding(.vertical, 14).padding(.leading, 16)
                     .accessibilityIdentifier("message-draft")
                     .disabled(voiceDraft != nil || voice.isBusy || voiceHeld)
+                #endif
                 Image(systemName: voice.isRecording ? "waveform" : "mic.fill").bzzyFont(19)
                     .foregroundStyle(voice.isBusy ? BZZYTheme.accent : BZZYTheme.secondary)
                     .frame(width: 40, height: 46).contentShape(Rectangle())
@@ -253,16 +283,8 @@ struct ConversationCanvas: View {
                     .accessibilityIdentifier("save-message")
             }.background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 21))
                 .overlay(RoundedRectangle(cornerRadius: 21).stroke(BZZYTheme.line, lineWidth: 0.7))
-                .onChange(of: CoreGoalDraft.isGoal(draft)) { _, _ in
-                    guard voiceDraft == nil, !voice.isBusy else { return }
-                    composerFocused = false
-                    Task { @MainActor in
-                        await Task.yield()
-                        composerFocused = true
-                    }
-                }
             HStack(spacing: 10) {
-                Text(voice.error ?? (voice.isStarting ? "Allow speech access, then hold again" : voice.isRecording ? "Listening · Release to finish" : voice.isFinishing ? "Finishing transcript…" : isLive ? (relay.coreError ?? (!relay.coreCommandStatus.isEmpty ? relay.coreCommandStatus : relay.coreConnected ? relay.corePermissions.contains("execute") ? "Connected to Core" : "Observer · Read only" : store.liveStatus)) : isDemo ? "Demo · On device" : "Not connected"))
+                Text(voice.error ?? (voice.isStarting ? "Allow speech access, then hold again" : voice.isRecording ? "Listening · Release to finish" : voice.isFinishing ? "Finishing transcript…" : isLive ? (relay.coreError ?? (!relay.coreCommandStatus.isEmpty ? relay.coreCommandStatus : relay.coreConnected ? (relay.coreInputStatus ?? (relay.corePermissions.contains("execute") ? "Connected to Core" : "Observer · Read only")) : store.liveStatus)) : isDemo ? "Demo · On device" : "Not connected"))
                     .bzzyFont(10).foregroundStyle(voice.error == nil ? BZZYTheme.muted : BZZYTheme.amber)
                 if voice.isBusy {
                     Button("Cancel") { cancelDictation() }.bzzyFont(10).buttonStyle(.plain)
@@ -309,6 +331,36 @@ private struct GoalPhasePill: View {
             Text(status == "complete" ? "Goal achieved" : stalled ? "Goal stalled" : active ? status == "verifying" ? "Verifying goal..." : "Pursuing goal..." : "Goal \(status)").lineLimit(1)
         }.bzzyFont(11, weight: .semibold).foregroundStyle(tone).padding(.horizontal, 10).padding(.vertical, 8)
             .background(tone.opacity(0.13), in: Capsule()).accessibilityIdentifier("chat-goal-status")
+    }
+}
+
+private struct OutgoingMessageBubble: View {
+    let message: CoreOutgoingMessage
+    let retryEnabled: Bool
+    let retry: () -> Void
+    var body: some View {
+        HStack {
+            Spacer(minLength: 48)
+            VStack(alignment: .trailing, spacing: 7) {
+                Text(verbatim: message.text).bzzyFont(15).lineSpacing(4).textSelection(.enabled)
+                    .foregroundStyle(message.status == .accepted ? BZZYTheme.background : BZZYTheme.text.opacity(0.65))
+                    .padding(.horizontal, 16).padding(.vertical, 14)
+                    .background(message.status == .accepted ? BZZYTheme.accent : BZZYTheme.elevated,
+                        in: UnevenRoundedRectangle(topLeadingRadius: 21, bottomLeadingRadius: 21, bottomTrailingRadius: 6, topTrailingRadius: 21))
+                HStack(spacing: 8) {
+                    if message.status == .sending { ProgressView().controlSize(.mini) }
+                    Text(message.status == .sending ? "Sending…" : message.status == .accepted ? "Sent" : message.status == .uncertain ? "Not confirmed" : "Not sent")
+                        .bzzyFont(10).foregroundStyle(message.status == .failed ? BZZYTheme.danger : BZZYTheme.secondary)
+                    if [.failed, .uncertain].contains(message.status) {
+                        Button(action: retry) { Label("Retry", systemImage: "arrow.clockwise").bzzyFont(11, weight: .semibold) }
+                            .buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent).disabled(!retryEnabled)
+                            .padding(.horizontal, 10).frame(minHeight: 32)
+                            .background(BZZYTheme.accent.opacity(0.12), in: Capsule())
+                            .accessibilityIdentifier("retry-message-\(message.id)")
+                    }
+                }
+            }.accessibilityIdentifier("outgoing-message-\(message.id)")
+        }
     }
 }
 
@@ -389,3 +441,71 @@ struct WorkspaceDetailsView: View {
         }.frame(maxWidth: .infinity, alignment: .leading).panel()
     }
 }
+
+#if canImport(UIKit)
+/// Keep one native editor and one selection while applying command styling.
+/// No view identity or keyboard-focus transition is tied to slash recognition.
+private struct GoalMessageEditor: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.delegate = context.coordinator
+        view.backgroundColor = .clear
+        view.font = .systemFont(ofSize: 14)
+        view.textColor = UIColor(BZZYTheme.text)
+        view.tintColor = UIColor(BZZYTheme.accent)
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.isScrollEnabled = false
+        view.accessibilityIdentifier = "message-draft"
+        view.accessibilityLabel = "Message"
+        let placeholder = UILabel()
+        placeholder.text = "Message"; placeholder.font = view.font
+        placeholder.textColor = UIColor(BZZYTheme.muted)
+        placeholder.tag = 731; placeholder.isUserInteractionEnabled = false
+        view.addSubview(placeholder)
+        return view
+    }
+    func updateUIView(_ view: UITextView, context: Context) {
+        context.coordinator.parent = self
+        view.isEditable = context.environment.isEnabled
+        if view.text != text, view.markedTextRange == nil {
+            let selection = view.selectedRange
+            view.text = text
+            view.selectedRange = NSRange(location: min(selection.location, text.utf16.count), length: 0)
+        }
+        context.coordinator.style(view)
+        if focused && !view.isFirstResponder && view.isEditable { view.becomeFirstResponder() }
+        if !focused && view.isFirstResponder { view.resignFirstResponder() }
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? 200
+        let measured = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        let line = uiView.font?.lineHeight ?? 18
+        uiView.isScrollEnabled = measured.height > line * 5
+        return CGSize(width: width, height: min(max(line, measured.height), line * 5))
+    }
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: GoalMessageEditor
+        init(_ parent: GoalMessageEditor) { self.parent = parent }
+        func style(_ view: UITextView) {
+            guard view.markedTextRange == nil else { return }
+            let selection = view.selectedRange
+            let defaults: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 14), .foregroundColor: UIColor(BZZYTheme.text)]
+            view.textStorage.beginEditing()
+            view.textStorage.setAttributes(defaults, range: NSRange(location: 0, length: view.text.utf16.count))
+            if CoreGoalDraft.isGoal(view.text) {
+                view.textStorage.addAttributes([.foregroundColor: UIColor(BZZYTheme.success), .backgroundColor: UIColor(BZZYTheme.success).withAlphaComponent(0.18)], range: NSRange(location: 0, length: 5))
+            }
+            view.textStorage.endEditing()
+            view.typingAttributes = defaults; view.selectedRange = selection
+            if let placeholder = view.viewWithTag(731) as? UILabel { placeholder.isHidden = !view.text.isEmpty; placeholder.sizeToFit() }
+        }
+        func textViewDidChange(_ view: UITextView) { parent.text = view.text; style(view); view.invalidateIntrinsicContentSize() }
+        func textViewDidBeginEditing(_ view: UITextView) { if !parent.focused { parent.focused = true } }
+        func textViewDidEndEditing(_ view: UITextView) { if parent.focused { parent.focused = false } }
+    }
+}
+#endif
