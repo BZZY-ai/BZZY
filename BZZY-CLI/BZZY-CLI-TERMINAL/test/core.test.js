@@ -19,6 +19,8 @@ test.afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); delete 
 
 test('yolo is opt-in on every invocation, including resume; malformed budgets fail early', () => {
   assert.equal(parseArgs(['--yolo', 'goal', 'finish']).options.yolo, true);
+  assert.equal(parseArgs(['--minimal']).options.minimal, true);
+  assert.equal(parseArgs([]).options.minimal, undefined);
   assert.equal(parseArgs(['resume', 'a']).options.yolo, false);
   for (const value of ['0', '-1', 'Infinity', '1.1', '9007199254740992']) assert.throws(() => parseArgs(['--token-budget', value]));
   assert.throws(() => parseArgs(['--provider', '--yolo']));

@@ -27,6 +27,19 @@ export const BUILTINS = {
         supportedEfforts: ['none', 'high', 'max'], defaultEffort: 'high' },
     },
   },
+  orcarouter: {
+    id: 'orcarouter', name: 'OrcaRouter', backend: 'codex', auth: 'api-key',
+    baseUrl: 'https://api.orcarouter.ai/v1', envKey: 'ORCAROUTER_API_KEY',
+    model: 'orca/orcacyber-zero-1.5', contextWindow: 128000, catalogFocus: 'cyber',
+    modelCapabilities: {
+      'orca/orcacyber-zero-1.5': { category: 'cyber', contextWindow: 1000000, inputModalities: ['text'],
+        supportedEfforts: ['low', 'medium', 'high'] },
+      'orca/orcacyber-zero-1.0': { category: 'cyber', contextWindow: 1000000, inputModalities: ['text'],
+        supportedEfforts: ['low', 'medium', 'high'] },
+      'orca/orcacyber-ultra-1.0': { category: 'cyber', contextWindow: 1048576, inputModalities: ['text'],
+        supportedEfforts: ['low', 'medium', 'high'] },
+    },
+  },
 };
 
 export function providerModelCapabilities(provider, model, discovered) {

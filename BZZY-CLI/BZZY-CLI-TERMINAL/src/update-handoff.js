@@ -14,7 +14,8 @@ function validated(value) {
     return [id, { value: draft.value, cursor: draft.cursor }];
   });
   return { v: 1, sessionId: value.sessionId, mode: value.mode, settingsOnly: value.settingsOnly, coreStopped: value.coreStopped,
-    activeTab: uuid(value.activeTab) ? value.activeTab : value.sessionId, drafts };
+    activeTab: uuid(value.activeTab) ? value.activeTab : value.sessionId, minimal: value.minimal === true,
+    colorPalette: ['blue', 'black', 'white'].includes(value.colorPalette) ? value.colorPalette : 'blue', drafts };
 }
 export function writeUpdateHandoff(ui, { coreStopped = false } = {}) {
   const tui = ui.tui;
@@ -22,7 +23,7 @@ export function writeUpdateHandoff(ui, { coreStopped = false } = {}) {
   const drafts = new Map(tui?.drafts || []), selected = ui.activeTab || ui.sessionId;
   if (uuid(selected)) drafts.set(selected, tui?.settingsDraft || { value: tui?.value || '', cursor: tui?.cursor || 0 });
   const value = validated({ v: 1, sessionId: uuid(ui.sessionId) ? ui.sessionId : null,
-    activeTab: ui.activeTab, mode: ui.sessionMode && ui.sessionMode !== 'CONTROL' ? 'VIEW' : 'CONTROL', settingsOnly: Boolean(ui.settingsOnly), coreStopped, drafts: [...drafts] });
+    activeTab: ui.activeTab, mode: ui.sessionMode && ui.sessionMode !== 'CONTROL' ? 'VIEW' : 'CONTROL', minimal: ui.minimal === true, colorPalette: ui.colorPalette, settingsOnly: Boolean(ui.settingsOnly), coreStopped, drafts: [...drafts] });
   const body = JSON.stringify(value);
   if (Buffer.byteLength(body) > maximum) throw new Error('The unsent drafts are too large to preserve during this update.');
   fs.mkdirSync(folder(), { recursive: true, mode: 0o700 });

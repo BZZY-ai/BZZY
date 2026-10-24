@@ -22,6 +22,7 @@ import { diagnosticError } from './diagnostic-error.js';
 import { CorePushWorker } from '../push/worker.js';
 import { terminalYolo } from './terminal-permissions.js';
 import { submitSessionInput } from './session-input.js';
+import { assertCoreAvailable } from './maintenance.js';
 import { HostMetricsSampler } from './host-metrics.js';
 
 const runtimeBuild = digest(['src', 'assets', 'bin'].flatMap(directory => fs.readdirSync(path.join(root, directory), { recursive: true })
@@ -84,6 +85,7 @@ async function readBody(request) {
   return bytes ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
 }
 export async function serveRuntime() {
+  assertCoreAvailable();
   privateDir(path.join(home(), 'runtime')); database();
   const unlock = lockFile(path.join(home(), 'runtime', 'service.lock'), 'A bzzy runtime is already starting or running.');
   const existing = runtimeInfo();
@@ -139,7 +141,7 @@ export async function serveRuntime() {
         const result = await (await relay()).request(request.method, pathname.slice('/relay/'.length), request.method === 'POST' ? await readBody(request) : {});
         send(response, 200, result); return;
       }
-      if (request.method === 'GET' && pathname === '/health') { send(response, 200, { ok: true, identity, runtimeBuild, environment, version: '0.2.0', apiVersion: 1, codexBaseline: '0.162.0' }); return; }
+      if (request.method === 'GET' && pathname === '/health') { send(response, 200, { ok: true, identity, runtimeBuild, installationId: digest(root), environment, version: '0.2.0', apiVersion: 1, codexBaseline: '0.162.0' }); return; }
       if (request.method === 'GET' && pathname === '/metrics') { send(response, 200, metrics.read()); return; }
       if (request.method === 'GET' && pathname === '/schema') { send(response, 200, readJson(path.join(root, 'assets', 'events.schema.json'))); return; }
       if (request.method === 'GET' && pathname === '/capabilities') { send(response, 200, { apiVersion: 1, managedExecutions: true, durableEvents: true, idempotentCommands: true, inputSubmission: true,
@@ -295,7 +297,7 @@ export async function serveRuntime() {
     if (active.length >= 8) return;
     for (const candidate of listRecords('execution', { state: 'queued' }).filter(j => !j.stopAction).slice(0, 8 - active.length)) {
       const logPath = path.join(home(), 'runtime', `${candidate.id}-execution.log`);
-      const job = reserveExecutionLaunch(candidate.id, logPath);
+      const job = reserveExecutionLaunch(candidate.id, logPath, { engineDirectory: root, engineBuild: runtimeBuild });
       if (!job) continue;
       const log = fs.openSync(logPath, 'a', 0o600);
       const parentId = loadSession(job.sessionId)?.parentSessionId;
@@ -377,13 +379,16 @@ async function awaitManagedRuntime(milliseconds) {
   throw Object.assign(new Error('The prepared Core service is not ready. Start Core explicitly or inspect its service status.'), { code: 'CORE_SERVICE_UNAVAILABLE' });
 }
 export async function ensureRuntime({ managedWaitMs = 10000 } = {}) {
+  assertCoreAvailable();
   if (!Number.isSafeInteger(managedWaitMs) || managedWaitMs < 50 || managedWaitMs > 15000) throw new Error('Managed runtime wait must be 50–15000 milliseconds.');
   if (operatorStopRequested()) throw Object.assign(new Error('Core was stopped explicitly. Start Core or open a new bzzy terminal to resume.'), { code: 'CORE_STOPPED' });
   const existing = runtimeInfo();
   if (existing && identityAlive(existing.identity)) {
     try {
       const health = await runtimeRequest(existing, 'GET', '/health');
-      if (health.runtimeBuild === runtimeBuild) return existing;
+      // Retained clients/runners from a previous immutable release must attach
+      // to the compatible installed daemon, never replace it with their code.
+      if (health.runtimeBuild === runtimeBuild || health.apiVersion === 1 && health.installationId && health.installationId !== digest(root)) return existing;
       await runtimeRequest(existing, 'POST', '/shutdown', {});
       const deadline = Date.now() + 5000;
       while (identityAlive(existing.identity) && Date.now() < deadline) await delay(50);
@@ -412,6 +417,7 @@ export async function ensureRuntime({ managedWaitMs = 10000 } = {}) {
   // Installation can finish while another client is waiting for the startup
   // lock. A prepared supervisor remains the only process allowed to spawn Core.
   if (preparedServiceInstalled()) return awaitManagedRuntime(managedWaitMs);
+  assertCoreAvailable();
   const log = fs.openSync(path.join(home(), 'runtime', 'service.log'), 'a', 0o600);
   const child = spawn(process.execPath, [path.join(root, 'bin/bzzy-engine.js'), 'internal-service'], { cwd: home(), env: runtimeEnv(), detached: true, stdio: ['ignore', log, log] });
   fs.closeSync(log); child.unref(); let failure; child.on('error', error => { failure = error; });
@@ -444,6 +450,7 @@ export async function executeJob(id) {
     if (latest && !['paused', 'cancelled', 'failed'].includes(latest.executionState)) {
       latest.executionState = 'failed'; latest.failure = { category: failure.code === 'UNSUPPORTED_POLICY' ? 'unsupported_policy' : 'runner_failure', message: error };
       if (acquired.goal && latest.goal && !['complete', 'cancelled'].includes(latest.goal.status)) { latest.goal.status = 'blocked'; latest.goal.reason = error; }
+      delete latest.deferTerminalNotification;
       saveSession(latest);
     }
   }

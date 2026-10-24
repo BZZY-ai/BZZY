@@ -12,6 +12,7 @@ import { enqueueExecution } from './execution-queue.js';
 import { normalizeContract } from './contracts.js';
 import { budgetUsage } from './delegation-usage.js';
 import { reconcileSession } from './recovery.js';
+import { isStalledGoal } from './goal-state.js';
 
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
 
@@ -22,7 +23,7 @@ export function executionRecord(id) {
   return getRecord('execution', id);
 }
 
-export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume = false, objective, requestId = randomUUID(), info, authorize, request, replaceGoalId, channel, environment } = {}) {
+export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume = false, objective, requestId = randomUUID(), info, authorize, request, replaceGoalId, resumeGoalId, channel, environment } = {}) {
   const permit = (permission = 'execute') => { requireOwner(sessionId, owner); authorize?.(permission); };
   const confirmReplacement = fresh => {
     if (!resume && needsGoalReplacement(fresh.goal) && replaceGoalId !== fresh.goal.id) {
@@ -37,7 +38,7 @@ export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume =
   // A duplicate request must reach the queue's digest check before cancellation
   // or recovery: it may be the very execution currently being observed.
   const accepted = database().prepare('SELECT response FROM requests WHERE scope=? AND id=?').get(`execute:${sessionId}`, requestId);
-  if (accepted?.response) return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId, environment }, requestId, { authorize: permit });
+  if (accepted?.response) return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId, resumeGoalId, environment }, requestId, { authorize: permit });
   confirmReplacement(loadSession(sessionId));
   if (!resume) {
     if (!objective?.trim()) throw new Error('Supply an objective to start persistent work.');
@@ -67,15 +68,16 @@ export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume =
     if (recovery.state === 'cleanup_required') throw new Error(recovery.reason);
     if (recovery.live) throw new Error('This goal is already running. Watch its current execution instead of starting another.');
   }
-  return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId, environment }, requestId, {
+  return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId, resumeGoalId, environment }, requestId, {
     authorize: permit,
     channel,
     prepare: (fresh, db) => {
       confirmReplacement(fresh);
       if (resume) {
         if (!fresh.goal || fresh.goal.status === 'complete') throw new Error('There is no unfinished goal to resume.');
+        if (resumeGoalId !== undefined && (fresh.goal.id !== resumeGoalId || !isStalledGoal(fresh.goal))) throw Object.assign(new Error('The stalled goal changed. Refresh before resuming.'), { code: 'CONFLICT', status: 409 });
         if (options.tokenBudget) fresh.goal.tokenBudget = options.tokenBudget;
-        if (fresh.goal.tokenBudget != null && budgetUsage(fresh) >= fresh.goal.tokenBudget) throw new Error('Goal budget is exhausted. Increase the total token budget before resuming.');
+        if (fresh.goal.tokenBudget != null && Math.max(fresh.goal.tokensUsed || 0, budgetUsage(fresh)) >= fresh.goal.tokenBudget) throw new Error('Goal budget is exhausted. Increase the total token budget before resuming.');
         Object.assign(fresh.goal, { notificationEpoch: (fresh.goal.notificationEpoch || 0) + 1, noActivityTurns: 0, blockerStreak: 0, lastBlocker: null });
         delete fresh.goal.reason;
       } else {

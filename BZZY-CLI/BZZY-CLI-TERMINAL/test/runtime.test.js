@@ -19,6 +19,8 @@ import { changeSessionModel, changeSessionProvider, attachSession, viewSession, 
 import { changeConversationProvider } from '../src/conversation-settings.js';
 import { conversationMessages } from '../src/conversation.js';
 import { initializeProject, writeProjectRecord } from '../src/project.js';
+import { suspendCoreHost, servicePlan } from '@bzzy/core/engine/host-service.js';
+import { beginCoreMaintenance } from '@bzzy/core/engine/maintenance.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 let dir, savedEnv;
@@ -359,8 +361,8 @@ test('an attached delegate conversation starts durable work only with /goal and 
   assert.match(fs.readFileSync(path.join(dir, 'result.txt'), 'utf8'), /Supplied evidence/);
   assert.ok(seen.some(event => event.type === 'info' && event.data.message.startsWith('Goal complete')));
 });
-test('attached goal resume keeps the same long-running objective and does not turn the word resume into a new goal', async () => {
-  const source = makeSession({ mode: 'delegate', executor: 'deepseek' }); source.goal.status = 'paused'; saveSession(source);
+for (const status of ['paused', 'blocked', 'awaiting_review']) test(`attached /goal resume continues a ${status} goal with the same objective`, async () => {
+  const source = makeSession({ mode: 'delegate', executor: 'deepseek' }); source.goal.status = status; saveSession(source);
   const original = source.goal.id, commands = ['/goal resume', '/goal status', '/exit'];
   const ui = { interactive: true, cursors: new Map(), setSession() {}, updateSession() {}, event() {}, async ask() {
     if (listRecords('execution').some(job => job.sessionId === source.id && ['queued', 'launching', 'running'].includes(job.state))) return new Promise(resolve => { ui.reader = { close: () => resolve(null) }; });
@@ -553,11 +555,33 @@ test('runtime restart preserves its address, observer tokens and the existing li
   assert.ok(question, 'the runner waits for explicit input throughout the restart');
   assert.equal(getRecord('execution', launched.executionId).state, 'running');
   const runner = getRecord('execution', launched.executionId).runner;
-  await runtimeRequest(launched.info, 'POST', '/shutdown', {});
+  const seen = []; let finishInput, snapshots = 0, viewEnded = false;
+  const watching = viewSession(session, { follow: true }, {
+    interactive: true, cursors: new Map(), setSession() {}, updateSession() { snapshots++; },
+    event(type, data) { seen.push({ type, data }); },
+    ask() { return new Promise(resolve => { finishInput = () => resolve('/exit'); this.reader = { close: () => resolve(null) }; }); },
+  }).finally(() => { viewEnded = true; });
+  for (let attempt = 0; attempt < 100 && !snapshots; attempt++) await delay(10);
+  assert.ok(snapshots);
+  const maintenance = beginCoreMaintenance();
+  try {
+    await suspendCoreHost({ plan: servicePlan({ userHome: path.join(dir, 'operator'), coreHome: process.env.BZZY_HOME }), run: () => ({ status: 1 }) });
+    await assert.rejects(ensureRuntime(), { code: 'CORE_MAINTENANCE' });
+    assert.ok(identityAlive(runner));
+    assert.equal(getRecord('execution', launched.executionId).state, 'running');
+    assert.equal(loadSession(session.id).goal?.status, session.goal?.status);
+    await delay(4500); // Longer than the transport's ordinary request retries.
+    assert.equal(viewEnded, false, 'an open CLI must survive the control handoff');
+  } finally { maintenance(); }
   const restarted = await ensureRuntime(); assert.equal(restarted.url, launched.info.url); assert.equal(restarted.token, launched.info.token);
   assert.ok(identityAlive(runner));
+  assert.deepEqual(getRecord('execution', launched.executionId).runner, runner);
   const observer = new BzzyClient({ url: restarted.url, token: observerToken.token });
   assert.equal((await observer.session(session.id)).execution.id, launched.executionId);
+  appendEvent(session.id, 'text', { text: 'Control handoff replay marker', messageId: 'handoff-replay' });
+  for (let attempt = 0; attempt < 200 && !seen.some(item => item.data.text === 'Control handoff replay marker'); attempt++) await delay(20);
+  finishInput(); await watching;
+  assert.equal(seen.filter(item => item.data.text === 'Control handoff replay marker').length, 1);
   await runtimeRequest(restarted, 'POST', `/sessions/${session.id}/answer`, { owner: launched.owner, questionId: question.id, answer: 'approved-account-A' }, randomUUID());
   assert.equal((await finished(launched.executionId)).exitCode, 0);
   const logs = fs.readFileSync(path.join(dir, 'backend.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));

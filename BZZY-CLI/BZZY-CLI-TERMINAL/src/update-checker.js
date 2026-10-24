@@ -8,7 +8,7 @@ export async function updateCommand(ui, { check = checkInstallationUpdate, apply
   try {
     const answer = await ui.chooseOne('BZZY updates · CLI + Core', check({ signal: AbortSignal.any([abort.signal, AbortSignal.timeout(12000)]) }).then(result => {
       checked = result; ui.updateStatus = result.blocked ? 'Update blocked' : result.available ? 'Update available' : 'Up to date';
-      return { description: `BZZY-ai/BZZY · ${result.current.slice(0, 8)} → ${result.target.slice(0, 8)}${result.blocked ? '\n' + result.blocked : '\nUpdates both products in this terminal. Your chat and draft reopen; running work stays paused.'}`,
+      return { description: `BZZY-ai/BZZY · ${result.current.slice(0, 8)} → ${result.target.slice(0, 8)}${result.blocked ? '\n' + result.blocked : '\nUpdates both products in this terminal. Your chat and draft reopen; active goals keep running.'}`,
         choices: [{ value: 'back', label: 'Back', selected: true }, ...(result.available && !result.blocked ? [{ value: 'install', label: 'Update CLI and Core' }] : [])] };
     }).catch(error => ({ description: error.message, choices: [{ value: 'back', label: 'Back', selected: true }] })));
     if (answer !== 'install') return;
@@ -19,7 +19,7 @@ export async function updateCommand(ui, { check = checkInstallationUpdate, apply
     ui.hostMetricsMonitor?.close(); ui.accountMonitor?.close(); ui.hostMetrics = null;
     const installation = apply(checked, { inherit: false });
     const progress = ui.chooseOne('Updating BZZY · CLI + Core', installation.then(() => ({ description: 'Installed. Reloading this terminal…', choices: [] })),
-      { locked: true, loadingLabel: 'Installing CLI and Core… Your chat and draft are saved.', hint: 'Work stays paused. This terminal reloads automatically.' });
+      { locked: true, loadingLabel: 'Installing CLI and Core… Your chat and draft are saved.', hint: 'Active goals continue. This terminal reattaches automatically.' });
     try {
       await installation;
       ui.updateRestart = { file, check: checked, target: updateLaunchTarget(checked) }; ui.detached = true;

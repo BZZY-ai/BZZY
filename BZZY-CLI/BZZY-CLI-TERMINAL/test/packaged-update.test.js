@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { updateRepository, checkPackagedUpdate, updatePackagedInstallation } from '../src/packaged-update.js';
 import { lockFile } from '@bzzy/core/engine/store.js';
 
-function fixture(t, { failInstall = false, running = true } = {}) {
+function fixture(t, { failInstall = false, failPrepare = false, running = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-package-update-'));
   const bin = path.join(root, 'bin'), previousBin = process.env.BZZY_BIN_DIR, previousHome = process.env.BZZY_HOME;
   process.env.BZZY_BIN_DIR = bin; process.env.BZZY_HOME = path.join(root, 'private'); fs.mkdirSync(bin);
@@ -22,14 +22,14 @@ function fixture(t, { failInstall = false, running = true } = {}) {
   git(root, 'init', '--bare', '--initial-branch=main', remote); git(root, 'clone', remote, author);
   const cli = path.join(author, 'BZZY-CLI/BZZY-CLI-TERMINAL'); fs.mkdirSync(cli, { recursive: true });
   for (const product of ['BZZY-CORE', 'BZZY-RELAY']) { fs.mkdirSync(path.join(author, product)); fs.writeFileSync(path.join(author, product, 'package.json'), '{}'); }
-  fs.writeFileSync(path.join(cli, 'install.sh'), '#!/bin/sh\nmkdir -p "$BZZY_BIN_DIR"\nprintf "# bzzy-managed launcher\\nnew revision\\n" > "$BZZY_BIN_DIR/bzzy"\n' + (failInstall ? 'exit 23\n' : 'exit 0\n'));
+  fs.writeFileSync(path.join(cli, 'install.sh'), '#!/bin/sh\nif [ "$1" = --prepare-only ]; then exit ' + (failPrepare ? '21' : '0') + '; fi\nmkdir -p "$BZZY_BIN_DIR"\nprintf "# bzzy-managed launcher\\nnew revision\\n" > "$BZZY_BIN_DIR/bzzy"\n' + (failInstall ? 'exit 23\n' : 'exit 0\n'));
   fs.writeFileSync(path.join(author, 'version.txt'), 'checked'); git(author, 'add', '.'); git(author, 'commit', '-m', 'Checked release'); git(author, 'push', 'origin', 'main');
   const checked = git(author, 'rev-parse', 'HEAD');
   fs.mkdirSync(path.join(directory, 'bin'), { recursive: true }); fs.mkdirSync(path.join(directory, 'node_modules/@bzzy/core'), { recursive: true });
   fs.writeFileSync(path.join(directory, 'package.json'), '{"name":"bzzy-cli"}'); fs.writeFileSync(path.join(directory, 'bin/bzzy.js'), '// old package'); fs.writeFileSync(path.join(directory, 'node_modules/@bzzy/core/package.json'), '{}');
   for (const name of ['bzzy', 'bzzy-core']) fs.writeFileSync(path.join(bin, name), '# bzzy-managed launcher\nold revision\n', { mode: 0o755 });
   const service = [], commands = [];
-  const lifecycle = { async coreHostStatus() { return { running, operatorStopped: !running }; }, async stopCoreHost() { service.push('stop'); commands.push({ executable: 'core-stop', args: [] }); } };
+  const lifecycle = { async coreHostStatus() { return { running, operatorStopped: !running }; }, beginCoreMaintenance() { service.push('maintenance'); return () => service.push('release'); }, async suspendCoreHost() { service.push('suspend'); commands.push({ executable: 'core-suspend', args: [] }); }, async stopCoreHost() { assert.fail('Updates must not pause executions'); } };
   const run = (executable, args, options) => {
     commands.push({ executable, args });
     if (executable === 'git') {
@@ -54,25 +54,28 @@ test('the old packaged CLI fetches the checked revision and installs CLI/Core to
   fs.writeFileSync(path.join(f.author, 'version.txt'), 'later'); f.git(f.author, 'add', '.'); f.git(f.author, 'commit', '-m', 'Later release'); f.git(f.author, 'push', 'origin', 'main');
   const result = await updatePackagedInstallation(f.directory, { expectedCommit: f.checked, releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle });
   assert.equal(result, 0);
-  const checkout = path.join(f.releaseRoot, 'checkout'); assert.equal(f.git(checkout, 'rev-parse', 'HEAD'), f.checked);
+  const checkout = path.join(f.releaseRoot, 'versions', f.checked); assert.equal(f.git(checkout, 'rev-parse', 'HEAD'), f.checked);
   assert.equal(fs.readFileSync(path.join(checkout, 'version.txt'), 'utf8'), 'checked');
-  assert.equal(f.service[0], 'stop'); assert.ok(f.service[1].includes(path.join(checkout, 'BZZY-CLI/BZZY-CLI-TERMINAL/bin/bzzy-core.js'))); assert.ok(f.service[1].endsWith(' start'));
+  assert.deepEqual(f.service.slice(0, 3), ['maintenance', 'suspend', 'release']); assert.ok(f.service[3].includes(path.join(checkout, 'BZZY-CLI/BZZY-CLI-TERMINAL/bin/bzzy-core.js'))); assert.ok(f.service[3].endsWith(' start'));
+  const prepare = f.commands.findIndex(c => c.executable === 'bash' && c.args.includes('--prepare-only'));
+  const suspend = f.commands.findIndex(c => c.executable === 'core-suspend');
+  assert.ok(prepare >= 0 && prepare < suspend, 'dependencies are prepared while existing Core is still running');
   fs.writeFileSync(path.join(checkout, 'BZZY-CORE/package.json'), '{"local":true}');
-  await assert.rejects(updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle }), /local changes/);
-  assert.equal(f.service.length, 2, 'a dirty managed checkout cannot stop Core or install');
+  await assert.rejects(updatePackagedInstallation(f.directory, { expectedCommit: f.checked, releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle }), /local changes/);
+  assert.equal(f.service.length, 4, 'a dirty retained release cannot suspend Core or install');
 });
 
 test('failed package upgrades restore old launchers and recover the retained old service', async t => {
   const f = fixture(t, { failInstall: true });
   await assert.rejects(updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle }), /update command failed/);
   assert.match(fs.readFileSync(path.join(f.bin, 'bzzy'), 'utf8'), /old revision/);
-  assert.equal(f.service[0], 'stop'); assert.ok(f.service[1].includes(f.directory) && f.service[1].endsWith(' service install')); assert.ok(f.service[2].endsWith(' start'));
+  assert.deepEqual(f.service.slice(0, 3), ['maintenance', 'suspend', 'release']); assert.ok(f.service[3].includes(f.directory) && f.service[3].endsWith(' service install')); assert.ok(f.service[4].endsWith(' start'));
 });
 
 test('updating an operator-stopped package never starts Core or replays work', async t => {
   const f = fixture(t, { running: false });
   await updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle });
-  assert.deepEqual(f.service, []);
+  assert.deepEqual(f.service, ['maintenance', 'release']);
 });
 
 test('legacy packaged upgrades honor the same installation lock as current Core updates', async t => {
@@ -86,14 +89,25 @@ test('legacy packaged upgrades honor the same installation lock as current Core 
   assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'runtime/installation-update.lock')), false);
 });
 
-test('an existing managed checkout changes revision only after Core is paused', async t => {
+test('successive updates retain each complete old release and never merge or reinstall its dependencies', async t => {
   const f = fixture(t);
   await updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle });
+  const oldRelease = path.join(f.releaseRoot, 'versions', f.checked);
+  const dependency = path.join(oldRelease, 'BZZY-CORE', 'node_modules', 'live-runner-fixture.js');
+  fs.mkdirSync(path.dirname(dependency), { recursive: true }); fs.writeFileSync(dependency, 'original dependency');
   fs.writeFileSync(path.join(f.author, 'version.txt'), 'new release'); f.git(f.author, 'add', '.'); f.git(f.author, 'commit', '-m', 'Next release'); f.git(f.author, 'push', 'origin', 'main');
-  f.commands.length = 0; f.service.length = 0;
+  const next = f.git(f.author, 'rev-parse', 'HEAD'); f.commands.length = 0; f.service.length = 0;
   await updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle });
-  const stop = f.commands.findIndex(command => command.executable === 'core-stop');
-  const merge = f.commands.findIndex(command => command.executable === 'git' && command.args.includes('merge'));
-  assert.ok(stop >= 0 && merge > stop, 'stop must precede the working tree fast-forward');
-  assert.equal(fs.readFileSync(path.join(f.releaseRoot, 'checkout/version.txt'), 'utf8'), 'new release');
+  assert.equal(fs.readFileSync(path.join(oldRelease, 'version.txt'), 'utf8'), 'checked');
+  assert.equal(fs.readFileSync(dependency, 'utf8'), 'original dependency');
+  assert.equal(fs.readFileSync(path.join(f.releaseRoot, 'versions', next, 'version.txt'), 'utf8'), 'new release');
+  assert.ok(f.commands.every(c => c.executable !== 'git' || !c.args.includes('merge')));
+  assert.ok(f.commands.filter(c => c.executable === 'bash').every(c => !c.args[0].startsWith(oldRelease)));
+});
+
+test('preparation failure leaves Core, launchers and all active releases untouched', async t => {
+  const f = fixture(t, { failPrepare: true });
+  await assert.rejects(updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle }), /update command failed/);
+  assert.deepEqual(f.service, []);
+  assert.match(fs.readFileSync(path.join(f.bin, 'bzzy'), 'utf8'), /old revision/);
 });

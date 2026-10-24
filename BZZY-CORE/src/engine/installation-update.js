@@ -83,90 +83,111 @@ function command(run, executable, args, options = {}) {
   return result.stdout?.trim() || '';
 }
 
+// Compatibility name for older callers. This now preserves runners; callers
+// must stage dependencies separately and never mutate the retained installation.
 export async function withPausedCore(directory, install, { run = spawnSync, lifecycle } = {}) {
   const require = createRequire(path.join(directory, 'package.json'));
   const host = lifecycle || await import(pathToFileURL(require.resolve('@bzzy/core/engine/host-service.js')).href);
-  const before = await host.coreHostStatus();
-  if (before.running) await host.stopCoreHost();
-  let installed;
-  try { installed = await install(); }
-  catch (error) {
-    // A failed installer may have replaced its launchers or service manifest.
-    // Restore the old service definition using the old, still-retained package.
-    try {
-      command(run, process.execPath, [path.join(directory, 'bin', 'bzzy-core.js'), 'service', 'install'], { stdio: 'inherit' });
-      if (before.running && !before.operatorStopped) command(run, process.execPath, [path.join(directory, 'bin', 'bzzy-core.js'), 'start'], { stdio: 'inherit' });
-    } catch { throw new Error('Update failed and Core recovery needs attention. Run bzzy-core status; saved work remains paused.'); }
-    throw error;
+  if (!host.suspendCoreHost || !host.beginCoreMaintenance) throw new Error('Stage a release with execution-preserving lifecycle support before updating.');
+  const release = host.beginCoreMaintenance();
+  let before, installed, failure;
+  try {
+    before = await host.coreHostStatus();
+    if (before.operatorStopped && before.running) await host.stopCoreHost();
+    else if (before.running) await host.suspendCoreHost();
+    installed = await install();
+  } catch (error) { failure = error; }
+  finally { release(); }
+  if (failure) {
+    if (before) {
+      try {
+        command(run, process.execPath, [path.join(directory, 'bin', 'bzzy-core.js'), 'service', 'install'], { stdio: 'inherit' });
+        if (before.running && !before.operatorStopped && !(await host.coreHostStatus()).operatorStopped)
+          command(run, process.execPath, [path.join(directory, 'bin', 'bzzy-core.js'), 'start'], { stdio: 'inherit' });
+      } catch { throw new Error('Update failed and Core control recovery needs attention. Existing runners were retained. Run bzzy-core status.'); }
+    }
+    throw failure;
   }
-  if (before.running && !before.operatorStopped) command(run, process.execPath, [path.join(installed.directory, 'bin', 'bzzy-core.js'), 'start'], { stdio: 'inherit' });
+  if (before.running && !before.operatorStopped && !(await host.coreHostStatus()).operatorStopped)
+    command(run, process.execPath, [path.join(installed.directory, 'bin', 'bzzy-core.js'), 'start'], { stdio: 'inherit' });
   return installed.code;
 }
 
-export async function updatePackagedInstallation(directory, { expectedCommit = process.env.BZZY_UPDATE_TARGET,
-  releaseRoot = path.join(os.homedir(), '.local', 'share', 'bzzy'), run = spawnSync, lifecycle, lockHeld = false } = {}) {
-  const release = lockHeld ? () => {} : installationLock();
-  try { return await installPackaged(directory, { expectedCommit, releaseRoot, run, lifecycle }); }
-  finally { release(); }
+export async function updatePackagedInstallation(directory, options = {}) {
+  if (!isPackagedInstallation(directory)) throw new Error('This is not an installed BZZY package.');
+  return updateRepositoryInstallation(directory, options);
 }
 
-async function installPackaged(directory, { expectedCommit, releaseRoot, run, lifecycle }) {
-  const cwd = fs.realpathSync(directory);
-  if (!isPackagedInstallation(cwd)) throw new Error('This is not an installed BZZY package.');
-  const git = (args, location = cwd) => command(run, 'git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: location });
-  const head = parseUpdateHead(git(['ls-remote', '--symref', updateRepository, 'HEAD']));
-  const target = expectedCommit || head.target;
-  if (!revision(target)) throw new Error('Invalid checked BZZY revision.');
-  fs.mkdirSync(releaseRoot, { recursive: true, mode: 0o700 });
-  const owner = fs.lstatSync(releaseRoot);
-  if (!owner.isDirectory() || owner.isSymbolicLink() || owner.mode & 0o022 || process.getuid && owner.uid !== process.getuid()) throw new Error('Use an owner-controlled BZZY release directory.');
-  const checkout = path.join(releaseRoot, 'checkout');
-  let needsMerge = false;
-  if (fs.existsSync(checkout)) {
-    const stat = fs.lstatSync(checkout);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || !officialRepository(git(['remote', 'get-url', 'origin'], checkout))) throw new Error('The managed update checkout is unavailable or has an unexpected origin.');
-    if (git(['status', '--porcelain', '--untracked-files=normal'], checkout)) throw new Error('The managed BZZY checkout has local changes. Commit or stash them before updating.');
-    if (git(['symbolic-ref', '--quiet', '--short', 'HEAD'], checkout) !== head.branch) throw new Error('The managed BZZY checkout is not on its default branch.');
-    git(['fetch', '--no-tags', 'origin', target], checkout);
-    git(['merge-base', '--is-ancestor', 'HEAD', target], checkout);
-    needsMerge = true;
-  } else {
-    const stage = fs.mkdtempSync(path.join(releaseRoot, '.update-'));
-    try {
-      git(['clone', '--no-checkout', '--origin', 'origin', updateRepository, path.join(stage, 'source')]);
-      const source = path.join(stage, 'source');
-      git(['fetch', '--no-tags', 'origin', target], source);
-      git(['checkout', '-B', head.branch, target], source);
-      git(['branch', '--set-upstream-to', `origin/${head.branch}`, head.branch], source);
-      fs.renameSync(source, checkout);
-    } finally { fs.rmSync(stage, { recursive: true, force: true }); }
-  }
-  if (!needsMerge && git(['rev-parse', 'HEAD'], checkout) !== target) throw new Error('Could not verify the checked BZZY update revision.');
-  const next = path.join(checkout, 'BZZY-CLI', 'BZZY-CLI-TERMINAL');
-  for (const entry of ['BZZY-CORE/package.json', 'BZZY-RELAY/package.json', 'BZZY-CLI/BZZY-CLI-TERMINAL/install.sh']) git(['cat-file', '-e', `${target}:${entry}`], checkout);
-  const binDir = process.env.BZZY_BIN_DIR || process.env.BZZY_LAUNCHER_BIN_DIR || path.join(os.homedir(), '.local', 'bin');
-  const backups = new Map();
-  for (const name of ['bzzy', 'bzzy-core']) {
-    const file = path.join(binDir, name);
-    if (!fs.existsSync(file)) continue;
-    const stat = fs.lstatSync(file), body = fs.readFileSync(file, 'utf8');
-    if (!stat.isFile() || stat.isSymbolicLink() || !body.includes('# bzzy-managed launcher')) throw new Error('An unrelated launcher occupies the BZZY install location.');
-    backups.set(file, { body, mode: stat.mode & 0o777 });
-  }
-  process.stdout.write(`Updating BZZY CLI and Core from GitHub (${target.slice(0, 8)})…\n`);
-  return withPausedCore(cwd, () => {
-    try {
-      // An existing managed checkout may be the running installation. Fetch
-      // first, but change its working tree only after Core has stopped.
-      if (needsMerge) git(['merge', '--ff-only', '--no-edit', target], checkout);
-      if (git(['rev-parse', 'HEAD'], checkout) !== target) throw new Error('Could not verify the checked BZZY update revision.');
-      command(run, 'bash', [path.join(next, 'install.sh')], { cwd: next, stdio: 'inherit', timeout: 240000,
-        env: { ...commandEnvironment(), BZZY_BIN_DIR: binDir } });
-    } catch (error) {
-      for (const [file, backup] of backups) fs.writeFileSync(file, backup.body, { mode: backup.mode });
-      throw error;
+function ownedDirectory(directory) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.mode & 0o022 || process.getuid && stat.uid !== process.getuid())
+    throw new Error('Use an owner-controlled BZZY release directory.');
+}
+
+// Both source and packaged installs switch to a separate, immutable checkout
+// for every revision. No npm ci, git merge or cleanup touches a live release.
+export async function updateRepositoryInstallation(directory, { expectedCommit = process.env.BZZY_UPDATE_TARGET,
+  releaseRoot = path.join(os.homedir(), '.local', 'share', 'bzzy'), run = spawnSync, lifecycle, lockHeld = false } = {}) {
+  const release = lockHeld ? () => {} : installationLock();
+  try {
+    const cwd = fs.realpathSync(directory);
+    const git = (args, location = cwd) => command(run, 'git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: location });
+    const head = parseUpdateHead(git(['ls-remote', '--symref', updateRepository, 'HEAD']));
+    const target = expectedCommit || head.target;
+    if (!revision(target)) throw new Error('Invalid checked BZZY revision.');
+    ownedDirectory(releaseRoot);
+    const versions = path.join(releaseRoot, 'versions'); ownedDirectory(versions);
+    const checkout = path.join(versions, target), prepared = path.join(versions, target + '.prepared');
+    if (!fs.existsSync(checkout)) {
+      const stage = fs.mkdtempSync(path.join(releaseRoot, '.update-'));
+      try {
+        const source = path.join(stage, 'source');
+        git(['clone', '--no-checkout', '--origin', 'origin', updateRepository, source]);
+        git(['fetch', '--no-tags', 'origin', target], source);
+        git(['checkout', '-B', head.branch, target], source);
+        git(['branch', '--set-upstream-to', `origin/${head.branch}`, head.branch], source);
+        fs.renameSync(source, checkout);
+      } finally { fs.rmSync(stage, { recursive: true, force: true }); }
     }
-    process.stdout.write('BZZY CLI and Core are up to date. Run: bzzy\n');
-    return { directory: next, code: 0 };
-  }, { run, lifecycle });
+    ownedDirectory(checkout);
+    if (!officialRepository(git(['remote', 'get-url', 'origin'], checkout))) throw new Error('The release has an unexpected origin.');
+    if (git(['status', '--porcelain', '--untracked-files=normal'], checkout)) throw new Error('The retained release has local changes. It will not be overwritten.');
+    if (git(['rev-parse', 'HEAD'], checkout) !== target) throw new Error('Could not verify the checked BZZY update revision.');
+    const next = path.join(checkout, 'BZZY-CLI', 'BZZY-CLI-TERMINAL');
+    for (const entry of ['BZZY-CORE/package.json', 'BZZY-RELAY/package.json', 'BZZY-CLI/BZZY-CLI-TERMINAL/install.sh']) git(['cat-file', '-e', `${target}:${entry}`], checkout);
+    const binDir = process.env.BZZY_BIN_DIR || process.env.BZZY_LAUNCHER_BIN_DIR || path.join(os.homedir(), '.local', 'bin');
+    const backups = new Map();
+    for (const name of ['bzzy', 'bzzy-core']) {
+      const file = path.join(binDir, name);
+      if (!fs.existsSync(file)) { backups.set(file, null); continue; }
+      const stat = fs.lstatSync(file), body = fs.readFileSync(file, 'utf8');
+      if (!stat.isFile() || stat.isSymbolicLink() || !body.includes('# bzzy-managed launcher')) throw new Error('An unrelated launcher occupies the BZZY install location.');
+      backups.set(file, { body, mode: stat.mode & 0o777 });
+    }
+    const install = (prepare = false) => command(run, 'bash', [path.join(next, 'install.sh'), ...(prepare ? ['--prepare-only'] : [])], {
+      cwd: next, stdio: 'inherit', timeout: 240000, env: { ...commandEnvironment(), BZZY_BIN_DIR: binDir,
+        ...(!prepare ? { BZZY_INSTALL_PREPARED: '1', BZZY_NO_PATH_UPDATE: '1' } : {}) } });
+    process.stdout.write(`Preparing BZZY CLI and Core (${target.slice(0, 8)}). Active goals continue…\n`);
+    if (!fs.existsSync(prepared)) {
+      // A release that was used before losing its preparation receipt is never
+      // rebuilt in place: npm ci would replace files beneath a surviving runner.
+      if (fs.existsSync(path.join(next, 'node_modules'))) throw new Error('Release preparation is incomplete. Retain this directory for existing runners; inspect it before retrying.');
+      install(true);
+      fs.writeFileSync(prepared, JSON.stringify({ revision: target }), { mode: 0o600, flag: 'wx' });
+    }
+    const host = lifecycle || await import(pathToFileURL(path.join(checkout, 'BZZY-CORE/src/engine/host-service.js')).href);
+    return await withPausedCore(cwd, () => {
+      try { install(); }
+      catch (error) {
+        for (const [file, backup] of backups) {
+          if (backup) fs.writeFileSync(file, backup.body, { mode: backup.mode });
+          else fs.rmSync(file, { force: true });
+        }
+        throw error;
+      }
+      process.stdout.write('BZZY CLI and Core updated. Reattaching to existing work…\n');
+      return { directory: next, code: 0 };
+    }, { run, lifecycle: host });
+  } finally { release(); }
 }

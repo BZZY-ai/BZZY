@@ -37,13 +37,17 @@ bzzy-core restart
 `start` checks prerequisites, prepares a missing manifest and starts the native
 user service. `status` reports engine and service without starting anything.
 `stop` pauses and verifies all queued/running work before disabling/unloading
-Core. `restart` performs that stop and a supervised start. Goals stay paused
-until explicitly resumed; lifecycle commands never start model work.
+Core. `restart` unloads only the control daemon and starts its supervisor again.
+Detached execution runners keep running, with the same execution IDs and process
+identities. Clients reattach and replay only missing events. Previously paused
+goals stay paused. A short maintenance gate prevents another client from starting
+a competing daemon during this handoff. Restart after an explicit Stop finishes
+the durable pause barrier before reactivating the service.
 
 Advanced `bzzy-core service plan` and `service install --dry-run` print the
 manifest without writing or loading anything. `service install` prepares it;
 service subcommands also accept start/status/stop/restart. An active manifest
-cannot be silently replaced during an upgrade: stop first. Service names include
+cannot be silently replaced during an upgrade: suspend control first through the combined updater. Service names include
 a digest of the private `BZZY_HOME`; separate contexts do not collide. Use the
 same owned private directory (mode 700) for every command.
 

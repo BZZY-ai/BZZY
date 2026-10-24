@@ -126,7 +126,7 @@ enum CoreApplicationProtocol {
         "assistant.status": [], "voice.status": [], "voice.send": ["text"], "voice.poll": ["requestId", "cursor"], "voice.cancel": ["requestId"], "task.submit": ["owner", "instruction", "coordinateInput"], "task.get": ["taskId"],
         "events.list": ["after", "limit"], "events.subscribe": ["consumerId"], "events.ack": ["subscriptionId", "seq"],
         "events.unsubscribe": ["subscriptionId"], "input.claim": ["owner", "takeover"], "input.release": ["owner"],
-        "execution.execute": ["owner", "prompt", "goal", "resumeGoal", "replaceGoalId", "coordinateInput"], "question.answer": ["owner", "questionId", "answer", "coordinateInput"],
+        "execution.execute": ["owner", "prompt", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "coordinateInput"], "question.answer": ["owner", "questionId", "answer", "coordinateInput"],
         "permissions.set": ["owner", "enabled", "questionId", "coordinateInput"],
         "control.request": ["owner", "action", "text", "coordinateInput"], "command.status": ["requestId"]]
     static func opaque(_ value: String) throws {
@@ -138,7 +138,7 @@ enum CoreApplicationProtocol {
     static func request(op: String, params: [String: CoreJSONValue], id: String, resource: String) throws -> CoreJSONValue {
         try opaque(id); try opaque(resource)
         guard let allowed = fields[op], Set(params.keys).isSubset(of: allowed) else { throw CoreApplicationError("OPERATION_DENIED") }
-        var optional: Set<String> = ["coordinateInput", "after", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "text", "scope", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
+        var optional: Set<String> = ["coordinateInput", "after", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "text", "scope", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
         if op == "voice.send" { optional.remove("text") }
         if op == "voice.poll" { guard let cursor = params["cursor"]?.integer, cursor >= 0 && cursor <= 2_000_000 else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "voice.send" { guard let text = params["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CoreApplicationError("INVALID_REQUEST") } }
@@ -189,6 +189,7 @@ enum CoreApplicationProtocol {
         }
         if op == "question.answer" { _ = try uuid(params["questionId"]?.string) }
         if let goal = params["replaceGoalId"] { _ = try uuid(goal.string) }
+        if let goal = params["resumeGoalId"] { _ = try uuid(goal.string); guard params["resumeGoal"]?.bool == true else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "permissions.set" {
             guard params["enabled"]?.bool != nil else { throw CoreApplicationError("INVALID_REQUEST") }
             if let question = params["questionId"] { _ = try uuid(question.string) }

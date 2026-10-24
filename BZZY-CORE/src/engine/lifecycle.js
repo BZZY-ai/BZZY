@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { goalReplyPreview } from './notification-preview.js';
+import { isStalledGoal } from './goal-state.js';
 
 export function goalEvent(session, { question } = {}) {
   const goal = session.goal;
   if (!goal) return null;
   if (goal.importedHistorical) return null;
   const completed = goal.status === 'complete';
-  const stalled = ['blocked', 'usage_limited', 'budget_limited', 'awaiting_review'].includes(goal.status) || (goal.status === 'paused' && goal.reason === 'turn_limit');
+  const stalled = isStalledGoal(goal);
   if (!completed && !stalled && !question) return null;
   const usage = session.summary?.usage || session.delegationUsage;
   return { version: 1, id: randomUUID(), type: question ? 'goal.waiting_for_input' : completed ? 'goal.completed' : 'goal.stalled', occurredAt: new Date().toISOString(),

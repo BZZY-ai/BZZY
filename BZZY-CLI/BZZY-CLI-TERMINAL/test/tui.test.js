@@ -10,16 +10,76 @@ import { eyeMotion } from '../src/mascot.js';
 import { RunnerUI } from '../src/runtime-ui.js';
 import { events } from '../src/database.js';
 import { commandSuggestions } from '../src/terminal-commands.js';
-import { palette, createTerminalTheme } from '../src/terminal-theme.js';
+import { palette, palettes, createTerminalTheme } from '../src/terminal-theme.js';
 
 const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-function terminal() {
+function terminal(options = {}) {
   const input = new PassThrough(); input.isTTY = true; input.isRaw = false; input.setRawMode = value => { input.isRaw = value; };
   const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 32, columns: 100 });
   let written = ''; output.on('data', chunk => { written += chunk; });
-  const ui = new UI({ input, output, error: output }); ui.setSession(sessionId);
+  const ui = new UI({ ...options, input, output, error: output }); ui.setSession(sessionId);
   return { ui, input, output, get written() { return written; } };
 }
+test('minimal chat uses the full terminal and retains conversation, input, mouse Send and approval controls across sizes', async () => {
+  const { ui, output } = terminal({ minimal: true });
+  try {
+    ui.event('message.user', { text: 'A minimal question' });
+    ui.event('text', { text: 'A visible answer', agent: 'Codex' });
+    for (const [columns, rows] of [[160, 42], [100, 32], [72, 20]]) {
+      Object.assign(output, { columns, rows }); ui.tui.value = 'Unsent draft'; ui.tui.cursor = 12; ui.tui.render();
+      const frame = ui.tui.lastFrame.map(clean).join('\n');
+      assert.match(frame, /A minimal question/); assert.match(frame, /A visible answer/); assert.match(frame, /Unsent draft/);
+      assert.doesNotMatch(frame, /BZZY|Session:|YOLO|Latest|Settings|Your next goal|CPU|Memory/);
+      assert.equal(ui.tui.dashboardActive, false); assert.equal(ui.tui.textRegion.top, 1);
+      const send = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(send); assert.equal(send.row, rows - 1);
+      assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
+    }
+    ui.onAnswerApproval = async () => {};
+    ui.tui.pendingApproval = { id: 'pending', expiresAt: Date.now() + 60000 };
+    ui.tui.render();
+    assert.deepEqual(ui.tui.hitTargets.filter(hit => hit.type === 'approval').map(hit => hit.answer), ['yes', 'no']);
+  } finally { ui.close(); }
+});
+test('color commands repaint roles and cached content locally without losing drafts or changing another terminal', async () => {
+  const first = terminal({ minimal: true }), second = terminal();
+  try {
+    first.ui.tui.value = 'Keep this draft'; first.ui.tui.cursor = 7;
+    first.ui.event('message.user', { text: 'User question' }); first.ui.event('text', { text: 'Agent answer' });
+    for (const name of ['black', 'white', 'blue']) {
+      assert.equal(await first.ui.settingsCommand('/color ' + name), true);
+      assert.equal(first.ui.tui.theme.name, name); assert.equal(first.ui.colorPalette, name);
+      assert.equal(first.ui.tui.value, 'Keep this draft'); assert.equal(first.ui.tui.cursor, 7);
+      assert.equal(second.ui.tui.theme.name, 'blue');
+      const frame = first.ui.tui.lastFrame.map(clean).join('\n');
+      assert.match(frame, /User question/); assert.match(frame, /Agent answer/); assert.match(frame, /Keep this draft/);
+      assert.doesNotMatch(frame, /BZZY|Settings|Session:/);
+      const theme = createTerminalTheme(first.output, { FORCE_COLOR: '3' }, name);
+      const background = palettes[name].background.slice(1).match(/../g).map(value => parseInt(value, 16)).join(';');
+      assert.equal(theme.background(palette.background), '\x1b[48;2;' + background + 'm');
+      assert.notEqual(theme.foreground(palette.user), theme.foreground(palette.agent));
+      assert.notEqual(theme.background(palette.userSurface), theme.background(palette.agentSurface));
+      for (const level of ['0', '1', '2', '3']) {
+        const fallback = createTerminalTheme(first.output, { FORCE_COLOR: level }, name);
+        if (level === '0') assert.equal(fallback.color('plain'), 'plain');
+        else assert.notEqual(fallback.foreground(palette.text), fallback.foreground(palette.background));
+      }
+    }
+    await first.ui.settingsCommand('/color orange'); assert.equal(first.ui.colorPalette, 'blue');
+    assert.equal(await first.ui.settingsCommand('This is a message'), false);
+    assert.ok(commandSuggestions('/col').some(item => item.command === '/color'));
+  } finally { first.ui.close(); second.ui.close(); }
+});
+test('every palette keeps body text, semantic labels and filled action buttons readable', () => {
+  const luminance = color => {
+    const channels = color.slice(1).match(/../g).map(value => parseInt(value, 16) / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+    return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
+  };
+  const contrast = (a, b) => { const x = luminance(a), y = luminance(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+  for (const [name, colors] of Object.entries(palettes)) for (const [foreground, background] of [
+    ['text', 'background'], ['muted', 'surface'], ['userText', 'userSurface'], ['agent', 'agentSurface'],
+    ['accent', 'selection'], ['background', 'accent'], ['background', 'goalSuccess'], ['background', 'danger'], ['background', 'yolo'],
+  ]) assert.ok(contrast(colors[foreground], colors[background]) >= 4.5, `${name}: ${foreground} on ${background}`);
+});
 test('user cards and agent replies retain distinct roles in RGB, basic-color and monochrome terminals', () => {
   const { ui, output } = terminal();
   try {

@@ -166,6 +166,7 @@ function lifecycle(platform = 'darwin', { standalone = false, failure = false } 
       if (!managed) running = false;
       return { quiesced: true, pausedExecutions: 2, runningAgentsContinue: false };
     },
+    async shutdown() { events.push('shutdown-control'); running = false; return { stopped: true, runningAgentsContinue: true }; },
   };
   return { ...setup, run, runtime, events, doctor: () => ({ ready: true }) };
 }
@@ -189,10 +190,25 @@ test('top-level lifecycle prepares once, pauses before unload, and restarts serv
       await startCoreHost(setup);
       assert.equal((await restartCoreHost(setup)).running, true);
       assert.equal(runtime.stopped(), false);
-      assert.equal(events.filter(value => value.startsWith('quiesce:')).length, 2);
+      assert.equal(events.filter(value => value.startsWith('quiesce:')).length, 1, 'restart must not pause existing runners');
       assert.ok(events.every(value => !/model|execute|codex|claude/.test(value)), 'lifecycle must not submit model work');
     } finally { setup.close(); }
   }
+});
+
+test('an explicit Stop arriving during restart wins over control reactivation', async () => {
+  const setup = lifecycle();
+  try {
+    await startCoreHost(setup);
+    const run = (command, args) => {
+      const result = setup.run(command, args);
+      if (args.includes('bootout')) setup.runtime.persistStop();
+      return result;
+    };
+    const result = await restartCoreHost({ ...setup, run });
+    assert.equal(result.operatorStopped, true); assert.equal(result.running, false);
+    assert.equal(setup.events.filter(value => value.includes('bootstrap')).length, 1);
+  } finally { setup.close(); }
 });
 
 test('operator stop failure leaves its gate and loaded supervisor intact; explicit restart safely migrates standalone Core', async () => {
@@ -208,7 +224,7 @@ test('operator stop failure leaves its gate and loaded supervisor intact; explic
   try {
     await assert.rejects(startCoreHost(standalone), { code: 'CORE_ALREADY_RUNNING' });
     assert.equal((await restartCoreHost(standalone)).managed, true);
-    assert.ok(standalone.events.includes('quiesce:false'));
+    assert.ok(standalone.events.includes('shutdown-control'));
     assert.equal(standalone.events.filter(value => value.includes('bootstrap')).length, 1);
   } finally { standalone.close(); }
 });

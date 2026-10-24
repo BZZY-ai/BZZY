@@ -12,7 +12,7 @@ export function enqueueExecution(sessionId, input, requestId, { authorize, prepa
   authorize();
   const environment = captureEnvironment(input.environment);
   let environmentId;
-  try { return reserveRequest(`execute:${sessionId}`, requestId, { prompt: input.prompt, options: input.options, goal: input.goal, resumeGoal: input.resumeGoal, replaceGoalId: input.replaceGoalId, environment }, db => {
+  try { return reserveRequest(`execute:${sessionId}`, requestId, { prompt: input.prompt, options: input.options, goal: input.goal, resumeGoal: input.resumeGoal, replaceGoalId: input.replaceGoalId, ...(input.resumeGoalId === undefined ? {} : { resumeGoalId: input.resumeGoalId }), environment }, db => {
     authorize();
     const session = loadSession(sessionId);
     if (session.modelSelectionRequired) throw new Error('Select a model before sending a message.');

@@ -6,6 +6,7 @@ import { enqueueGoalTurn } from './session-operations.js';
 import { needsGoalReplacement, parseGoalCommand } from './goals.js';
 import { setTerminalYolo } from './terminal-permissions.js';
 import { authorizedUpdateGrant } from './update-access.js';
+import { isStalledGoal } from './goal-state.js';
 
 const queues = new Map();
 const reject = (message, code = 'INVALID_REQUEST', status = 400) => { throw Object.assign(new Error(message), { code, status }); };
@@ -15,7 +16,7 @@ const reject = (message, code = 'INVALID_REQUEST', status = 400) => { throw Obje
 export function submitSessionInput(sessionId, input, requestId, context) {
   if (!context?.authorize || !context.request) throw new Error('Input needs an authenticated Core context.');
   if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(requestId)) reject('Supply a stable input request ID.');
-  const allowed = ['operation', 'owner', 'prompt', 'objective', 'options', 'environment', 'goal', 'resumeGoal', 'replaceGoalId', 'preparedGoalId', 'questionId', 'answer', 'action', 'text', 'enabled', 'clientRequestId'];
+  const allowed = ['operation', 'owner', 'prompt', 'objective', 'options', 'environment', 'goal', 'resumeGoal', 'replaceGoalId', 'resumeGoalId', 'preparedGoalId', 'questionId', 'answer', 'action', 'text', 'enabled', 'clientRequestId'];
   if (!input || Object.keys(input).some(key => !allowed.includes(key))) reject('Unknown input field.');
   if (!['execute', 'goal', 'answer', 'control', 'permissions'].includes(input.operation)) reject('Unknown input operation.');
   if (typeof input.owner !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.owner)) reject('Invalid input actor.');
@@ -68,6 +69,11 @@ async function dispatch(sessionId, input, requestId, { authorize, principal = 'o
     if (command.action && command.action !== 'resume') reject('Use goal controls or supply an objective.');
     objective = command.objective; resume = command.action === 'resume';
   }
+  if (input.resumeGoalId !== undefined) {
+    if (!isGoal || !resume || typeof input.resumeGoalId !== 'string' || !/^[a-f0-9-]{36}$/.test(input.resumeGoalId)) reject('A stalled resume needs its saved goal identity.');
+    const goal = loadSession(sessionId)?.goal;
+    if (goal?.id !== input.resumeGoalId || !isStalledGoal(goal)) reject('The stalled goal changed. Refresh before resuming.', 'CONFLICT', 409);
+  }
   if (isGoal && !resume) {
     if (typeof objective !== 'string' || !objective.trim() || Buffer.byteLength(objective) > 16 * 1024) reject('Supply a bounded goal objective.');
     const goal = loadSession(sessionId)?.goal;
@@ -89,7 +95,7 @@ async function dispatch(sessionId, input, requestId, { authorize, principal = 'o
     const relayCommand = requestId.startsWith('relay.') ? getRecord('core.relay.command', requestId.slice(6)) : null;
     if (relayCommand?.op === 'task.submit' && relayCommand.sessionId === sessionId) inputChannel.taskId = relayCommand.id;
     if (isGoal) result = await enqueueGoalTurn(sessionId, input.owner, input.options || {}, {
-      objective, resume, requestId: executionRequestId, replaceGoalId: input.replaceGoalId, authorize: permit, request, channel: inputChannel, environment: input.environment,
+      objective, resume, requestId: executionRequestId, replaceGoalId: input.replaceGoalId, resumeGoalId: input.resumeGoalId, authorize: permit, request, channel: inputChannel, environment: input.environment,
     });
     else if (input.operation === 'execute') {
       result = enqueueExecution(sessionId, { prompt: input.prompt, options: input.options || {}, environment: input.environment,

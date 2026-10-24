@@ -12,14 +12,14 @@ import { removeExecutionEnvironment } from './execution-environment.js';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const active = job => ['queued', 'launching', 'running'].includes(job.state);
-export function reserveExecutionLaunch(id, logPath) {
+export function reserveExecutionLaunch(id, logPath, { engineDirectory = root, engineBuild } = {}) {
   // A coordinator in another process may cancel a queued job after the
   // scheduler selects its batch. Claim the current record under the same write
   // lock used by cancellation, so a stale candidate cannot revive stopped work.
   return transaction(db => {
     const job = getRecord('execution', id);
     if (job?.state !== 'queued' || job.stopAction) return null;
-    const reserved = { ...job, state: 'launching', launchedAt: now(), logPath };
+    const reserved = { ...job, state: 'launching', launchedAt: now(), logPath, engineDirectory, engineBuild };
     putRecord('execution', id, reserved, db);
     return reserved;
   });
@@ -57,7 +57,7 @@ function verifiedRunner(job) {
   const current = processIdentity(job.runner.pid);
   if (!current) return null;
   const result = spawnSync('/bin/ps', ['-ww', '-p', String(current.pid), '-o', 'command='], { encoding: 'utf8', timeout: 1000 });
-  return result.status === 0 && result.stdout.includes(path.join(root, 'bin', 'bzzy-engine.js')) && result.stdout.includes(`internal-execution ${job.id}`) ? current : null;
+  return result.status === 0 && result.stdout.includes(path.join(job.engineDirectory || root, 'bin', 'bzzy-engine.js')) && result.stdout.includes(`internal-execution ${job.id}`) ? current : null;
 }
 export function requestExecutionStop(sessionId, controlId, action) {
   for (const job of listRecords('execution', { states: ['queued', 'launching', 'running'] }).filter(job => descendant(job.sessionId, sessionId))) {
@@ -109,6 +109,9 @@ function finish(job, { stopped = false, forced = false, error } = {}) {
     }
     for (const question of listRecords('question', { sessionId: session.id, state: 'pending' })) putRecord('question', question.id, { ...question, state: 'expired', reason: 'Execution stopped.' });
     for (const operation of listRecords('operation').filter(item => item.sessionId === session.id && ['planned', 'dispatched'].includes(item.state))) putRecord('operation', operation.id, { ...operation, state: 'uncertain', recoveryAt: now() });
+    // The runner normally releases this in its finally block. A forced exit
+    // cannot execute that cleanup; terminal supervision owns the outcome now.
+    delete session.deferTerminalNotification;
     saveSession(session); closeOpenActivities(session);
   }
   putRecord('run', job.sessionId, { ...getRecord('run', job.sessionId), state: session?.executionState || 'failed', finishedAt: now() });

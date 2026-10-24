@@ -643,7 +643,7 @@ export class RelayGateway extends EventEmitter {
           questions: snapshot.questions.filter(question => question.sessionId === row.sessionId).map(question => pick(question, ['id', 'sessionId', 'question', 'text', 'kind', 'options', 'createdAt', 'expiresAt'])),
           inputOwner: pick(snapshot.inputOwner, ['owner', 'sessionId', 'expiresAt']),
           capabilities: { activeSteering: Boolean(snapshot.capabilities.activeSteering && row.permissions.includes('steer')),
-            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true, inputSubmission: true,
+            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
             inputOwnedByDevice: snapshot.inputOwner?.principal === `grant:${row.coreGrantId}`,
             inputActor: digest(`grant:${row.coreGrantId}`),
             durableEvents: true, permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
@@ -732,6 +732,7 @@ export class RelayGateway extends EventEmitter {
       if (typeof params.prompt !== 'string' || !params.prompt.trim() || Buffer.byteLength(params.prompt) > LIMITS.promptBytes) fail('INVALID_REQUEST', 'Execution needs bounded nonempty text.');
       for (const key of ['goal', 'resumeGoal']) if (params[key] !== undefined && typeof params[key] !== 'boolean') fail('INVALID_REQUEST', 'Goal flags must be boolean.');
       if (params.replaceGoalId !== undefined) uuid(params.replaceGoalId);
+      if (params.resumeGoalId !== undefined) { uuid(params.resumeGoalId); if (params.resumeGoal !== true) fail('INVALID_REQUEST', 'A stalled resume requires resumeGoal.'); }
       if (params.resumeGoal === true && params.goal !== true) fail('INVALID_REQUEST', 'Resume requires a goal execution.');
     }
     if (request.op === 'question.answer') { uuid(params.questionId); if (typeof params.answer !== 'string' || Buffer.byteLength(params.answer) > LIMITS.promptBytes) fail('INVALID_REQUEST', 'Question answers must be bounded text.'); }
@@ -764,7 +765,7 @@ export class RelayGateway extends EventEmitter {
         const input = request.op === 'task.submit' ? { operation: 'execute', prompt: params.instruction }
           : request.op === 'execution.execute' ? { operation: params.goal === true ? 'goal' : 'execute',
             ...(params.goal === true ? { objective: params.prompt } : { prompt: params.prompt }),
-            resumeGoal: params.resumeGoal === true, replaceGoalId: params.replaceGoalId }
+            resumeGoal: params.resumeGoal === true, replaceGoalId: params.replaceGoalId, resumeGoalId: params.resumeGoalId }
           : request.op === 'question.answer' ? { operation: 'answer', questionId: params.questionId, answer: params.answer }
           : request.op === 'permissions.set' ? { operation: 'permissions', enabled: params.enabled, questionId: params.questionId }
           : { operation: 'control', action: params.action, text: params.text };
@@ -778,7 +779,7 @@ export class RelayGateway extends EventEmitter {
           const host = await runtime();
           result = await enqueueGoalTurn(row.sessionId, owner, {}, {
             objective: command?.objective ?? params.prompt, resume: command?.action === 'resume' || params.resumeGoal === true,
-            replaceGoalId: params.replaceGoalId, requestId,
+            replaceGoalId: params.replaceGoalId, resumeGoalId: params.resumeGoalId, requestId,
             authorize: permission => {
               const current = this.#authorize(row.id, row.peerId, row.resource, permission);
               // Scoped HTTP reads/controls retain their principal. Input owner

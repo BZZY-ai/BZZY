@@ -183,10 +183,17 @@ public final class RelayConnection {
     public private(set) var coreYoloEnabled = false
     public private(set) var coreYoloControl = false
     public private(set) var coreGoalSubmission = false
+    public private(set) var coreStalledGoalResume = false
     public private(set) var coreInputSubmission = false
     private var coreInputActor: String?
     public private(set) var coreGoalID: String?
     public private(set) var coreGoalStatus: String?
+    public private(set) var coreGoalReason: String?
+    public private(set) var coreExecutionState: String?
+    public var canResumeStalledGoal: Bool {
+        coreActionsAvailable && coreGoalSubmission && coreStalledGoalResume && corePermissions.contains("execute") && coreGoalID != nil
+        && !coreBusy && !coreCommandUncertain && CoreGoalDraft.canResumeStalled(status: coreGoalStatus, reason: coreGoalReason, executionState: coreExecutionState)
+    }
     @ObservationIgnored private var recentCoreShares: [String: CoreShareReference] = [:]
     @ObservationIgnored private var pendingCoreShareRequests: [String: String] = [:]
     @ObservationIgnored private var pushRegistrationHash: String?
@@ -652,10 +659,13 @@ public final class RelayConnection {
         coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
         coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
         coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
+        coreStalledGoalResume = snapshot["capabilities"]["stalledGoalResume"].bool == true
         coreInputSubmission = snapshot["capabilities"]["inputSubmission"].bool == true
         coreInputActor = snapshot["capabilities"]["inputActor"].string
         coreGoalID = snapshot["session"]["goal"]["id"].string
         coreGoalStatus = snapshot["session"]["goal"]["status"].string
+        coreGoalReason = snapshot["session"]["goal"]["reason"].string
+        coreExecutionState = snapshot["execution"]["state"].string
         corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
         if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: inputLease.generation) { stopInputRenewal() }
         onCoreSnapshot?(try JSONEncoder().encode(snapshot)); publishCoreEvents()
@@ -1286,7 +1296,7 @@ public final class RelayConnection {
         coreConnected = false; inputLease.reset()
         coreSubscriptionID = nil; corePermissions = []; coreIsAssistant = false; coreSharingAllowed = false; coreIsAgent = false
         coreYoloEnabled = false; coreYoloControl = false
-        coreGoalSubmission = false; coreInputSubmission = false; coreInputActor = nil; coreGoalID = nil; coreGoalStatus = nil
+        coreGoalSubmission = false; coreStalledGoalResume = false; coreInputSubmission = false; coreInputActor = nil; coreGoalID = nil; coreGoalStatus = nil; coreGoalReason = nil; coreExecutionState = nil
         if purge {
             coreOutgoingMessages = []
             confirmedCorePair = false; state.corePairValidated = false
@@ -1421,10 +1431,13 @@ public final class RelayConnection {
             coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
             coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
             coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
+            coreStalledGoalResume = snapshot["capabilities"]["stalledGoalResume"].bool == true
             coreInputSubmission = snapshot["capabilities"]["inputSubmission"].bool == true
             coreInputActor = snapshot["capabilities"]["inputActor"].string
             coreGoalID = snapshot["session"]["goal"]["id"].string
             coreGoalStatus = snapshot["session"]["goal"]["status"].string
+            coreGoalReason = snapshot["session"]["goal"]["reason"].string
+            coreExecutionState = snapshot["execution"]["state"].string
             corePermissions.formIntersection(Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []))
             onCoreSnapshot?(try JSONEncoder().encode(snapshot))
             if inputLease.observeCore(owner: snapshot["inputOwner"]["owner"].string, ownedByDevice: snapshot["capabilities"]["inputOwnedByDevice"].bool == true, at: leaseGeneration) { stopInputRenewal() }
@@ -1558,6 +1571,12 @@ public final class RelayConnection {
         guard corePermissions.contains("execute") else { return false }
         guard coreGoalSubmission else { coreError = "Update BZZY Core from the CLI before resuming goals."; return false }
         return await mutateCore("execution.execute", params: ["prompt": .string("Continue the existing goal."), "goal": .bool(true), "resumeGoal": .bool(true)])
+    }
+
+    @discardableResult public func resumeStalledCoreGoal(sessionID: String) async -> Bool {
+        guard sessionID == coreSessionID, canResumeStalledGoal, let goalID = coreGoalID else { return false }
+        return await mutateCore("execution.execute", params: ["prompt": .string("Continue the existing goal."), "goal": .bool(true),
+            "resumeGoal": .bool(true), "resumeGoalId": .string(goalID)])
     }
 
     private func mutateCore(_ op: String, params: [String: CoreJSONValue], outgoingText: String? = nil) async -> Bool {

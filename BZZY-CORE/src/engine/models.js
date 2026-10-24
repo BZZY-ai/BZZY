@@ -9,6 +9,21 @@ import { identityAlive } from './recovery.js';
 
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\x00-\x1f\x7f-\x9f]/u.test(value);
 
+// Presentation metadata only: category/order never authorizes a model or a tool.
+export function sortModelCatalog(models, provider) {
+  const rank = model => provider.catalogFocus === 'cyber' && model.capabilities?.category === 'cyber'
+    ? model.id === provider.model ? 0 : 1 : 2;
+  return [...models].sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id));
+}
+
+function compatibleCatalogEntry(provider, model) {
+  if (!model || typeof model !== 'object' || model.access?.available === false || model.access?.locked === true || model.locked === true || model.is_ready === false || model.is_delisted === true || model.is_upcoming === true) return false;
+  if (provider.catalogFocus !== 'cyber') return true;
+  const endpoints = model.supported_endpoint_types, outputs = model.architecture?.output_modalities;
+  if (Array.isArray(outputs) && outputs.length && !outputs.includes('text')) return false;
+  return !Array.isArray(endpoints) || !endpoints.length || endpoints.some(value => ['openai', 'openai-response', 'anthropic', 'gemini'].includes(value));
+}
+
 export function normalizeModel(provider, value) {
   if (typeof value === 'string') value = value.trim();
   if (value == null || value === 'default') return provider.model || null;
@@ -101,16 +116,19 @@ async function apiModels(provider, signal) {
   }
   const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!Array.isArray(result.data)) throw new Error('No model catalog returned.');
-  return result.data.filter(model => model && typeof model === 'object' && model.access?.available !== false && model.access?.locked !== true && model.is_ready !== false).map(model => {
+  return result.data.filter(model => compatibleCatalogEntry(provider, model)).map(model => {
     const context = model.context_window ?? model.context_length;
+    const modalities = model.input_modalities ?? model.architecture?.input_modalities;
+    const cyber = provider.catalogFocus === 'cyber' && (/^orca\/orcacyber[-/]/i.test(model.id) || model.required_tier === 'sec-uncensored' || model.category === 'cyber');
     const capabilities = providerModelCapabilities(provider, model.id, {
       supportedEfforts: Array.isArray(model.effort?.supported_levels) ? model.effort.supported_levels : undefined,
       defaultEffort: typeof model.effort?.default_level === 'string' ? model.effort.default_level : undefined,
       contextWindow: Number.isSafeInteger(context) && context > 0 ? context : undefined,
-      inputModalities: Array.isArray(model.input_modalities) ? model.input_modalities.filter(value => ['text', 'image'].includes(value)) : undefined,
+      inputModalities: Array.isArray(modalities) ? modalities.filter(value => ['text', 'image'].includes(value)) : undefined,
+      ...(cyber ? { category: 'cyber' } : {}),
     });
     return { id: model.id, name: model.display_name || model.name || model.id,
-      description: model.description || [capabilities.contextWindow ? capabilities.contextWindow.toLocaleString() + ' context tokens' : '', capabilities.inputModalities?.join(' + ')].filter(Boolean).join(' · '), capabilities };
+      description: model.description || [cyber ? 'Cyber' : '', capabilities.contextWindow ? capabilities.contextWindow.toLocaleString() + ' context tokens' : '', capabilities.inputModalities?.join(' + ')].filter(Boolean).join(' · '), capabilities };
   });
 }
 
@@ -127,7 +145,11 @@ export async function availableModels(session, { signal, timeoutMs = 8000 } = {}
       return [model.id, { ...model, capabilities }];
     }));
     if (!unique.size) throw new Error('Model catalog is empty.');
-    return { models: [...unique.values()], source: provider.auth === 'api-key' ? 'provider' : 'installed backend' };
+    const ordered = provider.catalogFocus === 'cyber' ? sortModelCatalog([...unique.values()], provider) : [...unique.values()];
+    return { models: ordered, source: provider.auth === 'api-key' ? 'provider' : 'installed backend',
+      ...(provider.catalogFocus === 'cyber' ? { description: ordered.some(model => model.capabilities.category === 'cyber')
+        ? 'Cyber models first. OrcaRouter checks workspace and key access on every call.'
+        : 'No Cyber models were listed for this key. Check Security Research access at https://www.orcarouter.ai/research. Other available chat models are listed.' } : {}) };
   } catch (error) {
     const description = error.code === 'MODEL_AUTH' ? `The provider rejected the API key. Run bzzy auth ${provider.id} to replace it.`
       : error.code === 'MODEL_ACCESS' ? 'The configured key could not access the model list. Use a model ID permitted by your provider.'

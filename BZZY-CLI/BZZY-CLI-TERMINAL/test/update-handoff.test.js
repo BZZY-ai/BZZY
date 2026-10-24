@@ -35,6 +35,8 @@ async function until(check) {
 }
 test('updating keeps the TUI open, locks installation controls and saves drafts for a safe reload', async t => {
   const f = fixture(t); let complete, installed = false;
+  f.ui.minimal = true;
+  f.ui.colorPalette = 'white';
   const pending = new Promise(resolve => { complete = resolve; });
   const updating = updateCommand(f.ui, { check: async () => f.check, hostStatus: async () => ({ operatorStopped: true }),
     apply: async (check, options) => { assert.equal(check.target, f.check.target); assert.equal(options.inherit, false); installed = true; await pending; } });
@@ -51,6 +53,8 @@ test('updating keeps the TUI open, locks installation controls and saves drafts 
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   const recovery = readUpdateHandoff(file);
   assert.equal(recovery.sessionId, f.ui.sessionId); assert.equal(recovery.coreStopped, true);
+  assert.equal(recovery.minimal, true);
+  assert.equal(recovery.colorPalette, 'white');
   assert.equal(recovery.drafts[0][1].value, 'Keep this unsent draft 🐝');
   assert.equal(fs.existsSync(file), false, 'Recovery is consumed once');
   assert.equal(f.ui.closed, undefined, 'The update command never closes the terminal UI');

@@ -257,6 +257,21 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertEqual(state["executionCount"].integer, goals && allowTakeover ? 3 : voiceChat ? 1 : 0, "Pairing and reconnecting observe only")
         XCTAssertEqual(state["coordinatorConfigured"].bool, voiceChat)
         XCTAssertEqual(state["activeGrants"].integer, 1)
+        if goals && allowTakeover {
+            XCTAssertFalse(connection.canResumeStalledGoal, "A completed goal keeps the shortcut disabled")
+            let stalled = try fixture.request(["op": .string("goal-stall")])
+            await connection.refreshCore()
+            try await eventually { connection.canResumeStalledGoal }
+            XCTAssertEqual(connection.coreGoalID, stalled["goalID"].string)
+            let accepted = await connection.resumeStalledCoreGoal(sessionID: connection.coreSessionID)
+            XCTAssertTrue(accepted)
+            try await eventually { try fixture.request(["op": .string("goal-state")])["status"].string == "complete" }
+            await connection.refreshCore()
+            XCTAssertFalse(connection.canResumeStalledGoal)
+            let resumed = try fixture.request(["op": .string("goal-state")])
+            XCTAssertEqual(resumed["goalID"].string, stalled["goalID"].string)
+            XCTAssertEqual(resumed["executionCount"].integer, 4, "A shortcut continues the saved goal exactly once")
+        }
         if failMetrics {
             XCTAssertEqual(try fixture.request(["op": .string("core-stop")])["stopped"].bool, true)
             try await eventually { !connection.coreActionsAvailable }

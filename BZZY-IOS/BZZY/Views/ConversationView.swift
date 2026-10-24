@@ -42,6 +42,7 @@ struct ConversationCanvas: View {
     @GestureState private var voiceHeld = false
     @State private var showDetails = false
     @State private var showActivity = false
+    @State private var composerCaretRequest = 0
     #if canImport(UIKit)
     @State private var composerFocused = false
     #else
@@ -63,6 +64,10 @@ struct ConversationCanvas: View {
     }
     private var canDictate: Bool {
         !isLive || relay.coreActionsAvailable && relay.coreSessionID == conversationID && relay.corePermissions.contains("execute")
+    }
+    private var canSetGoal: Bool {
+        voiceDraft == nil && !voice.isBusy && !voiceHeld && (!isLive || relay.coreActionsAvailable && relay.coreSessionID == conversationID
+            && relay.coreGoalSubmission && relay.corePermissions.contains("execute") && !relay.coreBusy && !relay.coreCommandUncertain)
     }
     private var messages: [LocalMessage] {
         if remoteSession { return store.liveSession?.id == conversationID ? store.liveMessages : [] }
@@ -210,7 +215,7 @@ struct ConversationCanvas: View {
             if isLive, relay.coreSessionID == conversationID {
                 HStack {
                     if let status = store.liveSession?.goalStatus {
-                        GoalPhasePill(status: status)
+                        GoalPhasePill(status: status, reason: relay.coreGoalReason)
                     }
                     Spacer(minLength: 6)
                     Button {
@@ -234,9 +239,22 @@ struct ConversationCanvas: View {
                 }
                 if let error = relay.coreError { Text(error).bzzyFont(11).foregroundStyle(BZZYTheme.danger) }
             }
+            HStack(spacing: 8) {
+                goalShortcut("Set goal", icon: "scope", id: "set-goal", enabled: canSetGoal) {
+                    draft = CoreGoalDraft.settingGoal(draft)
+                    composerCaretRequest &+= 1; composerFocused = true
+                    BZZYTheme.haptic()
+                }
+                goalShortcut("Resume goal", icon: "play.fill", id: "resume-goal",
+                             enabled: isLive && relay.coreSessionID == conversationID && relay.canResumeStalledGoal && !voice.isBusy && voiceDraft == nil) {
+                    Task { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
+                    BZZYTheme.haptic()
+                }
+                Spacer(minLength: 0)
+            }
             HStack(alignment: .bottom, spacing: 10) {
                 #if canImport(UIKit)
-                GoalMessageEditor(text: $draft, focused: Binding(get: { composerFocused }, set: { composerFocused = $0 }))
+                GoalMessageEditor(text: $draft, focused: Binding(get: { composerFocused }, set: { composerFocused = $0 }), caretAtEndRequest: composerCaretRequest)
                     .padding(.vertical, 14).padding(.leading, 16)
                     .disabled(voiceDraft != nil || voice.isBusy || voiceHeld)
                 #else
@@ -294,6 +312,17 @@ struct ConversationCanvas: View {
         }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10).background(BZZYTheme.background)
     }
 
+    private func goalShortcut(_ title: String, icon: String, id: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon).bzzyFont(11, weight: .semibold)
+                .padding(.horizontal, 11).frame(minHeight: 34)
+                .foregroundStyle(enabled ? BZZYTheme.accent : BZZYTheme.muted)
+                .background(enabled ? BZZYTheme.accent.opacity(0.10) : BZZYTheme.elevated, in: Capsule())
+                .overlay(Capsule().stroke(enabled ? BZZYTheme.accent.opacity(0.3) : BZZYTheme.line, lineWidth: 0.7))
+                .frame(minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(BZZYPressStyle()).disabled(!enabled).accessibilityIdentifier(id)
+    }
+
     private func startDictation() {
         guard canDictate, !voice.isBusy, voiceDraft == nil else { return }
         composerFocused = false
@@ -320,9 +349,10 @@ struct ConversationCanvas: View {
 
 private struct GoalPhasePill: View {
     let status: String
+    var reason: String? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var active: Bool { ["active", "verifying"].contains(status) }
-    private var stalled: Bool { ["blocked", "budget_limited", "usage_limited", "awaiting_review"].contains(status) }
+    private var stalled: Bool { CoreGoalDraft.isStalled(status: status, reason: reason) }
     private var tone: Color { status == "complete" ? BZZYTheme.success : stalled ? BZZYTheme.danger : active ? BZZYTheme.accent : BZZYTheme.secondary }
     var body: some View {
         HStack(spacing: 7) {
@@ -448,6 +478,7 @@ struct WorkspaceDetailsView: View {
 private struct GoalMessageEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var focused: Bool
+    var caretAtEndRequest = 0
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
@@ -477,6 +508,10 @@ private struct GoalMessageEditor: UIViewRepresentable {
             view.selectedRange = NSRange(location: min(selection.location, text.utf16.count), length: 0)
         }
         context.coordinator.style(view)
+        if context.coordinator.caretRequest != caretAtEndRequest, view.markedTextRange == nil {
+            context.coordinator.caretRequest = caretAtEndRequest
+            view.selectedRange = NSRange(location: view.text.utf16.count, length: 0)
+        }
         if focused && !view.isFirstResponder && view.isEditable { view.becomeFirstResponder() }
         if !focused && view.isFirstResponder { view.resignFirstResponder() }
     }
@@ -489,6 +524,7 @@ private struct GoalMessageEditor: UIViewRepresentable {
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: GoalMessageEditor
+        var caretRequest = 0
         init(_ parent: GoalMessageEditor) { self.parent = parent }
         func style(_ view: UITextView) {
             guard view.markedTextRange == nil else { return }

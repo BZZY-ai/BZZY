@@ -2,6 +2,16 @@ import Foundation
 
 /// Pure composer projection: the full slash command stays in the saved draft.
 public enum CoreGoalDraft {
+    public static func settingGoal(_ text: String) -> String {
+        if isGoal(text) { return text == "/goal" ? "/goal " : text }
+        return replacingBody(text)
+    }
+    public static func isStalled(status: String?, reason: String? = nil) -> Bool {
+        ["blocked", "usage_limited", "budget_limited", "awaiting_review"].contains(status ?? "") || status == "paused" && ["turn_limit", "recovery_required"].contains(reason ?? "")
+    }
+    public static func canResumeStalled(status: String?, reason: String? = nil, executionState: String? = nil) -> Bool {
+        isStalled(status: status, reason: reason) && !["queued", "launching", "running"].contains(executionState ?? "")
+    }
     public static func isGoal(_ text: String) -> Bool {
         text == "/goal" || text.hasPrefix("/goal ") || text.hasPrefix("/goal\n") || text.hasPrefix("/goal\t")
     }

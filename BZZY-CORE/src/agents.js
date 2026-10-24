@@ -6,7 +6,7 @@ import { exportSharedAgentProject, importSharedAgentProject } from './engine/pro
 import { CoreWorkspaces } from './workspaces.js';
 import { object, fail, uuid } from './validation.js';
 import { providerSelection, insertConversation, conversationExport } from './conversations.js';
-import { assertSessionIdle, availableModels } from './engine/models.js';
+import { assertSessionIdle, availableModels, sortModelCatalog } from './engine/models.js';
 import { writeJson } from './engine/files.js';
 import { canonicalPath, contains } from './paths.js';
 import { directoryIdentity, matchesDirectoryIdentity } from './engine/directory-identity.js';
@@ -51,7 +51,7 @@ export class CoreAgents {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25 || after !== undefined && (typeof after !== 'string' || after.length > 200 || /[\s\x00-\x1f\x7f-\x9f]/u.test(after))) fail('INVALID_REQUEST', 'Invalid model page.');
     const root = this.#workspaces.pin();
     const catalog = await availableModels({ ...selection, cwd: root.path }, { timeoutMs: 8000 });
-    const all = catalog.models.sort((a, b) => a.id.localeCompare(b.id));
+    const all = sortModelCatalog(catalog.models, providers()[provider]);
     const start = after === undefined ? 0 : all.findIndex(model => model.id === after) + 1;
     if (after !== undefined && !start) fail('INVALID_CURSOR', 'The model catalog changed. Reload before continuing.');
     const selected = all.slice(start, start + limit), hasMore = start + selected.length < all.length;

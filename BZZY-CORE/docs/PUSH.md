@@ -21,6 +21,15 @@ question details out of push payloads. Navigation uses opaque identifiers; full
 conversations, files, provider keys and invitation codes are excluded. Tapping an
 alert only opens/reconciles an authorized view.
 
+Blocked goals, provider usage limits, token/runtime budget limits, acceptance
+review, turn limits and interrupted goals requiring recovery all produce the
+same `goal.stalled` event. Core writes that event and its outbox record with the
+saved outcome, independently of CLI, Relay or iPhone connectivity. Supervision
+releases notification deferral if a runner dies before its own cleanup executes.
+Saving the same outcome again does not create another alert; an explicit resume
+advances the goal's notification epoch so a later stall can notify again.
+Manual pause, explicit Stop and cancellation are not reported as stalls.
+
 ## Host setup
 
 An Apple Developer APNs authentication key, its key ID, your team ID, a correctly

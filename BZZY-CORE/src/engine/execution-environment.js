@@ -11,7 +11,7 @@ const configuration = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPD
   'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'BZZY_ENV_ALLOW']);
 export function credentialEnvironmentNames() {
   const providers = readJson(path.join(home(), 'config.json'), {}).providers || {};
-  return new Set(['DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
+  return new Set(['DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
     ...Object.values(providers).map(provider => provider.envKey).filter(key => typeof key === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))]);
 }
 

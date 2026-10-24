@@ -275,12 +275,12 @@ export class ClientSettings {
     const host = await this.hostAdapter();
     // Leave old API/lease readers before stopping or replacing their daemon.
     // The CLI then stays in local Settings until the user leaves that screen.
-    this.ui.coreLifecycleInterrupted = true;
+    if (action !== 'core-restart') this.ui.coreLifecycleInterrupted = true;
     this.ui.hostMetrics = null;
     try {
       await host[{ 'core-start': 'startCoreHost', 'core-stop': 'stopCoreHost', 'core-restart': 'restartCoreHost' }[action]]();
       this.message = action === 'core-stop' ? 'Core stopped. Work is saved and paused.'
-        : action === 'core-restart' ? 'Core restarted. Paused work stays paused.' : 'Core is running. Paused work stays paused.';
+        : action === 'core-restart' ? 'Core restarted. Active work continues; paused work stays paused.' : 'Core is running. Paused work stays paused.';
     } finally {
       this.hostStatus = undefined;
       await this.refreshHost().catch(() => {});

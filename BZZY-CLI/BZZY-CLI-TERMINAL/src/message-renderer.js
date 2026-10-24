@@ -6,6 +6,7 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 // Message colors are part of the cross-client body contract, independent of
 // future changes to button, navigation and border colors.
 const colors = Object.freeze({ mint: '#00E5CB', amber: '#E4BD7C', coral: '#F28B82', blue: '#8CBDF5', lavender: '#B9A5F5', muted: '#91A6A1' });
+const lightColors = Object.freeze({ mint: '#087664', amber: '#805000', coral: '#B4322D', blue: '#235BB0', lavender: '#684196', muted: '#52606D' });
 const basicColors = Object.freeze({ mint: 96, amber: 93, coral: 91, blue: 94, lavender: 95, muted: 37 });
 const safeText = text => clean(text).replace(/[\u2028\u2029]/g, '\n').replaceAll('\t', '  ');
 const elements = node => node.children.filter(child => child.tag !== '#text');
@@ -61,8 +62,9 @@ function styleText(runs, context) {
   const reset = '\x1b[22;23;24m' + theme.foreground(palette.text);
   return runs.map(({ text, style }) => {
     if (!text) return '';
-    const tone = colors[style.color] || (style.size === 'small' ? palette.muted : palette.text);
-    const foreground = theme.level === 1 && basicColors[style.color] ? `\x1b[${basicColors[style.color]}m` : theme.foreground(tone);
+    const tone = (theme.name === 'white' ? lightColors : colors)[style.color] || (style.size === 'small' ? palette.muted : palette.text);
+    const basicTone = basicColors[style.color] && (theme.name === 'white' ? { mint: 36, amber: 33, coral: 31, blue: 34, lavender: 35, muted: 90 }[style.color] : basicColors[style.color]);
+    const foreground = theme.level === 1 && basicTone ? `\x1b[${basicTone}m` : theme.foreground(tone);
     const attributes = `${style.bold || style.size === 'large' ? '\x1b[1m' : ''}${style.size === 'small' ? '\x1b[2m' : ''}${style.italic ? '\x1b[3m' : ''}${style.underline ? '\x1b[4m' : ''}`;
     const codeBackground = style.code ? theme.background(palette.surface) : '';
     const restoreBackground = style.code ? background ? theme.background(background) : '\x1b[49m' : '';

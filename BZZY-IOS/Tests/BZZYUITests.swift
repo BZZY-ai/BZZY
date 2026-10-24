@@ -1,6 +1,25 @@
 import XCTest
 
 final class BZZYUITests: XCTestCase {
+    func testGoalShortcutsPrepareTheEditorAndLeaveResumeDisabledWithoutAStalledGoal() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing"]
+        app.launch()
+        app.buttons["agent-COOL"].tap()
+        let set = app.buttons["set-goal"], resume = app.buttons["resume-goal"], draft = app.textViews["message-draft"]
+        XCTAssertTrue(set.waitForExistence(timeout: 5)); XCTAssertTrue(set.isEnabled)
+        XCTAssertTrue(resume.exists); XCTAssertFalse(resume.isEnabled)
+        set.tap()
+        XCTAssertEqual(draft.value as? String, "/goal ")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        draft.typeText("Review this project")
+        XCTAssertEqual(draft.value as? String, "/goal Review this project")
+        set.tap(); draft.typeText(" safely")
+        XCTAssertEqual(draft.value as? String, "/goal Review this project safely")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        attach(app, name: "Compact goal shortcuts and focused green command")
+    }
     func testGoalComposerKeepsKeyboardAndSelectionWhileStylingCommand() {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -8,21 +8,23 @@ import { ClientSettings } from './client-settings.js';
 import { Pet } from './mascot.js';
 import { MESSAGE_FORMAT_LIMITS, parseMessageBody } from '@bzzy/core/message-format';
 import { renderMessageContent } from './message-renderer.js';
-import { createTerminalTheme } from './terminal-theme.js';
+import { createTerminalTheme, palettes } from './terminal-theme.js';
 import { HostMetricsMonitor } from './host-metrics.js';
 import { shareSavedSession } from './session-browser.js';
 import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
+  constructor({ json = false, pet = true, minimal = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
     this.json = json;
     this.pet = pet;
+    this.minimal = minimal;
+    this.colorPalette = updateHandoff?.colorPalette || 'blue';
     this.input = input;
     this.output = output;
     this.error = error;
     this.interactive = Boolean(input.isTTY && output.isTTY && !json);
-    this.hostMetricsEnabled = hostMetrics && this.interactive;
+    this.hostMetricsEnabled = hostMetrics && this.interactive && !minimal;
     this.metricsLoader = metricsLoader;
     this.lineOpen = false;
     this.reader = null;
@@ -105,6 +107,16 @@ export class UI {
   showAccountStatus() { this.event('info', { message: accountStatusDetails(this.accountStatus) }); }
   openSettings() { this.openTerminal(); this.settings ||= new ClientSettings(this); this.tui?.setPanel('settings'); }
   async settingsCommand(input) {
+    if (/^\/color(?:\s|$)/.test(input.trim())) {
+      const name = input.trim().slice(6).trim().toLowerCase();
+      if (!Object.hasOwn(palettes, name)) this.event('error', { message: 'Choose /color blue, /color black or /color white.' });
+      else {
+        this.colorPalette = name;
+        this.messageTheme = createTerminalTheme(this.output, process.env, name);
+        this.tui?.setColorPalette(name);
+      }
+      return true;
+    }
     if (input.trim() === '/yolo') { await this.toggleYolo(); return true; }
     if (/^\/session-action(?:\s|$)/.test(input)) {
       const match = /^\/session-action share ([a-f0-9-]{36})$/.exec(input.trim());
@@ -214,7 +226,7 @@ export class UI {
       if (!current.buffer) continue;
       const parsed = parseMessageBody(current.buffer);
       if (parsed.isFormatted) {
-        this.messageTheme ||= createTerminalTheme(this.output);
+        this.messageTheme ||= createTerminalTheme(this.output, process.env, this.colorPalette);
         const width = (this.output.columns || 80) - cellWidth(this.assistantPrefix(current));
         const rendered = renderMessageContent(parsed, { width, theme: this.messageTheme });
         this.emitAssistantText(rendered.lines.join('\n'), current);

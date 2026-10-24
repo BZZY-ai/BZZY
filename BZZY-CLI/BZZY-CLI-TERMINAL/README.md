@@ -61,6 +61,12 @@ then choose it from the model dropdown or use
 per-model reasoning choices come from Core. It uses the installed Codex CLI
 with the provider's Responses API. See [setup and model support](../../BZZY-CORE/docs/ABLITERATION.md).
 
+OrcaRouter is built in with Cyber models prioritized. Run `bzzy auth orcarouter`,
+then choose it from the model dropdown or use
+`bzzy --provider orcarouter --model orca/orcacyber-zero-1.5`.
+Cyber models appear when the key's workspace has the upstream access grant;
+see [OrcaRouter setup](../../BZZY-CORE/docs/ORCAROUTER.md).
+
 CLI stays terminal-oriented; persistent Agent management lives in iPhone.
 The terminal header shows Core host CPU and used/total RAM, refreshed roughly
 once per second. Wider terminals also show Core's own resident memory. These
@@ -109,6 +115,10 @@ Sending another `/goal <objective>` while a goal is active, verifying or paused
 opens **Replace current goal?** with **No** selected initially. Yes stops the
 previous run before queueing the new goal; No or Escape keeps it. Core checks the
 confirmed goal ID again, so a goal changed by another client needs a fresh review.
+Use `/goal resume` to continue a paused or stalled goal from its saved checkpoint.
+It keeps the same goal and objective, resets the recurring-blocker audit and
+retains spent tokens. A completed goal cannot resume; an exhausted token budget
+requires an explicitly increased total.
 
 Settings keeps its four main entries in compact cards. Open **Settings > BZZY
 Core > Terminal agent setups**, or `/settings modes`, to save each mode’s models,
@@ -164,13 +174,25 @@ hints map to terminal emphasis/dim. Raw history/JSON events remain unchanged and
 clipboard copies are readable text. Invalid or incomplete markup falls back to
 literal safe text; markup never executes actions or grants permissions.
 
+Run `bzzy --minimal` for only the conversation and bottom message input, at any
+terminal size. It keeps the same sessions, mouse input, command picker and
+approval controls. Use `/models`, `/settings`, `/sessions` or `/update` when
+needed. The layout and unsent draft survive an update.
+
+Use `/color blue`, `/color black` or `/color white` to switch the full palette
+instantly: chat roles, surfaces, buttons, selections, borders and status colors.
+Black uses a pitch-black canvas with neutral controls; white uses a white canvas
+with dark text and readable accents. Blue is the default on every new launch.
+The selection belongs to this CLI only, works in minimal mode, and is retained
+when that same terminal reloads after an update. No provider request is sent.
+
 The TUI follows the reference sidebar layout on wide terminals, with Chat, Activity, Network, Sessions, Skills and Settings. Smaller terminals retain a compact layout and the complete pairing QR. Sky-blue controls have hover and pressed feedback; navigation, recent sessions, Settings actions, Back, Send, Paste, Latest, Show tools, Copy and the update checker accept mouse clicks. The composer preserves unsent drafts across local controls.
 
 The header model control opens a floating searchable dropdown over the current chat. Click a model once to apply it; use the mouse wheel or arrows to browse, type to filter, and click outside or press Esc to cancel. The adjacent effort dropdown lists the selected model's supported reasoning levels. Save keeps the CLI default. Other selectors use floating dialogs with explicit Confirm/Cancel controls, preserving approval confirmations. Double-click the project alias to rename it inline; Enter/Save name confirms and Esc/Cancel returns. Core's own model and effort dropdowns remain independent in Settings → BZZY Core.
 
 Open **Skills** or `/skills` to view, create, import folders/ZIPs and explicitly enable shared workflows for every model. See [Core skills](../../BZZY-CORE/docs/SKILLS.md).
 
-Use **Check for updates** or `/update` to update CLI and Core together. The TUI stays open during installation, then reloads the new frontend in the same terminal with its saved chat and unsent draft. Core briefly restarts; paused work stays paused and another client's input lease is respected. Older already-running CLIs need one final reopen to load this updater. See [update behavior and limits](docs/UPDATES.md). The existing command remains:
+Use **Check for updates** or `/update` to update CLI and Core together. The TUI stays open during installation, then reloads the new frontend in the same terminal with its saved chat and unsent draft. Core control briefly restarts; active runners keep running and paused work stays paused and another client's input lease is respected. Older already-running CLIs need one final reopen to load this updater. See [update behavior and limits](docs/UPDATES.md). The existing command remains:
 
 ```bash
 bzzy --update

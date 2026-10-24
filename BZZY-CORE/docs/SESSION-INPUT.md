@@ -24,6 +24,13 @@ Goal replacement still requires the current goal's exact ID and cancel rights
 when stopping live execution. Confirmation is checked before changing control
 and again before committing the replacement. Reconnection cannot resume a goal.
 
+`/goal resume` explicitly continues an unfinished paused or stalled goal with
+its original ID, objective, checkpoint and evidence. It resets the blocker audit
+and notification epoch, while retaining token consumption. Exhausted budgets
+require an explicit higher total. The mobile stalled-only shortcut additionally
+sends `resumeGoalId`; Core checks both identity and stalled state inside queue
+admission. `stalledGoalResume` advertises this optional gateway capability.
+
 An `input-intent` journal namespaces each request by session and authenticated
 principal, fingerprints its complete input and records acceptance. Retrying an
 accepted intent returns its receipt without reclaiming input or executing again.

@@ -8,6 +8,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { home } from './files.js';
 import { canonicalPath } from '../paths.js';
 import { setTimeout as delay } from 'node:timers/promises';
+import { beginCoreMaintenance, assertCoreAvailable } from './maintenance.js';
+export { beginCoreMaintenance } from './maintenance.js';
 
 const marker = 'BZZY managed host service v1';
 const contextPaths = ['BZZY_CODEX_HOME', 'CODEX_HOME', 'BZZY_CLAUDE_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN'];
@@ -191,6 +193,7 @@ async function lifecycleRuntime() {
     const info = runtime.runtimeInfo(); return info && identityAlive(info.identity) ? info : null;
   };
   return {
+    controlAlive: () => Boolean(current()),
     clearStop: runtime.clearOperatorStopIntent,
     persistStop: runtime.persistOperatorStopIntent,
     stopped: runtime.operatorStopRequested,
@@ -211,6 +214,10 @@ async function lifecycleRuntime() {
       const result = await runtime.pauseRuntimeExecutions();
       return { quiesced: true, ...result, runningAgentsContinue: false };
     },
+    async shutdown() {
+      const info = current();
+      return info ? runtime.runtimeRequest(info, 'POST', '/shutdown', {}) : { stopped: true, runningAgentsContinue: true };
+    },
   };
 }
 
@@ -224,6 +231,7 @@ const sameManagedProcess = (engine, manager) => engine.running === true && manag
 
 export async function startCoreHost({ plan = servicePlan(), runtime, run = defaultRun, doctor = installationDoctor,
   prepare = true, readinessWaitMs = 8000 } = {}) {
+  assertCoreAvailable(plan.coreHome);
   if (!Number.isSafeInteger(readinessWaitMs) || readinessWaitMs < 50 || readinessWaitMs > 15000) throw failure('SERVICE_USAGE', 'Service readiness wait must be 50–15000 milliseconds.');
   runtime ||= await lifecycleRuntime();
   const ready = doctor();
@@ -269,7 +277,7 @@ export async function stopCoreHost({ plan = servicePlan(), runtime, run = defaul
   if (result.quiesced !== true && result.stopped !== true) throw failure('STOP_INCOMPLETE', 'Core could not verify that all work stopped.');
   if (manager.installed) stopService(plan, { run });
   const deadline = Date.now() + 8000;
-  while ((await runtime.status()).running) {
+  while (runtime.controlAlive ? await runtime.controlAlive() : (await runtime.status()).running) {
     if (Date.now() >= deadline) throw failure('STOP_INCOMPLETE', 'Core has not finished stopping; its stop intent remains active.');
     await delay(100);
   }
@@ -277,14 +285,42 @@ export async function stopCoreHost({ plan = servicePlan(), runtime, run = defaul
     service: serviceStatus(plan, { run }) };
 }
 
+export async function suspendCoreHost({ plan = servicePlan(), runtime, run = defaultRun } = {}) {
+  runtime ||= await lifecycleRuntime();
+  const manager = serviceStatus(plan, { run });
+  // Service manifests explicitly abandon descendants / use KillMode=process.
+  // Unload only the control daemon; execution runners keep their identities.
+  if (manager.installed) stopService(plan, { run });
+  if ((await runtime.status()).running) {
+    const result = await runtime.shutdown();
+    if (result.runningAgentsContinue !== true) throw failure('RESTART_INCOMPLETE', 'Core could not confirm execution-preserving shutdown.');
+  }
+  const deadline = Date.now() + 8000;
+  while (runtime.controlAlive ? await runtime.controlAlive() : (await runtime.status()).running) {
+    if (Date.now() >= deadline) throw failure('RESTART_INCOMPLETE', 'Core control has not finished shutting down; active runners were not paused.');
+    await delay(50);
+  }
+  return { running: false, runningAgentsContinue: true };
+}
+
 export async function restartCoreHost(options = {}) {
-  await stopCoreHost(options); return startCoreHost(options);
+  const release = beginCoreMaintenance((options.plan || servicePlan()).coreHome);
+  let runtime, wasStopped;
+  try {
+    runtime = options.runtime || await lifecycleRuntime(); wasStopped = runtime.stopped();
+    // A previous explicit Stop must finish its pause barrier first.
+    if (wasStopped) await stopCoreHost({ ...options, runtime });
+    else await suspendCoreHost({ ...options, runtime });
+  } finally { release(); }
+  if (!wasStopped && runtime.stopped()) return { ...await coreHostStatus({ ...options, runtime }), runningAgentsContinue: false };
+  return { ...await startCoreHost(options), runningAgentsContinue: true };
 }
 
 // Called only by a fresh terminal invocation, never by a status/metrics poll.
 // Source/test contexts without a prepared manifest retain their existing engine
 // path; a bundled installation uses exactly the installed user service.
 export async function activateCLIHost({ plan, runtime, run = defaultRun, direct = process.env.BZZY_DIRECT === '1' } = {}) {
+  assertCoreAvailable(plan?.coreHome);
   if (direct) return { managed: false, direct: true };
   plan ||= servicePlan(); runtime ||= await lifecycleRuntime();
   if (installed(plan)) return startCoreHost({ plan, runtime, run, prepare: false });

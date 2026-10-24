@@ -12,6 +12,10 @@ the same engine and private state.
 
 Implemented:
 
+- Built-in OrcaRouter support with OrcaCyber Zero 1.5 as its provider default,
+  authenticated Cyber-first discovery and shared CLI/iPhone model metadata.
+  See [OrcaRouter setup](docs/ORCAROUTER.md).
+
 - Built-in Abliteration API support through the existing Responses adapter,
   dynamic model discovery and model-specific effort/context metadata. See
   [Abliteration setup](docs/ABLITERATION.md).
@@ -155,7 +159,8 @@ node bin/bzzy-core.js workspace set /absolute/BZZY
 
 `status` reports engine and service without starting one. `start` prepares and
 starts the user service; `stop` verifies all work is paused and disables it;
-`restart` reopens Core without resuming models. `serve` runs the same engine in the foreground
+`restart` replaces only the control daemon while existing runners continue.
+Previously paused goals remain paused. `serve` runs the same engine in the foreground
 for a process supervisor; it refuses a duplicate service. The default private
 directory is `~/.bzzy`; `BZZY_HOME` selects another private host directory.
 Daemon runners are owned by Core. Status output omits owner

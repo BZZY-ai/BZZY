@@ -1,7 +1,7 @@
 import { chooseEffort } from './model-controls.js';
 import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
 import { randomUUID } from 'node:crypto';
-import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
+import { ensureRuntime, runtimeRequest, requireOwner, operatorStopRequested } from './runtime.js';
 import { delay } from './delegation.js';
 import { loadSession } from './store.js';
 import { chooseModel, assertModelIdle } from './models.js';
@@ -17,6 +17,7 @@ import { confirmGoalReplacement } from './goal-controls.js';
 
 const groupMode = session => ['parallel', 'besties'].includes(session.mode);
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
+const reconnectable = error => !operatorStopRequested() && (error instanceof TypeError && /fetch|network/i.test(error.message) || ['CORE_MAINTENANCE', 'ECONNREFUSED', 'ECONNRESET', 'UND_ERR_SOCKET', 'TimeoutError', 'AbortError'].includes(error.code || error.name));
 
 function saveSessionDefault(sessionId, ui) {
   const selected = saveSessionDefaultSelection(loadSession(sessionId));
@@ -325,6 +326,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   })() : null;
   try {
     while (!detached && !ui.nextSession && !ui.coreLifecycleInterrupted) {
+      try {
       if (modalTask) { await delay(100); continue; }
       const renderingId = activeId, selectedApi = client(info, renderingId, owner);
       await replay(selectedApi, renderingId, ui, () => activeId === renderingId && !modalTask);
@@ -364,6 +366,11 @@ async function watch(info, sessionId, owner, ui, options = {}) {
       if (!options.executionId && !active && !options.follow) return 0;
       if (!ui.interactive && !options.follow && !options.executionId) return 0;
       await delay(100);
+      } catch (error) {
+        if (!reconnectable(error)) throw error;
+        ui.tui?.notice('Reconnecting to Core… Active work continues.');
+        await delay(500);
+      }
     }
     if (detached) ui.detached = true;
     return 0;
@@ -398,6 +405,7 @@ export async function conversationInput(session, ui, connection) {
     catch (error) { ui.reader?.close(); await input; throw error; }
     const api = client(info, session.id, owner);
     while (waiting) {
+      try {
       await replay(api, session.id, ui, () => waiting);
       const snapshot = await api('GET');
       if (!waiting) break;
@@ -406,6 +414,11 @@ export async function conversationInput(session, ui, connection) {
         active = snapshot.execution; ui.reader?.close(); break;
       }
       await delay(100);
+      } catch (error) {
+        if (!reconnectable(error)) { ui.reader?.close(); await input; throw error; }
+        ui.tui?.notice('Reconnecting to Core…');
+        await delay(500);
+      }
     }
     const answer = await input;
     if (!active) {

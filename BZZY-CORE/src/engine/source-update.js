@@ -1,4 +1,4 @@
-import { officialRepository, isPackagedInstallation, updatePackagedInstallation, withPausedCore } from './installation-update.js';
+import { officialRepository, isPackagedInstallation, updatePackagedInstallation, updateRepositoryInstallation } from './installation-update.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +8,7 @@ import { installationDirectory } from './update-check.js';
 const installationRoot = installationDirectory();
 
 export function updateInstallation(directory = installationRoot, { expectedCommit = process.env.BZZY_UPDATE_TARGET, requireCanonical = directory === installationRoot || process.env.BZZY_UPDATE_CANONICAL === '1' } = {}) {
+  if (requireCanonical) return updateCoreAndCLI(directory, { expectedCommit });
   const cwd = fs.realpathSync(directory);
   const workspace = path.resolve(cwd, '../..');
   const isWorkspace = cwd === path.join(workspace, 'BZZY-CLI', 'BZZY-CLI-TERMINAL')
@@ -66,6 +67,6 @@ export async function updateCoreAndCLI(directory = installationRoot, { expectedC
     const { checkInstallationUpdate } = await import('./update-check.js');
     const check = await checkInstallationUpdate({ directory });
     if (check.blocked) throw new Error(check.blocked);
-    return await withPausedCore(directory, () => ({ directory, code: updateInstallation(directory, { expectedCommit: expectedCommit || check.target, requireCanonical: true }) }));
+    return await updateRepositoryInstallation(directory, { expectedCommit: expectedCommit || check.target, lockHeld: true });
   } finally { release(); }
 }

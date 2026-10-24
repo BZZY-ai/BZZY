@@ -6,16 +6,25 @@ Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen
 
 Open [BZZY.xcodeproj](BZZY.xcodeproj), select **BZZY** and an iPhone simulator, then Run. Simulator runs use Xcode’s local signing; do not disable signing when testing Keychain. For a physical iPhone, select your Apple development team. Push notifications require a push-enabled App ID and a matching provisioning profile. Debug uses the development APNs environment; Release uses production.
 
-Build **Debug 0.1.0 (11)** adds Core-coordinated input, persistent outgoing
+Build **Debug 0.1.0 (12)** adds compact **Set goal** and **Resume goal** chat
+shortcuts. Set goal preserves typed text, inserts the green `/goal` prefix and
+focuses the same editor with the cursor at the end. Resume stays disabled unless
+an authorized Core snapshot reports an idle stalled goal. It binds the action to
+that goal's exact ID; a changed/active/completed goal is rejected by Core.
+Update Core through the CLI to enable the new stalled-only resume capability.
+
+Build 11 added Core-coordinated input, persistent outgoing
 message states and explicit Retry. CLI/Core must also be updated through the CLI
 updater to enable this path. The iPhone binary is built and installed separately;
 the CLI updater does not replace iOS. Builds 9–10 introduced goal submission and
 replacement confirmation; build 11 replaces their client lease handling with
 Core-owned admission. TestFlight is deferred.
 
-The signed build 11 passed the development APNs/privacy/signature artifact
-checks and was installed in place on the connected iPhone. Automatic launch
-was blocked by the device lock; opening the installed app remains a device check.
+The signed build 12 passed development APNs/privacy/signature artifact checks.
+The new goal shortcuts and stable editor passed targeted simulator UI tests.
+Physical installation is pending because CoreDevice currently reports the phone
+unavailable; the previously installed build 11 remains the last verified phone
+installation. No app data or pairing was removed.
 
 Build 7 previously added send-on-release, fluid 64-band audio, independent
 speech-language settings and alias-only terminal rows to build 6's animated

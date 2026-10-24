@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ $# == 0 || $# == 1 && "$1" == --prepare-only ]] || { echo 'Usage: install.sh [--prepare-only]' >&2; exit 1; }
+bzzy_prepare_only="${1:-}"
+
 bzzy_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 bzzy_runtime="$bzzy_root/.bzzy-runtime"
 bzzy_node="$(command -v node || true)"
@@ -46,13 +49,20 @@ cd "$bzzy_root"
 # Development checkouts install the locked Relay SDK and link the shared Core.
 # Release tarballs already contain this dependency tree and work without npm or
 # the original sibling source directories. Neither path installs AI backends.
-if [[ -f "$bzzy_root/../../BZZY-CORE/package.json" ]]; then
+if [[ "${BZZY_INSTALL_PREPARED:-0}" == 1 ]]; then
+  [[ -f "$bzzy_root/node_modules/@bzzy/core/package.json" ]] || { echo 'Prepare the release dependencies first.' >&2; exit 1; }
+elif [[ -f "$bzzy_root/../../BZZY-CORE/package.json" ]]; then
   command -v npm >/dev/null || { echo 'The BZZY source workspace needs npm from the selected Node installation.' >&2; exit 1; }
   (cd "$bzzy_root/../../BZZY-CORE" && npm ci --ignore-scripts --install-links=true --no-audit --no-fund)
   npm ci --ignore-scripts --install-links=false --no-audit --no-fund
 elif [[ ! -f "$bzzy_root/node_modules/@bzzy/core/package.json" ]]; then
   echo 'BZZY Core is missing. Use a bundled BZZY release or keep BZZY-CORE and BZZY-RELAY beside BZZY-CLI in the complete source workspace.' >&2
   exit 1
+fi
+
+if [[ "$bzzy_prepare_only" == --prepare-only ]]; then
+  echo 'Release prepared. Launchers and Core service are unchanged.'
+  exit 0
 fi
 
 bzzy_bin_dir="${BZZY_BIN_DIR:-$HOME/.local/bin}"

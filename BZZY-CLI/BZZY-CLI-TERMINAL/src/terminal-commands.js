@@ -5,6 +5,7 @@ export const chatHelp = `Modes
   --besties    2–3 agents collaborate on a shared goal and review each other’s evidence.
 
 /goal <objective>  Start a goal, replacing the current one.
+/goal resume       Continue a paused or stalled goal from its saved checkpoint.
 /default           Save this mode’s agents, models and efforts separately.
 --default          Skip selection and reuse the saved preset, e.g. bzzy --parallel --default.
 /alias [name]      Name this session; omit the name to open a prompt.
@@ -21,6 +22,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /settings          Workspace, iPhone, Core and private DeepSeek API-key setup.
 /settings modes    Save models, efforts and counts for terminal agent modes.
 /yolo              Toggle native permission bypass for this terminal’s next run.
+/color blue|black|white Switch the complete TUI palette; each launch defaults to blue.
 bzzy settings      Open Settings directly without starting a conversation.
 bzzy doctor        Check both installed backends; add --live to test actual replies.
 
@@ -34,7 +36,8 @@ export const chatCommands = [
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/debate', description: 'Choose agents to challenge the latest reply' },
   { command: '/models', description: 'Choose a model and reasoning effort' },
-  { command: '/providers', description: 'Choose Codex, Claude or DeepSeek' },
+  { command: '/color', description: 'Switch the full palette: blue, black or white', argument: true },
+  { command: '/providers', description: 'Choose a provider and model from Core' },
   { command: '/default', description: 'Save this mode’s provider, models, efforts and full agent combo' },
   { command: '/alias', description: 'Name this session and keep its working directory' },
   { command: '/sessions', description: 'Open a saved named terminal chat' },

@@ -8,6 +8,9 @@ import { generateKeyPairSync, createPublicKey, verify, randomUUID } from 'node:c
 import { APNsClient, loadAPNsConfiguration, PushError } from '../src/push/apns.js';
 import { registerDeviceNotifications, updateDeviceNotifications, revokeDeviceNotifications, authorizedPushRegistration } from '../src/push/registration.js';
 import { CorePushWorker } from '../src/push/worker.js';
+import { newGoal } from '../src/engine/goals.js';
+import { saveSession } from '../src/engine/store.js';
+import { superviseExecutions } from '../src/engine/runtime-processes.js';
 import { getRecord, putRecord, listRecords, digest } from '../src/engine/database.js';
 import { validateRequest, sanitize } from '../src/relay/protocol.js';
 import { CoreAgents } from '../src/agents.js';
@@ -112,6 +115,36 @@ test('real HTTP/2 APNs wire uses ES256 JWT, fixed topic/alert headers, bounded g
   responseStatus = 410;
   await assert.rejects(client.send({ token, payload, collapseID: 'dedup' }), error => error.code === 'APNS_TOKEN_INVALID' && error.invalidated && error.permanent);
   assert.throws(() => new APNsClient({ configuration: cfg, endpoint: 'http://example.com', allowInsecureLocal: true }), { code: 'APNS_CONFIGURATION_INVALID' });
+});
+
+test('every stalled outcome is saved once and sent through APNs without a connected phone socket', async () => {
+  const row = grant({ catalog: true }), cfg = configuration(), sends = [];
+  register(row, { scope: 'terminals' });
+  const worker = new CorePushWorker({ configurationLoader: () => cfg, hostID: () => hostId,
+    clientFactory: () => ({ send: async value => { sends.push(value); return { accepted: true, apnsId: value.id }; }, close() {} }) });
+  try {
+    for (const [status, reason] of [['blocked', 'A required source is unavailable.'], ['usage_limited', 'Provider quota reached.'],
+      ['budget_limited', 'Runtime limit reached.'], ['awaiting_review', 'Acceptance needs review.'], ['paused', 'turn_limit'], ['paused', 'recovery_required']]) {
+      const selected = session(); selected.alias = 'Stalled goal'; selected.goal = { ...newGoal('Check this goal'), status, reason };
+      saveSession(selected); saveSession(selected);
+      const entries = listRecords('outbox').filter(item => item.event.sessionId === selected.id);
+      assert.equal(entries.length, 1, status + ':' + reason); assert.equal(entries[0].event.type, 'goal.stalled');
+      await worker.tick(); await worker.tick();
+      assert.equal(sends.filter(item => item.payload.bzzy.sessionId === selected.id).length, 1);
+      assert.equal(sends.at(-1).payload.aps.alert.title, 'Goal stalled - Stalled goal');
+      assert.equal(sends.at(-1).payload.aps.alert.body, reason);
+    }
+    const selected = session(); selected.goal = newGoal('A crashed runner must alert'); selected.deferTerminalNotification = true; selected.executionState = 'running';
+    saveSession(selected);
+    const executionId = randomUUID();
+    putRecord('execution', executionId, { id: executionId, sessionId: selected.id, state: 'running', goal: true, runner: null, runnerExitedAt: new Date().toISOString(), runnerExitCode: 1 });
+    superviseExecutions();
+    const failure = listRecords('outbox').filter(item => item.event.sessionId === selected.id);
+    assert.equal(failure.length, 1, 'forced runner finalization must release notification deferral');
+    assert.equal(failure[0].event.type, 'goal.stalled');
+    await worker.tick(); assert.ok(sends.some(item => item.payload.bzzy.sessionId === selected.id));
+    assert.equal(getRecord('session', selected.id).deferTerminalNotification, undefined);
+  } finally { worker.close(); }
 });
 
 test('catalog notifications cover future CLI goals while socket-free, exclude internal contexts and deduplicate durable outbox events', async () => {

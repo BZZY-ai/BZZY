@@ -85,6 +85,50 @@ test('resuming through Core queues one execution for a repeated request', async 
   assert.equal(getRecord('execution', first.executionId).resumeGoal, true);
 });
 
+for (const status of ['blocked', 'awaiting_review', 'budget_limited']) test(`/goal resume keeps a stalled ${status} goal and its saved checkpoint`, async () => {
+  const session = goalSession(), owner = randomUUID(), requestId = randomUUID();
+  Object.assign(session.goal, { status, reason: 'Previous attempt stalled', tokensUsed: 80, turns: 5,
+    blockerStreak: 3, lastBlocker: 'Previous blocker', noActivityTurns: 3, evidence: ['saved-evidence'] });
+  session.checkpoint = { phase: 'review', artifact: 'saved-result' };
+  saveSession(session); claimInput(session.id, owner);
+  const originalContract = structuredClone(session.contract), originalGoal = session.goal.id;
+  const first = await enqueueGoalTurn(session.id, owner, {}, { resume: true, requestId });
+  const repeated = await enqueueGoalTurn(session.id, owner, {}, { resume: true, requestId });
+  const resumed = loadSession(session.id);
+  assert.equal(first.executionId, repeated.executionId);
+  assert.equal(resumed.goal.id, originalGoal); assert.equal(resumed.goal.objective, session.goal.objective);
+  assert.deepEqual(resumed.goal.evidence, ['saved-evidence']); assert.deepEqual(resumed.checkpoint, session.checkpoint);
+  assert.deepEqual(resumed.contract, originalContract); assert.equal(resumed.goal.tokensUsed, 80);
+  assert.equal(resumed.goal.blockerStreak, 0); assert.equal(resumed.goal.noActivityTurns, 0);
+  assert.equal(resumed.goal.lastBlocker, null); assert.equal(resumed.goal.reason, undefined);
+  assert.equal(resumed.goal.notificationEpoch, 1); assert.equal(getRecord('execution', first.executionId).resumeGoal, true);
+  assert.equal(listRecords('execution', { sessionId: session.id }).length, 1);
+});
+
+test('stalled goal resume preserves exhausted budgets until the user explicitly raises the total', async () => {
+  const session = goalSession(), owner = randomUUID();
+  Object.assign(session.goal, { status: 'budget_limited', tokensUsed: 1000 }); saveSession(session); claimInput(session.id, owner);
+  await assert.rejects(enqueueGoalTurn(session.id, owner, {}, { resume: true }), /budget is exhausted/);
+  assert.equal(listRecords('execution', { sessionId: session.id }).length, 0);
+  const receipt = await enqueueGoalTurn(session.id, owner, { tokenBudget: 2000 }, { resume: true });
+  assert.equal(loadSession(session.id).goal.id, session.goal.id); assert.equal(loadSession(session.id).goal.tokenBudget, 2000);
+  assert.equal(getRecord('execution', receipt.executionId).resumeGoal, true);
+});
+
+test('the stalled resume shortcut is bound to the exact goal and rechecks stalled state inside admission', async () => {
+  const session = goalSession(), owner = randomUUID();
+  session.goal.status = 'blocked'; saveSession(session); claimInput(session.id, owner);
+  await assert.rejects(enqueueGoalTurn(session.id, owner, {}, { resume: true, resumeGoalId: randomUUID() }), { code: 'CONFLICT' });
+  session.goal.status = 'paused'; saveSession(session);
+  await assert.rejects(enqueueGoalTurn(session.id, owner, {}, { resume: true, resumeGoalId: session.goal.id }), { code: 'CONFLICT' });
+  assert.equal(listRecords('execution', { sessionId: session.id }).length, 0);
+  session.goal.status = 'blocked'; saveSession(session);
+  const requestId = randomUUID(), input = { resume: true, resumeGoalId: session.goal.id, requestId };
+  const receipt = await enqueueGoalTurn(session.id, owner, {}, input);
+  assert.equal((await enqueueGoalTurn(session.id, owner, {}, input)).executionId, receipt.executionId);
+  assert.equal(loadSession(session.id).goal.id, session.goal.id);
+});
+
 test('new goals require exact replacement confirmation, reset evidence and deduplicate before stopping work', async () => {
   const session = goalSession(), owner = randomUUID(), requestId = randomUUID(); claimInput(session.id, owner);
   session.acceptance = { passed: true, criteria: ['old evidence'] }; saveSession(session);

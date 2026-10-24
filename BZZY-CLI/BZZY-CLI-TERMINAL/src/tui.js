@@ -24,7 +24,7 @@ const targetKey = hit => hit && [hit.type, hit.command || hit.action || hit.pane
 export class TerminalChat {
   constructor(ui) {
     this.ui = ui; this.input = ui.input; this.output = ui.output;
-    this.theme = createTerminalTheme(this.output);
+    this.theme = createTerminalTheme(this.output, process.env, ui.colorPalette);
     this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.panel = 'chat'; this.scroll = 0;
     this.assignments = new Map();
     this.value = ''; this.cursor = 0; this.history = []; this.historyIndex = 0; this.drafts = new Map();
@@ -43,6 +43,14 @@ export class TerminalChat {
     this.onExit = () => this.restore(); process.once('exit', this.onExit);
     this.render();
     this.startAnimation();
+  }
+
+  setColorPalette(name) {
+    this.theme = createTerminalTheme(this.output, process.env, name);
+    this.entryLayouts = new WeakMap(); this.bodyCache = null;
+    this.lastFrame = []; this.lastBackgrounds = []; this.dashboardFrame = null; this.paintedFrame = null;
+    this.textSelection = null;
+    this.render();
   }
 
   startAnimation() {
@@ -1253,7 +1261,7 @@ export class TerminalChat {
   }
   renderScene({ force = false } = {}) {
     if (this.closed || this.outputBlocked || this.copyMode && !force) return;
-    if (!this.dashboardRendering && !this.ui.privateView && !this.ui.settings?.qrView && (this.output.columns || 80) >= 100 && (this.output.rows || 24) >= 28 && !this.textSelection) { this.renderDashboard((this.output.columns || 80) - 1, this.output.rows || 24); return; }
+    if (!this.ui.minimal && !this.dashboardRendering && !this.ui.privateView && !this.ui.settings?.qrView && (this.output.columns || 80) >= 100 && (this.output.rows || 24) >= 28 && !this.textSelection) { this.renderDashboard((this.output.columns || 80) - 1, this.output.rows || 24); return; }
     if (!this.dashboardRendering) { this.dashboardActive = false; this.composerLeft = 0; this.dashboardFrame = null; }
     this.privateFrame = false; this.hitTargets = [];
     if (this.ui.privateView) {
@@ -1275,15 +1283,16 @@ export class TerminalChat {
     const maximumPinned = height < 22 ? 1 : 2;
     const pinned = this.pinned && this.panel !== 'settings' && (!this.dashboardRendering || this.busy || this.scroll > 0 || this.goal) ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
     const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
-    const header = this.persistentHeader(width, height);
-    if (pinned.length) {
+    if (this.ui.minimal) this.eyeRegion = null;
+    const header = this.ui.minimal ? [] : this.persistentHeader(width, height);
+    if (pinned.length && !this.ui.minimal) {
       header.push(color('  YOU ASKED', palette.user, true));
       for (const [index, line] of pinned.slice(0, maximumPinned).entries()) header.push(color('  │ ' + clip(line + (index === maximumPinned - 1 && pinned.length > maximumPinned ? ' …' : ''), width - 5), palette.accent));
       header.push(edge('─'.repeat(width)));
     }
     this.sceneHeaderLength = header.length + (this.dashboardRendering ? 3 : 0);
-    const bottom = [edge('─'.repeat(width))];
-    if (this.mode === 'delegate') {
+    const bottom = this.ui.minimal ? [] : [edge('─'.repeat(width))];
+    if (this.mode === 'delegate' && !this.ui.minimal) {
       const phase = this.busy ? this.delegationPhase || 'Supervisor planning' : this.goal?.status === 'complete' ? 'Goal complete' : 'Delegation';
       const counters = delegationCounters(this.delegationUsage), text = phase + ' · ' + counters;
       if (cellWidth(text) > width - 3) bottom.push(color('  ' + phase, palette.accent), color('  ' + clip(counters, width - 3), palette.accent));
@@ -1300,7 +1309,7 @@ export class TerminalChat {
       }
       line += ' '.repeat(Math.max(0, left - cellWidth(line)));
       line += fillSurface(label, cellWidth(label), this.theme, enabled ? palette.yolo : palette.surface, enabled ? palette.background : palette.muted, true);
-      bottomHits.push({ type: 'yolo', row: bottom.length, left: left + 1, right: left + cellWidth(label) }); bottom.push(line);
+      if (!this.ui.minimal) { bottomHits.push({ type: 'yolo', row: bottom.length, left: left + 1, right: left + cellWidth(label) }); bottom.push(line); }
       if (this.pendingApproval && (!this.pendingApproval.expiresAt || this.pendingApproval.expiresAt > Date.now())) {
         const disabled = this.ui.sessionMode === 'VIEW' || !this.ui.onAnswerApproval || this.approvalSubmitting;
         let approvalLine = '  '; let column = 3;
@@ -1311,7 +1320,7 @@ export class TerminalChat {
         bottom.push(approvalLine);
       }
     }
-    if (this.busy && (this.currentTool || this.currentActivity)) bottom.push(muted('  ' + clip(this.currentTool || this.currentActivity, width - 3)));
+    if (!this.ui.minimal && this.busy && (this.currentTool || this.currentActivity)) bottom.push(muted('  ' + clip(this.currentTool || this.currentActivity, width - 3)));
     if (completions.length) {
       const maximum = height < 28 ? 3 : 6, offset = Math.max(0, Math.min(this.completionFocus - Math.floor(maximum / 2), completions.length - maximum));
       bottom.push(muted('  Commands · ↑/↓ choose · Tab complete · Esc close'));
@@ -1340,7 +1349,7 @@ export class TerminalChat {
     const inputIndex = bottom.length - 1;
     if (hasSubmit) bottomHits.push({ type: 'confirm', row: inputIndex, left: inputWidth + 4, right: inputWidth + 3 + cellWidth(sendLabel) });
     bottom.push(edge('╰' + '─'.repeat(Math.max(0, width - 2)) + '╯'));
-    if (!this.promptDraft && height >= 28) {
+    if (!this.ui.minimal && !this.promptDraft && height >= 28) {
       const controls = [[' Paste ', 'paste'], [' ↓ Latest ', 'latest'], [this.showTools ? ' Hide tools ' : ' Show tools ', 'tools'], ...(this.busy ? [[' Pause ', 'model-control', '/pause']] : [])];
       let left = 3, line = '  ';
       for (const [label, type, command] of controls) {
@@ -1350,8 +1359,10 @@ export class TerminalChat {
       }
       bottom.push(line);
     }
-    for (const line of wrap(sessionLabel, width - 2)) bottom.push(muted(' ' + line));
-    if (selected && selected.id !== this.ui.sessionId) for (const line of wrap(`Chat: ${selected.id}`, width - 2)) bottom.push(muted(' ' + line));
+    if (!this.ui.minimal) {
+      for (const line of wrap(sessionLabel, width - 2)) bottom.push(muted(' ' + line));
+      if (selected && selected.id !== this.ui.sessionId) for (const line of wrap(`Chat: ${selected.id}`, width - 2)) bottom.push(muted(' ' + line));
+    }
     // Keep the host header in place; constrained terminals spend their
     // remaining rows on the current screen and composer.
     const overflow = Math.max(0, header.length + bottom.length - height);

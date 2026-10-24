@@ -106,6 +106,12 @@ async function handle(input) {
         cliFinished, cliMode, cliText, latestExecution: jobs.at(-1) ? { state: jobs.at(-1).state, prompt: jobs.at(-1).prompt, exitCode: jobs.at(-1).exitCode, error: jobs.at(-1).error } : null,
         notificationCount: listRecords('outbox').filter(row => row.event.type === 'goal.completed').length };
     }
+    case 'goal-stall': {
+      const current = getRecord('session', session.id);
+      current.goal.status = 'blocked'; current.goal.reason = 'Fixture stalled checkpoint';
+      putRecord('session', current.id, current);
+      return { goalID: current.goal.id };
+    }
     case 'cli-attach': {
       if (cliTask) throw new Error('CLI_ALREADY_ATTACHED');
       let signalReady;

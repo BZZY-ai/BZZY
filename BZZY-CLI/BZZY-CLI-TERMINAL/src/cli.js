@@ -37,7 +37,7 @@ import { updateCoreAndCLI } from './update.js';
 import { readUpdateHandoff, execUpdatedCLI } from './update-handoff.js';
 import { retireTelegram } from './migrations.js';
 import { backendCommand } from '@bzzy/core/engine/entry.js';
-import { activateCLIHost, coreHostStatus, stopCoreHost } from '@bzzy/core/engine/host-service.js';
+import { activateCLIHost, coreHostStatus, stopCoreHost, restartCoreHost } from '@bzzy/core/engine/host-service.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
@@ -88,6 +88,7 @@ Usage:
   bzzy doctor [--live]                   Verify CLI, subscription login and connection; --live tests replies
 
 Options:
+  --minimal             Show only the conversation and message input
   --provider NAME       Select a provider for a new session
   --model MODEL         Select a model (provider default otherwise)
   --cwd DIRECTORY       Working directory
@@ -215,6 +216,7 @@ export function parseArgs(argv) {
     else if (raw === '--delegate') { options.mode = 'delegate'; options.delegationSetup = true; }
     else if (raw === '--besties') { options.mode = 'besties'; options.bestiesSetup = true; }
     else if (raw === '--review-only') options.reviewOnly = true;
+    else if (raw === '--minimal') options.minimal = true;
     else if (raw === '--yolo') options.yolo = true;
     else if (raw === '--json') options.json = true;
     else if (raw === '--live') options.live = true;
@@ -464,7 +466,7 @@ export async function main(argv) {
     : updateHandoff.settingsOnly || updateHandoff.coreStopped ? ['settings'] : [];
   if (['internal-mcp', 'internal-tools', 'internal-service', 'internal-execution', 'internal-assignment'].includes(argv[0])) return backendCommand(argv);
   const { options, args } = parseArgs(argv);
-  if (updateHandoff) options.restoreAfterUpdate = true;
+  if (updateHandoff) { options.restoreAfterUpdate = true; options.minimal = updateHandoff.minimal; }
   if (options.version) { process.stdout.write('bzzy 0.2.0\n'); return 0; }
   if (options.whoami) { process.stdout.write(whoami(options.cwd)); return 0; }
   if (options.help || args[0] === 'help') { process.stdout.write(HELP); return 0; }
@@ -527,7 +529,7 @@ export async function main(argv) {
     if (command === 'service') {
       if (rest[0] === 'stop') { const status = await stopCoreHost(); ui.event('info', { ...status, message: 'Core stopped. Work is paused; history and accounts are preserved.' }); }
       else if (rest[0] === 'status') { const status = await coreHostStatus(); ui.event('info', { ...status, message: status.running ? 'Core running.' : 'Core stopped.' }); }
-      else if (rest[0] === 'restart') { await stopCoreHost(); await activateCLIHost(); await ensureRuntime(); ui.event('info', { message: 'Core restarted. Paused work remains paused.' }); }
+      else if (rest[0] === 'restart') { await restartCoreHost(); await ensureRuntime(); ui.event('info', { message: 'Core restarted. Active work continues; paused work remains paused.' }); }
       else if (rest[0] === 'web') { const info = await ensureRuntime(); const sessionId = rest[1] ? findSession(rest[1]).id : null;
         const credential = sessionId ? await runtimeRequest(info, 'POST', '/tokens', { sessionId }) : null;
         ui.event('info', { message: `${info.url}/#token=${credential?.token || info.token}${sessionId ? `&session=${sessionId}` : ''}` }); }
