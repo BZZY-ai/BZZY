@@ -25,7 +25,7 @@ terminal catalog access, project sharing and Agent management without permission
 pickers; fingerprint confirmation, expiry and revocation remain. The four main
 Settings entries are API keys, Default BZZY folder, Pair iPhone and BZZY Core.
 
-The installer prepares a disabled user-service manifest without starting Core.
+The installer prepares a disabled service manifest without starting Core.
 Opening plain `bzzy` activates that same service automatically. Simple controls:
 
 ```sh
@@ -36,7 +36,7 @@ bzzy-core restart
 ```
 
 `start` checks prerequisites, prepares a missing manifest and starts the native
-user service. `status` reports engine and service without starting anything.
+service. `status` reports engine and service without starting anything.
 `stop` pauses and verifies all queued/running work before disabling/unloading
 Core. `restart` unloads only the control daemon and starts its supervisor again.
 Detached execution runners keep running, with the same execution IDs and process
@@ -44,6 +44,18 @@ identities. Clients reattach and replay only missing events. Previously paused
 goals stay paused. A short maintenance gate prevents another client from starting
 a competing daemon during this handoff. Restart after an explicit Stop finishes
 the durable pause barrier before reactivating the service.
+
+On Linux, installing as root selects a root-owned system unit at
+`/etc/systemd/system/bzzy-core-<context>.service`. Lifecycle commands use the
+system manager directly; no `systemctl --user`, login session, lingering or
+second account is required. The service uses the same root-owned `BZZY_HOME`,
+provider bindings, projects and Relay identity. Enabling it starts at boot via
+`multi-user.target`. Owner terminal execution has the root account's native
+permissions; scoped Agent/Relay authorization remains enforced by Core.
+
+Regular Linux accounts continue using `~/.config/systemd/user/` and their user
+manager. macOS continues requiring a graphical non-root LaunchAgent account.
+An update retains existing runners and private state under the same account.
 
 Advanced `bzzy-core service plan` and `service install --dry-run` print the
 manifest without writing or loading anything. `service install` prepares it;

@@ -29,7 +29,7 @@ bzzy
 ```
 
 The installer prepares Node 24+ if needed and requires Python 3.9+ for project
-ZIP sharing. Core runs as a user service. Use `bzzy-core start|status|stop|restart`
+ZIP sharing. Core runs as a user service; Linux root installations use a systemd system service. Use `bzzy-core start|status|stop|restart`
 or **CLI Settings → BZZY Core**. Stop pauses work durably; Start/Restart do not
 automatically replay paused goals.
 

@@ -29,7 +29,10 @@ CLI, guide secure provider authorization, create private local state, perform
 health checks, and register the appropriate background service. Installing a
 package does not authorize agents to access accounts, folders or networks.
 
-- Debian/Ubuntu: use systemd supervision and a non-root execution identity.
+- Debian/Ubuntu: use systemd user supervision for regular accounts. An owner
+  explicitly running Core as root uses a root-owned system unit and that account’s
+  native terminal permissions. Remote payloads cannot select the operating-system
+  user or service scope.
 - macOS: use launchd. A per-user LaunchAgent starts with a user login and ends
   at logout; unattended boot-time service is a distinct LaunchDaemon setup with
   an explicit non-root user. Account/Keychain availability must be verified in

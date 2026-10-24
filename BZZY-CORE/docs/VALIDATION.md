@@ -375,3 +375,15 @@ fixtures pass for managed-launcher discovery and explicit custom paths from an
 unrelated cwd, with whitespace/apostrophes in installation paths. They verify
 exact revision selection and preservation of the original source. No real
 installation is updated by these tests.
+
+## Linux root host supervision (2026-10-24)
+
+All 247 Core tests and the CLI suite (454 pass, 21 platform/optional skips) pass.
+Three new cases verify root-owned system-unit plans, exact system-manager
+arguments, lifecycle stop barriers/restart behavior and retained private state.
+Regular-user manager scope and macOS non-root behavior retain their existing
+checks. On Debian 13 under actual UID 0, the same three isolated lifecycle tests
+pass and two disposable Core/Relay identity/registration cases pass with no model
+execution. These checks use temporary state and a fake lifecycle manager; no
+production Core service or user installation was changed. Native boot/reboot
+supervision of the new root system unit remains a deployment check.
