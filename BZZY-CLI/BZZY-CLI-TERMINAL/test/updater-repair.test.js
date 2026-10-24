@@ -35,6 +35,12 @@ export async function updateRepositoryInstallation(directory, options) {
   fs.writeFileSync(path.join(old, 'local-notes.txt'), 'preserve my local files');
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
   fs.writeFileSync(path.join(bin, 'bzzy'), `#!/bin/sh\n# bzzy-managed launcher\nexec ${quote(process.execPath)} ${quote(path.join(old, 'bin/bzzy.js'))} "$@"\n`, { mode: 0o755 });
+  if (!explicit) {
+    const writer = path.join(old, 'scripts/install-launcher.mjs'); fs.mkdirSync(path.dirname(writer));
+    fs.copyFileSync(new URL('../scripts/install-launcher.mjs', import.meta.url), writer);
+    const installed = spawnSync(process.execPath, [writer, bin, process.execPath], { env, encoding: 'utf8' });
+    assert.equal(installed.status, 0, installed.stderr);
+  }
   const args = [repair, ...(explicit ? ['--installation', old, '--node', process.execPath] : [])];
   const result = spawnSync('python3', args, { cwd: os.tmpdir(), env, encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.stderr);
@@ -44,4 +50,23 @@ export async function updateRepositoryInstallation(directory, options) {
   assert.equal(fs.readFileSync(path.join(old, 'local-notes.txt'), 'utf8'), 'preserve my local files');
   assert.equal(fs.readFileSync(path.join(old, 'bin/bzzy.js'), 'utf8'), '// installed CLI');
   assert.match(result.stdout, /updater repaired/);
+});
+
+for (const scenario of ['missing-install', 'missing-package', 'invalid-package', 'missing-node', 'failed-node']) test(`repair identifies ${scenario} before network access without exposing file contents`, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-repair-diagnostic-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, 'installed'), missing = path.join(root, 'missing');
+  fs.mkdirSync(installed);
+  const secret = 'fixture-private-malformed-package-fragment';
+  if (!['missing-install', 'missing-package'].includes(scenario)) fs.writeFileSync(path.join(installed, 'package.json'), scenario === 'invalid-package' ? secret : '{"name":"bzzy-cli"}');
+  let node = scenario === 'missing-node' ? missing : process.execPath;
+  if (scenario === 'failed-node') {
+    node = path.join(root, 'failed-node'); fs.writeFileSync(node, '#!/bin/sh\necho fixture-private-node-output >&2\nexit 17\n', { mode: 0o755 });
+  }
+  const result = spawnSync('python3', [repair, '--installation', scenario === 'missing-install' ? missing : installed, '--node', node], { encoding: 'utf8', timeout: 3000 });
+  assert.equal(result.status, 1);
+  const codes = { 'missing-install': 'REPAIR_INSTALL_MISSING', 'missing-package': 'REPAIR_PACKAGE_MISSING', 'invalid-package': 'REPAIR_PACKAGE_INVALID', 'missing-node': 'REPAIR_NODE_MISSING', 'failed-node': 'REPAIR_NODE_FAILED' };
+  assert.ok(result.stderr.includes(codes[scenario]), result.stderr);
+  assert.ok(!result.stderr.includes(secret)); assert.ok(!result.stderr.includes('fixture-private-node-output'));
+  assert.ok(!result.stdout.includes('Preparing the official updater'));
 });

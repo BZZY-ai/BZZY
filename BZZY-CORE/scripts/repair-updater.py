@@ -25,10 +25,20 @@ def main():
         if not launcher:
             raise RuntimeError('BZZY is not on PATH. Use --installation and --node for its installed paths.')
         launcher = Path(launcher)
-        source = launcher.resolve()
-        body = source.read_text()
+        try:
+            source = launcher.resolve(strict=True)
+            body = source.read_text()
+        except FileNotFoundError:
+            raise RuntimeError('REPAIR_LAUNCHER_MISSING: The BZZY launcher points to a missing file. Use --installation with the current CLI or Core package path.')
+        except PermissionError:
+            raise RuntimeError('REPAIR_LAUNCHER_PERMISSION: Run the repair as the account that owns the BZZY installation.')
+        except UnicodeError:
+            raise RuntimeError('REPAIR_LAUNCHER_FORMAT: This launcher is not a text script. Use --installation and --node with the installed paths.')
         if '# bzzy-managed launcher' in body:
-            entries = [shlex.split(line) for line in body.splitlines() if line.startswith('exec ')]
+            try:
+                entries = [shlex.split(line) for line in body.splitlines() if line.startswith('exec ')]
+            except ValueError:
+                raise RuntimeError('REPAIR_LAUNCHER_FORMAT: The launcher command could not be parsed. Use --installation and --node explicitly.')
             if len(entries) != 1 or len(entries[0]) != 4 or entries[0][-1] != '$@':
                 raise RuntimeError('Unrecognized launcher. Use --installation and --node explicitly.')
             node = node or Path(entries[0][1])
@@ -36,14 +46,40 @@ def main():
             launcher_bin = launcher.parent
         else:
             directory = source.parent.parent
-    directory = directory.resolve(strict=True)
-    package = json.loads((directory / 'package.json').read_text())
+    try:
+        directory = directory.resolve(strict=True)
+    except FileNotFoundError:
+        raise RuntimeError('REPAIR_INSTALL_MISSING: The launcher refers to a missing installation directory. Use --installation with the current CLI or Core package path.')
+    except PermissionError:
+        raise RuntimeError('REPAIR_INSTALL_PERMISSION: Run the repair as the account that owns the BZZY installation.')
+    try:
+        package = json.loads((directory / 'package.json').read_text())
+    except FileNotFoundError:
+        raise RuntimeError('REPAIR_PACKAGE_MISSING: No package.json exists at the detected installation. Use --installation with the CLI or Core package directory, not its launcher folder.')
+    except PermissionError:
+        raise RuntimeError('REPAIR_PACKAGE_PERMISSION: The installed package metadata is unreadable. Run as the BZZY installation account.')
+    except (ValueError, UnicodeError):
+        raise RuntimeError('REPAIR_PACKAGE_INVALID: The detected package.json is invalid. Its contents were not displayed or changed.')
+    if not isinstance(package, dict):
+        raise RuntimeError('REPAIR_PACKAGE_INVALID: The detected package.json must contain a package object. Its contents were not displayed or changed.')
     if package.get('name') not in ('bzzy-cli', '@bzzy/core'):
         raise RuntimeError('Choose the installed BZZY CLI or Core package directory.')
     node = str(node or shutil.which('node') or '')
     if not node:
         raise RuntimeError('Node.js 24+ is required. Use --node with the installed Node executable.')
-    version = subprocess.run([node, '--version'], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+    try:
+        result = subprocess.run([node, '--version'], capture_output=True, text=True, timeout=10)
+    except FileNotFoundError:
+        raise RuntimeError('REPAIR_NODE_MISSING: The launcher’s Node executable no longer exists. Use --node with a working Node.js 24+ executable.')
+    except PermissionError:
+        raise RuntimeError('REPAIR_NODE_PERMISSION: The selected Node executable cannot be run by this account.')
+    except OSError:
+        raise RuntimeError('REPAIR_NODE_START_FAILED: The selected Node executable could not start. Check its platform and executable format.')
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('REPAIR_NODE_TIMEOUT: The selected Node executable did not answer --version.')
+    if result.returncode:
+        raise RuntimeError('REPAIR_NODE_FAILED: The selected Node executable failed --version. Use --node with a working Node.js 24+ executable.')
+    version = result.stdout.strip()
     if not re.fullmatch(r'v\d+\.\d+\.\d+', version) or int(version[1:].split('.')[0]) < 24:
         raise RuntimeError('Node.js 24+ is required. Use --node with the installed Node executable.')
     env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'Never'}
