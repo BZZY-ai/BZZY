@@ -393,7 +393,7 @@ async function chat(provider, options, ui, existingSession) {
         continue;
       }
       if (/^\/models?(?:\s|$)/.test(input)) { Object.assign(session, await changeSessionModel(session.id, input.replace(/^\/models?\s*/, ''), ui)); continue; }
-      if (session.modelSelectionRequired) throw new Error('Select a model using the model dropdown before sending a message.');
+      if (session.modelSelectionRequired) throw new Error(`Select a model with /models${ui.minimal ? '' : ' or the model dropdown'} before sending a message.`);
       if (input === '/goal' || input.startsWith('/goal ')) {
         const objective = input.slice(5).trim();
         if (!objective || ['status', 'pause', 'cancel', 'clear', 'resume'].includes(objective)) {
