@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showConnection = false
     @State private var showNotifications = false
+    @State private var showDefaults = false
     @State private var confirmUpdate = false
     @State private var updateTarget: String?
     @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var recognitionLanguage = SpeechLanguage.preferred.rawValue
@@ -39,6 +40,13 @@ struct SettingsView: View {
                             Image(systemName: "chevron.right").bzzyFont(11)
                         }.panel()
                     }.buttonStyle(.plain).accessibilityIdentifier("notification-settings")
+                    Button { showDefaults = true } label: {
+                        HStack {
+                            Label("Models and defaults", systemImage: "slider.horizontal.3").bzzyFont(14)
+                            Spacer(); Image(systemName: "chevron.right").bzzyFont(11)
+                        }.panel()
+                    }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable)
+                        .accessibilityIdentifier("model-defaults-settings")
                     Eyebrow(text: "Voice")
                     VStack(alignment: .leading, spacing: 20) {
                         languagePicker("Listening language · STT", selection: $recognitionLanguage, identifier: "speech-recognition-language")
@@ -93,6 +101,7 @@ struct SettingsView: View {
                     if relay.hosts.isEmpty { ConnectView() }
                     else { HostPickerView() }
                 }
+                .sheet(isPresented: $showDefaults) { CoreDefaultsEditor() }
                 .sheet(isPresented: $showNotifications) { NotificationsView() }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
     }
@@ -117,5 +126,174 @@ struct SettingsView: View {
                 Text(text).bzzyFont(12).foregroundStyle(BZZYTheme.secondary).lineSpacing(5)
             }
         }
+    }
+}
+
+private struct DefaultModelChoice: Equatable {
+    var provider = ""
+    var model = ""
+    var effort = "default"
+    init(_ value: CoreJSONValue = .null) {
+        provider = value["provider"].string ?? ""
+        model = value["model"].string ?? ""
+        effort = value["effort"].string ?? "default"
+    }
+    var json: CoreJSONValue { .object(["provider": .string(provider), "model": model.isEmpty ? .null : .string(model), "effort": .string(effort)]) }
+}
+
+struct CoreDefaultsEditor: View {
+    var sessionID: String? = nil
+    @Environment(RelayConnection.self) private var relay
+    @Environment(\.dismiss) private var dismiss
+    @State private var target = "cli"
+    @State private var snapshot: CoreJSONValue = .null
+    @State private var providers: [CoreJSONValue] = []
+    @State private var choices = [DefaultModelChoice()]
+    @State private var revision = ""
+    @State private var origin: String?
+    @State private var busy = false
+    @State private var message = ""
+    @State private var pendingID: String?
+    private let targets = ["cli", "core", "besties", "parallel", "debate", "delegate"]
+    private var available: Bool { relay.coreActionsAvailable && origin == relay.activeHostID }
+    var body: some View {
+        NavigationStack {
+            ScrollView { VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 22) {
+                    Text(sessionID == nil ? "Models and defaults" : "Conversation model").bzzyFont(27, weight: .medium)
+                    Text(sessionID == nil ? "Saved on this computer. Defaults apply to new chats and mode launches." : "Pause, choose a model, then resume your saved goal in this conversation.")
+                        .bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+                    if sessionID == nil {
+                        Picker("Default for", selection: $target) {
+                            ForEach(targets, id: \.self) { Text($0 == "cli" ? "CLI chat" : $0 == "core" ? "Core assistant" : $0.capitalized).tag($0) }
+                        }.pickerStyle(.menu).accessibilityIdentifier("defaults-target")
+                        if !["cli", "core", "delegate"].contains(target) {
+                            Stepper("Agents: \(choices.count)", value: Binding(get: { choices.count }, set: { count in
+                                if count > choices.count { choices.append(DefaultModelChoice()) }
+                                else { choices = Array(choices.prefix(count)) }
+                            }), in: 2...3).bzzyFont(14)
+                        }
+                    }
+                    ForEach(choices.indices, id: \.self) { index in
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(target == "delegate" && sessionID == nil ? (index == 0 ? "Supervisor" : "Executor") : choices.count == 1 ? "Model selection" : "Agent \(index + 1)").bzzyFont(14, weight: .medium)
+                            DefaultModelFields(choice: $choices[index], providers: providers)
+                        }.panel()
+                    }
+                    if !message.isEmpty { Text(message).bzzyFont(12).foregroundStyle(BZZYTheme.secondary).accessibilityIdentifier("defaults-status") }
+                }.disabled(busy || pendingID != nil || !available)
+                VStack(spacing: 16) {
+                    AccentButton(title: pendingID == nil ? "Save on Core" : "Retry same save", symbol: "checkmark") {
+                        relay.performHostAction { await save() }
+                    }.disabled(busy || !available || revision.isEmpty || choices.contains(where: { $0.provider.isEmpty }))
+                        .accessibilityIdentifier("save-model-defaults")
+                    Button("Reload saved settings") { relay.performHostAction { await load() } }.disabled(busy || !available)
+                }.padding(.top, 20)
+            } }.padding(25).bzzyScreen()
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+        }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
+            .task { origin = relay.activeHostID; await load() }
+            .onChange(of: target) { _, _ in selectTarget() }
+            .coreAvailabilityGate()
+    }
+    private func selectTarget() {
+        let value = snapshot["defaults"][target]
+        let saved = ["cli", "core"].contains(target) ? (value == .null ? [] : [value]) : value.array ?? []
+        choices = saved.isEmpty ? Array(repeating: DefaultModelChoice(), count: ["cli", "core"].contains(target) ? 1 : 2) : saved.map(DefaultModelChoice.init)
+        pendingID = nil; message = ""
+    }
+    private func load() async {
+        guard available else { return }
+        busy = true; defer { busy = false }
+        do {
+            let catalog = try await relay.readCoreSettings("settings.providers")
+            guard available else { return }
+            providers = catalog["providers"].array ?? []
+            if let sessionID {
+                let session = try await relay.readCoreSessionSelection(sessionID: sessionID)
+                guard available else { return }
+                choices = [DefaultModelChoice(.object(["provider": session["provider"], "model": session["model"], "effort": session["selectedEffort"]]))]
+                revision = session["updatedAt"].string ?? ""
+            } else {
+                let result = try await relay.readCoreSettings()
+                guard available else { return }
+                snapshot = result; revision = result["revision"].string ?? ""; selectTarget()
+            }
+            pendingID = nil; message = ""
+        } catch { if available { message = error.localizedDescription } }
+    }
+    private func save() async {
+        guard available else { return }
+        busy = true; defer { busy = false }
+        if let sessionID {
+            if await relay.changeCoreSessionSelection(choices[0].json, revision: revision, sessionID: sessionID) { dismiss() }
+            else { message = "Save was not confirmed. Check conversation activity and reload before editing again." }
+        } else {
+            let id = pendingID ?? CoreRelayClient.commandID(); pendingID = id
+            do {
+                let result = try await relay.saveCoreDefaults(target: target, revision: revision, agents: choices.map(\.json), requestID: id)
+                guard available else { return }
+                snapshot = result; revision = result["revision"].string ?? ""; pendingID = nil
+                message = "Default saved on Core."
+            } catch {
+                guard available else { return }
+                if let code = (error as? CoreApplicationError)?.code, ["CONFLICT", "INVALID_REQUEST", "FORBIDDEN", "OPERATION_DENIED"].contains(code) {
+                    pendingID = nil; revision = ""; message = "Settings changed or were rejected. Reload before saving."
+                } else { message = "Save not confirmed. Retry the same save or reload Core’s saved settings." }
+            }
+        }
+    }
+}
+
+private struct DefaultModelFields: View {
+    @Binding var choice: DefaultModelChoice
+    let providers: [CoreJSONValue]
+    @Environment(RelayConnection.self) private var relay
+    @State private var models: [CoreJSONValue] = []
+    @State private var next: String?
+    @State private var loading = false
+    @State private var catalogMessage = ""
+    private var efforts: [String] {
+        models.first(where: { $0["id"].string == choice.model })?["capabilities"]["supportedEfforts"].array?.compactMap(\.string)
+        ?? providers.first(where: { $0["id"].string == choice.provider })?["supportedEfforts"].array?.compactMap(\.string) ?? []
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("Provider", selection: Binding(get: { choice.provider }, set: { choice.provider = $0; choice.model = ""; choice.effort = "default" })) {
+                Text("Choose provider").tag("")
+                ForEach(providers.compactMap { $0["id"].string }, id: \.self) { id in
+                    Text(providers.first(where: { $0["id"].string == id })?["name"].string ?? id).tag(id)
+                }
+            }.pickerStyle(.menu)
+            Picker("Model", selection: $choice.model) {
+                Text("Provider default").tag("")
+                ForEach(models.compactMap { $0["id"].string }, id: \.self) { Text($0).tag($0) }
+                if !choice.model.isEmpty && !models.contains(where: { $0["id"].string == choice.model }) { Text(choice.model).tag(choice.model) }
+            }.pickerStyle(.menu)
+            TextField("Model ID", text: $choice.model).autocorrectionDisabled().bzzyFont(12, design: .monospaced)
+            Picker("Effort", selection: $choice.effort) {
+                Text("Provider default").tag("default")
+                ForEach(Array(Set(efforts + (choice.effort == "default" ? [] : [choice.effort]))).sorted(), id: \.self) { Text($0).tag($0) }
+            }.pickerStyle(.menu)
+            if loading { ProgressView() }
+            if next != nil { Button("Load more models") { relay.performHostAction { await load(more: true) } }.disabled(loading) }
+            if !catalogMessage.isEmpty { Text(catalogMessage).bzzyFont(11).foregroundStyle(BZZYTheme.secondary) }
+        }.task(id: choice.provider) { await load() }
+    }
+    private func load(more: Bool = false) async {
+        let provider = choice.provider, origin = relay.activeHostID
+        guard !provider.isEmpty else { models = []; next = nil; return }
+        loading = true; defer { if choice.provider == provider { loading = false } }
+        if !more { models = []; next = nil }
+        var params: [String: CoreJSONValue] = ["provider": .string(provider), "limit": .number(25)]
+        if more, let next { params["after"] = .string(next) }
+        do {
+            let result = try await relay.readCoreSettings("settings.models", params: params)
+            guard origin == relay.activeHostID, provider == choice.provider, !Task.isCancelled else { return }
+            let page = result["models"].array ?? []
+            models = more ? models + page : page
+            next = result["hasMore"].bool == true ? result["nextCursor"].string : nil
+            catalogMessage = result["source"].string == "manual" ? "Catalog unavailable. You can enter a model ID." : ""
+        } catch { if origin == relay.activeHostID && provider == choice.provider { catalogMessage = "Catalog unavailable. You can enter a model ID." } }
     }
 }

@@ -78,10 +78,10 @@ test('missing presets give a clear error with --default, and debate supports two
 });
 
 const ptyAvailable = process.platform === 'linux' && spawnSync('script', ['--version'], { stdio: 'ignore' }).status === 0;
-test('each mode --default goes straight to goal entry without confirmation or model selection', { skip: !ptyAvailable, timeout: 20000 }, async () => {
+test('each mode flag goes straight to goal entry without confirmation or model selection', { skip: !ptyAvailable, timeout: 20000 }, async () => {
   for (const mode of ['parallel', 'debate', 'besties', 'delegate']) {
     saveModeDefault(mode, agents(mode, mode === 'delegate' ? 2 : 3));
-    const command = [process.execPath, path.join(root, 'bin/bzzy.js'), `--${mode}`, '--default', '--no-pet'].map(value => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
+    const command = [process.execPath, path.join(root, 'bin/bzzy.js'), `--${mode}`, '--no-pet'].map(value => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
     const child = spawn('script', ['-qefc', command, '/dev/null'], { cwd: directory, env: { ...process.env, TERM: 'xterm-256color' }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = ''; child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
     const done = new Promise((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });

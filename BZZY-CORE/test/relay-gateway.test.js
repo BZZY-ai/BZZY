@@ -97,10 +97,16 @@ async function fixture(t, { provisioned = true, subscriptionLeaseMs = 60000 } = 
   return context;
 }
 
-test('an unprovisioned host cannot become a gateway or start an execution', async t => {
+test('a new host registers its public identity once without creating grants or execution', async t => {
   const f = await fixture(t, { provisioned: false });
-  await assert.rejects(f.gateway.start(), { code: 'HOST_ENROLLMENT_REQUIRED' });
-  assert.equal(f.gateway.status().gateway, 'stopped'); assert.equal(listRecords('execution').length, 0);
+  await f.gateway.start();
+  assert.equal(f.gateway.status().gateway, 'ready');
+  assert.equal(f.store.host(f.host.certificate.id).role, 'host');
+  assert.equal(f.store.count('devices'), 1);
+  await f.hostClient.request('host.register');
+  assert.equal(f.store.count('devices'), 1);
+  assert.equal(listRecords('execution').length, 0);
+  assert.equal(f.gateway.status().activeGrants, 0);
 });
 
 test('private identity setup is exclusive, persistent and never returns secret keys', async t => {
@@ -934,4 +940,80 @@ test('deleting a derived terminal revokes only its scopes and immediately invali
   assert.equal(getRecord('core.relay.grant', paired.local.id).revokedAt, undefined);
   assert.ok(getRecord('core.relay.grant', scoped.local.id).revokedAt);
   assert.ok(getRecord('core.relay.context', selected.result.resource).revokedAt);
+});
+
+test('own-phone defaults are independent, revision checked and scoped grants cannot administer them', async t => {
+  const f = await fixture(t), session = f.createSession();
+  const scoped = await f.pair(session.id, controls);
+  assert.equal((await f.rpc(scoped, 'settings.get')).error.code, 'FORBIDDEN');
+  const own = await f.pair(session.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });
+  const initial = (await f.rpc(own, 'settings.get')).result;
+  const selection = { provider: 'codex', model: 'fixture-default', effort: 'high' };
+  const id = randomUUID(), input = { target: 'cli', expectedRevision: initial.revision, agents: [selection] };
+  const saved = await f.rpc(own, 'settings.configure', input, { id });
+  assert.equal(saved.ok, true, JSON.stringify(saved));
+  assert.deepEqual(saved.result.defaults.cli, selection);
+  assert.equal(saved.result.defaults.core, null);
+  assert.deepEqual(await f.rpc(own, 'settings.configure', input, { id }), saved);
+  assert.equal((await f.rpc(own, 'settings.configure', { ...input, agents: [{ ...selection, model: 'other' }] })).error.code, 'CONFLICT');
+  let current = saved.result;
+  for (const target of ['core', 'besties', 'parallel', 'debate', 'delegate']) {
+    const agents = Array.from({ length: target === 'core' ? 1 : target === 'delegate' ? 2 : 3 }, () => selection);
+    const result = await f.rpc(own, 'settings.configure', { target, expectedRevision: current.revision, agents });
+    assert.equal(result.ok, true, JSON.stringify(result)); current = result.result;
+    assert.deepEqual(current.defaults[target], target === 'core' ? selection : agents);
+    assert.deepEqual(current.defaults.cli, selection);
+  }
+  const invalid = await f.rpc(own, 'settings.configure', { target: 'delegate', expectedRevision: current.revision, agents: [selection, selection, selection] });
+  assert.equal(invalid.error.code, 'INVALID_REQUEST');
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('paused own-phone terminal model edits preserve goal/history and use durable input receipts', async t => {
+  const f = await fixture(t), session = f.createSession();
+  const own = await f.pair(session.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });
+  const scoped = await f.pair(session.id, controls);
+  const { loadSession } = await import('../src/engine/store.js');
+  const fresh = loadSession(session.id); fresh.goal = { ...newGoal('Keep the same objective.'), status: 'paused', tokensUsed: 27 };
+  putRecord('session', session.id, fresh); appendEvent(session.id, 'text', { text: 'Saved reply.' });
+  const params = { owner: 'phone', selection: { provider: 'codex', model: 'new-model', effort: 'high' }, expectedUpdatedAt: fresh.updatedAt, coordinateInput: true };
+  assert.equal((await f.rpc(scoped, 'session.configure', params)).error.code, 'FORBIDDEN');
+  const id = randomUUID(), result = await f.rpc(own, 'session.configure', params, { id });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.result.model, 'new-model');
+  assert.equal(loadSession(session.id).goal.id, fresh.goal.id);
+  assert.equal(loadSession(session.id).goal.tokensUsed, 27);
+  assert.equal(loadSession(session.id).goal.status, 'paused');
+  assert.equal(listRecords('execution').length, 0);
+  assert.deepEqual(await f.rpc(own, 'session.configure', params, { id }), result);
+  assert.equal((await f.rpc(own, 'command.status', { requestId: id })).result.state, 'accepted');
+  assert.equal((await f.rpc(own, 'session.configure', { ...params, selection: { ...params.selection, model: 'stale' } })).error.code, 'CONFLICT');
+});
+
+test('own-phone pause, model change and exact paused-goal resume retain the same goal', async t => {
+  const f = await fixture(t), session = f.createSession();
+  const own = await f.pair(session.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });
+  prepareTask(session, {}, 'Keep this objective across a model change');
+  session.goal = newGoal('Keep this objective across a model change');
+  putRecord('session', session.id, session);
+  const paused = await f.rpc(own, 'control.request', { owner: 'phone', action: 'pause', coordinateInput: true });
+  assert.equal(paused.ok, true, JSON.stringify(paused));
+  let snapshot = (await f.rpc(own, 'session.get')).result;
+  assert.equal(snapshot.session.goal.status, 'paused');
+  assert.equal(snapshot.session.goal.id, session.goal.id);
+  assert.equal((await f.rpc(own, 'settings.providers')).ok, true);
+  assert.equal((await f.rpc(own, 'settings.models', { provider: 'codex' })).ok, true, 'defaults catalogs work before a managed folder is configured');
+  const changed = await f.rpc(own, 'session.configure', { owner: 'phone', coordinateInput: true,
+    expectedUpdatedAt: snapshot.session.updatedAt, selection: { provider: 'codex', model: 'fixture-new-model', effort: 'high' } });
+  assert.equal(changed.ok, true, JSON.stringify(changed));
+  const params = { owner: 'phone', coordinateInput: true, prompt: 'Continue the existing goal.', goal: true,
+    resumeGoal: true, resumeGoalId: session.goal.id, resumeGoalStatus: 'paused' };
+  assert.equal((await f.rpc(own, 'execution.execute', { ...params, resumeGoalId: randomUUID() })).error.code, 'CONFLICT');
+  const id = randomUUID(), resumed = await f.rpc(own, 'execution.execute', params, { id });
+  assert.equal(resumed.ok, true, JSON.stringify(resumed));
+  assert.equal((await f.rpc(own, 'execution.execute', params, { id })).result.executionId, resumed.result.executionId);
+  await waitFor(() => ['finished', 'failed', 'stopped'].includes(getRecord('execution', resumed.result.executionId)?.state));
+  snapshot = (await f.rpc(own, 'session.get')).result;
+  assert.equal(snapshot.session.goal.id, session.goal.id); assert.equal(snapshot.session.model, 'fixture-new-model');
+  assert.equal(listRecords('execution', { sessionId: session.id }).length, 1);
 });

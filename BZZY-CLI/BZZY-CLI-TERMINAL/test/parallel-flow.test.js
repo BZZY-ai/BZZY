@@ -68,7 +68,7 @@ test('two and three parallel agent pickers retain each model and effort separate
     prepareTask(session, { mode: 'parallel' }, 'Same authorized objective for every independent peer');
     assert.deepEqual(loadSession(session.id).parallelAgents, selections); assert.equal(session.goal, null);
   }
-  assert.doesNotMatch(fs.readFileSync(path.join(directory, 'backend.jsonl'), 'utf8'), /thread\/start|turn\/start/);
+  assert.doesNotMatch((fs.existsSync(path.join(directory, 'backend.jsonl')) ? fs.readFileSync(path.join(directory, 'backend.jsonl'), 'utf8') : ''), /thread\/start|turn\/start/);
 });
 
 test('cancelling a later parallel picker creates no conversation or execution', async () => {
@@ -192,13 +192,13 @@ test('parallel materializes separate chats and workspaces with each native effor
 });
 
 const ptyAvailable = process.platform === 'linux' && spawnSync('script', ['--version'], { stdio: 'ignore' }).status === 0;
-test('parallel terminal reuses a saved combo straight to goal entry, or opens the selector on No', { skip: !ptyAvailable, timeout: 30000 }, async () => {
+test('parallel terminal reuses a saved combo straight to goal entry, or configures a different explicit count', { skip: !ptyAvailable, timeout: 30000 }, async () => {
   const parent = createSession(BUILTINS.codex, directory);
   applyParallelSelection(parent, [{ provider: 'codex', model: 'saved-first', effort: 'xhigh' }, { provider: 'claude', model: 'saved-second', effort: 'high' }]);
   saveSessionDefaultSelection(parent);
   const existing = sessions().map(session => session.id);
   for (const useSaved of [true, false]) {
-    const command = [process.execPath, path.join(root, 'bin/bzzy.js'), '--parallel', '--no-pet'].map(value => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
+    const command = [process.execPath, path.join(root, 'bin/bzzy.js'), '--parallel', ...(useSaved ? [] : ['3']), '--no-pet'].map(value => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
     const child = spawn('script', ['-qefc', command, '/dev/null'], { cwd: directory, env: { ...process.env, BZZY_DIRECT: '0', TERM: 'xterm-256color' }, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
@@ -212,9 +212,7 @@ test('parallel terminal reuses a saved combo straight to goal entry, or opens th
       throw new Error(`Missing ${fragment}: ${output.slice(-2000)}`);
     }
     try {
-      await until('Use saved combo?');
-      assert.match(output, /saved-first/); assert.match(output, /saved-second/);
-      child.stdin.write(useSaved ? '\r' : '\x1b[B\r');
+      assert.doesNotMatch(output, /Use saved combo/);
       await until(useSaved ? 'Parallel · Goal setup' : 'Parallel · Select agents');
       if (useSaved) assert.doesNotMatch(output, /Parallel · Select agents|Choose model|Choose provider/);
       child.stdin.write('\x1b');

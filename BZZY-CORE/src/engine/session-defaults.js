@@ -28,9 +28,9 @@ export function saveSessionDefaultSelection(session) {
 export function savedDefaultMessage(selected) {
   if (selected.mode) return `${selected.mode[0].toUpperCase() + selected.mode.slice(1)} default saved · ${selected.agents.map((agent, index) =>
     `Agent ${index + 1}: ${agent.provider} · ${agent.model || 'provider default'} · effort ${agent.effort}`).join('\n')}
-Use --${selected.mode} --default to reuse it directly.`;
+Use --${selected.mode} to reuse it directly.`;
   if (selected.parallelAgents) return `Parallel default saved · ${selected.parallelAgents.map((agent, index) =>
     `Agent ${index + 1}: ${agent.provider} · ${agent.model || 'provider default'} · effort ${agent.effort}`).join('\n')}
-Next --parallel launch will ask whether to use this combo.`;
+Next --parallel launch will reuse this combo automatically.`;
   return `Default saved · ${selected.provider} · ${selected.model || 'provider default'} · effort ${selected.effort}. New bzzy sessions will use it.`;
 }

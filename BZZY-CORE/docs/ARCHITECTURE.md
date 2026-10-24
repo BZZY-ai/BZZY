@@ -120,9 +120,9 @@ session control grants confer no global administration rights. See
 
 `src/relay/` now supplies the outbound home-host gateway using the deployed
 Relay SDK as a local package dependency. Host endpoint keys live in a separate
-private identity file, never in source or Relay state. Provisioning remains an
-operator action on the host's public certificate; a candidate connection is not
-host enrollment.
+private identity file, never in source or Relay state. Core registers its own public certificate through authenticated `host.register`
+on the updated Relay. A candidate connection alone has no enrolled-host rights;
+registration adds no Core authorization or access to other hosts.
 
 Explicit confirmation of a recipient fingerprint and a locally saved invitation
 intent creates an exact session/resource/action grant. The gateway persists

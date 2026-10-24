@@ -175,3 +175,23 @@ test('bounded deliveries, oversized messages, request limits and sanitized failu
   const url = f.relay.audience.replace('ws:', 'http:').replace('/v1/socket', '/healthz');
   assert.deepEqual(await (await fetch(url)).json(), { ok: true, version: 1 });
 });
+
+test('authenticated self registration reuses one public identity and cannot register another device or undo revocation', async t => {
+  const f = await fixture(t), host = await f.client();
+  await assert.rejects(host.createInvitation({ kind: 'PAIR', resource: 'fresh' }), { code: 'HOST_REQUIRED' });
+  const registered = await host.request('host.register');
+  assert.equal(registered.id, host.identity.certificate.id);
+  assert.equal(f.store.count('devices'), 1);
+  assert.deepEqual(await host.request('host.register'), registered);
+  assert.equal(f.store.count('devices'), 1);
+  await assert.rejects(host.request('host.register', { certificate: createIdentity().certificate }), { code: 'INVALID_MESSAGE' });
+  const recipient = await f.client();
+  assert.deepEqual((await recipient.grants()).grants, []);
+  await pair(host, recipient);
+  const before = f.store.count('devices');
+  await host.request('host.register');
+  assert.equal(f.store.count('devices'), before);
+  assert.equal((await host.grants()).grants.length, 1);
+  f.store.revokeDevice(host.identity.certificate.id);
+  await assert.rejects(host.request('host.register'), { code: 'DEVICE_REVOKED' });
+});

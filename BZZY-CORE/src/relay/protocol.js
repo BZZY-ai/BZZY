@@ -9,6 +9,9 @@ export const LIMITS = Object.freeze({ payloadBytes: 28 * 1024, promptBytes: 16 *
 const fields = Object.freeze({
   'voice.status': [], 'voice.send': ['text'], 'voice.poll': ['requestId', 'cursor'], 'voice.cancel': ['requestId'],
   'updates.status': [], 'updates.check': [], 'updates.configure': ['monitoringEnabled', 'notificationsEnabled', 'remoteUpdatesEnabled'], 'updates.install': ['target'],
+  'settings.get': [], 'settings.providers': [], 'settings.models': ['provider', 'after', 'limit'],
+  'settings.configure': ['target', 'expectedRevision', 'agents'],
+  'session.configure': ['owner', 'selection', 'expectedUpdatedAt', 'coordinateInput'],
   'session.get': [], 'session.usage': [], 'host.metrics': [],
   'notifications.register': ['deviceToken', 'environment', 'enabled', 'scope', 'hostHints'],
   'notifications.update': ['enabled'], 'notifications.revoke': [],
@@ -25,12 +28,12 @@ const fields = Object.freeze({
   'events.chunk': ['seq', 'offset', 'limit'],
   'events.ack': ['subscriptionId', 'seq'], 'events.unsubscribe': ['subscriptionId'],
   'input.claim': ['owner', 'takeover'], 'input.release': ['owner'],
-  'execution.execute': ['owner', 'prompt', 'goal', 'resumeGoal', 'replaceGoalId', 'resumeGoalId', 'coordinateInput'],
+  'execution.execute': ['owner', 'prompt', 'goal', 'resumeGoal', 'replaceGoalId', 'resumeGoalId', 'resumeGoalStatus', 'coordinateInput'],
   'question.answer': ['owner', 'questionId', 'answer', 'coordinateInput'],
   'permissions.set': ['owner', 'enabled', 'questionId', 'coordinateInput'],
   'control.request': ['owner', 'action', 'text', 'coordinateInput'], 'command.status': ['requestId'],
 });
-export const COMMANDS = new Set(['voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
+export const COMMANDS = new Set(['settings.configure', 'session.configure', 'voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
   'agents.create', 'agents.update', 'agents.archive', 'agents.open', 'agents.import', 'agents.import.cancel']);
 export const OPERATIONS = Object.freeze(Object.keys(fields));
 
@@ -52,6 +55,7 @@ export function validateRequest(value) {
 }
 
 export function permissionFor(request) {
+  if (['settings.configure', 'session.configure'].includes(request.op)) return 'execute';
   if (request.op === 'voice.send') return 'execute';
   if (request.op === 'voice.cancel') return 'pause';
   if (['updates.install', 'updates.configure'].includes(request.op)) return 'execute';

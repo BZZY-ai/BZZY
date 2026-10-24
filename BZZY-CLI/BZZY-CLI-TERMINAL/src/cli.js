@@ -1,7 +1,7 @@
 import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { config, providers, getProvider, setDefault, addProvider, apiKey, saveKey, ensureApiKey, chooseProvider, saveDefaultSelection } from './providers.js';
+import { config, modeDefault, providers, getProvider, setDefault, addProvider, apiKey, saveKey, ensureApiKey, chooseProvider, saveDefaultSelection } from './providers.js';
 import { chooseModel } from './models.js';
 import { home, findSession, sessions, loadSession, normalizeSessionAlias, setSessionAlias } from './store.js';
 import { chooseSavedSession, namedTerminalSessions, promptSessionAlias, queueSessionBrowser, sessionLabel } from './session-browser.js';
@@ -139,7 +139,7 @@ Chat commands: /goal <objective>, /goal status|pause|resume|clear,
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
 /default saves a separate preset for normal chat, delegate, debate, besties or parallel.
---default skips selectors and the saved-combo question for the selected mode.
+Mode flags automatically use their saved defaults; --default also requires a saved preset.
 /models: ↑/↓ chooses a model; ←/→ sets supported effort; Enter confirms.
 /provider and /model are aliases. /quit also exits.
 Delegation: choose a strong brain and a less expensive executor; describe one overall goal.
@@ -602,8 +602,13 @@ export async function main(argv) {
     if (command && !executionCommands.includes(command) && !positionalContext) throw new Error(`Unknown command ${command}. Use bzzy --help.`);
     if (options.contextFile && !(options.goal || ['goal', 'delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command))) throw new Error('--context-file requires --goal or a goal execution command.');
     const contextFileText = options.contextFile ? readContextFile(options.contextFile, options.cwd) : undefined;
-    applyLaunchDefault(options);
     if (['delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command)) options.mode = command === 'paralel' ? 'parallel' : command;
+    if (!options.mode || options.mode === 'solo') applyLaunchDefault(options);
+    if (['parallel', 'besties', 'debate', 'delegate'].includes(options.mode)
+      && !options.agents && !options.participants && !options.supervisor && !options.executor) {
+      const saved = modeDefault(options.mode);
+      if (saved && (options.parallelCount == null || options.parallelCount === saved.length)) options.useDefault = true;
+    }
     if (options.useDefault && (!options.mode || options.mode === 'solo') && !config().defaultProvider) throw new Error('No normal chat default saved. Choose a provider and run /default first.');
     if (options.mode === 'delegate' && (options.delegationSetup && ui.interactive || options.useDefault)) {
       ui.openTerminal();

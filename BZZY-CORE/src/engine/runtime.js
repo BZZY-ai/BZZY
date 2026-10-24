@@ -292,6 +292,15 @@ export async function serveRuntime() {
             const targets = children.filter(child => listRecords('execution', { sessionId: child.id, states: ['queued', 'launching', 'running'], limit: 1 }).length > 0);
             for (const child of targets) { const childControl = { ...control, id: randomUUID(), sessionId: child.id, parentControlId: control.id }; putRecord('control', childControl.id, childControl, db); appendEvent(child.id, 'control.queued', childControl, db); }
             control.state = 'observed'; control.result = { active: false, childSessions: targets.map(child => child.id) };
+            const fresh = loadSession(id);
+            if (!targets.length && fresh.goal && !['complete', 'cancelled'].includes(fresh.goal.status)) {
+              fresh.goal.status = body.action === 'pause' ? 'paused' : 'cancelled';
+              fresh.goal.reason = 'user_' + body.action;
+              fresh.executionState = fresh.goal.status; fresh.updatedAt = now();
+              putRecord('session', id, fresh, db);
+              appendEvent(id, 'lifecycle', { status: fresh.goal.status, executionState: fresh.executionState, reason: fresh.goal.reason }, db);
+            }
+
           }
           putRecord('control', control.id, control, db);
           if (body.action === 'steer') appendEvent(id, 'message.user', { text: body.text, kind: 'steering', controlId: control.id }, db);

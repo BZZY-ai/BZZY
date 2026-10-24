@@ -11,6 +11,14 @@ const safeError = error => ['HOST_ENROLLMENT_REQUIRED', 'BZZY_LOCKED', 'PRIVATE_
   'PRIVATE_FILE_REQUIRED', 'NON_ROOT_REQUIRED', 'TLS_REQUIRED', 'INVALID_IDENTITY'].includes(error?.code)
   ? error.code : 'CONNECTION_FAILED';
 
+export function prepareRelayService() {
+  const current = readJson(configPath(), {});
+  if (current.enabled === undefined) {
+    initializeRelayIdentity();
+    writeJson(configPath(), { ...current, enabled: true });
+  }
+}
+
 // Owned by the Core daemon, never by the terminal UI. Administration stays on
 // the authenticated local owner API and is absent from the encrypted allowlist.
 export class CoreRelayService {

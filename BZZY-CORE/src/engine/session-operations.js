@@ -6,7 +6,7 @@ import { prepareTask } from './task.js';
 import { newGoal, needsGoalReplacement } from './goals.js';
 import { getProvider } from './providers.js';
 import { assertModelIdle, assertSessionIdle } from './models.js';
-import { database, transaction, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
+import { reserveRequest, database, transaction, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
 import { conversationCursor } from './conversation.js';
 import { enqueueExecution } from './execution-queue.js';
 import { normalizeContract } from './contracts.js';
@@ -23,7 +23,7 @@ export function executionRecord(id) {
   return getRecord('execution', id);
 }
 
-export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume = false, objective, requestId = randomUUID(), info, authorize, request, replaceGoalId, resumeGoalId, channel, environment } = {}) {
+export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume = false, objective, requestId = randomUUID(), info, authorize, request, replaceGoalId, resumeGoalId, resumeGoalStatus, channel, environment } = {}) {
   const permit = (permission = 'execute') => { requireOwner(sessionId, owner); authorize?.(permission); };
   const confirmReplacement = fresh => {
     if (!resume && needsGoalReplacement(fresh.goal) && replaceGoalId !== fresh.goal.id) {
@@ -75,7 +75,7 @@ export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume =
       confirmReplacement(fresh);
       if (resume) {
         if (!fresh.goal || fresh.goal.status === 'complete') throw new Error('There is no unfinished goal to resume.');
-        if (resumeGoalId !== undefined && (fresh.goal.id !== resumeGoalId || !isStalledGoal(fresh.goal))) throw Object.assign(new Error('The stalled goal changed. Refresh before resuming.'), { code: 'CONFLICT', status: 409 });
+        if (resumeGoalId !== undefined && (fresh.goal.id !== resumeGoalId || (resumeGoalStatus === 'paused' ? fresh.goal.status !== 'paused' : !isStalledGoal(fresh.goal)))) throw Object.assign(new Error('The stalled goal changed. Refresh before resuming.'), { code: 'CONFLICT', status: 409 });
         if (options.tokenBudget) fresh.goal.tokenBudget = options.tokenBudget;
         if (fresh.goal.tokenBudget != null && Math.max(fresh.goal.tokensUsed || 0, budgetUsage(fresh)) >= fresh.goal.tokenBudget) throw new Error('Goal budget is exhausted. Increase the total token budget before resuming.');
         Object.assign(fresh.goal, { notificationEpoch: (fresh.goal.notificationEpoch || 0) + 1, noActivityTurns: 0, blockerStreak: 0, lastBlocker: null });
@@ -114,27 +114,28 @@ export function updateIdleGoal(sessionId, owner, action) {
   writeJson(sessionPath(changed.id), changed); return changed;
 }
 
-function editSession(sessionId, owner, apply, authorize) {
-  const session = transaction(db => {
+function editSession(sessionId, owner, apply, authorize, existingDb) {
+  const operation = db => {
     requireOwner(sessionId, owner); authorize?.();
     const current = loadSession(sessionId); assertModelIdle(current);
     apply(current, db); current.updatedAt = now();
     putRecord('session', sessionId, current, db);
     return current;
-  });
+  };
+  const session = existingDb ? operation(existingDb) : transaction(operation);
   writeJson(sessionPath(sessionId), session);
   return session;
 }
 
-export function setSessionModel(sessionId, owner, selected, { authorize } = {}) {
+export function setSessionModel(sessionId, owner, selected, { authorize, db } = {}) {
   return editSession(sessionId, owner, (session, db) => {
     const previous = session.model;
     Object.assign(session, { modelSelectionRequired: false, model: selected.model, resolvedModel: null, modelCapabilities: selected.capabilities, selectedEffort: selected.effort, reasoningEffort: null });
     appendEvent(session.id, 'model.changed', { provider: session.provider, previousModel: previous, model: session.model, effort: session.selectedEffort, appliesTo: 'next_turn' }, db);
-  }, authorize);
+  }, authorize, db);
 }
 
-export function setSessionProvider(sessionId, owner, expectedProvider, providerId, selected, { authorize } = {}) {
+export function setSessionProvider(sessionId, owner, expectedProvider, providerId, selected, { authorize, db } = {}) {
   const provider = getProvider(providerId);
   return editSession(sessionId, owner, (session, db) => {
     if (session.provider !== expectedProvider) throw new Error('The provider changed while selection was open. Choose it again.');
@@ -153,5 +154,22 @@ export function setSessionProvider(sessionId, owner, expectedProvider, providerI
     }
     appendEvent(session.id, 'provider.changed', { previousProvider: previous.provider, previousModel: previous.model, previousThreadId: previous.threadId,
       provider: session.provider, model: session.model, effort: session.selectedEffort, conversationThrough: session.conversationHandoff.throughSeq, appliesTo: 'next_turn' }, db);
-  }, authorize);
+  }, authorize, db);
+}
+
+// Shared authenticated input operation; a model edit starts no execution and
+// preserves the saved goal, evidence, history and budget.
+export function configureSessionSelection(sessionId, owner, input, requestId, { authorize } = {}) {
+  const { selection, expectedUpdatedAt } = input;
+  return reserveRequest(`selection:${sessionId}`, requestId, input, db => {
+    authorize?.();
+    const current = loadSession(sessionId);
+    if (current?.updatedAt !== expectedUpdatedAt) throw Object.assign(new Error('Session changed. Reload before editing.'), { code: 'CONFLICT', status: 409 });
+    try { assertModelIdle(current); } catch { throw Object.assign(new Error('Pause the current response before editing.'), { code: 'CONFLICT', status: 409 }); }
+    const options = { authorize, db };
+    const saved = selection.provider === current.provider
+      ? setSessionModel(sessionId, owner, selection, options)
+      : setSessionProvider(sessionId, owner, current.provider, selection.provider, selection, options);
+    return { sessionId, provider: saved.provider, model: saved.model, effort: saved.selectedEffort };
+  });
 }

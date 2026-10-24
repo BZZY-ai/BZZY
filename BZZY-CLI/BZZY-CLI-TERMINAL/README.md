@@ -133,7 +133,9 @@ Core > Terminal agent setups**, or `/settings modes`, to save each mode’s mode
 efforts and agent count. Debate, Parallel and Besties support two or three agents;
 Delegate has two roles, supervisor and executor. Model/effort fields use the Core
 catalog and floating dropdowns. Editing starts no work; Save applies to the next
-mode launch, and `--MODE --default` reuses its saved combination directly.
+mode launch, and `bzzy --MODE` reuses its saved combination directly. `--default` remains an
+explicit requirement that a matching preset exists. Explicit agent/participant
+selections override the saved combination.
 Terminal mode presets stay independent from the normal chat and Core assistant
 defaults. Unsaved edits survive Back; Reload saved setup explicitly discards them.
 
@@ -227,9 +229,9 @@ Each execution receives allowlisted caller configuration and locally declared pr
 The existing runtime supports expiring session credentials with explicit control permissions and revocation. `bzzy service token SESSION` remains read-only; `bzzy service grants` lists grants and `bzzy service revoke GRANT_ID` revokes one. See the [integration guide](docs/INTEGRATION.md) for scoped clients and reconnect semantics. Full-project `/export` bundles remain private owner backups and can contain secrets; `/share` uses the separate credential-filtered portable policy.
 
 Open **Settings** in the terminal, use `/settings`, or run `bzzy settings`
-directly. It includes hidden DeepSeek API-key save/replacement and device
+directly. It includes hidden DeepSeek, Abliteration and OrcaRouter API-key save/replacement and device
 pairing using the bundled Core Relay gateway. The main menu has four entries:
-**DeepSeek API key**, **Default BZZY folder**, **Pair iPhone**, and **BZZY Core**.
+**API keys**, **Default BZZY folder**, **Pair iPhone**, and **BZZY Core**.
 Open BZZY Core for status, Start, Stop, Restart and its independent model/effort default. Stop leaves Settings usable;
 Start/Restart preserve paused work. Leaving Settings reconnects an existing chat
 without replaying a goal; leaving while Core is stopped closes the CLI.
@@ -240,8 +242,7 @@ terminal catalog access, project sharing and Agent management. Its secondary
 screen retains fingerprint confirmation, access expiry and grant revocation;
 there are no observe-only/control or scope-selection choices. Core service
 commands remain available directly; Core's independent model/effort/Save controls live inside the BZZY Core secondary screen.
-Core and its Relay dependencies are packaged with this CLI, and the Relay
-operator must enroll the public host certificate first.
+Core and its Relay dependencies are packaged with this CLI, and Core automatically registers its public identity on the updated Relay.
 The daemon keeps the gateway connected after CLI closes. Native local full-line
 tests validate iOS interoperability; public host enrollment, real-device checks
 and unattended boot/logout behavior remain deployment checks.

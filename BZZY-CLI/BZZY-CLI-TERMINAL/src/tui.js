@@ -20,7 +20,7 @@ import { goalIndicator } from './goal-indicator.js';
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
 const mouseOn = '\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h', mouseOff = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l';
-const targetKey = hit => hit && [hit.type, hit.command || hit.action || hit.panel || hit.id || hit.index || '', hit.row, hit.left, hit.right].join(':');
+const targetKey = hit => hit?.type === 'settings' ? `settings:${hit.action}` : hit && [hit.type, hit.command || hit.action || hit.panel || hit.id || hit.index || '', hit.row, hit.left, hit.right].join(':');
 
 export class TerminalChat {
   constructor(ui) {

@@ -338,3 +338,27 @@ allowlists its non-secret fixture log variable in temporary configuration.
 These sibling results are a historical snapshot, not a claim about later CLI
 changes. The separate CLI test harness has since acquired explicit fixture
 environment handling; rerun that harness for its current status.
+
+## Own-phone defaults, paused model changes and automatic registration (2026-10-24)
+
+- All 244 Core tests pass with test concurrency 2. The new encrypted fixtures
+  cover independent defaults, exact revision/idempotency checks, scoped-grant
+  denial, catalogs without a managed folder, pause/model-change/resume of one
+  goal, retained history/budget, and same-identity registration without inference.
+- Relay's 31 tests pass locally and on the Debian production host before rollout.
+  Only the intended server change was deployed; its baseline matched the repo.
+  Health/TLS and loopback-only port 8787 were verified after restart. A disposable
+  external WSS host registered twice and reconnected with the same ID; the single
+  public test record was then removed. No endpoint private keys were uploaded.
+- CLI's full suite passes (440 pass, 21 platform/optional skips), with subsequent
+  Settings tests covering whole-card hover and both additional masked key stores.
+  Real macOS PTY launches of each mode flag reached goal entry with its saved
+  models/count, without a selector or execution, then cancelled cleanly.
+- The iOS simulator build succeeds. All 84 native Swift model/transport tests
+  pass, exercising the existing encrypted Core line; added tests validate default
+  settings/session selection responses and exact paused-goal request fields.
+  A physical phone interaction with the new screens remains a manual check.
+
+Normal reinstalls retain one identity only while the same private BZZY_HOME is
+preserved. Full private-state deletion creates a fresh identity deliberately.
+The installed user CLI/Core and physical iPhone were not automatically updated.

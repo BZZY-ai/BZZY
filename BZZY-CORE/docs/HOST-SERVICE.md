@@ -11,18 +11,19 @@ point a service at a removable checkout or a temporary npx runtime.
 ./install.sh
 bzzy-core doctor
 bzzy-core workspace set "$HOME/BZZY"
-bzzy-core relay init
+bzzy-core start
 ```
 
 `doctor` checks Node, Python, the private host directory and the native service
 manager without starting a daemon or reading account secrets. It does not claim
 provider login, Relay enrollment or Apple push readiness. Configure providers
-privately on the host. Send only the public identity prepared by `relay init`
-to the Relay operator, then use CLI Settings → Pair iPhone. Settings and pairing
+privately on the host. Core prepares and registers its own public identity
+automatically, then use CLI Settings → Pair iPhone. Keep the same user and private
+`BZZY_HOME` across normal reinstalls to retain one host identity and its pairing. Settings and pairing
 do not require a model. This own-phone flow requests full session control,
 terminal catalog access, project sharing and Agent management without permission
-pickers; fingerprint confirmation, expiry and revocation remain. The three main
-Settings entries are DeepSeek API key, Default BZZY folder and Pair iPhone.
+pickers; fingerprint confirmation, expiry and revocation remain. The four main
+Settings entries are API keys, Default BZZY folder, Pair iPhone and BZZY Core.
 
 The installer prepares a disabled user-service manifest without starting Core.
 Opening plain `bzzy` activates that same service automatically. Simple controls:

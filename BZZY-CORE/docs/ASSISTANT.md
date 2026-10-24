@@ -53,7 +53,7 @@ These are Core host commands. The terminal consumes this same engine and retains
 the `bzzy auth PROVIDER` authorization interface when a provider needs login.
 Its hidden input is handled by the terminal; credential storage and native
 provider authentication belong to Core. No account secret is accepted by the
-assistant setup commands above, and native iOS setup is separate product work.
+assistant setup commands above, and the fully approved own phone can now edit independent defaults through Settings → Models and defaults.
 
 ```js
 import { randomUUID } from 'node:crypto';
@@ -176,3 +176,22 @@ native headings, tables, emphasis and code. Core preserves the original response
 string in durable text events and artifacts. Terminal display projection does not
 rewrite that history. This presentation contract does not add iOS networking,
 change authorization or turn a formatted success label into verified evidence.
+
+## Own-phone defaults and paused terminal model changes
+
+The fully approved own-phone base grant can read `settings.get`,
+`settings.providers`, paged `settings.models` and save `settings.configure`.
+Scoped friends and Agent/terminal derived resources cannot administer defaults.
+Saves require the displayed revision and an idempotency ID. CLI, Core, Besties,
+Parallel, Debate and Delegate selections remain independent; Delegate has two
+roles, and the other multi-agent modes allow two or three agents. Model discovery
+uses Core's provider catalog and does not require an Agents folder.
+
+An individual own-phone terminal supports `session.configure` through coordinated input,
+with the displayed session timestamp and provider/model/effort selection. Core
+checks ownership, live permission, idle state and revision at commit. Editing
+preserves the goal, budget, evidence and chat. Pause stops work; Resume with
+`resumeGoalId` and `resumeGoalStatus: "paused"` checks the exact manually paused
+goal at admission and queue commit. Stalled-only resume keeps its original guard.
+Reconnect and settings edits start no work. Keys continue to use private host
+authorization and are absent from these settings RPCs.

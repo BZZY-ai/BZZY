@@ -62,7 +62,7 @@ export class ClientSettings {
   changed() { if (this.closed) return; if (this.ui.tui) this.ui.tui.settingsEnsureFocus = true; this.ui.tui?.schedule(); }
   get pageTitle() {
     return this.page === 'mode-edit' ? `${modeSettings[this.modes.mode].title} default`
-      : { main: 'Settings', core: 'BZZY Core', modes: 'Terminal agent setups', pair: 'Pair iPhone', approve: 'Confirm iPhone' }[this.page] || 'Settings';
+      : { main: 'Settings', core: 'BZZY Core', keys: 'API keys', modes: 'Terminal agent setups', pair: 'Pair iPhone', approve: 'Confirm iPhone' }[this.page] || 'Settings';
   }
   get pageSubtitle() {
     return { main: 'Your workspace, connections and defaults', core: 'Service and assistant · terminal presets stay independent',
@@ -73,9 +73,9 @@ export class ClientSettings {
     const index = this.rows().filter(row => row.action).findIndex(row => row.action === action);
     if (index >= 0) this.focus = index;
   }
-  keyStatus() {
+  keyStatus(id = 'deepseek') {
     try {
-      return credentialStatus('deepseek');
+      return credentialStatus(id);
     } catch { return { unavailable: true }; }
   }
   pending() { return this.gateway?.pendingPairings() || []; }
@@ -90,7 +90,7 @@ export class ClientSettings {
     }
     const previous = this.page;
     this.page = 'main'; this.qrView = false; this.message = ''; this.warning = false;
-    this.focusAction(previous === 'core' ? 'core' : 'pair'); this.changed(); return true;
+    this.focusAction(previous === 'core' ? 'core' : previous === 'keys' ? 'deepseek' : 'pair'); this.changed(); return true;
   }
   rows() {
     const rows = [], put = (text = '', tone = 'text', action) => rows.push({ text, tone, action });
@@ -98,14 +98,22 @@ export class ClientSettings {
     if (this.page === 'mode-edit') return this.modes.rows();
     if (this.page === 'main') {
       const key = this.keyStatus();
-      rows.push({ text: 'DeepSeek API key', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
-        detail: key.unavailable ? 'Unavailable' : key.environment ? 'Environment key · click to replace' : key.saved ? 'Configured · stored privately' : 'Add your key securely' });
+      rows.push({ text: 'API keys', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
+        detail: 'DeepSeek · Abliteration · OrcaRouter · ' + (key.unavailable ? 'Unavailable' : key.environment ? 'Environment key · click to replace' : key.saved ? 'Configured · stored privately' : 'Add your key securely') });
       let folder; try { folder = this.workspaces.settings().root?.path || 'Choose a folder'; } catch { folder = 'Unavailable'; }
       rows.push({ text: 'Default BZZY folder', action: 'workspace-root', icon: '▱', card: true, tone: 'accent', detail: folder });
       rows.push({ text: 'Pair iPhone', action: 'pair', icon: '⌁', card: true, tone: 'accent',
         detail: this.pending().length ? 'iPhone waiting for approval' : this.grants().length ? 'iPhone paired' : 'Full access · QR or code' });
       rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, default assistant and terminal agent setups', value: this.hostStatus ? this.hostLabel() : undefined });
       return rows;
+    }
+    if (this.page === 'keys') {
+      for (const id of ['deepseek', 'abliteration', 'orcarouter']) {
+        const provider = getProvider(id), status = this.keyStatus(id);
+        rows.push({ text: provider.name + ' API key', action: 'key:' + id, card: true, icon: '⌘',
+          detail: status.unavailable ? 'Unavailable' : status.environment ? 'Environment key · replace securely' : status.saved ? 'Configured · replace securely' : 'Add your key securely' });
+      }
+      put('Back', 'muted', 'back'); return rows;
     }
     if (this.page === 'core') {
       rows.push({ text: 'Background service', section: true });
@@ -237,16 +245,16 @@ export class ClientSettings {
     this.message = 'Scan in BZZY on your iPhone, or enter the code.';
     this.focusAction('qr'); this.qrView = true;
   }
-  async saveDeepseek() {
-    const provider = getProvider('deepseek');
-    let key = (await this.ui.secret('DeepSeek API key · hidden · Enter saves · Esc cancels'))?.trim();
+  async saveDeepseek(id = 'deepseek') {
+    const provider = getProvider(id);
+    let key = (await this.ui.secret(`${provider.name} API key · hidden · Enter saves · Esc cancels`))?.trim();
     if (!key) return;
     if (key.length > 8192 || /\s|[\x00-\x1f\x7f-\x9f]/u.test(key)) { this.message = 'Use an API key without whitespace or control characters.'; this.warning = true; return; }
     if (this.closed) return;
     saveKey(provider.id, key); key = undefined;
     delete process.env[provider.envKey];
     this.ui.accountMonitor?.close(); this.ui.accountMonitor = null;
-    if (this.ui.accountStatus) delete this.ui.accountStatus.deepseek;
+    if (this.ui.accountStatus) delete this.ui.accountStatus[id];
     this.message = 'API key saved. New requests will use it.';
   }
   async configureWorkspace() {
@@ -295,7 +303,8 @@ export class ClientSettings {
       else if (action.startsWith('mode:')) { this.modes.open(action.slice(5)); this.page = 'mode-edit'; this.focus = 0; }
       else if (action.startsWith('preset-')) { const message = await this.modes.run(action); if (message) this.message = message; }
       else if (action === 'workspace-root') await this.configureWorkspace();
-      else if (action === 'deepseek') await this.saveDeepseek();
+      else if (action === 'deepseek') { this.page = 'keys'; this.focus = 0; }
+      else if (action.startsWith('key:')) await this.saveDeepseek(action.slice(4));
       else if (action === 'core') { delete this.coreSelection; delete this.coreRevision; this.page = 'core'; this.focus = 0; await this.refreshHost(); }
       else if (action === 'core-model') {
         const shown = (this.assistant ||= new CoreAssistant()).settings();

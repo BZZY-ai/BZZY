@@ -233,6 +233,7 @@ export async function startCoreHost({ plan = servicePlan(), runtime, run = defau
   prepare = true, readinessWaitMs = 8000 } = {}) {
   assertCoreAvailable(plan.coreHome);
   if (!Number.isSafeInteger(readinessWaitMs) || readinessWaitMs < 50 || readinessWaitMs > 15000) throw failure('SERVICE_USAGE', 'Service readiness wait must be 50–15000 milliseconds.');
+  if (!runtime) (await import('../relay/service.js')).prepareRelayService();
   runtime ||= await lifecycleRuntime();
   const ready = doctor();
   if (!ready.ready) throw failure('SERVICE_PREREQUISITES', 'Run bzzy-core doctor and resolve Node/Python/private-directory prerequisites before starting.');
@@ -322,7 +323,9 @@ export async function restartCoreHost(options = {}) {
 export async function activateCLIHost({ plan, runtime, run = defaultRun, direct = process.env.BZZY_DIRECT === '1' } = {}) {
   assertCoreAvailable(plan?.coreHome);
   if (direct) return { managed: false, direct: true };
-  plan ||= servicePlan(); runtime ||= await lifecycleRuntime();
+  plan ||= servicePlan();
+  if (!runtime && installed(plan)) (await import('../relay/service.js')).prepareRelayService();
+  runtime ||= await lifecycleRuntime();
   if (installed(plan)) return startCoreHost({ plan, runtime, run, prepare: false });
   runtime.clearStop(); return { managed: false };
 }

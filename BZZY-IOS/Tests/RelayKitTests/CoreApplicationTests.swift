@@ -44,6 +44,31 @@ import CryptoKit
 }
 
 final class CoreApplicationTests: XCTestCase {
+    @MainActor func testDefaultSettingsAndSessionSelectionValidateNativeResponses() async throws {
+        let h = CoreHarness(); try await h.bind(inputActor: "phone")
+        let selection: CoreJSONValue = .object(["provider": .string("codex"), "model": .string("saved-model"), "effort": .string("high")])
+        let snapshot: CoreJSONValue = .object(["revision": .string(String(repeating: "a", count: 64)),
+            "defaults": .object(["cli": selection, "core": .null, "parallel": .array([selection, selection, selection]),
+                "besties": .null, "debate": .null, "delegate": .array([selection, selection])])])
+        h.result = snapshot
+        let read = try await h.client.request("settings.get")
+        XCTAssertEqual(read, snapshot)
+        let saved = try await h.client.request("settings.configure", params: ["target": .string("cli"),
+            "expectedRevision": snapshot["revision"], "agents": .array([selection])])
+        XCTAssertEqual(saved, snapshot)
+        let params: [String: CoreJSONValue] = ["owner": .string("phone"), "coordinateInput": .bool(true),
+            "selection": selection, "expectedUpdatedAt": .string("2026-10-24T00:00:00.000Z")]
+        h.result = .object(["state": .string("accepted"), "sessionId": .string(h.session), "provider": .string("codex"), "model": .string("saved-model"), "effort": .string("high")])
+        let changed = try await h.client.request("session.configure", params: params)
+        XCTAssertEqual(changed["model"].string, "saved-model")
+        h.result = .object(["state": .string("accepted"), "sessionId": .string(UUID().uuidString.lowercased()), "provider": .string("codex"), "model": .string("saved-model"), "effort": .string("high")])
+        do { _ = try await h.client.request("session.configure", params: params); XCTFail("Foreign session accepted") }
+        catch { XCTAssertEqual((error as? CoreApplicationError)?.code, "UNCERTAIN", "An invalid mutation receipt cannot confirm acceptance") }
+        var injected = params; injected["environment"] = .object([:])
+        XCTAssertThrowsError(try CoreApplicationProtocol.request(op: "session.configure", params: injected, id: "edit", resource: "resource"))
+        XCTAssertNoThrow(try CoreApplicationProtocol.request(op: "settings.models", params: ["provider": .string("codex"), "after": .string("saved-model"), "limit": .number(25)], id: "catalog", resource: "resource"))
+    }
+
     @MainActor func testLateSupersededSubscriptionClosureCannotInvalidateCurrentStream() async throws {
         let h = CoreHarness(); try await h.bind(); try await h.subscribe()
         var closed = false; h.client.onSubscriptionClosed = { _, _ in closed = true }

@@ -2,7 +2,8 @@ import { database, digest, getRecord, putRecord, listRecords, appendEvent, now }
 import { loadSession, sessionDeleted } from './store.js';
 import { claimInput, effectiveInputOwner, requireOwner } from './runtime.js';
 import { enqueueExecution } from './execution-queue.js';
-import { enqueueGoalTurn } from './session-operations.js';
+import { providerSelection } from '../conversations.js';
+import { enqueueGoalTurn, configureSessionSelection } from './session-operations.js';
 import { needsGoalReplacement, parseGoalCommand } from './goals.js';
 import { setTerminalYolo } from './terminal-permissions.js';
 import { authorizedUpdateGrant } from './update-access.js';
@@ -16,9 +17,9 @@ const reject = (message, code = 'INVALID_REQUEST', status = 400) => { throw Obje
 export function submitSessionInput(sessionId, input, requestId, context) {
   if (!context?.authorize || !context.request) throw new Error('Input needs an authenticated Core context.');
   if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(requestId)) reject('Supply a stable input request ID.');
-  const allowed = ['operation', 'owner', 'prompt', 'objective', 'options', 'environment', 'goal', 'resumeGoal', 'replaceGoalId', 'resumeGoalId', 'preparedGoalId', 'questionId', 'answer', 'action', 'text', 'enabled', 'clientRequestId'];
+  const allowed = ['operation', 'owner', 'prompt', 'objective', 'options', 'environment', 'goal', 'resumeGoal', 'replaceGoalId', 'resumeGoalId', 'resumeGoalStatus', 'preparedGoalId', 'questionId', 'answer', 'action', 'text', 'enabled', 'clientRequestId', 'selection', 'expectedUpdatedAt'];
   if (!input || Object.keys(input).some(key => !allowed.includes(key))) reject('Unknown input field.');
-  if (!['execute', 'goal', 'answer', 'control', 'permissions'].includes(input.operation)) reject('Unknown input operation.');
+  if (!['execute', 'goal', 'answer', 'control', 'permissions', 'selection'].includes(input.operation)) reject('Unknown input operation.');
   if (typeof input.owner !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.owner)) reject('Invalid input actor.');
   if (input.clientRequestId !== undefined && (typeof input.clientRequestId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(input.clientRequestId))) reject('Invalid client request identity.');
   for (const flag of ['goal', 'resumeGoal', 'enabled']) if (input[flag] !== undefined && typeof input[flag] !== 'boolean') reject('Input flags must be boolean.');
@@ -41,6 +42,15 @@ async function dispatch(sessionId, input, requestId, { authorize, principal = 'o
   const permission = input.operation === 'answer' ? 'answer' : input.operation === 'control' ? input.action : 'execute';
   if (!['execute', 'answer', 'pause', 'cancel', 'steer'].includes(permission)) reject('Unknown input permission.');
   authorize(permission);
+  if (input.operation === 'selection') {
+    providerSelection(input.selection);
+    if (typeof input.expectedUpdatedAt !== 'string') reject('Use the displayed session revision.');
+    if (principal !== 'owner') {
+      const binding = [...listRecords('core.relay.grant'), ...listRecords('core.relay.context')]
+        .find(row => row.sessionId === sessionId && `grant:${row.coreGrantId}` === principal && !row.revokedAt && row.expiresAt > Date.now());
+      if (!binding || !authorizedUpdateGrant(binding.relayGrantId || binding.id) || loadSession(sessionId)?.purpose === 'agent') reject('Model changes require the fully approved own phone and a terminal.', 'FORBIDDEN', 403);
+    }
+  }
   if (input.operation === 'permissions') {
     authorize('answer');
     if (principal !== 'owner') {
@@ -70,10 +80,11 @@ async function dispatch(sessionId, input, requestId, { authorize, principal = 'o
     if (command.action && command.action !== 'resume') reject('Use goal controls or supply an objective.');
     objective = command.objective; resume = command.action === 'resume';
   }
+  if (input.resumeGoalStatus !== undefined && (input.resumeGoalStatus !== 'paused' || !input.resumeGoalId)) reject('Use an exact paused goal identity.');
   if (input.resumeGoalId !== undefined) {
     if (!isGoal || !resume || typeof input.resumeGoalId !== 'string' || !/^[a-f0-9-]{36}$/.test(input.resumeGoalId)) reject('A stalled resume needs its saved goal identity.');
     const goal = loadSession(sessionId)?.goal;
-    if (goal?.id !== input.resumeGoalId || !isStalledGoal(goal)) reject('The stalled goal changed. Refresh before resuming.', 'CONFLICT', 409);
+    if (goal?.id !== input.resumeGoalId || (input.resumeGoalStatus === 'paused' ? goal?.status !== 'paused' : !isStalledGoal(goal))) reject('The stalled goal changed. Refresh before resuming.', 'CONFLICT', 409);
   }
   if (isGoal && !resume) {
     if (typeof objective !== 'string' || !objective.trim() || Buffer.byteLength(objective) > 16 * 1024) reject('Supply a bounded goal objective.');
@@ -96,11 +107,14 @@ async function dispatch(sessionId, input, requestId, { authorize, principal = 'o
     const relayCommand = requestId.startsWith('relay.') ? getRecord('core.relay.command', requestId.slice(6)) : null;
     if (relayCommand?.op === 'task.submit' && relayCommand.sessionId === sessionId) inputChannel.taskId = relayCommand.id;
     if (isGoal) result = await enqueueGoalTurn(sessionId, input.owner, input.options || {}, {
-      objective, resume, requestId: executionRequestId, replaceGoalId: input.replaceGoalId, resumeGoalId: input.resumeGoalId, authorize: permit, request, channel: inputChannel, environment: input.environment,
+      objective, resume, requestId: executionRequestId, replaceGoalId: input.replaceGoalId, resumeGoalId: input.resumeGoalId, resumeGoalStatus: input.resumeGoalStatus, authorize: permit, request, channel: inputChannel, environment: input.environment,
     });
     else if (input.operation === 'execute') {
       result = enqueueExecution(sessionId, { prompt: input.prompt, options: input.options || {}, environment: input.environment,
         goal: input.goal === true, resumeGoal: resume }, executionRequestId, { authorize: permit, channel: inputChannel });
+    } else if (input.operation === 'selection') {
+      const selection = providerSelection(input.selection);
+      result = configureSessionSelection(sessionId, input.owner, { selection, expectedUpdatedAt: input.expectedUpdatedAt }, executionRequestId, { authorize: permit });
     } else if (input.operation === 'permissions') {
       result = setTerminalYolo(sessionId, { enabled: input.enabled, questionId: input.questionId }, executionRequestId, { authorize: permit });
     } else {

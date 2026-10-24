@@ -72,7 +72,7 @@ export async function startRelay({ store, audience, host = '127.0.0.1', port = 0
   const process = (state, frame) => {
     const { op } = frame;
     const fields = {
-      'invite.create': ['spec'], 'invite.claim': ['code'], 'invite.status': ['claimId'],
+      'host.register': [], 'invite.create': ['spec'], 'invite.claim': ['code'], 'invite.status': ['claimId'],
       'invite.decide': ['claimId', 'approve', 'recipient'], 'invite.revoke': ['invitationId'],
       'grant.list': [], 'grant.inspect': ['grantId'], 'grant.revoke': ['grantId'],
       'peer.revoke': ['peerId'], 'route.send': ['grantId', 'messageId', 'box'],
@@ -82,6 +82,10 @@ export async function startRelay({ store, audience, host = '127.0.0.1', port = 0
     record(frame, ['v', 'id', 'op', ...fields[op]]);
     const deviceId = state.cert.id;
     switch (op) {
+      case 'host.register': {
+        const result = store.provisionHost(state.cert);
+        emitAudit('host', 'registered', deviceId); return result;
+      }
       case 'invite.create': {
         const result = store.createInvitation(deviceId, frame.spec); emitAudit('invitation', 'created', deviceId); return result;
       }

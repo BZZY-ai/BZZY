@@ -1,3 +1,4 @@
+import { providerModels } from './engine/provider-catalog.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -6,7 +7,7 @@ import { exportSharedAgentProject, importSharedAgentProject } from './engine/pro
 import { CoreWorkspaces } from './workspaces.js';
 import { object, fail, uuid } from './validation.js';
 import { providerSelection, insertConversation, conversationExport } from './conversations.js';
-import { assertSessionIdle, availableModels, sortModelCatalog } from './engine/models.js';
+import { assertSessionIdle } from './engine/models.js';
 import { writeJson } from './engine/files.js';
 import { canonicalPath, contains } from './paths.js';
 import { directoryIdentity, matchesDirectoryIdentity } from './engine/directory-identity.js';
@@ -47,17 +48,9 @@ export class CoreAgents {
     }));
   }
   async models(provider, { after, limit = 25 } = {}) {
-    this.#check(); const selection = providerSelection({ provider });
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25 || after !== undefined && (typeof after !== 'string' || after.length > 200 || /[\s\x00-\x1f\x7f-\x9f]/u.test(after))) fail('INVALID_REQUEST', 'Invalid model page.');
+    this.#check(); providerSelection({ provider });
     const root = this.#workspaces.pin();
-    const catalog = await availableModels({ ...selection, cwd: root.path }, { timeoutMs: 8000 });
-    const all = sortModelCatalog(catalog.models, providers()[provider]);
-    const start = after === undefined ? 0 : all.findIndex(model => model.id === after) + 1;
-    if (after !== undefined && !start) fail('INVALID_CURSOR', 'The model catalog changed. Reload before continuing.');
-    const selected = all.slice(start, start + limit), hasMore = start + selected.length < all.length;
-    return { ...catalog, hasMore, nextCursor: hasMore ? selected.at(-1).id : null, models: selected.map(model => ({ id: model.id,
-      ...(typeof model.name === 'string' ? { name: model.name.slice(0, 160) } : {}),
-      ...(model.capabilities ? { capabilities: { ...model.capabilities, supportedEfforts: model.capabilities.supportedEfforts?.slice(0, 12) } } : {}) })) };
+    return providerModels(provider, { after, limit, cwd: root.path });
   }
   #row(id, { archived = false } = {}) {
     this.#check(); uuid(id); const row = getRecord('core.agent', id);

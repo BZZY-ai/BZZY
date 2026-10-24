@@ -215,6 +215,23 @@ For terminals, the recipient uses `bzzy --import CODE` or `/import` in CLI to re
 
 Both Cores must stay online during transfer. Imported identities/paths are remapped, credentials excluded and existing files protected. The public Relay must support the transfer quotas/lifetime; see [project sharing](../BZZY-CORE/docs/PROJECT-SHARING.md). Mobile terminal import and scheduled Agent activation remain unsupported. Legacy demo import is preview/test behavior and cannot substitute for live production import.
 
+## Models, defaults and goal pause
+
+Settings → Models and defaults configures each computer’s independent CLI solo,
+Core assistant, Besties, Parallel, Debate and Delegate defaults. Provider/model
+catalogs come from Core; effort options follow the selected model. Each agent
+has its own selection, with two or three agents except Delegate’s supervisor and
+executor. Saves use revision checks and explicit same-request retry. They affect
+new chats/mode launches and start no work. The fully approved own phone is
+required; scoped collaboration grants cannot change these defaults.
+
+An individual live terminal’s composer has Pause, Model and Resume goal controls. Pause
+stops the saved goal, Model changes an idle conversation’s provider/model/effort,
+and Resume continues the exact paused goal. History, objective, evidence and
+spent budget remain. Offline controls stay locked. These controls require both
+the updated app binary and Core; updating CLI/Core does not install the app.
+Provider API keys are edited securely on the host in CLI Settings → API keys.
+
 ## Host updates
 
 Settings → BZZY Updates shows the authoritative Core update status. The fully approved own phone can enable monitoring, update notifications and remote installation, check GitHub, and explicitly confirm the displayed CLI/Core revision. An update notification only opens Settings. Installation uses a durable Core helper; work is paused and the phone reconnects to inspect the result. Remote installation starts disabled and cannot be enabled by scoped friends or Agent/session contexts. Unknown acceptance retains its request ID for an explicit same-request retry. These controls require the updated iOS binary; they do not install the phone app itself.

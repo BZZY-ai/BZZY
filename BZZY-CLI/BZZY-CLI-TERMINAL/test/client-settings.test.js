@@ -83,7 +83,7 @@ test('Settings presents the four requested options and preserves the chat draft'
   assert.equal(ui.settings.page, 'main');
   assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
   const frame = ui.tui.lastFrame.map(clean).join('\n');
-  assert.match(frame, /DeepSeek API key/); assert.match(frame, /BZZY folder/); assert.match(frame, /Pair iPhone/);
+  assert.match(frame, /API keys/); assert.match(frame, /BZZY folder/); assert.match(frame, /Pair iPhone/);
   assert.doesNotMatch(frame, /Core coordinator|Prepare host identity|Copy public host certificate|Restart Core|Stop Core/);
   assert.equal(ui.tui.value, '');
   ui.settings.focusAction('deepseek');
@@ -102,7 +102,7 @@ test('Settings retains the host header and all four choices fit normal terminal 
   for (const rows of [24, 32]) {
     Object.assign(output, { rows, columns: 100 }); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
-    for (const label of ['DeepSeek API key', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
+    for (const label of ['API keys', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
     assert.match(frame, /fixture-model-banner/); assert.match(frame, /fixture-project-path/);
     assert.match(frame, /987,654 tokens/); assert.match(frame, /[Ee]ffort:? default/);
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === 'settings'));
@@ -418,17 +418,18 @@ test('DeepSeek edits are masked, private, cancellable and do not overwrite unrel
   const term = terminal(), { ui } = term; ui.openSettings();
   const file = path.join(home(), 'credentials.json'); writeJson(file, { another: 'fixture-other-binding' });
   const secret = 'fixture-new-deepseek-key';
-  const save = ui.settings.run('deepseek'); await waitFor(() => ui.tui.hidden);
+  await ui.settings.run('deepseek');
+  const save = ui.settings.run('key:deepseek'); await waitFor(() => ui.tui.hidden);
   ui.tui.key(secret, {}); ui.tui.render();
   assert.doesNotMatch(term.written, new RegExp(secret));
   ui.tui.key('', { name: 'return' }); await save;
   assert.deepEqual(readJson(file), { another: 'fixture-other-binding', deepseek: secret });
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.doesNotMatch(JSON.stringify([ui.tui.entries, ui.tui.history, listRecords('event'), listRecords('outbox')]), new RegExp(secret));
-  const cancel = ui.settings.run('deepseek'); await waitFor(() => ui.tui.hidden);
+  const cancel = ui.settings.run('key:deepseek'); await waitFor(() => ui.tui.hidden);
   ui.tui.key('fixture-cancelled-key', {}); ui.tui.key('', { name: 'escape' }); await cancel;
   assert.equal(readJson(file).deepseek, secret);
-  const invalid = ui.settings.run('deepseek'); await waitFor(() => ui.tui.hidden);
+  const invalid = ui.settings.run('key:deepseek'); await waitFor(() => ui.tui.hidden);
   ui.tui.key('not a valid key', {}); ui.tui.key('', { name: 'return' }); await invalid;
   assert.equal(readJson(file).deepseek, secret); assert.equal(ui.settings.warning, true);
 });
@@ -437,7 +438,8 @@ test('one masked key prompt replaces the environment override without exposing e
   const term = terminal(), { ui } = term; ui.openSettings();
   process.env.DEEPSEEK_API_KEY = 'fixture-environment-key';
   ui.chooseOne = async () => assert.fail('Replacing a key uses only the masked prompt.');
-  const save = ui.settings.run('deepseek'); await waitFor(() => ui.tui.hidden);
+  await ui.settings.run('deepseek');
+  const save = ui.settings.run('key:deepseek'); await waitFor(() => ui.tui.hidden);
   ui.tui.key('fixture-replacement-key', {}); ui.tui.key('', { name: 'return' });
   await save;
   assert.equal(Boolean(ui.tui.selection), false);
@@ -463,6 +465,9 @@ test('a damaged credential store cannot leak private parse fragments into Settin
   fs.writeFileSync(path.join(home(), 'credentials.json'), 'fixture-private-damaged-json', { mode: 0o600 });
   ui.openSettings(); ui.tui.render();
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Unavailable/i);
+  assert.doesNotMatch(term.written, /fixture-private-damaged-json/);
+  await ui.settings.run('deepseek'); ui.tui.render();
+  assert.equal(ui.settings.page, 'keys');
   assert.doesNotMatch(term.written, /fixture-private-damaged-json/);
 });
 
@@ -534,5 +539,30 @@ test('the iOS palette uses exact RGB where supported and readable terminal fallb
     assert.equal(clean(line), 'Text 世界'); assert.equal(cellWidth(line), 9);
     if (!theme.level) assert.equal(line, 'Text 世界');
     else assert.ok(theme.foreground(palette.text) !== theme.foreground(palette.background));
+  }
+});
+
+for (const id of ['abliteration', 'orcarouter']) test(`${id} Settings key replacement uses hidden private storage`, async () => {
+  const term = terminal(), { ui } = term; ui.openSettings();
+  await ui.settings.run('deepseek');
+  assert.equal(ui.settings.page, 'keys');
+  const secret = `fixture-${id}-replacement`;
+  const save = ui.settings.run(`key:${id}`); await waitFor(() => ui.tui.hidden);
+  ui.tui.key(secret, {}); ui.tui.render(); assert.ok(!term.written.includes(secret));
+  ui.tui.key('', { name: 'return' }); await save;
+  const file = path.join(home(), 'credentials.json');
+  assert.equal(readJson(file)[id], secret); assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.ok(!JSON.stringify([ui.tui.entries, ui.tui.history, listRecords('outbox')]).includes(secret));
+});
+
+test('Settings title, description and border hover as one card', () => {
+  const { ui } = terminal(); ui.openSettings();
+  ui.tui.theme = createTerminalTheme(ui.output, { FORCE_COLOR: '3' }); ui.tui.render();
+  const card = ui.tui.hitTargets.filter(hit => hit.type === 'settings' && hit.action === 'core');
+  assert.equal(card.length, 3);
+  const rows = card.map(hit => hit.row);
+  for (const hit of card) {
+    ui.tui.mouse(32, hit.left + 2, hit.row); ui.tui.render();
+    for (const row of rows) assert.ok(ui.tui.lastFrame[row - 1].includes(ui.tui.theme.background(palette.hover)), 'every part of the card shares hover feedback');
   }
 });

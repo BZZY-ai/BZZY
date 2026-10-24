@@ -7,7 +7,8 @@ export const chatHelp = `Modes
 /goal <objective>  Start a goal, replacing the current one.
 /goal resume       Continue a paused or stalled goal from its saved checkpoint.
 /default           Save this mode’s agents, models and efforts separately.
---default          Skip selection and reuse the saved preset, e.g. bzzy --parallel --default.
+--parallel, --besties, --debate, --delegate reuse their saved presets automatically.
+--default requires a matching saved preset.
 /alias [name]      Name this session; omit the name to open a prompt.
 --alias NAME       Name a new session, e.g. bzzy --alias trabajo_01.
 /sessions          Open named terminal chats; ↑/↓ select, Enter open, Esc back.
@@ -19,7 +20,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 --import FILE.zip|CODE Restore a project ZIP or Relay terminal copy here; keeps work paused.
 /skill_that [name] Turn the last completed goal into SKILL.md with detailed steps and references.
 /doctor            Test the current subscription login, backend connection and model reply.
-/settings          Workspace, iPhone, Core and private DeepSeek API-key setup.
+/settings          Workspace, iPhone, Core and private DeepSeek/Abliteration/OrcaRouter API-key setup.
 /settings modes    Save models, efforts and counts for terminal agent modes.
 /yolo              Toggle native permission bypass for this terminal’s next run.
 /color blue|black|white Switch the complete TUI palette; each launch defaults to blue.

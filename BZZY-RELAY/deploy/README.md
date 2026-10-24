@@ -47,8 +47,12 @@ sudo -u bzzy-relay /usr/local/bin/node /opt/bzzy-relay/bin/relay.js host-add \
   --state /var/lib/bzzy-relay --certificate /path/readable-by-service/host.public.json
 ```
 
-No hosted client can self-promote to host. Future guided installers can wrap this
-operator step without exposing permanent administrative credentials in QR codes.
+Updated Core clients register their own public certificate through authenticated
+`host.register`; manual host-add is optional. This operation takes no certificate
+parameter, cannot enroll another identity, does not restore revoked identities and
+uses the existing connection/request/device quotas. Registration provides routing
+identity only; application authorization still requires explicit host fingerprint
+approval and Core’s local grant. Repeated registration is idempotent by device ID.
 
 ## Verification and maintenance
 

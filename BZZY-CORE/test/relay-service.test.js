@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { CoreRelayService } from '../src/relay/service.js';
+import { CoreRelayService, prepareRelayService } from '../src/relay/service.js';
 
 let directory, previous;
 test.beforeEach(() => {
@@ -26,12 +26,13 @@ class FixtureGateway extends EventEmitter {
   grants() { return []; }
 }
 
-test('Relay starts only after explicit enablement, shares concurrent starts, and restores after daemon restart', async () => {
+test('Relay registers on first startup, shares concurrent starts, restores and honors explicit disconnect', async () => {
   const instances = [];
   const gatewayFactory = () => { const gateway = new FixtureGateway(); instances.push(gateway); return gateway; };
+  prepareRelayService();
   const first = new CoreRelayService({ gatewayFactory });
-  assert.equal((await first.restore()).status.enabled, false);
-  assert.equal(instances.length, 0);
+  assert.equal((await first.restore()).status.enabled, true);
+  assert.equal(instances.length, 1);
   await Promise.all([first.connect(), first.connect(), first.request('GET', 'status')]);
   assert.equal(instances.length, 1); assert.equal(instances[0].starts, 1);
   assert.equal(first.snapshot().status.managed, true);

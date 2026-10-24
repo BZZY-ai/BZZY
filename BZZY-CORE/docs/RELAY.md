@@ -23,13 +23,19 @@ node bin/bzzy-core.js relay init
 `init` creates `$BZZY_HOME/relay/host.identity.json` (default `~/.bzzy/relay/`)
 with mode 0600 inside private 0700 directories. It refuses permissive/symlinked
 storage, never replaces an existing identity, and prints **only its public
-certificate**. Send that public certificate to the independently authorized Relay
-operator for `host-add`, following the [Relay deployment guide](../../BZZY-RELAY/deploy/README.md). Keep the private file on the
-home host. There is no public enrollment API or permanent enrollment token.
+certificate**. Keep the private file on the home host. On explicit Core service activation,
+Core initializes this identity if missing and enables its outbound gateway. After
+socket-bound signed authentication, `host.register` registers only that socket’s
+verified public certificate. No operator credential, Core token or provider key
+is sent. Existing enrolled hosts and `host-add` remain compatible.
 
-Host enrollment is still an operator step in Relay v1. Core cannot turn a new
-candidate identity into an enrolled host. `HOST_ENROLLMENT_REQUIRED` means that
-step remains outstanding, even if TLS authentication succeeded.
+Repeated registration/reconnection updates the same public identity, with one
+active socket per identity. Package/service uninstall preserves private Core
+state, so reinstalling with the same user and `BZZY_HOME` reuses the host and
+pairing. Deleting that private state deliberately creates a new identity; BZZY
+does not fingerprint hardware or reuse another user’s identity. Revoked identities
+cannot self-register again. Older Relay servers return `HOST_ENROLLMENT_REQUIRED`;
+update Relay or use their existing operator enrollment path.
 
 For normal use after enrollment, open CLI Settings → Pair iPhone and create the
 pairing QR/code there. That path uses the shared daemon's gateway; closing the

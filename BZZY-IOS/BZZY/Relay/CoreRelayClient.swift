@@ -250,7 +250,7 @@ import CryptoKit
             let proof = event.type == "input.accepted" ? event.data : event.data["channel"]
             guard proof["actor"].string == inputActor,
                   let id = proof["requestId"].string, let row = pending[id], row.params["coordinateInput"]?.bool == true,
-                  ["execution.execute", "task.submit", "question.answer", "permissions.set", "control.request"].contains(row.op) else { continue }
+                  ["execution.execute", "task.submit", "question.answer", "permissions.set", "session.configure", "control.request"].contains(row.op) else { continue }
             var result = event.type == "input.accepted" ? event.data["result"].object ?? [:]
                 : ["sessionId": .string(event.sessionId), "executionId": event.data["executionId"]]
             result["state"] = .string("accepted")
@@ -267,6 +267,26 @@ import CryptoKit
     private func acceptResult(_ result: CoreJSONValue, op: String, params: [String: CoreJSONValue]) throws {
         guard result.object != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
         switch op {
+        case "settings.get", "settings.configure":
+            try result.record(["revision", "defaults"])
+            guard result["revision"].string?.count == 64 else { throw CoreApplicationError("INVALID_RESPONSE") }
+            try result["defaults"].record(["cli", "core", "debate", "parallel", "besties", "delegate"])
+            for target in ["cli", "core", "debate", "parallel", "besties", "delegate"] {
+                let value = result["defaults"][target]
+                if value == .null { continue }
+                let agents = ["cli", "core"].contains(target) ? [value] : value.array ?? []
+                guard !agents.isEmpty, agents.count <= 3, target != "delegate" || agents.count == 2 else { throw CoreApplicationError("INVALID_RESPONSE") }
+                for agent in agents {
+                    try agent.record(["provider", "model", "effort"])
+                    guard agent["provider"].string != nil, agent["effort"].string != nil,
+                          agent["model"] == .null || agent["model"].string != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
+                }
+            }
+        case "session.configure":
+            try result.record(["state", "sessionId", "provider", "model", "effort"])
+            guard result["state"].string == "accepted", result["sessionId"].string == sessionID,
+                  result["provider"].string != nil, result["effort"].string != nil,
+                  result["model"] == .null || result["model"].string != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
         case "voice.status":
             try result.record(["configured", "assistantConfigured", "workspaceConfigured"])
             guard result["configured"].bool != nil, result["assistantConfigured"].bool != nil, result["workspaceConfigured"].bool != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
@@ -369,7 +389,7 @@ import CryptoKit
             try result.record(["workspaceRoot", "configured", "scheduling"])
             guard result["configured"].bool != nil, result["scheduling"].bool == false,
                   result["workspaceRoot"] == .null || result["workspaceRoot"].object != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
-        case "agents.providers":
+        case "agents.providers", "settings.providers":
             try result.record(["providers"])
             guard let providers = result["providers"].array, providers.count <= 100 else { throw CoreApplicationError("INVALID_RESPONSE") }
             for provider in providers {
@@ -378,7 +398,7 @@ import CryptoKit
                       provider["model"] == .null || provider["model"].string != nil,
                       provider["supportedEfforts"].array?.allSatisfy({ $0.string != nil }) == true else { throw CoreApplicationError("INVALID_RESPONSE") }
             }
-        case "agents.models":
+        case "agents.models", "settings.models":
             try result.record(["models", "source", "description", "hasMore", "nextCursor"], required: ["models", "source", "hasMore", "nextCursor"])
             guard let models = result["models"].array, models.count <= Int(params["limit"]?.integer ?? 25),
                   ["provider", "installed backend", "manual"].contains(result["source"].string ?? "") else { throw CoreApplicationError("INVALID_RESPONSE") }

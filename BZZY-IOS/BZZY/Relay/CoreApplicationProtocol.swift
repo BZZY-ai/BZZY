@@ -140,9 +140,12 @@ enum CoreApplicationProtocol {
     static let promptBytes = 16 * 1024
     static let eventBytes = 16 * 1024 * 1024
     static let chunkBytes = 16 * 1024
-    static let commands: Set<String> = ["voice.send", "voice.cancel", "updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "permissions.set", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
+    static let commands: Set<String> = ["settings.configure", "session.configure", "voice.send", "voice.cancel", "updates.configure", "updates.install", "execution.execute", "task.submit", "question.answer", "permissions.set", "control.request", "sessions.open", "share.create", "share.approve", "share.revoke", "notifications.register", "notifications.update", "notifications.revoke", "agents.create", "agents.update", "agents.archive", "agents.open", "agents.import", "agents.import.cancel"]
     static let fields: [String: Set<String>] = [
         "updates.status": [], "updates.check": [], "updates.configure": ["monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"], "updates.install": ["target"],
+        "settings.get": [], "settings.providers": [], "settings.models": ["provider", "after", "limit"],
+        "settings.configure": ["target", "expectedRevision", "agents"],
+        "session.configure": ["owner", "selection", "expectedUpdatedAt", "coordinateInput"],
         "host.metrics": [],
         "agents.status": [], "agents.providers": [], "agents.models": ["provider", "after", "limit"], "agents.list": ["after", "limit"], "agents.get": ["agentId"],
         "agents.create": ["name", "instructions", "provider", "model", "effort"], "agents.update": ["agentId", "expectedRevision", "name", "instructions", "provider", "model", "effort"],
@@ -156,7 +159,7 @@ enum CoreApplicationProtocol {
         "events.list": ["after", "before", "latest", "limit", "eventChunks"], "events.subscribe": ["consumerId", "bootstrapToken", "eventChunks", "singleView"],
         "events.chunk": ["seq", "offset", "limit"], "events.ack": ["subscriptionId", "seq"],
         "events.unsubscribe": ["subscriptionId"], "input.claim": ["owner", "takeover"], "input.release": ["owner"],
-        "execution.execute": ["owner", "prompt", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "coordinateInput"], "question.answer": ["owner", "questionId", "answer", "coordinateInput"],
+        "execution.execute": ["owner", "prompt", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "resumeGoalStatus", "coordinateInput"], "question.answer": ["owner", "questionId", "answer", "coordinateInput"],
         "permissions.set": ["owner", "enabled", "questionId", "coordinateInput"],
         "control.request": ["owner", "action", "text", "coordinateInput"], "command.status": ["requestId"]]
     static func opaque(_ value: String) throws {
@@ -168,7 +171,7 @@ enum CoreApplicationProtocol {
     static func request(op: String, params: [String: CoreJSONValue], id: String, resource: String) throws -> CoreJSONValue {
         try opaque(id); try opaque(resource)
         guard let allowed = fields[op], Set(params.keys).isSubset(of: allowed) else { throw CoreApplicationError("OPERATION_DENIED") }
-        var optional: Set<String> = ["coordinateInput", "after", "before", "latest", "bootstrapToken", "eventChunks", "singleView", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "text", "scope", "hostHints", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
+        var optional: Set<String> = ["coordinateInput", "after", "before", "latest", "bootstrapToken", "eventChunks", "singleView", "limit", "takeover", "goal", "resumeGoal", "replaceGoalId", "resumeGoalId", "resumeGoalStatus", "text", "scope", "hostHints", "model", "effort", "monitoringEnabled", "notificationsEnabled", "remoteUpdatesEnabled"]
         if op == "voice.send" { optional.remove("text") }
         if op == "voice.poll" { guard let cursor = params["cursor"]?.integer, cursor >= 0 && cursor <= 2_000_000 else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "voice.send" { guard let text = params["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CoreApplicationError("INVALID_REQUEST") } }
@@ -191,7 +194,9 @@ enum CoreApplicationProtocol {
         if op == "updates.configure", params.isEmpty { throw CoreApplicationError("INVALID_REQUEST") }
         if op == "sessions.open" { _ = try uuid(params["sessionId"]?.string) }
         if params["agentId"] != nil { _ = try uuid(params["agentId"]?.string) }
-        if params["expectedRevision"] != nil {
+        if op == "settings.configure" {
+            guard let revision = params["expectedRevision"]?.string, revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw CoreApplicationError("INVALID_REQUEST") }
+        } else if params["expectedRevision"] != nil {
             guard let revision = params["expectedRevision"]?.integer, revision > 0 else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         for key in ["name", "instructions", "provider", "model", "effort"] where params[key] != nil {
@@ -216,12 +221,12 @@ enum CoreApplicationProtocol {
             guard let seq = params["seq"]?.integer, seq > 0, let offset = params["offset"]?.integer, offset >= 0, offset < eventBytes,
                   let limit = params["limit"]?.integer, limit > 0, limit <= chunkBytes else { throw CoreApplicationError("INVALID_REQUEST") }
         }
-        for key in ["after", "before", "seq", "limit"] where params[key] != nil && !(["sessions.list", "agents.list", "agents.models"].contains(op) && key == "after") {
+        for key in ["after", "before", "seq", "limit"] where params[key] != nil && !(["sessions.list", "agents.list", "agents.models", "settings.models"].contains(op) && key == "after") {
             guard let number = params[key]?.integer, number >= (key == "limit" ? 1 : 0),
-                  key != "limit" || number <= (op == "events.chunk" ? Int64(chunkBytes) : ["sessions.list", "agents.list", "agents.models"].contains(op) ? 25 : 50) else { throw CoreApplicationError("INVALID_REQUEST") }
+                  key != "limit" || number <= (op == "events.chunk" ? Int64(chunkBytes) : ["sessions.list", "agents.list", "agents.models", "settings.models"].contains(op) ? 25 : 50) else { throw CoreApplicationError("INVALID_REQUEST") }
         }
         if let before = params["before"]?.integer, before < 1 { throw CoreApplicationError("INVALID_REQUEST") }
-        if op == "agents.models", let after = params["after"] {
+        if ["agents.models", "settings.models"].contains(op), let after = params["after"] {
             guard let id = after.string, !id.isEmpty, id.utf8.count <= 200,
                   id.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
                   !id.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { throw CoreApplicationError("INVALID_REQUEST") }
@@ -229,6 +234,7 @@ enum CoreApplicationProtocol {
         if op == "question.answer" { _ = try uuid(params["questionId"]?.string) }
         if let goal = params["replaceGoalId"] { _ = try uuid(goal.string) }
         if let goal = params["resumeGoalId"] { _ = try uuid(goal.string); guard params["resumeGoal"]?.bool == true else { throw CoreApplicationError("INVALID_REQUEST") } }
+        if let status = params["resumeGoalStatus"] { guard status.string == "paused", params["resumeGoalId"] != nil else { throw CoreApplicationError("INVALID_REQUEST") } }
         if op == "permissions.set" {
             guard params["enabled"]?.bool != nil else { throw CoreApplicationError("INVALID_REQUEST") }
             if let question = params["questionId"] { _ = try uuid(question.string) }

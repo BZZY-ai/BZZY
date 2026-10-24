@@ -41,6 +41,7 @@ struct ConversationCanvas: View {
     @State private var voiceDraft: VoiceDraft?
     @State private var recordingTask: Task<Void, Never>?
     @GestureState private var voiceHeld = false
+    @State private var showModelSettings = false
     @State private var showDetails = false
     @State private var showActivity = false
     @State private var composerCaretRequest = 0
@@ -322,20 +323,32 @@ struct ConversationCanvas: View {
                 }
                 if let error = relay.coreError { Text(error).bzzyFont(11).foregroundStyle(BZZYTheme.danger) }
             }
-            HStack(spacing: 8) {
+            ScrollView(.horizontal) { HStack(spacing: 8) {
                 goalShortcut("Set goal", icon: "scope", id: "set-goal", enabled: canSetGoal) {
                     draft = CoreGoalDraft.settingGoal(draft)
                     composerCaretRequest &+= 1; composerFocused = true
                     BZZYTheme.haptic()
                 }
+                if isLive {
+                    goalShortcut("Pause", icon: "pause.fill", id: "pause-goal",
+                                 enabled: relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("pause") && !relay.coreBusy && ["active", "verifying"].contains(relay.coreGoalStatus ?? "")) {
+                        relay.performHostAction { await relay.controlCore("pause", sessionID: conversationID) }
+                    }
+                    if relay.coreSelectionControl {
+                        goalShortcut("Model", icon: "slider.horizontal.3", id: "session-model",
+                                     enabled: relay.isCoreSessionReady(conversationID) && !["queued", "launching", "running", "waiting_for_input", "verifying"].contains(relay.coreExecutionState ?? "") && !relay.coreBusy) {
+                            showModelSettings = true
+                        }.sheet(isPresented: $showModelSettings) { CoreDefaultsEditor(sessionID: conversationID) }
+                    }
+                }
                 goalShortcut("Resume goal", icon: "play.fill", id: "resume-goal",
-                             enabled: isLive && relay.isCoreSessionReady(conversationID) && relay.canResumeStalledGoal && !voice.isBusy && voiceDraft == nil) {
+                             enabled: isLive && relay.isCoreSessionReady(conversationID) && relay.canResumeCoreGoal && !relay.isCoreSessionBusy(conversationID) && !voice.isBusy && voiceDraft == nil) {
                     prepareForSubmission()
                     relay.performHostAction { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
                     BZZYTheme.haptic()
                 }
                 Spacer(minLength: 0)
-            }
+            } }.scrollIndicators(.hidden)
             HStack(alignment: .bottom, spacing: 10) {
                 #if canImport(UIKit)
                 GoalMessageEditor(text: $draft, focused: Binding(get: { composerFocused }, set: { composerFocused = $0 }), caretAtEndRequest: composerCaretRequest)

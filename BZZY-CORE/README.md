@@ -111,11 +111,11 @@ assignment workers and MCP bridges; these do not load CLI parsing or rendering.
 Terminal compatibility modules re-export Core implementations for existing
 integrations. They are not a second runtime or database.
 
-Live home-host use requires operator enrollment of its public certificate.
+Live home-host use automatically registers its public certificate with the updated Relay.
 Native iOS integration, on-demand Agent CRUD, typed Agent/Terminal sharing,
 Agent receive jobs and APNs registration/provider delivery code are implemented
 and tested locally. Scheduled triggers, production email/account connectors,
-public Relay rollout/enrollment, TestFlight distribution and physical Apple
+TestFlight distribution and physical Apple
 push/device verification remain separate work. The existing execution dispatcher
 is reused. Persistent Agents use a restricted native provider/tool path plus the
 scoped filesystem broker; ordinary owner terminal execution retains its existing
@@ -181,16 +181,16 @@ credentials. Use the same `BZZY_HOME` for every lifecycle command. Programmatic
 `BzzyCore.start()` retains the existing facade; explicit `bzzy-core restart` can
 safely migrate a development daemon to supervision.
 
-The CLI installer provides both `bzzy` and `bzzy-core` launchers. Prepare the
-public host identity with `bzzy-core relay init` for operator enrollment. Create
+The CLI installer provides both `bzzy` and `bzzy-core` launchers. Core prepares and registers its public host identity on service activation;
+`bzzy-core relay init` remains available to inspect its public certificate. Create
 at least one CLI terminal with `bzzy`, then open CLI Settings → Pair iPhone to
 display its QR or temporary code automatically, without choosing a terminal, and complete fingerprint
 comparison. This own-phone flow automatically requests full session control,
 terminal catalog access, project sharing and Agent management, with no access-mode
 or scope picker. Fingerprint confirmation, expiry and revocation remain on the
 secondary screen. Existing grants gain no new permissions automatically. The
-main Settings menu contains only DeepSeek API key, Default BZZY folder and Pair
-iPhone; lifecycle/coordinator commands and APIs remain available separately.
+main Settings menu contains API keys, Default BZZY folder, Pair iPhone and BZZY
+Core; lifecycle/coordinator commands and APIs remain available separately.
 The daemon keeps an explicitly enabled gateway connected after CLI closes and
 restores it after a daemon restart. Installation prepares a disabled user manifest;
 plain `bzzy` or `bzzy-core start` activates it. After explicit stop, background

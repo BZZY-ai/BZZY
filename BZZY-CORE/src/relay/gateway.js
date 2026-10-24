@@ -1,3 +1,6 @@
+import { providerModels } from '../engine/provider-catalog.js';
+import { remoteDefaults, configureRemoteDefaults } from '../engine/remote-settings.js';
+import { requireUpdateGrant } from '../engine/update-access.js';
 import { coreUpdates } from '../engine/updates.js';
 import { terminalCatalogRevision } from '../engine/session-deletion.js';
 import { CoreVoiceChat } from '../engine/voice-chat.js';
@@ -144,7 +147,13 @@ export class RelayGateway extends EventEmitter {
       this.#transfers.restore();
       for (const pin of this.#rows('core.relay.pin')) if (!pin.revokedAt) this.#relay.trustPeer(pin.certificate);
       const authentication = await this.#relay.connect();
-      if (authentication?.role !== 'host') fail('HOST_ENROLLMENT_REQUIRED', 'Enroll this host public certificate with the Relay operator.');
+      if (authentication?.role !== 'host') {
+        try { await this.#relay.request('host.register'); }
+        catch (error) {
+          if (error.code === 'UNKNOWN_OPERATION') fail('HOST_ENROLLMENT_REQUIRED', 'Update Relay to support automatic host registration.');
+          throw error;
+        }
+      }
       await this.#core.start(); this.#started = true;
       this.#relayHealth = new RelayConnectionHealth(this.#relay).start();
       for (const command of this.#rows('core.relay.command')) if (command.state === 'dispatching') putRecord('core.relay.command', command.id, { ...command, state: 'uncertain' });
@@ -358,7 +367,7 @@ export class RelayGateway extends EventEmitter {
       try {
         request = validateRequest(message.payload);
         row = this.#authorize(row.id, message.from, request.resource, permissionFor(request));
-        if (getRecord('session-deletion', row.sessionId) && ['input.claim', 'input.release', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request'].includes(request.op)) {
+        if (getRecord('session-deletion', row.sessionId) && ['input.claim', 'input.release', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'session.configure', 'control.request'].includes(request.op)) {
           fail('SESSION_DELETED', 'This chat was deleted.', 404);
         }
         if ((await runtime()).operatorStopRequested()) fail('CORE_STOPPED', 'Core was stopped by the local operator.', 409);
@@ -635,6 +644,12 @@ export class RelayGateway extends EventEmitter {
     return { state: 'accepted', ...result };
   }
   async #read(row, request) {
+    if (request.op.startsWith('settings.')) {
+      requireUpdateGrant(row);
+      if (request.op === 'settings.get') return remoteDefaults(row);
+      if (request.op === 'settings.providers') return { providers: this.#agents.providers() };
+      return providerModels(request.params.provider, { after: request.params.after, limit: request.params.limit, cwd: loadSession(row.sessionId)?.cwd });
+    }
     if (request.op === 'voice.status') return this.#voice.status(row);
     if (request.op === 'voice.poll') return this.#voice.poll(row, request.params.requestId, request.params.cursor);
     if (request.op === 'updates.status') return coreUpdates().status(row);
@@ -673,12 +688,12 @@ export class RelayGateway extends EventEmitter {
         if (getRecord('session-deletion', row.sessionId)) return this.#deletedSessionSnapshot(row);
         const snapshot = await client.session(row.sessionId);
         if (getRecord('session-deletion', row.sessionId)) return this.#deletedSessionSnapshot(row);
-        return { session: pick(snapshot.session, ['id', 'alias', 'provider', 'backend', 'model', 'cwd', 'createdAt', 'updatedAt', 'turns', 'executionState', 'goal', 'acceptance']),
+        return { session: pick(snapshot.session, ['id', 'alias', 'provider', 'backend', 'model', 'cwd', 'createdAt', 'updatedAt', 'turns', 'selectedEffort', 'executionState', 'goal', 'acceptance']),
           execution: pick(snapshot.execution, ['id', 'sessionId', 'state', 'createdAt', 'startedAt', 'finishedAt', 'exitCode']),
           questions: snapshot.questions.filter(question => question.sessionId === row.sessionId).map(question => pick(question, ['id', 'sessionId', 'question', 'text', 'kind', 'options', 'createdAt', 'expiresAt'])),
           inputOwner: pick(snapshot.inputOwner, ['owner', 'sessionId', 'expiresAt']),
           capabilities: { activeSteering: Boolean(snapshot.capabilities.activeSteering && row.permissions.includes('steer')),
-            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
+            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), selectionControl: Boolean(authorizedOwnPhone(row.relayGrantId || row.id) && terminalSession(snapshot.session) && !['parallel', 'besties', 'debate'].includes(snapshot.session.mode)), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
             inputOwnedByDevice: snapshot.inputOwner?.principal === `grant:${row.coreGrantId}`,
             inputActor: digest(`grant:${row.coreGrantId}`),
             durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
@@ -741,7 +756,7 @@ export class RelayGateway extends EventEmitter {
           putRecord('core.relay.command', record.id, record);
         }
       }
-      const kind = { 'execution.execute': 'execute', 'task.submit': 'execute', 'question.answer': 'answer', 'permissions.set': 'permissions', 'control.request': 'control' }[record.op];
+      const kind = { 'execution.execute': 'execute', 'task.submit': 'execute', 'question.answer': 'answer', 'permissions.set': 'permissions', 'session.configure': 'selection', 'control.request': 'control' }[record.op];
       const intent = getRecord('input-intent', digest({ sessionId: row.sessionId, principal: `grant:${row.coreGrantId}`, requestId: `relay.${record.id}` }));
       if (intent?.state === 'accepted') {
         record = { ...record, state: 'accepted', result: intent.result, reconciledAt: now() };
@@ -767,6 +782,13 @@ export class RelayGateway extends EventEmitter {
   }
 
   async #command(row, request) {
+    if (request.op === 'settings.configure') return configureRemoteDefaults(row, request.params, request.id);
+    if (request.op === 'session.configure') {
+      const parent = authorizedOwnPhone(row.relayGrantId || row.id);
+      const session = loadSession(row.sessionId);
+      if (!parent || parent.peerId !== row.peerId || !terminalSession(session) || ['parallel', 'besties', 'debate'].includes(session.mode)) fail('FORBIDDEN', 'Model changes require your fully approved phone and an individual terminal.', 403);
+      if (request.params.coordinateInput !== true) fail('INVALID_REQUEST', 'Use coordinated input for model changes.');
+    }
     if (request.op === 'voice.send') return this.#voice.send(row, request.params.text, request.id);
     if (request.op === 'voice.cancel') return this.#voice.cancel(row, request.params.requestId, request.id);
     if (request.op === 'updates.configure') return coreUpdates().configure(row, request.params);
@@ -784,6 +806,7 @@ export class RelayGateway extends EventEmitter {
       for (const key of ['goal', 'resumeGoal']) if (params[key] !== undefined && typeof params[key] !== 'boolean') fail('INVALID_REQUEST', 'Goal flags must be boolean.');
       if (params.replaceGoalId !== undefined) uuid(params.replaceGoalId);
       if (params.resumeGoalId !== undefined) { uuid(params.resumeGoalId); if (params.resumeGoal !== true) fail('INVALID_REQUEST', 'A stalled resume requires resumeGoal.'); }
+      if (params.resumeGoalStatus !== undefined && (params.resumeGoalStatus !== 'paused' || !params.resumeGoalId)) fail('INVALID_REQUEST', 'Use an exact paused goal identity.');
       if (params.resumeGoal === true && params.goal !== true) fail('INVALID_REQUEST', 'Resume requires a goal execution.');
     }
     if (request.op === 'question.answer') { uuid(params.questionId); if (typeof params.answer !== 'string' || Buffer.byteLength(params.answer) > LIMITS.promptBytes) fail('INVALID_REQUEST', 'Question answers must be bounded text.'); }
@@ -813,10 +836,11 @@ export class RelayGateway extends EventEmitter {
       const requestId = `relay.${key}`;
       let result;
       if (params.coordinateInput === true) {
-        const input = request.op === 'task.submit' ? { operation: 'execute', prompt: params.instruction }
+        const input = request.op === 'session.configure' ? { operation: 'selection', selection: params.selection, expectedUpdatedAt: params.expectedUpdatedAt }
+          : request.op === 'task.submit' ? { operation: 'execute', prompt: params.instruction }
           : request.op === 'execution.execute' ? { operation: params.goal === true ? 'goal' : 'execute',
             ...(params.goal === true ? { objective: params.prompt } : { prompt: params.prompt }),
-            resumeGoal: params.resumeGoal === true, replaceGoalId: params.replaceGoalId, resumeGoalId: params.resumeGoalId }
+            resumeGoal: params.resumeGoal === true, replaceGoalId: params.replaceGoalId, resumeGoalId: params.resumeGoalId, resumeGoalStatus: params.resumeGoalStatus }
           : request.op === 'question.answer' ? { operation: 'answer', questionId: params.questionId, answer: params.answer }
           : request.op === 'permissions.set' ? { operation: 'permissions', enabled: params.enabled, questionId: params.questionId }
           : { operation: 'control', action: params.action, text: params.text };
@@ -830,7 +854,7 @@ export class RelayGateway extends EventEmitter {
           const host = await runtime();
           result = await enqueueGoalTurn(row.sessionId, owner, {}, {
             objective: command?.objective ?? params.prompt, resume: command?.action === 'resume' || params.resumeGoal === true,
-            replaceGoalId: params.replaceGoalId, resumeGoalId: params.resumeGoalId, requestId,
+            replaceGoalId: params.replaceGoalId, resumeGoalId: params.resumeGoalId, resumeGoalStatus: params.resumeGoalStatus, requestId,
             authorize: permission => {
               const current = this.#authorize(row.id, row.peerId, row.resource, permission);
               // Scoped HTTP reads/controls retain their principal. Input owner

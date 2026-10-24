@@ -10,8 +10,8 @@ Live endpoint: `wss://190.114.255.214/v1/socket`; health:
 `https://190.114.255.214/healthz`. The Debian deployment and public encrypted
 transport were verified, including a full VPS reboot. See
 [deployment guide](deploy/README.md) and [platform support](deploy/PLATFORMS.md).
-Test identities have been revoked; an operator must enroll your actual host's
-public certificate before pairing your devices. No permanent credentials are
+Core automatically registers its authenticated public host certificate before
+pairing. Reinstalling with the same private Core state reuses that host record. No permanent credentials are
 embedded in this package or these addresses.
 
 ## Run and verify
@@ -72,8 +72,13 @@ umask 077
 node bin/relay.js identity-create --file /private/device.identity.json > /private/device.public.json
 ```
 
-Only the **public** home-host certificate is provisioned on the VPS by its
-operator. No endpoint secret, Core token or provider credential is uploaded.
+Core uses `host.register` after signed socket authentication. This bounded
+operation registers only the authenticated socket’s own public certificate,
+reuses its device ID and rejects revoked identities. It grants no access to other
+hosts or Core sessions: QR/code claiming and fingerprint approval remain required.
+No endpoint secret, Core token or provider credential is uploaded.
+
+The existing operator provisioning command remains available:
 
 ```sh
 node bin/relay.js host-add --state /var/lib/bzzy-relay --certificate /private/host.public.json

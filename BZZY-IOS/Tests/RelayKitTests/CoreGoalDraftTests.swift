@@ -49,4 +49,12 @@ final class CoreGoalDraftTests: XCTestCase {
         invalid = params; invalid["resumeGoal"] = .bool(false)
         XCTAssertThrowsError(try CoreApplicationProtocol.request(op: "execution.execute", params: invalid, id: "resume-request", resource: "approved"))
     }
+    func testPausedResumeRequiresAnExactGoalAndPausedState() throws {
+        var params: [String: CoreJSONValue] = ["owner": .string("phone"), "prompt": .string("Continue"), "goal": .bool(true),
+            "resumeGoal": .bool(true), "resumeGoalId": .string(UUID().uuidString), "resumeGoalStatus": .string("paused")]
+        XCTAssertNoThrow(try CoreApplicationProtocol.request(op: "execution.execute", params: params, id: "resume", resource: "resource"))
+        params.removeValue(forKey: "resumeGoalId")
+        XCTAssertThrowsError(try CoreApplicationProtocol.request(op: "execution.execute", params: params, id: "resume", resource: "resource"))
+    }
+
 }

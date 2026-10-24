@@ -325,3 +325,16 @@ local Relay/Core integration are tested. Normal TLS/IP trust, Keychain protected
 data lifecycle, physical iPhone pairing and Apple-provisioned APNs delivery still
 require their respective real-device checks before those deployments are called
 verified. A local notification or Relay connection alone proves neither.
+
+### Own-phone settings additions
+
+`settings.get` returns `{ revision, defaults }` for cli/core/besties/parallel/
+debate/delegate. `settings.configure` accepts `{ target, expectedRevision, agents }`;
+all selections contain only provider/model/effort. `settings.providers` and paged
+`settings.models` reuse the Core catalog. These operations require the fully
+approved own-phone base grant, never a derived session or scoped friend.
+`session.configure` accepts owner, coordinateInput:true, selection and
+expectedUpdatedAt on an own-phone terminal, starts no execution and journals its
+receipt. `selectionControl` advertises support. A manually paused goal resume
+uses resumeGoalId plus resumeGoalStatus:"paused", checked at admission and commit.
+No credentials, environment, filesystem path or tool policy can be supplied.

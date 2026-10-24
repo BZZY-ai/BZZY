@@ -33,8 +33,10 @@ ZIP sharing. Core runs as a user service. Use `bzzy-core start|status|stop|resta
 or **CLI Settings → BZZY Core**. Stop pauses work durably; Start/Restart do not
 automatically replay paused goals.
 
-CLI Settings also contains the DeepSeek key, default BZZY folder and Pair iPhone.
-Terminal projects keep their original working directory. Use `/alias NAME` to
+CLI Settings also contains API keys (DeepSeek, Abliteration and OrcaRouter), the default BZZY folder and Pair iPhone.
+iPhone Settings → Models and defaults edits independent solo CLI, Core assistant,
+Besties, Parallel, Debate and Delegate presets. Mode flags reuse their saved setup
+automatically; a missing preset opens setup. Terminal projects keep their original working directory. Use `/alias NAME` to
 show a session in CLI/iOS; both lists put the most recent activity first.
 
 ## iPhone and Relay
@@ -45,7 +47,7 @@ host. The app holds device-scoped authorization, never Core's owner credentials.
 See the [iOS guide](BZZY-IOS/README.md) and [Core Relay setup](BZZY-CORE/docs/RELAY.md).
 
 For a Relay you operate, use the [deployment guide](BZZY-RELAY/deploy/README.md).
-Host enrollment remains an operator step. Keep private deployment configuration,
+Core registers its public host identity automatically with the updated Relay. Normal reinstalls reuse the private identity in `~/.bzzy/relay/host.identity.json`; keep that directory to retain the same computer and pairing. Keep private deployment configuration,
 keys, account bindings and notification credentials outside this repository.
 
 ## Development
