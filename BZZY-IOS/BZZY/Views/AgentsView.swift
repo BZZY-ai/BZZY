@@ -23,15 +23,15 @@ struct AgentsView: View {
                         .disabled(!AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
                 }.frame(maxWidth: .infinity).padding(.top, 32).padding(.bottom, 30)
 
-                if relay.coreAgentsAvailable {
+                if relay.coreAgentsAvailable || !store.hostAgents.isEmpty {
                     VStack(alignment: .leading, spacing: 15) {
                         HStack {
-                            Text("On demand").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+                            Text(relay.coreAgentsAvailable ? "On demand" : "Saved agents · Offline").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                             Spacer()
-                            Button { Task { await relay.refreshCoreAgents() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                                .bzzyFont(12)
+                            Button { relay.performHostAction { await relay.refreshCoreAgents() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                                .bzzyFont(12).disabled(!relay.coreActionsAvailable)
                         }
-                        if !store.hostAgentsConfigured {
+                        if relay.coreAgentsAvailable && !store.hostAgentsConfigured {
                             Text("Configure the default Agents workspace on your host to create agents.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         }
                         ForEach(store.hostAgents) { agent in
@@ -50,14 +50,14 @@ struct AgentsView: View {
                             }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable || !relay.coreCatalogReady || relay.coreBusy)
                                 .accessibilityIdentifier("host-agent-\(agent.id)")
                                 .contextMenu {
-                                    Button("Edit") { editingHostAgent = agent }
-                                    Button("Archive", role: .destructive) { archivingHostAgent = agent }
+                                    Button("Edit") { editingHostAgent = agent }.disabled(!relay.coreActionsAvailable)
+                                    Button("Archive", role: .destructive) { archivingHostAgent = agent }.disabled(!relay.coreActionsAvailable)
                                 }
                         }
                         if !relay.coreAgentStatus.isEmpty { Text(relay.coreAgentStatus).bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
                         if relay.coreAgentMutationPending {
-                            Button("Check saved agent request") { Task { await relay.reconcileCoreAgentCommand() } }.bzzyFont(12)
-                            Button("Retry exact saved agent request") { Task { await relay.retryCoreAgentCommand() } }.bzzyFont(12)
+                            Button("Check saved agent request") { relay.performHostAction { await relay.reconcileCoreAgentCommand() } }.bzzyFont(12)
+                            Button("Retry exact saved agent request") { relay.performHostAction { await relay.retryCoreAgentCommand() } }.bzzyFont(12)
                         }
                         if relay.coreSessionAttachmentPending { Button("Cancel pending attachment") { relay.cancelCoreSessionAttachment() }.bzzyFont(12) }
                     }.padding(.bottom, 24)
@@ -95,7 +95,7 @@ struct AgentsView: View {
             .sheet(item: $editingHostAgent) { HostAgentEditorView(agent: $0) }
             .confirmationDialog("Archive this agent? It will stop appearing in the active agent list.", isPresented: Binding(get: { archivingHostAgent != nil }, set: { if !$0 { archivingHostAgent = nil } }), titleVisibility: .visible) {
                 if let agent = archivingHostAgent {
-                    Button("Archive", role: .destructive) { Task {
+                    Button("Archive", role: .destructive) { relay.performHostAction {
                         _ = await relay.mutateCoreAgent("agents.archive", params: ["agentId": .string(agent.id), "expectedRevision": .number(Double(agent.revision))])
                         archivingHostAgent = nil
                     } }
@@ -297,7 +297,7 @@ private struct HostAgentEditorView: View {
                         }
                         if !model.isEmpty && !models.contains(where: { $0["id"].string == model }) { Text(model).tag(model) }
                     }.pickerStyle(.menu).accessibilityIdentifier("host-agent-model")
-                    if modelHasMore { Button("Load more models") { Task { await loadMoreModels() } }.bzzyFont(12) }
+                    if modelHasMore { Button("Load more models") { relay.performHostAction { await loadMoreModels() } }.bzzyFont(12) }
                     if catalogSource == "manual" || models.isEmpty {
                         TextField("Model ID (optional)", text: $model).bzzyFont(13, design: .monospaced).panel()
                     }
@@ -308,10 +308,10 @@ private struct HostAgentEditorView: View {
                     if let error { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
                     if !relay.coreAgentStatus.isEmpty { Text(relay.coreAgentStatus).bzzyFont(12).foregroundStyle(BZZYTheme.secondary) }
                     if relay.coreAgentMutationPending {
-                        Button("Check saved agent request") { Task { if await relay.reconcileCoreAgentCommand() { dismiss() } } }
-                        Button("Retry exact saved agent request") { Task { await relay.retryCoreAgentCommand() } }
+                        Button("Check saved agent request") { relay.performHostAction { if await relay.reconcileCoreAgentCommand() { dismiss() } } }
+                        Button("Retry exact saved agent request") { relay.performHostAction { await relay.retryCoreAgentCommand() } }
                     }
-                    AccentButton(title: saving ? "Saving" : agent == nil ? "Create on Core" : "Save on Core", symbol: "checkmark") { Task { await save() } }
+                    AccentButton(title: saving ? "Saving" : agent == nil ? "Create on Core" : "Save on Core", symbol: "checkmark") { relay.performHostAction { await save() } }
                         .disabled(!valid).opacity(valid ? 1 : 0.4).accessibilityIdentifier("host-agent-save")
                 }.padding(25)
             }.textFieldStyle(.plain).bzzyScreen()
@@ -322,25 +322,28 @@ private struct HostAgentEditorView: View {
             .onChange(of: provider) { _, value in
                 guard !loading else { return }
                 model = ""; effort = "default"
-                Task { await loadModels(value) }
+                relay.performHostAction { await loadModels(value) }
             }
     }
 
     private func load() async {
         loading = true; defer { loading = false }
+        let origin = HostActionContext(hostID: relay.activeHostID)
         do {
             let catalog = try await relay.readCoreAgent("agents.providers")
+            guard origin.permits(relay.activeHostID), !Task.isCancelled else { return }
             providers = (catalog["providers"].array ?? []).compactMap { item in
                 guard let id = item["id"].string, let name = item["name"].string else { return nil }
                 return HostProviderChoice(id: id, name: name, efforts: item["supportedEfforts"].array?.compactMap(\.string) ?? [])
             }
             if let agent {
                 let detail = try await relay.readCoreAgent("agents.get", fields: ["agentId": agent.id])["agent"]
+                guard origin.permits(relay.activeHostID), !Task.isCancelled else { return }
                 name = detail["name"].string ?? agent.name; instructions = detail["instructions"].string ?? ""
                 provider = detail["provider"].string ?? agent.provider; model = detail["model"].string ?? ""
                 effort = detail["effort"].string ?? "default"; revision = detail["revision"].integer ?? Int64(agent.revision)
             } else { provider = providers.first?.id ?? "" }
-            await loadModels(provider)
+            if origin.permits(relay.activeHostID), !Task.isCancelled { await loadModels(provider) }
         } catch { self.error = "Agent settings unavailable. Check host access and refresh." }
     }
 

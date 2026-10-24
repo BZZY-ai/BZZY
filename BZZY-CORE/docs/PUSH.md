@@ -79,9 +79,17 @@ These operations use the existing `bzzy-core` v1 encrypted payload:
 
 | Operation | Parameters | Result |
 | --- | --- | --- |
-| `notifications.register` | `deviceToken` (64–512 hexadecimal characters, even length), `environment` (`sandbox` or `production`), `enabled` (boolean), optional `scope` (`session`, default, `terminals`, or `authorized`) | `registered`, `enabled`, `providerConfigured`, actual `scope` |
+| `notifications.register` | `deviceToken` (64–512 hexadecimal characters, even length), `environment` (`sandbox` or `production`), `enabled` (boolean), optional `scope` (`session`, default, `terminals`, or `authorized`) and `hostHints` (boolean) | `registered`, `enabled`, `providerConfigured`, actual `scope` |
 | `notifications.update` | `enabled` (boolean) | Same public state |
 | `notifications.revoke` | `{}` | `{ "revoked": true }` |
+
+A scoped `session.get` advertising `capabilities.notificationsHostRouting:true`
+allows a new client to send `hostHints:true`. Only opted-in bindings include
+`bzzy.hostId` in goal, Agent and update hints. Core derives it from the current
+reauthorized registration, never from event/model text or a supplied client host
+ID. Old bindings retain the original payload shape so older strict clients keep
+working. Collapse and thread identifiers remain scoped by host, device and event;
+the same iPhone token and update revision on two Cores do not collapse together.
 
 The authorized local peer/grant/resource determines the recipient and session.
 There are no remote topic, endpoint, recipient-ID or arbitrary-message fields,

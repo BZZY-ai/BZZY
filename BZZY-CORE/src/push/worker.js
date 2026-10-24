@@ -79,14 +79,20 @@ export class CorePushWorker {
           putRecord('core.push.delivery', id, delivery); sent++;
           try {
             const current = getRecord('core.push.registration', registration.id);
-            if (!current?.enabled || current.tokenDigest !== registration.tokenDigest || !authorizedPushRegistration(current, isUpdate ? undefined : event.sessionId) || isUpdate && (!authorizedUpdateGrant(current.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(current.relayGrantId)).notificationsEnabled === false)) {
+            if (!current?.enabled || current.hostId !== hostId || current.tokenDigest !== registration.tokenDigest || !authorizedPushRegistration(current, isUpdate ? undefined : event.sessionId) || isUpdate && (!authorizedUpdateGrant(current.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(current.relayGrantId)).notificationsEnabled === false)) {
               putRecord('core.push.delivery', id, { ...delivery, state: 'failed', code: 'FORBIDDEN', updatedAt: now() }); continue;
             }
             const session = isUpdate ? null : getRecord('session', event.sessionId), isAgent = session?.purpose === 'agent';
+            // Older iOS parsers reject unknown metadata. Opt-in belongs to the
+            // device binding; pre-capability registrations retain their shape.
+            const hostHint = current.hostHints === true ? { hostId: current.hostId } : {};
             const receipt = await this.#client.send({ token: current.deviceToken, id: delivery.apnsId, collapseID: id, signal: this.#abort.signal,
               payload: { aps: { alert: isUpdate ? { title: 'BZZY update available', body: 'Update CLI and Core from Settings on your iPhone.' } : goalAlert(event, session, secrets), sound: 'default', category: 'BZZY_UPDATE',
                   'thread-id': digest({ hostId, resource: current.resource, sessionId: event.sessionId }) },
-                bzzy: isUpdate ? { v: 1, eventId: id, destination: 'updates' } : { v: 1, eventId: id, destination: isAgent ? 'agents' : 'terminal', resource: current.resource, sessionId: event.sessionId,
+                // This public routing hint comes from the reauthorized private
+                // binding, never from a model reply or the queued event. Clients
+                // still authenticate the selected Core before opening details.
+                bzzy: isUpdate ? { v: 1, eventId: id, ...hostHint, destination: 'updates' } : { v: 1, eventId: id, ...hostHint, destination: isAgent ? 'agents' : 'terminal', resource: current.resource, sessionId: event.sessionId,
                   ...(isAgent ? { agentId: session.agentId } : {}) } } });
             putRecord('core.push.delivery', id, { ...delivery, state: 'sent', receipt: { accepted: receipt.accepted === true, apnsId: receipt.apnsId }, updatedAt: now() });
           } catch (error) {

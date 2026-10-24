@@ -48,20 +48,20 @@ enum RelayKeychain {
     }
 }
 
-private struct HostBinding: Codable {
+struct HostBinding: Codable {
     let certificate: RelayCertificate
     let grantID: String
     let expiresAt: Int64
 }
 
-private struct PendingPair: Codable {
+struct PendingPair: Codable {
     let claimID: String
     let expectedFingerprint: String
     let expectedCertificate: RelayCertificate?
     let expiresAt: Int64?
 }
 
-private struct PendingCoreCommand: Codable {
+struct PendingCoreCommand: Codable {
     let hostID: String
     let resource: String
     let id: String
@@ -69,27 +69,27 @@ private struct PendingCoreCommand: Codable {
     let params: [String: CoreJSONValue]
 }
 
-private struct CoreCacheScope: Codable {
+struct CoreCacheScope: Codable {
     let hostID: String
     let resource: String
     let sessionID: String
 }
 
-private struct SelectedCoreSession: Codable {
+struct SelectedCoreSession: Codable {
     let sessionID: String
     let resource: String
     var kind: String? = nil
     var agentID: String? = nil
 }
-private struct PendingAgentOpen: Codable {
+struct PendingAgentOpen: Codable {
     let agentID: String
     let requestID: String
 }
-private struct PendingSessionOpen: Codable {
+struct PendingSessionOpen: Codable {
     let sessionID: String
     let requestID: String
 }
-private struct AgentImportReference: Codable {
+struct AgentImportReference: Codable {
     let hostID: String
     let grantID: String
     let sourceFingerprint: String
@@ -97,14 +97,14 @@ private struct AgentImportReference: Codable {
     var importID: String?
 }
 
-private struct PendingCoreUpdate: Codable {
+struct PendingCoreUpdate: Codable {
     let hostID: String
     let grantID: String
     let requestID: String
     let target: String
 }
 
-private struct SavedRelayState: Codable {
+struct SavedRelayState: Codable {
     var pendingVoice: PendingVoiceTurn?
     var pendingUpdate: PendingCoreUpdate?
     var host: HostBinding?
@@ -122,10 +122,20 @@ private struct SavedRelayState: Codable {
     var agentImport: AgentImportReference?
 }
 
-private struct PendingVoiceTurn: Codable {
+struct PendingVoiceTurn: Codable {
     let hostID: String
     let grantID: String
     let requestID: String
+}
+
+private struct NotificationPreferencePlan {
+    let id = UUID()
+    let token: String?
+    let environment: String?
+    let enabled: Bool
+    func matches(token: String?, environment: String?, enabled: Bool) -> Bool {
+        self.token == token && self.environment == environment && self.enabled == enabled
+    }
 }
 
 public struct CoreShareReference: Sendable {
@@ -139,6 +149,14 @@ public enum RelayStatus: String, Sendable {
 
 @MainActor @Observable
 public final class RelayConnection {
+    public private(set) var hosts: [CoreHostSummary] = []
+    public private(set) var activeHostID: String?
+    public private(set) var defaultHostID: String?
+    public private(set) var isAddingHost = false
+    @ObservationIgnored private var profiles = SavedCoreHosts()
+    @ObservationIgnored private var authorizationLoaded = false
+    @ObservationIgnored private var hostSelectionEpoch = UUID()
+
     public private(set) var voicePhase = "idle"
     public private(set) var voiceReply = ""
     public private(set) var voiceErrorCode: String?
@@ -197,6 +215,14 @@ public final class RelayConnection {
     }
     @ObservationIgnored private var recentCoreShares: [String: CoreShareReference] = [:]
     @ObservationIgnored private var pendingCoreShareRequests: [String: String] = [:]
+    @ObservationIgnored private var notificationPreferencePlan: NotificationPreferencePlan?
+    @ObservationIgnored private var notificationSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var notificationSyncEpoch = UUID()
+    @ObservationIgnored private var notificationClients: [UUID: CoreRelayClient] = [:]
+    @ObservationIgnored private var notificationFingerprints: [String: String] = [:]
+    @ObservationIgnored private var notificationStatuses: [String: String] = [:]
+    @ObservationIgnored private var notificationForgettingHosts = Set<String>()
+    @ObservationIgnored private var notificationHostHintsSupported = false
     @ObservationIgnored private var pushRegistrationHash: String?
     @ObservationIgnored private var pushRegistrationStatus = "Host delivery not registered"
     @ObservationIgnored private var pushRegistrationBusy = false
@@ -328,6 +354,9 @@ public final class RelayConnection {
     }
     @ObservationIgnored private var makeTransport: (RelayIdentity) throws -> RelayTransport = { RelayTransport(identity: $0) }
     @ObservationIgnored private var isolatedProjectionDirectory: URL?
+    #if DEBUG
+    @ObservationIgnored private var previewProfileStorageURL: URL?
+    #endif
 
     public init(networkingEnabled: Bool = false) { self.networkingEnabled = networkingEnabled }
 
@@ -344,17 +373,243 @@ public final class RelayConnection {
         self.isolatedProjectionDirectory = projectionDirectory
     }
 
+    /// Restores private saved profiles before UI navigation, without contacting Relay.
+    public func restoreSavedHosts() throws {
+        guard networkingEnabled else { return }
+        try loadProfilesIfNeeded()
+    }
+
+    private func loadProfilesIfNeeded() throws {
+        guard !authorizationLoaded else { return }
+        if let data = try loadAuthorization() { profiles = try SavedCoreHosts.decode(data) }
+        for index in profiles.profiles.indices {
+            if let cache = try? CoreHostCatalogCache.load(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory, hostID: profiles.profiles[index].id) {
+                profiles.profiles[index].sessions = cache.sessions
+                profiles.profiles[index].agents = cache.agents
+            }
+        }
+        // Only a cold connection chooses the default. Foreground, reconnect and
+        // inactive overlays retain the user's current computer selection.
+        activeHostID = profiles.defaultHostID ?? profiles.activeHostID ?? profiles.profiles.first?.id
+        defaultHostID = profiles.defaultHostID
+        state = profiles.profiles.first(where: { $0.id == activeHostID })?.state ?? profiles.unpairedState ?? SavedRelayState()
+        authorizationLoaded = true
+        restoreHostPresentation()
+        try save()
+    }
+
+    private func synchronizeActiveProfile() {
+        if let id = activeHostID ?? state.host?.certificate.id {
+            activeHostID = id
+            if let index = profiles.profiles.firstIndex(where: { $0.id == id }) {
+                profiles.profiles[index].state = state
+                // A disconnect empties capabilities, not the last display catalog.
+                profiles.profiles[index].sessions = catalogEntries
+                profiles.profiles[index].agents = agentEntries
+            } else if state.host != nil {
+                profiles.profiles.append(SavedCoreHost(id: id, name: "Computer \(profiles.profiles.count + 1)", state: state,
+                                                      sessions: catalogEntries, agents: agentEntries))
+            }
+            profiles.activeHostID = id
+            if profiles.defaultHostID == nil { profiles.defaultHostID = id }
+            profiles.unpairedState = nil
+        } else { profiles.unpairedState = state }
+        defaultHostID = profiles.defaultHostID
+    }
+
+    private func refreshHostSummaries() {
+        hosts = profiles.profiles.map { profile in
+            CoreHostSummary(id: profile.id, name: profile.name, fingerprint: profile.id,
+                isOnline: profile.id == activeHostID && coreActionsAvailable,
+                isDefault: profile.id == defaultHostID,
+                isPaired: profile.state.host != nil && (profile.state.host?.expiresAt ?? 0) > RelayWire.now)
+        }
+    }
+
+    private func restoreHostPresentation() {
+        confirmedCorePair = state.corePairValidated == true && (state.host?.expiresAt ?? 0) > RelayWire.now
+        hasHost = state.host != nil
+        hostFingerprint = state.host?.certificate.id ?? ""
+        hostStatus = hasHost ? "Host offline" : "Not paired"
+        voicePhase = state.pendingVoice == nil ? "idle" : "uncertain"
+        catalogEntries = profiles.profiles.first(where: { $0.id == activeHostID })?.sessions ?? []
+        agentEntries = profiles.profiles.first(where: { $0.id == activeHostID })?.agents ?? []
+        if confirmedCorePair {
+            onCoreSessions?( (try? JSONEncoder().encode(catalogEntries)) ?? Data("[]".utf8))
+            onCoreAgents?( (try? JSONEncoder().encode(agentEntries)) ?? Data("[]".utf8))
+        }
+        refreshHostSummaries()
+    }
+
+    /// Detaches observation only. It never releases input, pauses a goal,
+    /// cancels an execution or deletes another computer's private history.
+    private func detachHostPresentation(preservingPairingObservation: Bool = false) {
+        hostSelectionEpoch = UUID()
+        reconnect?.cancel(); reconnect = nil
+        // Approval may be executing inside this polling/monitor task. Let its
+        // current read finish; cancelling it would cancel the new Core attach.
+        if !preservingPairingObservation {
+            pollingEpoch = UUID(); polling?.cancel(); polling = nil
+            stopCoreMonitor()
+        }
+        stopCore(purge: false)
+        coreStarting = false; coreAttaching = false; coreBusy = false; isBusy = false
+        coreCatalogRefreshing = false; coreUpdateBusy = false; pushRegistrationBusy = false
+        coreProjection = nil; cachedPresentationScope = nil
+        desiredCoreSessionID = nil; attachmentIntent = UUID()
+        observedDeletedCoreSessions.removeAll(); observedCatalogRevision = nil; loadedCatalogRevision = nil
+        reconcilingReceipts.removeAll()
+        coreSessionID = ""; coreResource = ""; coreGrantID = ""
+        coreOutgoingMessages = []; coreHistoryHasOlder = false; coreHistoryHasNewer = false
+        catalogEntries = []; agentEntries = []; coreCatalogAvailable = false
+        coreAgentsAvailable = false; coreAgentsConfigured = false; coreAgentStatus = ""
+        coreError = nil; coreCommandStatus = ""; coreTaskStatus = ""
+        coreUpdateSnapshot = nil; coreUpdateStatus = "Connect to Core to check updates."
+        coreAgentImportSnapshot = nil; coreAgentImportRecoveredAgent = nil; agentImportRevision = UUID()
+        voiceReply = ""; voicePhase = "idle"; voiceErrorCode = nil
+        recentCoreShares = [:]; pendingCoreShareRequests = [:]
+        pushRegistrationStatus = "Host delivery not registered"
+        confirmedCorePair = false; fatalAuthorizationLoss = false
+        invitation = nil; hasPairingPreview = false; pairingStatus = ""; errorMessage = nil
+        commandJournalRevision = UUID()
+        onCoreSessions?(Data("[]".utf8)); onCoreAgents?(Data("[]".utf8)); onCoreCleared?()
+    }
+
+    public func activateHost(_ id: String) async {
+        guard !forgettingHost, id != activeHostID,
+              profiles.profiles.contains(where: { $0.id == id }) else { return }
+        do { try save() } catch { errorMessage = RelayFailure("KEYCHAIN_UNAVAILABLE").localizedDescription; return }
+        detachHostPresentation()
+        activeHostID = id
+        state = profiles.profiles.first(where: { $0.id == id })!.state
+        isAddingHost = false
+        restoreHostPresentation()
+        do { try save() } catch { errorMessage = RelayFailure("KEYCHAIN_UNAVAILABLE").localizedDescription; return }
+        if networkingEnabled && !suspended { await resume() }
+    }
+
+    public func setDefaultHost(_ id: String) {
+        guard profiles.profiles.contains(where: { $0.id == id }) else { return }
+        let previous = profiles.defaultHostID
+        profiles.defaultHostID = id
+        do { try save() } catch { profiles.defaultHostID = previous; defaultHostID = previous; refreshHostSummaries(); errorMessage = RelayFailure("KEYCHAIN_UNAVAILABLE").localizedDescription }
+    }
+
+    public func renameHost(_ id: String, name: String) {
+        let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard !name.isEmpty, let index = profiles.profiles.firstIndex(where: { $0.id == id }) else { return }
+        let previous = profiles.profiles[index].name
+        profiles.profiles[index].name = name
+        do { try save() } catch { profiles.profiles[index].name = previous; refreshHostSummaries(); errorMessage = RelayFailure("KEYCHAIN_UNAVAILABLE").localizedDescription }
+    }
+
+    public func beginAddingHost() { isAddingHost = true; errorMessage = nil; pairingStatus = "" }
+    public func cancelAddingHost() {
+        isAddingHost = false; state.pending = nil
+        pollingEpoch = UUID(); polling?.cancel(); polling = nil
+        cancelPairingPreview(); pairingStatus = ""
+        try? save()
+    }
+
+    public func hostProfileID(forNotificationHostID id: String) -> String? {
+        profiles.profiles.first(where: { $0.id == id && $0.state.host != nil })?.id
+    }
+    public func notificationHostHintIDs(resource: String, sessionID: String? = nil, agentID: String? = nil) -> [String] {
+        profiles.profiles.filter { profile in
+            guard profile.state.host != nil else { return false }
+            if let agentID { return profile.agents.contains { $0["id"].string == agentID && $0["sessionId"].string == sessionID } }
+            return (profile.state.coreCacheScopes ?? profile.state.coreCacheScope.map { [$0] } ?? []).contains {
+                $0.resource == resource && (sessionID == nil || $0.sessionID == sessionID)
+            } || profile.sessions.contains { entry in
+                if let sessionID { return entry["id"].string == sessionID }
+                return entry["existingResource"].string == resource
+            }
+        }.map(\.id)
+    }
+
+    private func revokeInactiveProfile(grantID: String) {
+        guard let index = profiles.profiles.firstIndex(where: { $0.state.host?.grantID == grantID }) else { return }
+        purgeProfileCache(profiles.profiles[index].state)
+        try? CoreHostCatalogCache.purge(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory, hostID: profiles.profiles[index].id)
+        profiles.profiles[index].state = SavedRelayState()
+        profiles.profiles[index].sessions = []; profiles.profiles[index].agents = []
+        try? save()
+    }
+
+    private func purgeProfileCache(_ value: SavedRelayState) {
+        var scopes = value.coreCacheScopes ?? []
+        if let legacy = value.coreCacheScope { scopes.append(legacy) }
+        for scope in scopes {
+            try? CoreEventProjectionStore.purge(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory,
+                hostID: scope.hostID, resource: scope.resource, sessionID: scope.sessionID)
+        }
+    }
+
+    public func forgetHost(_ id: String) async {
+        guard profiles.profiles.contains(where: { $0.id == id }), !notificationForgettingHosts.contains(id) else { return }
+        notificationForgettingHosts.insert(id)
+        defer { notificationForgettingHosts.remove(id) }
+        for client in notificationClients.values where client.hostID == id { client.disconnected() }
+        if let host = notificationHost(id) { await revokeNotifications(for: id, host: host) }
+        guard let index = profiles.profiles.firstIndex(where: { $0.id == id }) else { return }
+        let wasActive = id == activeHostID
+        if wasActive {
+            await forgetHost()
+            guard state.host == nil else { return }
+            detachHostPresentation(); state = SavedRelayState(); activeHostID = nil
+        } else { purgeProfileCache(profiles.profiles[index].state) }
+        try? CoreHostCatalogCache.purge(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory, hostID: id)
+        profiles.profiles.removeAll { $0.id == id }
+        notificationFingerprints.removeValue(forKey: id); notificationStatuses.removeValue(forKey: id)
+        if profiles.defaultHostID == id { profiles.defaultHostID = profiles.profiles.first?.id }
+        if activeHostID == nil, let next = profiles.defaultHostID ?? profiles.profiles.first?.id {
+            activeHostID = next; state = profiles.profiles.first(where: { $0.id == next })!.state
+        }
+        if wasActive { restoreHostPresentation() }
+        do { try save() } catch { errorMessage = RelayFailure("KEYCHAIN_UNAVAILABLE").localizedDescription }
+        if wasActive && networkingEnabled && !suspended { await resume() }
+    }
+
     #if DEBUG
     /// Explicit isolated UI fixture. It never enables networking, writes the
     /// device Keychain, or establishes Core readiness.
     public static func pairedOfflinePreview() throws -> RelayConnection {
         let connection = RelayConnection(networkingEnabled: false)
         let identity = try RelayIdentity.generate()
-        connection.state.host = HostBinding(certificate: identity.certificate, grantID: "offline-preview", expiresAt: RelayWire.now + 600_000)
+        connection.state.host = HostBinding(certificate: identity.certificate, grantID: "offline-preview", expiresAt: RelayWire.now + 86_400_000)
         connection.state.corePairValidated = true
         connection.confirmedCorePair = true
         connection.hasHost = true; connection.status = .connected
         connection.hostStatus = "Host offline"
+        connection.activeHostID = identity.certificate.id
+        connection.synchronizeActiveProfile(); connection.refreshHostSummaries()
+        return connection
+    }
+    public static func multipleHostsOfflinePreview(storageURL: URL? = nil) throws -> RelayConnection {
+        if let storageURL, let data = try? Data(contentsOf: storageURL) {
+            let connection = RelayConnection(networkingEnabled: false)
+            connection.profiles = try SavedCoreHosts.decode(data)
+            connection.activeHostID = connection.profiles.defaultHostID ?? connection.profiles.activeHostID
+            connection.defaultHostID = connection.profiles.defaultHostID
+            connection.state = connection.profiles.profiles.first(where: { $0.id == connection.activeHostID })?.state ?? SavedRelayState()
+            connection.authorizationLoaded = true
+            connection.restoreHostPresentation()
+            connection.previewProfileStorageURL = storageURL
+            return connection
+        }
+        let connection = try pairedOfflinePreview()
+        let first = connection.activeHostID!
+        connection.renameHost(first, name: "Test Mac")
+        let identity = try RelayIdentity.generate()
+        var second = SavedRelayState()
+        second.host = HostBinding(certificate: identity.certificate, grantID: "offline-preview-two", expiresAt: RelayWire.now + 86_400_000)
+        second.corePairValidated = true
+        connection.profiles.profiles.append(SavedCoreHost(id: identity.certificate.id, name: "Real server", state: second))
+        connection.profiles.defaultHostID = identity.certificate.id
+        connection.activeHostID = identity.certificate.id; connection.state = second
+        connection.synchronizeActiveProfile(); connection.restoreHostPresentation()
+        connection.previewProfileStorageURL = storageURL
+        try connection.save()
         return connection
     }
     #endif
@@ -394,10 +649,7 @@ public final class RelayConnection {
             if transport == nil {
                 let identity = try loadIdentity()
                 deviceFingerprint = identity.certificate.id
-                if let data = try loadAuthorization() {
-                    do { state = try JSONDecoder().decode(SavedRelayState.self, from: data) }
-                    catch { throw RelayFailure("INVALID_IDENTITY") }
-                }
+                try loadProfilesIfNeeded()
                 let client = try makeTransport(identity)
                 if let host = state.host {
                     try client.trust(host.certificate); hostFingerprint = host.certificate.id
@@ -406,7 +658,10 @@ public final class RelayConnection {
                 transport = client
                 client.onEvent = { [weak self] event, data in
                     guard let self else { return }
-                    if event == "grant.revoked", data["grantId"].string == self.state.host?.grantID {
+                    if event == "grant.revoked", let grantID = data["grantId"].string,
+                       grantID != self.state.host?.grantID {
+                        self.revokeInactiveProfile(grantID: grantID)
+                    } else if event == "grant.revoked", data["grantId"].string == self.state.host?.grantID {
                         self.stopCore(purge: true)
                         self.state.host = nil
                         self.hasHost = false
@@ -420,6 +675,14 @@ public final class RelayConnection {
                 client.onFailure = { [weak self] error in self?.failed(error) }
                 client.onPayload = { [weak self] peer, grant, payload in
                     guard let self else { return }
+                    // Inactive peers may answer only explicitly registered,
+                    // private notification RPC clients. They never reach UI.
+                    if payload["type"].string == "response" {
+                        for client in self.notificationClients.values where client.hostID == peer && client.grantID == grant {
+                            try? client.receive(from: peer, grantID: grant, payload: payload)
+                        }
+                    }
+                    guard peer == self.state.host?.certificate.id, grant == self.state.host?.grantID else { return }
                     do {
                         if payload["type"].string == "response" {
                             try self.catalogClient?.receive(from: peer, grantID: grant, payload: payload)
@@ -446,6 +709,7 @@ public final class RelayConnection {
 
     public func pause() {
         suspended = true
+        cancelNotificationSynchronization()
         reconnect?.cancel(); reconnect = nil
         polling?.cancel(); polling = nil
         stopCoreMonitor()
@@ -485,11 +749,13 @@ public final class RelayConnection {
             return
         }
         isBusy = true
-        defer { isBusy = false }
+        let claimEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == claimEpoch { isBusy = false } }
         if transport?.online != true { await connect() }
         guard let transport, transport.online else { return }
         do {
             let reply = try await transport.request("invite.claim", fields: ["code": .string(invitation.code)])
+            guard hostSelectionEpoch == claimEpoch else { return }
             guard reply["state"].string == "pending", let claimID = reply["claimId"].string else {
                 throw RelayFailure("INVALID_MESSAGE")
             }
@@ -501,6 +767,7 @@ public final class RelayConnection {
             schedulePolling()
         } catch {
             // Claims consume codes. Never retry a claim on timeout/reconnect.
+            guard hostSelectionEpoch == claimEpoch else { return }
             errorMessage = (error as? RelayFailure ?? RelayFailure("UNCERTAIN")).localizedDescription
             pairingStatus = "Not paired"
         }
@@ -518,7 +785,8 @@ public final class RelayConnection {
         defer { forgettingHost = false; isBusy = false }
         let previousGrant = state.host?.grantID
         confirmedCorePair = false
-        if let client = catalogClient, client.grantID == previousGrant {
+        if !notificationForgettingHosts.contains(state.host?.certificate.id ?? ""),
+           let client = catalogClient, client.grantID == previousGrant {
             _ = try? await client.request("notifications.revoke")
         }
         guard state.host?.grantID == previousGrant else { return }
@@ -563,8 +831,10 @@ public final class RelayConnection {
 
     private func pollDecision() async {
         guard let pending = state.pending, let transport, transport.online, !suspended else { return }
+        var approvedGrantID: String?
         do {
             let result = try await transport.request("invite.status", fields: ["claimId": .string(pending.claimID)])
+            guard state.pending?.claimID == pending.claimID else { return }
             guard result["claimId"].string == pending.claimID, let decision = result["state"].string else {
                 throw RelayFailure("INVALID_MESSAGE")
             }
@@ -583,14 +853,26 @@ public final class RelayConnection {
                   let grantID = grant["id"].string, let expiry = grant["expiresAt"].integer, expiry > RelayWire.now else {
                 throw RelayFailure("HOST_MISMATCH")
             }
+            approvedGrantID = grantID
             try transport.trust(peer)
             let current = try await transport.inspect(grantID)
             guard state.pending?.claimID == pending.claimID else { return }
             // Re-pairing replaces the approved resource; old private projections and
             // pending commands must not follow the new authorization.
-            if state.host?.grantID != grantID { stopCore(purge: true) }
+            state.pending = nil
+            if state.host?.certificate.id != peer.id {
+                try save()
+                detachHostPresentation(preservingPairingObservation: true)
+                state = profiles.profiles.first(where: { $0.id == peer.id })?.state ?? SavedRelayState()
+                activeHostID = peer.id
+            }
+            if state.host != nil, state.host?.grantID != grantID { stopCore(purge: true) }
             state.host = HostBinding(certificate: peer, grantID: grantID, expiresAt: expiry)
             state.pending = nil
+            isAddingHost = false
+            if profiles.defaultHostID == nil { profiles.defaultHostID = peer.id }
+            defaultHostID = profiles.defaultHostID
+            restoreHostPresentation()
             try save()
             hasHost = true
             hostFingerprint = peer.id
@@ -602,6 +884,7 @@ public final class RelayConnection {
             scheduleCoreMonitor()
             if current["online"].bool == true { await startCore(grant: current) }
         } catch {
+            guard state.pending?.claimID == pending.claimID || approvedGrantID != nil && state.host?.grantID == approvedGrantID else { return }
             let failure = error as? RelayFailure ?? RelayFailure("CONNECTION_FAILED")
             errorMessage = failure.localizedDescription
             if ["HOST_MISMATCH", "INVALID_IDENTITY", "INVITE_EXPIRED", "CLAIM_UNAVAILABLE", "GRANT_UNAVAILABLE"].contains(failure.code) {
@@ -616,7 +899,8 @@ public final class RelayConnection {
               grant["id"].string == host.grantID, grant["spec"]["kind"].string == "PAIR",
               grant["spec"]["mode"].string == "pair", let baseResource = grant["spec"]["resource"].string else { return }
         coreStarting = true
-        defer { coreStarting = false }
+        let startingEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == startingEpoch { coreStarting = false } }
         var startingClient: CoreRelayClient?
         do {
             if catalogClient == nil || catalogClient?.grantID != host.grantID || catalogClient?.resource != baseResource {
@@ -651,6 +935,8 @@ public final class RelayConnection {
                     guard snapshot["session"]["id"].string == selected?.sessionID else { throw CoreApplicationError("INVALID_RESPONSE") }
                     selectedSnapshot = snapshot
                 } catch let failure as CoreApplicationError where ["FORBIDDEN", "GRANT_UNAVAILABLE"].contains(failure.code) {
+                    guard hostSelectionEpoch == startingEpoch, catalogClient === catalog,
+                          state.host?.grantID == host.grantID else { return }
                     removeSelectedCoreContext()
                     coreClient = catalog; startingClient = catalog
                     coreResource = baseResource; coreGrantID = host.grantID; coreIsAgent = false
@@ -662,6 +948,7 @@ public final class RelayConnection {
             guard catalogClient === catalog, state.host?.grantID == host.grantID, !suspended,
                   transport.online, let active = coreClient else { return }
             coreCatalogAvailable = baseSnapshot["capabilities"]["sessionAccess"].bool == true
+            notificationHostHintsSupported = baseSnapshot["capabilities"]["notificationsHostRouting"].bool == true
             coreAgentsAvailable = baseSnapshot["capabilities"]["agentAccess"].bool == true
             coreCatalogReady = true
             observeCatalogRevision(baseSnapshot)
@@ -680,7 +967,8 @@ public final class RelayConnection {
         guard catalogRefreshTask == nil else { return }
         let epoch = UUID(); catalogRefreshEpoch = epoch
         catalogRefreshTask = Task { [weak self, weak catalog] in
-            guard let self, let catalog else { return }
+            guard let self, let catalog, self.catalogClient === catalog,
+                  self.catalogRefreshEpoch == epoch, !self.suspended, !Task.isCancelled else { return }
             defer { if self.catalogRefreshEpoch == epoch { self.catalogRefreshTask = nil } }
             if self.coreCatalogAvailable {
                 do { try await self.loadCoreSessions(using: catalog) }
@@ -782,6 +1070,7 @@ public final class RelayConnection {
         try save()
         confirmedCorePair = true
         coreConnected = true; coreError = nil
+        refreshHostSummaries()
         onCoreAvailability?(true, "Connected to Core")
         // Readiness is established by this exact authorized session.get. History
         // and optional catalogs must not hold the composer behind large payloads.
@@ -908,11 +1197,13 @@ public final class RelayConnection {
         catalogEntries = entries
         loadedCatalogRevision = revisionAtStart
         onCoreSessions?(try JSONEncoder().encode(entries))
+        try save()
     }
 
     public func refreshCoreSessions() async {
         guard !coreCatalogRefreshing else { return }
-        coreCatalogRefreshing = true; defer { coreCatalogRefreshing = false }
+        coreCatalogRefreshing = true; let catalogEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == catalogEpoch { coreCatalogRefreshing = false } }
         if !coreActionsAvailable { await resume(); await refresh() }
         guard coreActionsAvailable, coreCatalogReady, coreCatalogAvailable, let catalog = catalogClient else {
             coreError = "Offline. Waiting for a confirmed Core connection."; return
@@ -1007,7 +1298,9 @@ public final class RelayConnection {
 
     /// Opening is an authorized attachment to an existing CLI session. It never creates or executes a terminal.
     public func openCoreSession(_ sessionID: String) async -> Bool {
+        let openingEpoch = hostSelectionEpoch
         if !coreActionsAvailable { await resume(); await refresh() }
+        guard hostSelectionEpoch == openingEpoch, !Task.isCancelled else { return false }
         if isCoreSessionReady(sessionID) { return true }
         guard coreActionsAvailable, !coreBusy, !coreStarting, !coreAttaching,
               coreCatalogReady, coreCatalogAvailable, let catalog = catalogClient,
@@ -1022,7 +1315,8 @@ public final class RelayConnection {
             coreError = "Resolve the previous terminal attachment before choosing another terminal."; return false
         }
         coreBusy = true; coreAttaching = true; coreError = nil
-        defer { coreBusy = false; coreAttaching = false }
+        let busyEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == busyEpoch { coreBusy = false; coreAttaching = false } }
         do {
             let opening = state.openingSession ?? PendingSessionOpen(sessionID: sessionID, requestID: CoreRelayClient.commandID())
             state.openingSession = opening; try save()
@@ -1070,7 +1364,7 @@ public final class RelayConnection {
             voiceConfigured = result["configured"].bool == true
             if !voiceConfigured { voiceErrorCode = result["assistantConfigured"].bool == true ? "WORKSPACE_SETUP_REQUIRED" : "ASSISTANT_SETUP_REQUIRED" }
             if state.pendingVoice != nil { startVoicePolling(client) }
-        } catch { voiceConfigured = false; voiceErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE" }
+        } catch { if catalogClient === client { voiceConfigured = false; voiceErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE" } }
     }
 
     public func sendVoiceText(_ text: String) async -> Bool {
@@ -1085,6 +1379,7 @@ public final class RelayConnection {
             guard coreActionsAvailable, catalogClient === client, state.pendingVoice?.requestID == pending.requestID else { return false }
             voicePhase = "waiting"; startVoicePolling(client); return true
         } catch {
+            guard catalogClient === client, state.pendingVoice?.requestID == pending.requestID else { return false }
             let code = (error as? CoreApplicationError)?.code ?? "UNCERTAIN"
             if ["FORBIDDEN", "GRANT_UNAVAILABLE", "INVALID_REQUEST", "CONFLICT", "CAPACITY", "CORE_STOPPED", "ASSISTANT_SETUP_REQUIRED", "WORKSPACE_SETUP_REQUIRED", "WORKSPACE_CHANGED", "WORKSPACE_UNAVAILABLE", "PROVIDER_UNAVAILABLE", "OPERATION_DENIED"].contains(code) {
                 state.pendingVoice = nil; try? save(); voicePhase = "idle"
@@ -1120,7 +1415,7 @@ public final class RelayConnection {
                     if reply.isEmpty { self.voiceErrorCode = result["code"].string ?? (phase == "unknown" ? "VOICE_NOT_SENT" : ["failed", "paused", "cancelled"].contains(phase) ? "VOICE_STOPPED" : "VOICE_EMPTY_REPLY") }
                     return
                 } catch is CancellationError { return }
-                catch { self.voicePhase = "uncertain"; self.voiceErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE"; return }
+                catch { if self.catalogClient === client, self.state.pendingVoice?.requestID == pending.requestID { self.voicePhase = "uncertain"; self.voiceErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE" }; return }
             }
         }
     }
@@ -1134,12 +1429,13 @@ public final class RelayConnection {
             _ = try await client.request("voice.cancel", params: ["requestId": .string(pending.requestID)])
             guard catalogClient === client, state.pendingVoice?.requestID == pending.requestID else { return }
             state.pendingVoice = nil; try save(); voicePhase = "idle"
-        } catch { voicePhase = "uncertain"; voiceErrorCode = (error as? CoreApplicationError)?.code ?? "UNCERTAIN" }
+        } catch { if catalogClient === client, state.pendingVoice?.requestID == pending.requestID { voicePhase = "uncertain"; voiceErrorCode = (error as? CoreApplicationError)?.code ?? "UNCERTAIN" } }
     }
 
     public func refreshCoreUpdates(checkNow: Bool = false) async {
         guard coreActionsAvailable, !suspended, !coreUpdateBusy, let client = catalogClient else { return }
-        coreUpdateBusy = true; defer { coreUpdateBusy = false }
+        coreUpdateBusy = true; let updateEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == updateEpoch { coreUpdateBusy = false } }
         do {
             let result = try await client.request(checkNow ? "updates.check" : "updates.status")
             guard catalogClient === client, !suspended else { return }
@@ -1156,23 +1452,26 @@ public final class RelayConnection {
                 coreUpdateStatus = result["available"].bool == true ? "A new BZZY version is available." : result["phase"].string == "ready" ? "CLI and Core are up to date." : result["blocked"].string ?? "Check GitHub for updates."
             }
         } catch {
+            guard catalogClient === client else { return }
             coreUpdateStatus = (error as? CoreApplicationError)?.code == "FORBIDDEN" ? "Host updates require your fully approved phone pairing." : "Update status unavailable. Reconnect to Core and retry."
         }
     }
 
     public func configureCoreUpdates(_ preferences: [String: CoreJSONValue]) async {
         guard coreActionsAvailable, !suspended, !coreUpdateBusy, let client = catalogClient else { return }
-        coreUpdateBusy = true; defer { coreUpdateBusy = false }
+        coreUpdateBusy = true; let updateEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == updateEpoch { coreUpdateBusy = false } }
         do {
             let result = try await client.request("updates.configure", params: preferences)
             guard catalogClient === client, !suspended else { return }
             coreUpdateSnapshot = result; coreUpdateStatus = "Update preferences saved on Core."
-        } catch { coreUpdateStatus = "Update preferences were not confirmed. Refresh before retrying." }
+        } catch { if catalogClient === client { coreUpdateStatus = "Update preferences were not confirmed. Refresh before retrying." } }
     }
 
     public func installCoreUpdate(expectedTarget: String? = nil) async {
         guard coreActionsAvailable, !suspended, !coreUpdateBusy, let client = catalogClient else { return }
-        coreUpdateBusy = true; defer { coreUpdateBusy = false }
+        coreUpdateBusy = true; let updateEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == updateEpoch { coreUpdateBusy = false } }
         do {
             let pending: PendingCoreUpdate
             if let saved = state.pendingUpdate {
@@ -1190,36 +1489,163 @@ public final class RelayConnection {
             state.pendingUpdate = nil; try save()
             coreUpdateStatus = "Update accepted. CLI and Core will restart; saved goals remain paused."
         } catch {
+            guard catalogClient === client else { return }
             if let code = (error as? CoreApplicationError)?.code, ["FORBIDDEN", "INVALID_REQUEST", "CONFLICT"].contains(code) {
                 state.pendingUpdate = nil; try? save(); coreUpdateStatus = "Update rejected. Refresh the version and permissions before retrying."
             } else { coreUpdateStatus = "Update acceptance is uncertain. Refresh status or explicitly retry the same request." }
         }
     }
 
-    /// Registers only this paired device and locally approved notification
-    /// scope. Token contents never enter durable client history or event streams.
+    /// Compatibility entry point. The preference belongs to this phone, so it
+    /// applies to every saved computer without changing the selected workspace.
     public func synchronizeCoreNotifications(token: String?, environment: String?, enabled: Bool) async -> String {
-        guard coreActionsAvailable, coreCatalogReady, !suspended, let client = catalogClient else { return "Waiting for authorized Core connection" }
-        guard !pushRegistrationBusy else { return pushRegistrationStatus }
-        pushRegistrationBusy = true; defer { pushRegistrationBusy = false }
-        do {
-            if !enabled {
-                _ = try await client.request("notifications.update", params: ["enabled": .bool(false)])
-                guard coreActionsAvailable, catalogClient === client else { return "Waiting for authorized Core connection" }
-                pushRegistrationHash = nil; pushRegistrationStatus = "Host activity alerts disabled"
-                return pushRegistrationStatus
+        await synchronizeAllCoreNotifications(token: token, environment: environment, enabled: enabled)
+    }
+
+    /// Coalesce rapid preference/token changes into one serial latest plan.
+    /// Tokens stay in memory and encrypted RPC only, never profile persistence.
+    public func synchronizeAllCoreNotifications(token: String?, environment: String?, enabled: Bool) async -> String {
+        if notificationPreferencePlan?.matches(token: token, environment: environment, enabled: enabled) != true {
+            notificationPreferencePlan = NotificationPreferencePlan(token: token, environment: environment, enabled: enabled)
+        }
+        guard networkingEnabled, !suspended, transport?.online == true else { return "Waiting for authorized Core connection" }
+        if notificationSyncTask == nil {
+            let epoch = UUID(); notificationSyncEpoch = epoch
+            notificationSyncTask = Task { [weak self] in
+                guard let self else { return }
+                defer { if self.notificationSyncEpoch == epoch { self.notificationSyncTask = nil } }
+                while !Task.isCancelled, !self.suspended, let plan = self.notificationPreferencePlan {
+                    // A fresh Apple registration is required before enabling.
+                    if plan.enabled && (plan.token == nil || plan.environment == nil) { return }
+                    let ids = self.profiles.profiles.map(\.id)
+                    for id in ids {
+                        guard !Task.isCancelled, self.notificationPreferencePlan?.id == plan.id, !self.suspended else { break }
+                        guard !self.notificationForgettingHosts.contains(id), let host = self.notificationHost(id) else { continue }
+                        await self.synchronizeNotifications(for: id, host: host, plan: plan)
+                    }
+                    if self.notificationPreferencePlan?.id == plan.id { return }
+                }
             }
-            guard let token, let environment else { return "Device push registration unavailable; check app signing and notification permission" }
-            let scope = coreCatalogAvailable || coreAgentsAvailable ? "authorized" : "session"
-            let bytes = try JSONEncoder().encode([client.hostID, client.grantID, client.resource, token, environment, scope])
+        }
+        await notificationSyncTask?.value
+        if let current = notificationPreferencePlan, current.enabled && (current.token == nil || current.environment == nil) {
+            return "Waiting for Apple push registration"
+        }
+        return activeHostID.flatMap { notificationStatuses[$0] } ?? "Waiting for authorized Core connection"
+    }
+
+    private func notificationHost(_ id: String) -> HostBinding? {
+        guard profiles.profiles.contains(where: { $0.id == id }) else { return nil }
+        return id == activeHostID ? state.host : profiles.profiles.first(where: { $0.id == id })?.state.host
+    }
+    private func notificationHostIsCurrent(_ id: String, host: HostBinding) -> Bool {
+        guard let current = notificationHost(id) else { return false }
+        return current.grantID == host.grantID && current.certificate == host.certificate && current.expiresAt > RelayWire.now
+    }
+    private func notificationTimeRemaining(_ deadline: TimeInterval) throws -> UInt64 {
+        let remaining = deadline - ProcessInfo.processInfo.systemUptime
+        guard remaining > 0.001 else { throw CoreApplicationError("OFFLINE") }
+        return UInt64(min(3, remaining) * 1_000_000_000)
+    }
+    private func notificationRequestIsCurrent(id: String, host: HostBinding, transport: RelayTransport,
+                                              planID: UUID?, deadline: TimeInterval, revoking: Bool) -> Bool {
+        !suspended && self.transport === transport && transport.online && notificationHostIsCurrent(id, host: host)
+            && (revoking || !notificationForgettingHosts.contains(id))
+            && (planID == nil || notificationPreferencePlan?.id == planID)
+            && ProcessInfo.processInfo.systemUptime < deadline
+    }
+
+    /// This client has no event callbacks, input owner or UI projection. Its
+    /// send closure is fenced again after Relay's fresh presence inspection.
+    private func notificationClient(id: String, host: HostBinding, transport: RelayTransport, resource: String,
+                                    planID: UUID?, deadline: TimeInterval, revoking: Bool) -> CoreRelayClient {
+        CoreRelayClient(hostID: id, grantID: host.grantID, resource: resource, timeoutNanoseconds: 3_000_000_000) { [weak self, weak transport] payload in
+            guard let self, let transport else { throw CoreApplicationError("OFFLINE") }
+            let allowed = revoking ? ["session.get", "notifications.revoke"] : ["session.get", "notifications.register", "notifications.update"]
+            guard allowed.contains(payload["op"].string ?? ""), self.notificationRequestIsCurrent(id: id, host: host, transport: transport,
+                    planID: planID, deadline: deadline, revoking: revoking) else { throw CoreApplicationError("FORBIDDEN") }
+            let timeout = try self.notificationTimeRemaining(deadline)
+            _ = try await transport.send(grantID: host.grantID, payload: payload, timeoutNanoseconds: timeout, beforeSend: { [weak self] in
+                guard let self, self.notificationRequestIsCurrent(id: id, host: host, transport: transport,
+                        planID: planID, deadline: deadline, revoking: revoking) else { throw CoreApplicationError("FORBIDDEN") }
+            })
+        }
+    }
+
+    private func synchronizeNotifications(for id: String, host: HostBinding, plan: NotificationPreferencePlan) async {
+        guard let transport, !suspended, transport.online else { return }
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        var client: CoreRelayClient?
+        let route = UUID()
+        let timer = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            self?.notificationClients[route]?.disconnected()
+        }
+        defer { timer.cancel(); client?.disconnected(); notificationClients.removeValue(forKey: route) }
+        do {
+            try transport.trust(host.certificate)
+            let grant = try await transport.inspect(host.grantID, timeoutNanoseconds: try notificationTimeRemaining(deadline))
+            guard notificationRequestIsCurrent(id: id, host: host, transport: transport, planID: plan.id, deadline: deadline, revoking: false),
+                  grant["hostId"].string == id, grant["spec"]["kind"].string == "PAIR", grant["spec"]["mode"].string == "pair",
+                  grant["online"].bool == true, let resource = grant["spec"]["resource"].string else { return }
+            let rpc = notificationClient(id: id, host: host, transport: transport, resource: resource, planID: plan.id, deadline: deadline, revoking: false)
+            client = rpc; notificationClients[route] = rpc
+            let snapshot = try await rpc.request("session.get")
+            guard notificationRequestIsCurrent(id: id, host: host, transport: transport, planID: plan.id, deadline: deadline, revoking: false) else { return }
+            let scope = snapshot["capabilities"]["sessionAccess"].bool == true || snapshot["capabilities"]["agentAccess"].bool == true ? "authorized" : "session"
+            let hints = snapshot["capabilities"]["notificationsHostRouting"].bool == true
+            let bytes = try JSONEncoder().encode([id, host.grantID, resource, plan.enabled ? "enabled" : "disabled",
+                plan.enabled ? plan.token ?? "" : "", plan.enabled ? plan.environment ?? "" : "", scope, hints ? "host-hints" : "legacy"])
             let fingerprint = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-            if pushRegistrationHash == fingerprint { return pushRegistrationStatus }
-            let result = try await client.request("notifications.register", params: ["deviceToken": .string(token), "environment": .string(environment), "enabled": .bool(true), "scope": .string(scope)])
-            guard coreActionsAvailable, catalogClient === client else { return "Waiting for authorized Core connection" }
-            pushRegistrationHash = fingerprint
-            pushRegistrationStatus = result["providerConfigured"].bool == true ? "Host push configured · Delivery requires Apple connectivity" : "Device registered · Configure APNs on the source Core"
-            return pushRegistrationStatus
-        } catch { return "Host push registration unavailable; retry after reconnecting" }
+            if notificationFingerprints[id] == fingerprint { return }
+            // Once a mutation is dispatched, an unknown/stale response cannot
+            // justify skipping the next plan for this host.
+            notificationFingerprints.removeValue(forKey: id)
+            let result: CoreJSONValue
+            if plan.enabled {
+                guard let token = plan.token, let environment = plan.environment else { return }
+                var params: [String: CoreJSONValue] = ["deviceToken": .string(token), "environment": .string(environment), "enabled": .bool(true), "scope": .string(scope)]
+                if hints { params["hostHints"] = .bool(true) }
+                result = try await rpc.request("notifications.register", params: params)
+            } else { result = try await rpc.request("notifications.update", params: ["enabled": .bool(false)]) }
+            guard notificationRequestIsCurrent(id: id, host: host, transport: transport, planID: plan.id, deadline: deadline, revoking: false) else { return }
+            notificationFingerprints[id] = fingerprint
+            notificationStatuses[id] = !plan.enabled ? "Host activity alerts disabled" : result["providerConfigured"].bool == true
+                ? "Host push configured · Delivery requires Apple connectivity" : "Device registered · Configure APNs on the source Core"
+        } catch {
+            if notificationHostIsCurrent(id, host: host), notificationPreferencePlan?.id == plan.id {
+                notificationStatuses[id] = "Host push registration unavailable; retry after reconnecting"
+            }
+        }
+    }
+
+    private func revokeNotifications(for id: String, host: HostBinding) async {
+        guard let transport, !suspended, transport.online else { return }
+        let deadline = ProcessInfo.processInfo.systemUptime + 3, route = UUID()
+        var client: CoreRelayClient?
+        let timer = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            self?.notificationClients[route]?.disconnected()
+        }
+        defer { timer.cancel(); client?.disconnected(); notificationClients.removeValue(forKey: route) }
+        do {
+            try transport.trust(host.certificate)
+            let grant = try await transport.inspect(host.grantID, timeoutNanoseconds: try notificationTimeRemaining(deadline))
+            guard notificationRequestIsCurrent(id: id, host: host, transport: transport, planID: nil, deadline: deadline, revoking: true),
+                  grant["hostId"].string == id, grant["spec"]["kind"].string == "PAIR", grant["spec"]["mode"].string == "pair",
+                  grant["online"].bool == true, let resource = grant["spec"]["resource"].string else { return }
+            let rpc = notificationClient(id: id, host: host, transport: transport, resource: resource, planID: nil, deadline: deadline, revoking: true)
+            client = rpc; notificationClients[route] = rpc
+            _ = try await rpc.request("session.get")
+            guard notificationRequestIsCurrent(id: id, host: host, transport: transport, planID: nil, deadline: deadline, revoking: true) else { return }
+            _ = try await rpc.request("notifications.revoke")
+        } catch { /* Local forgetting proceeds even when this computer is offline. */ }
+    }
+
+    private func cancelNotificationSynchronization() {
+        notificationSyncEpoch = UUID(); notificationSyncTask?.cancel(); notificationSyncTask = nil
+        for client in notificationClients.values { client.disconnected() }
+        notificationClients.removeAll()
     }
 
     /// Push resource values are navigation hints. Re-read the authorized catalog
@@ -1313,6 +1739,7 @@ public final class RelayConnection {
         } while cursor != nil
         agentEntries = entries; coreAgentStatus = ""
         onCoreAgents?(try JSONEncoder().encode(entries))
+        try save()
     }
 
     public func refreshCoreAgents() async {
@@ -1427,7 +1854,8 @@ public final class RelayConnection {
               coreCatalogReady, !coreBusy, state.pendingAgentCommand == nil,
               let catalog = catalogClient else { return false }
         coreBusy = true; coreAgentStatus = ""
-        defer { coreBusy = false }
+        let busyEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == busyEpoch { coreBusy = false } }
         let pending = PendingCoreCommand(hostID: catalog.hostID, resource: catalog.resource, id: CoreRelayClient.commandID(), op: op, params: params)
         state.pendingAgentCommand = pending
         do { try save() }
@@ -1482,7 +1910,8 @@ public final class RelayConnection {
     public func retryCoreAgentCommand() async {
         guard coreActionsAvailable, !coreBusy, coreAgentsAvailable, coreCatalogReady, let pending = state.pendingAgentCommand,
               let catalog = catalogClient else { return }
-        coreBusy = true; defer { coreBusy = false }
+        coreBusy = true; let busyEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == busyEpoch { coreBusy = false } }
         _ = await dispatchCoreAgentCommand(pending, catalog: catalog)
     }
 
@@ -1496,7 +1925,8 @@ public final class RelayConnection {
         guard state.openingSession == nil else { coreAgentStatus = "Resolve or cancel the terminal attachment first."; return false }
         if let opening = state.openingAgent, opening.agentID != agentID { coreAgentStatus = "Resolve or cancel the previous agent attachment first."; return false }
         coreBusy = true; coreAttaching = true; coreAgentStatus = ""
-        defer { coreBusy = false; coreAttaching = false }
+        let busyEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == busyEpoch { coreBusy = false; coreAttaching = false } }
         do {
             let opening = state.openingAgent ?? PendingAgentOpen(agentID: agentID, requestID: CoreRelayClient.commandID())
             state.openingAgent = opening; try save()
@@ -1682,7 +2112,7 @@ public final class RelayConnection {
         coreClient?.onEvents = nil; coreClient?.onSubscriptionClosed = nil
         if !retainCurrentClient && (coreClient !== catalogClient || !preserveCatalog) { coreClient?.disconnected() }
         coreClient = nil
-        if !preserveCatalog { pushRegistrationHash = nil }
+        if !preserveCatalog { pushRegistrationHash = nil; notificationHostHintsSupported = false }
         if !preserveCatalog {
             catalogRefreshEpoch = UUID(); catalogRefreshTask?.cancel(); catalogRefreshTask = nil
             catalogReadEpoch = UUID(); catalogReadTask?.cancel(); catalogReadTask = nil; catalogReadAgain = false
@@ -1721,6 +2151,7 @@ public final class RelayConnection {
             do { try save() }
             catch { coreError = "Access was removed, but local authorization changes could not be saved securely." }
         }
+        refreshHostSummaries()
         onCoreAvailability?(false, purge ? "Access removed" : "Disconnected; host work continues")
     }
 
@@ -2017,7 +2448,8 @@ public final class RelayConnection {
         guard savedCoreCommands.count < 128 else { coreError = "Resolve saved message receipts before sending more conversations."; return false }
         let resource = coreResource
         coreBusy = true; coreError = nil; lastCommandAccepted = false
-        defer { coreBusy = false }
+        let busyEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == busyEpoch { coreBusy = false } }
         if !coreInputSubmission {
             guard await claimCoreInput(takeover: corePermissions.contains("takeover")) else { return false }
         } else {
@@ -2073,7 +2505,8 @@ public final class RelayConnection {
               let hostID = state.host?.certificate.id,
               let original = projection.outgoing.first(where: { $0.id == id }), original.status != .accepted,
               pendingCoreCommand == nil || pendingCoreCommand?.id == original.requestID else { return }
-        coreBusy = true; defer { coreBusy = false }
+        coreBusy = true; let busyEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == busyEpoch { coreBusy = false } }
         do {
             if pendingCoreCommand == nil {
                 pendingCoreCommand = PendingCoreCommand(hostID: hostID, resource: coreResource,
@@ -2098,7 +2531,7 @@ public final class RelayConnection {
             try projection.putOutgoing(message); publishCoreEvents()
             if !coreInputSubmission { guard await claimCoreInput(takeover: corePermissions.contains("takeover")) else { return } }
             _ = await dispatchCore(command)
-        } catch { coreError = "Retry could not be saved. Your message is preserved." }
+        } catch { if coreProjection === projection { coreError = "Retry could not be saved. Your message is preserved." } }
     }
 
     public func removeFailedOutgoingMessage(_ id: String) {
@@ -2205,7 +2638,8 @@ public final class RelayConnection {
     /// Explicit user retry only; retains the saved ID and identical original parameters.
     public func retryCoreCommand() async {
         guard !coreBusy, coreActionsAvailable, let pending = pendingCoreCommand, let client = coreClient else { return }
-        coreBusy = true; defer { coreBusy = false }
+        coreBusy = true; let busyEpoch = hostSelectionEpoch
+        defer { if hostSelectionEpoch == busyEpoch { coreBusy = false } }
         if !coreInputSubmission { guard await claimCoreInput(takeover: corePermissions.contains("takeover")) else { return } }
         guard coreActionsAvailable, coreClient === client, pendingCoreCommand?.id == pending.id,
               coreResource == pending.resource, state.host?.certificate.id == pending.hostID else { return }
@@ -2213,8 +2647,23 @@ public final class RelayConnection {
     }
 
     private func save() throws {
+        synchronizeActiveProfile()
+        refreshHostSummaries()
+        #if DEBUG
+        if let url = previewProfileStorageURL {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(profiles).write(to: url, options: .atomic)
+        }
+        #endif
         guard networkingEnabled else { return }
-        try saveAuthorization(JSONEncoder().encode(state))
+        guard profiles.profiles.count <= 64 else { throw RelayFailure("TRUST_CAPACITY") }
+        let authorization = try JSONEncoder().encode(profiles)
+        guard authorization.count <= 8_000_000 else { throw RelayFailure("CAPACITY") }
+        if let hostID = activeHostID {
+            try CoreHostCatalogCache(sessions: catalogEntries, agents: agentEntries)
+                .save(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory, hostID: hostID)
+        }
+        try saveAuthorization(authorization)
     }
 
     private func schedulePolling() {

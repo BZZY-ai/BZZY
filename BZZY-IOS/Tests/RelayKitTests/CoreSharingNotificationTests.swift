@@ -89,13 +89,17 @@ final class CoreSharingNotificationTests: XCTestCase {
         let token = String(repeating: "ab", count: 32)
         let params: [String: CoreJSONValue] = ["deviceToken": .string(token), "environment": .string("sandbox"), "enabled": .bool(true), "scope": .string("terminals")]
         _ = try CoreApplicationProtocol.request(op: "notifications.register", params: params, id: "register", resource: "approved")
+        for hostHints in [true, false] {
+            var upgraded = params; upgraded["hostHints"] = .bool(hostHints)
+            _ = try CoreApplicationProtocol.request(op: "notifications.register", params: upgraded, id: "register", resource: "approved")
+        }
         for field in ["topic", "url", "recipient", "deviceId", "sessionId", "message", "headers", "credentials"] {
             var altered = params; altered[field] = .string("denied")
             XCTAssertThrowsError(try CoreApplicationProtocol.request(op: "notifications.register", params: altered, id: "register", resource: "approved"))
         }
         for (field, value) in [("deviceToken", CoreJSONValue.string(String(repeating: "a", count: 63))),
                                ("deviceToken", .string(String(repeating: "a", count: 514))), ("deviceToken", .string(String(repeating: "g", count: 64))),
-                               ("environment", .string("other")), ("scope", .string("all-users")), ("enabled", .string("yes"))] {
+                               ("environment", .string("other")), ("scope", .string("all-users")), ("enabled", .string("yes")), ("hostHints", .string("true")), ("hostHints", .null)] {
             var altered = params; altered[field] = value
             XCTAssertThrowsError(try CoreApplicationProtocol.request(op: "notifications.register", params: altered, id: "register", resource: "approved"))
         }

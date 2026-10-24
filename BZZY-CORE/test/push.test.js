@@ -16,7 +16,7 @@ import { validateRequest, sanitize } from '../src/relay/protocol.js';
 import { CoreAgents } from '../src/agents.js';
 import { CoreWorkspaces } from '../src/workspaces.js';
 
-const token = 'ab'.repeat(32), hostId = 'host-fixture', peerId = 'phone-fixture';
+const token = 'ab'.repeat(32), hostId = 'H'.repeat(43), peerId = 'phone-fixture';
 let directory, previous;
 test.beforeEach(() => {
   previous = process.env.BZZY_HOME;
@@ -73,6 +73,12 @@ test('notification registration stays within exact device/resource grants, catal
   assert.throws(() => register(row, { scope: 'terminals' }), { code: 'FORBIDDEN' });
   assert.deepEqual(register(row), { registered: true, enabled: true, providerConfigured: false, scope: 'session' });
   const saved = listRecords('core.push.registration')[0];
+  assert.equal(saved.hostHints, false, 'Unnegotiated clients retain their legacy payload shape');
+  for (const hostHints of ['true', 1, null]) {
+    assert.throws(() => register(row, { hostHints }), { code: 'INVALID_REQUEST' });
+    assert.throws(() => validateRequest({ v: 1, protocol: 'bzzy-core', type: 'request', id: 'request', resource: row.resource,
+      op: 'notifications.register', params: { deviceToken: token, environment: 'sandbox', enabled: true, hostHints } }), { code: 'INVALID_REQUEST' });
+  }
   putRecord('core.push.registration', saved.id, { ...saved, enabledSince: saved.enabledSince - 10_000 });
   register(row);
   assert.equal(getRecord('core.push.registration', saved.id).enabledSince, saved.enabledSince - 10_000, 'Foreground token refresh preserves queued background alerts');
@@ -82,11 +88,91 @@ test('notification registration stays within exact device/resource grants, catal
   assert.equal(updateDeviceNotifications(row, { enabled: false }).enabled, false);
   assert.deepEqual(revokeDeviceNotifications(row, {}), { revoked: true });
   assert.equal(listRecords('core.push.registration')[0].deviceToken, undefined);
-  for (const field of ['topic', 'url', 'recipient', 'sessionId', 'message']) {
+  for (const field of ['topic', 'url', 'recipient', 'sessionId', 'hostId', 'message']) {
     assert.throws(() => validateRequest({ v: 1, protocol: 'bzzy-core', type: 'request', id: 'request', resource: row.resource,
       op: 'notifications.register', params: { deviceToken: token, environment: 'sandbox', enabled: true, [field]: 'denied' } }));
   }
   assert.equal(sanitize({ deviceToken: token }).deviceToken, '[redacted]');
+});
+
+test('one phone token stays privately registered on two Core hosts with independently pinned alert routes and collapse IDs', async () => {
+  const { sessionPermissions } = await import('../src/engine/session-access.js');
+  const hosts = [hostId, 'R'.repeat(43)], bindings = [], sendsByHost = [], goalEventID = randomUUID(), updateEventID = randomUUID();
+  for (const [index, host] of hosts.entries()) {
+    process.env.BZZY_HOME = path.join(directory, 'host-' + index);
+    fs.mkdirSync(process.env.BZZY_HOME, { mode: 0o700 });
+    const row = grant({ catalog: true, agentAccess: true, host }), cfg = configuration(), sends = [];
+    Object.assign(row, { shareAccess: true, permissions: [...sessionPermissions] });
+    putRecord('core.relay.grant', row.id, row);
+    const access = getRecord('access-token', digest(row.token));
+    putRecord('access-token', digest(row.token), { ...access, permissions: [...sessionPermissions] });
+    register(row, { scope: 'authorized', hostHints: true });
+    const selected = getRecord('session', row.sessionId); selected.alias = 'Example'; putRecord('session', selected.id, selected);
+    // Queued/model-controlled metadata cannot redirect either alert family.
+    outbox(selected, 'goal.completed', { id: goalEventID, replyPreview: 'Verified result.', hostId: hosts[1 - index] });
+    const update = { id: updateEventID, type: 'system.update_available', target: 'b'.repeat(40), hostId: hosts[1 - index], occurredAt: new Date(Date.now() + 20).toISOString() };
+    putRecord('core.update.status', 'default', { phase: 'ready', available: true, target: update.target });
+    putRecord('outbox', 'system-update-test', { event: update, deliveries: {} });
+    const worker = new CorePushWorker({ configurationLoader: () => cfg, hostID: () => host,
+      clientFactory: () => ({ send: async value => { sends.push(value); return { accepted: true, apnsId: value.id }; }, close() {} }) });
+    try { await worker.tick(); await worker.tick(); } finally { worker.close(); }
+    assert.equal(sends.length, 2);
+    for (const sent of sends) {
+      assert.equal(sent.payload.bzzy.hostId, host);
+      assert.match(sent.collapseID, /^[a-f0-9]{64}$/);
+      assert.equal(sent.payload.bzzy.eventId, sent.collapseID);
+      const payload = JSON.stringify(sent.payload);
+      assert.ok(!payload.includes(token)); assert.ok(!payload.includes(row.token)); assert.ok(!payload.includes('/private/workspace'));
+    }
+    assert.deepEqual(sends.find(sent => sent.payload.bzzy.destination === 'terminal').payload.aps.alert,
+      { title: 'Goal achieved - Example', body: 'Verified result.' });
+    assert.equal(sends.find(sent => sent.payload.bzzy.destination === 'updates').payload.bzzy.resource, undefined);
+    bindings.push({ home: process.env.BZZY_HOME, row }); sendsByHost.push(sends);
+  }
+  for (const destination of ['terminal', 'updates']) {
+    const [first, second] = sendsByHost.map(sends => sends.find(sent => sent.payload.bzzy.destination === destination));
+    assert.notEqual(first.collapseID, second.collapseID, 'A host cannot replace another host alert on the same phone');
+    assert.notEqual(first.payload.aps['thread-id'], second.payload.aps['thread-id']);
+  }
+  process.env.BZZY_HOME = bindings[0].home;
+  revokeDeviceNotifications(bindings[0].row, {});
+  assert.equal(listRecords('core.push.registration')[0].deviceToken, undefined);
+  process.env.BZZY_HOME = bindings[1].home;
+  assert.equal(listRecords('core.push.registration')[0].enabled, true, 'Revoking one private host binding cannot revoke the other');
+  assert.equal(authorizedPushRegistration(listRecords('core.push.registration')[0]), true);
+});
+
+test('legacy bindings keep iOS v1 notification keys until the device explicitly negotiates host hints', async () => {
+  const { sessionPermissions } = await import('../src/engine/session-access.js');
+  const row = grant({ catalog: true, agentAccess: true }), cfg = configuration(), sends = [];
+  Object.assign(row, { shareAccess: true, permissions: [...sessionPermissions] }); putRecord('core.relay.grant', row.id, row);
+  const access = getRecord('access-token', digest(row.token));
+  putRecord('access-token', digest(row.token), { ...access, permissions: [...sessionPermissions] });
+  register(row, { scope: 'authorized' });
+  const saved = listRecords('core.push.registration')[0], { hostHints: ignored, ...legacyBinding } = saved;
+  putRecord('core.push.registration', saved.id, legacyBinding);
+  const selected = getRecord('session', row.sessionId);
+  outbox(selected, 'goal.completed', { replyPreview: 'Saved result.' });
+  const update = { id: randomUUID(), type: 'system.update_available', target: 'c'.repeat(40), occurredAt: new Date(Date.now() + 20).toISOString() };
+  putRecord('core.update.status', 'default', { phase: 'ready', available: true, target: update.target });
+  putRecord('outbox', 'legacy-update', { event: update, deliveries: {} });
+  const worker = new CorePushWorker({ configurationLoader: () => cfg, hostID: () => hostId,
+    clientFactory: () => ({ send: async value => { sends.push(value); return { accepted: true, apnsId: value.id }; }, close() {} }) });
+  try {
+    await worker.tick(); assert.equal(sends.length, 2);
+    const legacyKeys = new Set(['v', 'eventId', 'destination', 'resource', 'sessionId', 'agentId']);
+    for (const sent of sends) {
+      assert.equal(sent.payload.bzzy.hostId, undefined);
+      assert.ok(Object.keys(sent.payload.bzzy).every(key => legacyKeys.has(key)), 'Core-first updates preserve the old strict iOS parser');
+    }
+    register(row, { scope: 'authorized', hostHints: true });
+    assert.equal(getRecord('core.push.registration', saved.id).enabledSince, saved.enabledSince, 'Negotiating metadata retains queued-event eligibility');
+    outbox(selected, 'goal.stalled', { replyPreview: 'Needs attention.' });
+    await worker.tick(); assert.equal(sends.length, 3); assert.equal(sends.at(-1).payload.bzzy.hostId, hostId);
+    register(row, { scope: 'authorized', hostHints: false });
+    outbox(selected, 'goal.waiting_for_input');
+    await worker.tick(); assert.equal(sends.length, 4); assert.equal(sends.at(-1).payload.bzzy.hostId, undefined);
+  } finally { worker.close(); }
 });
 
 test('real HTTP/2 APNs wire uses ES256 JWT, fixed topic/alert headers, bounded generic payload and token invalidation', async t => {
@@ -149,7 +235,7 @@ test('every stalled outcome is saved once and sent through APNs without a connec
 
 test('catalog notifications cover future CLI goals while socket-free, exclude internal contexts and deduplicate durable outbox events', async () => {
   const row = grant({ catalog: true }), cfg = configuration(), sends = [];
-  register(row, { scope: 'terminals' });
+  register(row, { scope: 'terminals', hostHints: true });
   const futureTerminal = session(), internal = session('core-assistant');
   outbox(futureTerminal); outbox(internal); outbox(session(), 'text');
   const worker = new CorePushWorker({ configurationLoader: () => cfg, hostID: () => hostId,
@@ -159,6 +245,7 @@ test('catalog notifications cover future CLI goals while socket-free, exclude in
     assert.equal(sends.length, 1); const serialized = JSON.stringify(sends[0].payload);
     assert.equal(sends[0].payload.aps.alert.body, 'PRIVATE GOAL TEXT'); assert.ok(!serialized.includes('/private/workspace'));
     assert.equal(sends[0].payload.bzzy.resource, row.resource);
+    assert.equal(sends[0].payload.bzzy.hostId, hostId);
     assert.equal(sends[0].payload.bzzy.sessionId, futureTerminal.id);
     assert.equal(listRecords('core.push.delivery')[0].state, 'sent');
     assert.ok(!JSON.stringify(listRecords('core.push.delivery')).includes(token));
@@ -190,13 +277,14 @@ test('authorized notifications include only explicitly approved live agent defin
   const agents = new CoreAgents(), agent = agents.create({ name: 'Private purpose', instructions: 'Private durable mission.', provider: 'codex', effort: 'default' }, { requestId: randomUUID() });
   const row = grant({ agentAccess: true }), cfg = configuration(), sends = [];
   assert.throws(() => register(row, { scope: 'terminals' }), { code: 'FORBIDDEN' });
-  assert.equal(register(row, { scope: 'authorized' }).scope, 'authorized');
+  assert.equal(register(row, { scope: 'authorized', hostHints: true }).scope, 'authorized');
   outbox(getRecord('session', agent.sessionId)); outbox(session()); outbox(session('core-assistant'));
   const worker = new CorePushWorker({ configurationLoader: () => cfg, hostID: () => hostId,
     clientFactory: () => ({ send: async value => { sends.push(value); return { accepted: true, apnsId: value.id }; }, close() {} }) });
   try {
     await worker.tick(); assert.equal(sends.length, 1);
     assert.equal(sends[0].payload.bzzy.destination, 'agents'); assert.equal(sends[0].payload.bzzy.agentId, agent.id);
+    assert.equal(sends[0].payload.bzzy.hostId, hostId);
     assert.equal(sends[0].payload.bzzy.sessionId, agent.sessionId);
     assert.equal(sends[0].payload.aps.alert.title, 'Goal achieved');
     assert.match(sends[0].payload.aps['thread-id'], /^[a-f0-9]{64}$/);
@@ -245,7 +333,7 @@ test('new-version push alerts route to Settings only for the full own-phone gran
  const { updateDeviceKey } = await import('../src/engine/update-access.js');
  const row = grant({ catalog: true, agentAccess: true }), cfg = configuration(), sends = [];
  Object.assign(row, { shareAccess: true, permissions: [...sessionPermissions] }); putRecord('core.relay.grant', row.id, row);
- const access = getRecord('access-token', digest(row.token)); putRecord('access-token', digest(row.token), { ...access, permissions: [...sessionPermissions] }); register(row, { scope: 'authorized' });
+ const access = getRecord('access-token', digest(row.token)); putRecord('access-token', digest(row.token), { ...access, permissions: [...sessionPermissions] }); register(row, { scope: 'authorized', hostHints: true });
  const event = { id: randomUUID(), type: 'system.update_available', occurredAt: new Date(Date.now() + 20).toISOString(), target: 'b'.repeat(40) };
  putRecord('core.update.status', 'default', { phase: 'ready', available: true, target: event.target });
  putRecord('outbox', 'system-update-test', { event, deliveries: {} });
@@ -253,6 +341,7 @@ test('new-version push alerts route to Settings only for the full own-phone gran
  try {
   await worker.tick(); await worker.tick(); assert.equal(sends.length, 1);
   assert.equal(sends[0].payload.aps.alert.title, 'BZZY update available'); assert.equal(sends[0].payload.bzzy.destination, 'updates');
+  assert.equal(sends[0].payload.bzzy.hostId, hostId);
   assert.equal(sends[0].payload.bzzy.sessionId, undefined); assert.equal(sends[0].payload.bzzy.resource, undefined);
   putRecord('core.update.device', updateDeviceKey(row), { notificationsEnabled: false });
   putRecord('outbox', 'system-update-next', { event: { ...event, id: randomUUID() }, deliveries: {} }); await worker.tick(); assert.equal(sends.length, 1);

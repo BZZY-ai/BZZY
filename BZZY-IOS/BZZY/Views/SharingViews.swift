@@ -386,7 +386,7 @@ struct LiveTerminalShareView: View {
                     if let archiveBytes { Text(ByteCountFormatter.string(fromByteCount: archiveBytes, countStyle: .file)).bzzyFont(12).foregroundStyle(BZZYTheme.secondary) }
                     if !shareState.isEmpty { Text(shareState.capitalized).bzzyFont(14) }
                     if shareID == nil && !uncertain {
-                        AccentButton(title: "Generate temporary code", symbol: "qrcode") { Task { await create() } }
+                        AccentButton(title: "Generate temporary code", symbol: "qrcode") { relay.performHostAction { await create() } }
                             .disabled(isBusy || !relay.coreActionsAvailable || !relay.coreSharingAllowed)
                     } else if let shareID {
                         if invitation == nil && ["open", "pending", "approved"].contains(shareState) {
@@ -403,16 +403,16 @@ struct LiveTerminalShareView: View {
                                     .disabled(isBusy || !relay.coreActionsAvailable)
                             }.panel()
                         }
-                        Button("Refresh transfer status") { Task { await refreshStatus(shareID) } }.disabled(isBusy)
+                        Button("Refresh transfer status") { relay.performHostAction { await refreshStatus(shareID) } }.disabled(isBusy)
                         if !["complete", "revoked", "expired"].contains(shareState) {
-                            Button("Revoke code", role: .destructive) { Task { await revoke(shareID) } }.disabled(isBusy)
+                            Button("Revoke code", role: .destructive) { relay.performHostAction { await revoke(shareID) } }.disabled(isBusy)
                         } else {
                             Button("New share") { self.shareID = nil; invitation = nil; shareState = ""; createRequestID = nil; uncertain = false; error = nil }
                         }
                     }
                     if uncertain {
                         Text("Share preparation is not confirmed. No automatic retry.").bzzyFont(12).foregroundStyle(BZZYTheme.amber)
-                        Button("Check request status") { Task { await reconcile() } }.disabled(isBusy || !relay.coreActionsAvailable)
+                        Button("Check request status") { relay.performHostAction { await reconcile() } }.disabled(isBusy || !relay.coreActionsAvailable)
                     }
                     if let error { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
                     Text(kind == .agent ? "Both Cores must stay online. Your recipient imports on iPhone; Core restores a fresh paused agent beneath their own Agents workspace. Their accounts and permissions stay separate." : "The source Core must stay online. Your recipient imports the code in their BZZY CLI, restores it into their current directory, and authorizes their own accounts.")
@@ -421,7 +421,7 @@ struct LiveTerminalShareView: View {
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .confirmationDialog("Approve this recipient to receive the project and saved context?", isPresented: Binding(get: { selectedClaim != nil }, set: { if !$0 { selectedClaim = nil } }), titleVisibility: .visible) {
                     if let claim = selectedClaim {
-                        Button("Approve verified recipient") { Task { await approve(claim) } }
+                        Button("Approve verified recipient") { relay.performHostAction { await approve(claim) } }
                     }
                 }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
@@ -435,7 +435,8 @@ struct LiveTerminalShareView: View {
             }
             .task(id: shareID) {
                 guard let shareID else { return }
-                while !Task.isCancelled {
+                let origin = HostActionContext(hostID: relay.activeHostID)
+                while !Task.isCancelled && origin.permits(relay.activeHostID) {
                     if let expiresAt, expiresAt <= Date() { invitation = nil; claims = []; shareState = "expired"; return }
                     if scenePhase == .active && !isBusy { await refreshStatus(shareID) }
                     if ["complete", "revoked", "expired"].contains(shareState) { return }
@@ -614,8 +615,9 @@ struct LiveAgentImportView: View {
             .onAppear { visible = true }
             .onDisappear { visible = false; clearInvitation() }
             .task {
+                let origin = HostActionContext(hostID: relay.activeHostID)
                 await loadProviders()
-                while !Task.isCancelled {
+                while !Task.isCancelled && origin.permits(relay.activeHostID) {
                     if scenePhase == .active && relay.coreActionsAvailable && relay.coreAgentImportPending && !busy && !finished { await refresh() }
                     do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 }
@@ -628,7 +630,7 @@ struct LiveAgentImportView: View {
             .onChange(of: relay.coreActionsAvailable) { _, ready in if !ready { clearInvitation() } }
             .onChange(of: scenePhase) { _, phase in if phase != .active { clearInvitation() } }
             .onChange(of: fingerprint) { _, _ in verified = false }
-            .onChange(of: provider) { _, value in if !loading { model = ""; effort = "default"; Task { await loadModels(value) } } }
+            .onChange(of: provider) { _, value in if !loading { model = ""; effort = "default"; relay.performHostAction { await loadModels(value) } } }
     }
 
     private var entry: some View {
@@ -678,12 +680,12 @@ struct LiveAgentImportView: View {
                 ForEach(models.compactMap { $0["id"].string }, id: \.self) { id in Text(models.first(where: { $0["id"].string == id })?["name"].string ?? id).tag(id) }
             }.pickerStyle(.menu)
             if modelSource == "manual" || models.isEmpty { TextField("Model ID (optional)", text: $model).bzzyFont(13, design: .monospaced).panel() }
-            if modelHasMore { Button("Load more models") { Task { await loadModels(provider, more: true) } } }
+            if modelHasMore { Button("Load more models") { relay.performHostAction { await loadModels(provider, more: true) } } }
             Picker("Effort", selection: $effort) {
                 Text("Provider default").tag("default")
                 ForEach(efforts.filter { $0 != "default" }, id: \.self) { Text($0).tag($0) }
             }.pickerStyle(.menu)
-            AccentButton(title: "Receive on Core", symbol: "square.and.arrow.down") { Task { await receive(invitation) } }
+            AccentButton(title: "Receive on Core", symbol: "square.and.arrow.down") { relay.performHostAction { await receive(invitation) } }
                 .disabled(busy || loading || !verified || !validFingerprint || provider.isEmpty || resolvedModel == nil || !relay.coreActionsAvailable || !relay.coreAgentsConfigured || name.utf8.count > 120)
                 .accessibilityIdentifier("agent-import-receive")
             Button("Use another code") { clearInvitation(); error = nil }
@@ -709,7 +711,7 @@ struct LiveAgentImportView: View {
                 Text(relay.coreAgentImportRecoveredAgent?["name"].string ?? progress?["agent"]["name"].string ?? "Agent").bzzyFont(18, weight: .medium)
                 Text("Saved on your Core with new identities. Review the imported context and authorize your own accounts before asking it to work.").bzzyFont(13).foregroundStyle(BZZYTheme.secondary)
             }
-            Button("Refresh transfer") { Task { await refresh() } }.disabled(busy || !relay.coreActionsAvailable)
+            Button("Refresh transfer") { relay.performHostAction { await refresh() } }.disabled(busy || !relay.coreActionsAvailable)
             if finished {
                 AccentButton(title: progress?["state"].string == "complete" || relay.coreAgentImportRecoveredAgent != nil ? "Done" : "Use another code", symbol: "checkmark") {
                     let complete = progress?["state"].string == "complete" || relay.coreAgentImportRecoveredAgent != nil
@@ -717,7 +719,7 @@ struct LiveAgentImportView: View {
                     if complete { store.selectedTab = .agents; dismiss() }
                 }
             } else {
-                Button("Cancel transfer", role: .destructive) { Task { await cancel() } }.disabled(busy || progress == nil || !relay.coreActionsAvailable)
+                Button("Cancel transfer", role: .destructive) { relay.performHostAction { await cancel() } }.disabled(busy || progress == nil || !relay.coreActionsAvailable)
             }
             Text("Both Cores must stay online during transfer. Closing this sheet does not execute or resume imported work.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
         }
@@ -736,11 +738,12 @@ struct LiveAgentImportView: View {
         let code = invitation.code, source = fingerprint
         clearInvitation(); busy = true; error = nil
         defer { busy = false }
+        let origin = HostActionContext(hostID: relay.activeHostID)
         do {
             try await relay.beginCoreAgentImport(code: code, sourceFingerprint: source, provider: provider,
                 model: selectedModel,
                 effort: effort, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
-            if visible { _ = try await relay.refreshCoreAgentImport() }
+            if visible, origin.permits(relay.activeHostID), !Task.isCancelled { _ = try await relay.refreshCoreAgentImport() }
         } catch { if visible { self.error = "Import was not confirmed (\((error as? CoreApplicationError)?.code ?? "UNAVAILABLE")). Check the saved request; no automatic retry." } }
     }
     private func refresh() async {
@@ -757,9 +760,10 @@ struct LiveAgentImportView: View {
     }
     private func loadProviders() async {
         loading = true; defer { loading = false }
+        let origin = HostActionContext(hostID: relay.activeHostID)
         do {
             let result = try await relay.readCoreAgent("agents.providers")
-            guard visible else { return }
+            guard visible, origin.permits(relay.activeHostID), !Task.isCancelled else { return }
             providers = result["providers"].array ?? []; provider = providers.first?["id"].string ?? ""
             await loadModels(provider)
         } catch { if visible { self.error = "Core provider settings are unavailable." } }

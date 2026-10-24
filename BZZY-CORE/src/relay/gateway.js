@@ -681,7 +681,7 @@ export class RelayGateway extends EventEmitter {
             yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true, inputSubmission: true, stalledGoalResume: true,
             inputOwnedByDevice: snapshot.inputOwner?.principal === `grant:${row.coreGrantId}`,
             inputActor: digest(`grant:${row.coreGrantId}`),
-            durableEvents: true, historyPaging: true, eventChunks: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
+            durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true, singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
             ...(authorizedOwnPhone(row.relayGrantId || row.id) ? { terminalCatalogRevision: terminalCatalogRevision() } : {}),
             permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
             relay: true, portableSharing: row.shareAccess === true, shareKind: row.kind === 'agent' ? 'AGENT' : 'TERMINAL' } };
@@ -716,7 +716,7 @@ export class RelayGateway extends EventEmitter {
     return { session: { ...pick(saved, ['id', 'provider', 'backend', 'model', 'cwd', 'createdAt', 'updatedAt']), executionState: 'deleted' },
       execution: null, questions: [], inputOwner: null,
       capabilities: { sessionDeleted: true, activeSteering: false, yolo: false, yoloControl: false, goalSubmission: false, inputSubmission: false,
-        stalledGoalResume: false, inputOwnedByDevice: false, durableEvents: true, historyPaging: true, eventChunks: true,
+        stalledGoalResume: false, inputOwnedByDevice: false, durableEvents: true, historyPaging: true, eventChunks: true, notificationsHostRouting: true,
         singleViewSubscription: Boolean(authorizedOwnPhone(row.relayGrantId || row.id)),
         ...(authorizedOwnPhone(row.relayGrantId || row.id) ? { terminalCatalogRevision: terminalCatalogRevision() } : {}),
         permissions: ['observe'], sessionAccess: row.sessionAccess === true, agentAccess: row.agentAccess === true,

@@ -6,7 +6,7 @@ enum AppLaunchMode {
         #if BZZY_PREVIEW
         return true
         #elseif DEBUG
-        return contains("--ui-testing") && !contains("--pairing-gate-testing") && !contains("--core-offline-testing")
+        return contains("--ui-testing") && !contains("--pairing-gate-testing") && !contains("--core-offline-testing") && !contains("--multi-host-testing")
         #else
         return false
         #endif
@@ -39,6 +39,13 @@ struct BZZYApp: App {
     }
     @MainActor private static func makeRelay() -> RelayConnection {
         #if DEBUG
+        if AppLaunchMode.contains("--ui-testing") && AppLaunchMode.contains("--multi-host-testing") {
+            let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("BZZY", isDirectory: true)
+            let url = folder.appendingPathComponent("multi-host-ui-profiles.json")
+            if AppLaunchMode.contains("--reset-ui-testing") { try? FileManager.default.removeItem(at: url) }
+            if let preview = try? RelayConnection.multipleHostsOfflinePreview(storageURL: url) { return preview }
+        }
         if AppLaunchMode.contains("--ui-testing") && AppLaunchMode.contains("--core-offline-testing"),
            let preview = try? RelayConnection.pairedOfflinePreview() { return preview }
         #endif
@@ -76,6 +83,9 @@ struct WorkspaceView: View {
     @State private var transfers = DemoTransferStore()
     @State private var importKind: SharedResourceKind?
     @State private var showConnection = false
+    @State private var showHosts = false
+    @State private var notificationRoutingNotice: String?
+    @State private var hostProfilesReady = false
     @State private var pendingConnectionFromNotification = false
     @State private var navigationID = UUID()
     @Environment(\.scenePhase) private var scenePhase
@@ -94,33 +104,20 @@ struct WorkspaceView: View {
         #if BZZY_PREVIEW
         return true
         #elseif DEBUG
-        return CommandLine.arguments.contains("--ui-testing") && !CommandLine.arguments.contains("--pairing-gate-testing") && !CommandLine.arguments.contains("--core-offline-testing")
+        return AppLaunchMode.allowsPreviewNavigation
         #else
         return false
         #endif
     }
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            if !relay.hosts.isEmpty || allowsDemoNavigation { workspaceHeader }
             if !allowsDemoNavigation && !relay.corePairAuthorized {
                 ConnectView(required: true)
             } else {
-        VStack(spacing: 0) {
         NavigationStack {
             VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Text("BZZY").bzzyFont(22, weight: .bold).foregroundStyle(BZZYTheme.accent)
-                    Spacer()
-                    RoundButton(symbol: "square.and.arrow.down", label: "Import \(store.selectedTab == .agents ? "agent" : "terminal")") {
-                        importKind = store.selectedTab == .agents ? .agent : .terminal
-                    }.accessibilityIdentifier("import-resource").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
-                    if store.selectedTab == .agents {
-                        RoundButton(symbol: "plus", label: "Create an agent") { showCreate = true }
-                            .accessibilityIdentifier("create-agent").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
-                    }
-                    RoundButton(symbol: "slider.horizontal.3", label: "Settings") { showSettings = true }
-                }.padding(.horizontal, 25).padding(.top, 10).padding(.bottom, 8)
-
                 if relay.coreActionsAvailable {
                     HostMetricsBar(metrics: relay.hostMetrics, status: relay.hostMetricsStatus)
                         .padding(.horizontal, 25).padding(.bottom, 8)
@@ -135,6 +132,11 @@ struct WorkspaceView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
             .bzzyScreen()
             .toolbar(.hidden)
+        }.id(navigationID)
+            }
+            if !relay.hosts.isEmpty || allowsDemoNavigation { CoreConnectionFooter() }
+        }
+            .bzzyScreen()
             .sheet(isPresented: $showSettings, onDismiss: {
                 if pendingConnectionFromNotification {
                     pendingConnectionFromNotification = false
@@ -142,6 +144,7 @@ struct WorkspaceView: View {
                 }
             }) { SettingsView() }
             .sheet(isPresented: $showConnection) { ConnectView() }
+            .sheet(isPresented: $showHosts) { HostPickerView(onSelect: { resetHostNavigation() }) }
             .sheet(item: $importKind) { kind in
                 if kind == .agent && !store.showsDemoContent { LiveAgentImportView(store: store).coreAvailabilityGate() }
                 else { ImportResourceView(store: store, kind: kind).coreAvailabilityGate() }
@@ -149,24 +152,29 @@ struct WorkspaceView: View {
             .alert("Local storage", isPresented: Binding(get: { store.storageError != nil && !storageNoticeDismissed }, set: { if !$0 { storageNoticeDismissed = true } })) {
                 Button("OK") { storageNoticeDismissed = true }
             } message: { Text(store.storageError ?? "") }
-        }
-            CoreConnectionFooter()
-        }
-            }
-        }
-            .id(navigationID).environment(relay).environment(notifications).environment(transfers)
+            .alert("Choose a computer", isPresented: Binding(get: { notificationRoutingNotice != nil }, set: { if !$0 { notificationRoutingNotice = nil } })) {
+                Button("Computers") { notificationRoutingNotice = nil; showHosts = true }
+                Button("Cancel", role: .cancel) { notificationRoutingNotice = nil }
+            } message: { Text(notificationRoutingNotice ?? "") }
+            .environment(relay).environment(notifications).environment(transfers)
             .tint(BZZYTheme.accent).preferredColorScheme(.dark)
             .task {
                 relay.onNotice = { kind in Task { await notifications.hostNotice(kind) } }
                 relay.onCoreSnapshot = { store.applyLiveSnapshot($0) }
                 relay.onCoreEvents = { store.applyLiveEvents($0) }
                 relay.onCoreAvailability = { store.setLiveAvailability($0, status: $1) }
-                relay.onCoreCleared = { store.clearLiveSession() }
+                relay.onCoreCleared = { store.clearLiveSession(); resetHostNavigation() }
                 relay.onCoreConversationCleared = { store.clearLiveConversation() }
                 relay.onCoreSessions = { store.applyLiveTerminalCatalog($0) }
                 relay.onCoreAgents = { store.applyHostAgents($0) }
                 relay.onCoreAgentStatus = { store.applyHostAgentStatus($0) }
-                navigateFromNotification()
+                do {
+                    try relay.restoreSavedHosts()
+                    hostProfilesReady = true
+                    store.retainHostDrafts(Set(relay.hosts.filter(\.isPaired).map(\.id)))
+                    applyMultiHostFixture()
+                    navigateFromNotification()
+                } catch { /* Relay surfaces private-storage failures during resume. */ }
                 await notifications.refresh()
                 await relay.resume()
                 await synchronizePushRegistration()
@@ -174,8 +182,10 @@ struct WorkspaceView: View {
             .onChange(of: notifications.registrationRevision) { _, _ in Task { await synchronizePushRegistration() } }
             .onChange(of: relay.corePairAuthorized) { _, authorized in
                 if authorized { Task { await notifications.refresh(); await synchronizePushRegistration() } }
-                else { notifications.hostAuthorizationRemoved() }
+                else if relay.hosts.isEmpty { notifications.hostAuthorizationRemoved() }
             }
+            .onChange(of: relay.activeHostID) { _, _ in applyMultiHostFixture() }
+            .onChange(of: relay.hosts.filter(\.isPaired).map(\.id)) { _, ids in if hostProfilesReady { store.retainHostDrafts(Set(ids)) } }
             .onChange(of: relay.coreCatalogReady) { _, ready in if ready { Task { await synchronizePushRegistration() } } }
             .onChange(of: notifications.destination) { _, _ in navigateFromNotification() }
             .onChange(of: scenePhase) { _, phase in
@@ -184,23 +194,100 @@ struct WorkspaceView: View {
             }
     }
 
+    private var workspaceHeader: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                Text("BZZY").bzzyFont(22, weight: .bold).foregroundStyle(BZZYTheme.accent)
+                Spacer()
+                RoundButton(symbol: "square.and.arrow.down", label: "Import \(store.selectedTab == .agents ? "agent" : "terminal")") {
+                    importKind = store.selectedTab == .agents ? .agent : .terminal
+                }.accessibilityIdentifier("import-resource").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
+                if store.selectedTab == .agents {
+                    RoundButton(symbol: "plus", label: "Create an agent") { showCreate = true }
+                        .accessibilityIdentifier("create-agent").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
+                }
+                RoundButton(symbol: "slider.horizontal.3", label: "Settings") { showSettings = true }
+            }
+            if !relay.hosts.isEmpty {
+                Button { showHosts = true } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "desktopcomputer").bzzyFont(13)
+                        Text(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Choose computer")
+                            .bzzyFont(13, weight: .medium).lineLimit(1)
+                        if relay.activeHostID == relay.defaultHostID { Image(systemName: "star.fill").bzzyFont(9) }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.up.chevron.down").bzzyFont(10, weight: .semibold)
+                    }.foregroundStyle(BZZYTheme.accent).padding(.horizontal, 14).frame(minHeight: 39)
+                        .background(BZZYTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 13))
+                        .overlay(RoundedRectangle(cornerRadius: 13).stroke(BZZYTheme.accent.opacity(0.2), lineWidth: 0.7))
+                }.buttonStyle(BZZYPressStyle()).accessibilityIdentifier("host-selector")
+                    .accessibilityLabel("Computer")
+                    .accessibilityValue(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Choose computer")
+                    .accessibilityHint("Switch computers, choose a default, or add a computer")
+            }
+        }.padding(.horizontal, 25).padding(.top, 10).padding(.bottom, 8)
+    }
+
+    private func resetHostNavigation() {
+        showCreate = false; showSettings = false; showConnection = false; importKind = nil
+        pendingConnectionFromNotification = false
+        store.notificationAgentID = nil; store.notificationTerminalID = nil
+        navigationID = UUID()
+    }
+
+    private func applyMultiHostFixture() {
+        #if DEBUG
+        guard AppLaunchMode.contains("--ui-testing"), AppLaunchMode.contains("--multi-host-testing") else { return }
+        store.selectedTab = .terminal
+        guard relay.hosts.first(where: { $0.id == relay.activeHostID })?.name == "Test Mac" else { return }
+        let sessionID = "44444444-4444-4444-8444-444444444444"
+        let snapshot: [String: Any] = ["session": ["id": sessionID, "alias": "Test only dummy chat", "cwd": "/isolated-ui-fixture", "model": "Fixture"]]
+        if let data = try? JSONSerialization.data(withJSONObject: snapshot) { store.applyLiveSnapshot(data) }
+        #endif
+    }
+
     private func synchronizePushRegistration() async {
         guard notifications.enabled else { return }
         let revision = notifications.registrationRevision
-        let connection = "\(relay.hostFingerprint):\(relay.corePairAuthorized):\(relay.coreCatalogReady)"
-        let status = await relay.synchronizeCoreNotifications(token: notifications.pushToken,
-            environment: notifications.pushEnvironment, enabled: notifications.authorized && notifications.alertsEnabled)
-        notifications.hostRegistrationStatus(status)
-        let current = "\(relay.hostFingerprint):\(relay.corePairAuthorized):\(relay.coreCatalogReady)"
-        if revision != notifications.registrationRevision || connection != current { await synchronizePushRegistration() }
+        let token = notifications.pushToken
+        let environment = notifications.pushEnvironment
+        let registrationEnabled = notifications.authorized && notifications.alertsEnabled
+        let connection = "\(relay.activeHostID ?? ""): \(relay.hostFingerprint):\(relay.corePairAuthorized):\(relay.coreCatalogReady)"
+        let status = await relay.synchronizeAllCoreNotifications(token: token,
+            environment: environment, enabled: registrationEnabled)
+        let current = "\(relay.activeHostID ?? ""): \(relay.hostFingerprint):\(relay.corePairAuthorized):\(relay.coreCatalogReady)"
+        let currentPlan = revision == notifications.registrationRevision && token == notifications.pushToken
+            && environment == notifications.pushEnvironment
+            && registrationEnabled == (notifications.authorized && notifications.alertsEnabled)
+        if currentPlan && connection == current { notifications.hostRegistrationStatus(status) }
+        else { await synchronizePushRegistration() }
     }
 
     private func navigateFromNotification() {
-        guard let route = notifications.destination else { return }
+        guard hostProfilesReady, let route = notifications.destination else { return }
         let resource = notifications.destinationResource
         let sessionID = notifications.destinationSessionID
         let agentID = notifications.destinationAgentID
+        let hostID = notifications.destinationHostID
         notifications.destination = nil; notifications.destinationResource = nil; notifications.destinationSessionID = nil; notifications.destinationAgentID = nil
+        notifications.destinationHostID = nil
+        let matchingHosts = resource.map { relay.notificationHostHintIDs(resource: $0, sessionID: sessionID, agentID: agentID) } ?? []
+        let targetHostID = hostID.flatMap { relay.hostProfileID(forNotificationHostID: $0) }
+            ?? (hostID == nil ? (matchingHosts.count == 1 ? matchingHosts[0] : relay.hosts.count == 1 ? relay.hosts[0].id : nil) : nil)
+        // Legacy hints are ambiguous after a second computer is paired. Never
+        // reconcile their resource against whichever computer happens to be open.
+        if (hostID != nil || !relay.hosts.isEmpty) && targetHostID == nil {
+            notificationRoutingNotice = hostID == nil ? "This alert does not identify one saved computer. Choose its computer to inspect the current state." : "This alert belongs to a computer that is not saved on this iPhone."
+            return
+        }
+        Task {
+        showHosts = false
+        if let targetHostID, targetHostID != relay.activeHostID {
+            resetHostNavigation()
+            await relay.activateHost(targetHostID)
+        }
+        let routingHostID = relay.activeHostID
+        guard targetHostID == nil || routingHostID == targetHostID else { return }
         switch route {
         case .agents, .terminal:
             showSettings = false
@@ -218,10 +305,11 @@ struct WorkspaceView: View {
                 showConnection = true
             }
         }
-        Task {
             await relay.refresh()
+            guard relay.activeHostID == routingHostID else { return }
             if let resource {
                 await relay.reconcileNotificationResource(resource, sessionID: sessionID, agentID: agentID)
+                guard relay.activeHostID == routingHostID else { return }
                 if let agentID, store.hostAgents.contains(where: { $0.id == agentID && $0.sessionID == relay.coreSessionID }) { store.notificationAgentID = agentID }
                 else if let sessionID, store.liveTerminals.contains(where: { $0.id == sessionID && $0.id == relay.coreSessionID }) { store.notificationTerminalID = sessionID }
             }

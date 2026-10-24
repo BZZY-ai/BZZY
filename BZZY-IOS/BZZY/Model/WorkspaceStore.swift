@@ -1,6 +1,16 @@
 import Foundation
 import Observation
 
+/// A delayed UI intent belongs to the computer visible when it was created.
+/// Conversation IDs alone cannot distinguish copies of a Core database.
+struct HostActionContext: Equatable {
+    let hostID: String?
+    func permits(_ selectedHostID: String?) -> Bool {
+        guard let hostID else { return false }
+        return hostID == selectedHostID
+    }
+}
+
 enum WorkspaceTab: String, CaseIterable {
     case agents = "Agents"
     case terminal = "Terminal"
@@ -215,6 +225,9 @@ final class WorkspaceStore {
     private(set) var hostAgentsConfigured = false
     private(set) var liveAvailable = false
     private(set) var liveStatus = "Not connected"
+    // A session UUID is only unique within its computer. Keep unsent text in
+    // that same scope when navigation is replaced during a computer switch.
+    private(set) var hostComposerDrafts: [String: [String: String]] = [:]
     private let persistenceURL: URL?
     let showsDemoContent: Bool
 
@@ -223,6 +236,7 @@ final class WorkspaceStore {
         var terminalDrafts: [TerminalDraft]?
         var agents: [AgentProfile]
         var messages: [String: [LocalMessage]]
+        var hostComposerDrafts: [String: [String: String]]?
     }
 
     init(persistenceURL: URL? = nil, includeSamples: Bool = true) {
@@ -237,6 +251,7 @@ final class WorkspaceStore {
             terminalDrafts = saved.terminalDrafts ?? []
             agents = includeSamples ? saved.agents : saved.agents.filter { !$0.isSample }
             messages = saved.messages
+            hostComposerDrafts = saved.hostComposerDrafts ?? [:]
         } catch {
             storageError = "Your saved preview could not be opened. It has been kept on this device."
         }
@@ -249,7 +264,7 @@ final class WorkspaceStore {
         if CommandLine.arguments.contains("--ui-testing") {
             let testFile = folder.appendingPathComponent("ui-test-workspace.json")
             if CommandLine.arguments.contains("--reset-ui-testing") { try? FileManager.default.removeItem(at: testFile) }
-            let store = WorkspaceStore(persistenceURL: testFile)
+            let store = WorkspaceStore(persistenceURL: testFile, includeSamples: !CommandLine.arguments.contains("--multi-host-testing"))
             if CommandLine.arguments.contains("--history-paging-testing") {
                 store.agents[0].isSample = false
                 let id = AgentProfile.samples[0].id.uuidString
@@ -288,6 +303,21 @@ final class WorkspaceStore {
         guard !cleaned.isEmpty else { return }
         messages[conversationID, default: []].append(.init(id: UUID(), text: cleaned, kind: .user, createdAt: Date()))
         save()
+    }
+
+    func composerDraft(hostID: String, conversationID: String) -> String {
+        hostComposerDrafts[hostID]?[conversationID] ?? ""
+    }
+
+    func saveComposerDraft(_ text: String, hostID: String, conversationID: String, persist: Bool = false) {
+        if text.isEmpty { hostComposerDrafts[hostID]?.removeValue(forKey: conversationID) }
+        else { hostComposerDrafts[hostID, default: [:]][conversationID] = text }
+        if persist { save() }
+    }
+
+    func retainHostDrafts(_ hostIDs: Set<String>) {
+        let retained = hostComposerDrafts.filter { hostIDs.contains($0.key) }
+        if retained != hostComposerDrafts { hostComposerDrafts = retained; save() }
     }
 
     func demoConversation(_ id: String) -> DemoConversation? {
@@ -419,7 +449,7 @@ final class WorkspaceStore {
 
     func setLiveAvailability(_ available: Bool, status: String) { liveAvailable = available; liveStatus = status }
     func clearLiveConversation() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveAvailable = false; liveStatus = "Conversation unavailable" }
-    func clearLiveSession() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveTerminals = []; hostAgents = []; hostAgentWorkspace = nil; hostAgentsConfigured = false; liveAvailable = false; liveStatus = "Not connected" }
+    func clearLiveSession() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveTerminals = []; hostAgents = []; hostAgentWorkspace = nil; hostAgentsConfigured = false; liveAvailable = false; liveStatus = "Not connected"; notificationAgentID = nil; notificationTerminalID = nil }
     fileprivate static func eventDate(_ text: String) -> Date? {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
@@ -431,7 +461,7 @@ final class WorkspaceStore {
         guard storageError == nil else { return }
         do {
             try FileManager.default.createDirectory(at: persistenceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(SavedWorkspace(version: 1, terminalDrafts: terminalDrafts, agents: agents, messages: messages))
+            let data = try JSONEncoder().encode(SavedWorkspace(version: 1, terminalDrafts: terminalDrafts, agents: agents, messages: messages, hostComposerDrafts: hostComposerDrafts))
             #if os(iOS)
             try data.write(to: persistenceURL, options: [.atomic, .completeFileProtection])
             #else

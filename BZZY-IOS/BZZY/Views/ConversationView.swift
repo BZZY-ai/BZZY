@@ -29,6 +29,7 @@ struct ConversationCanvas: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var draft = ""
+    @State private var draftHostID: String?
     @State private var pendingSubmittedDraft: String?
     @State private var goalToReplace: String?
     @State private var replacementDraft: String?
@@ -57,22 +58,24 @@ struct ConversationCanvas: View {
     private var isLive: Bool { remoteSession || store.liveSession?.id == conversationID }
     private var canSubmit: Bool {
         voiceDraft == nil && !voice.isBusy && !voiceHeld && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        (!isLive || relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("execute") && !relay.isCoreSessionBusy(conversationID) && !relay.hasUncertainCoreCommand(sessionID: conversationID))
+        (!isLive || draftHostID == relay.activeHostID && relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("execute") && !relay.isCoreSessionBusy(conversationID) && !relay.hasUncertainCoreCommand(sessionID: conversationID))
     }
     private func submit(_ submitted: String, replacing goalID: String? = nil) {
         prepareForSubmission()
         pendingSubmittedDraft = submitted
-        Task {
+        let submissionHostID = draftHostID
+        relay.performHostAction {
+            guard submissionHostID == relay.activeHostID else { return }
             if await relay.sendCoreMessage(submitted, sessionID: conversationID, replaceGoalID: goalID), draft == submitted {
                 draft = ""; pendingSubmittedDraft = nil; composerFocused = false
             }
         }
     }
     private var canDictate: Bool {
-        !isLive || relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("execute")
+        !isLive || draftHostID == relay.activeHostID && relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("execute")
     }
     private var canSetGoal: Bool {
-        voiceDraft == nil && !voice.isBusy && !voiceHeld && (!isLive || relay.isCoreSessionReady(conversationID)
+        voiceDraft == nil && !voice.isBusy && !voiceHeld && (!isLive || draftHostID == relay.activeHostID && relay.isCoreSessionReady(conversationID)
             && relay.coreGoalSubmission && relay.corePermissions.contains("execute") && !relay.isCoreSessionBusy(conversationID) && !relay.hasUncertainCoreCommand(sessionID: conversationID))
     }
     private var messages: [LocalMessage] {
@@ -158,7 +161,7 @@ struct ConversationCanvas: View {
                                        CoreGoalDraft.needsReplacement(status: relay.coreGoalStatus), let goalID = relay.coreGoalID,
                                        outgoing.params["replaceGoalId"]?.string != goalID {
                                         retryGoalMessageID = outgoing.id; goalToReplace = goalID; showReplaceGoal = true
-                                    } else { Task { await relay.retryOutgoingMessage(outgoing.id) } }
+                                    } else { relay.performHostAction { await relay.retryOutgoingMessage(outgoing.id) } }
                                 }.contextMenu {
                                     if outgoing.status == .failed {
                                         Button("Remove failed message", role: .destructive) { relay.removeFailedOutgoingMessage(outgoing.id) }
@@ -251,17 +254,28 @@ struct ConversationCanvas: View {
             }
         }
         .onChange(of: canDictate) { _, allowed in if !allowed { cancelDictation() } }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { cancelDictation() } }
+        .onAppear {
+            if isLive, draftHostID == nil, let hostID = relay.activeHostID {
+                draftHostID = hostID
+                draft = store.composerDraft(hostID: hostID, conversationID: conversationID)
+            }
+        }
+        .onChange(of: draft) { _, text in
+            if let hostID = draftHostID, relay.hosts.contains(where: { $0.id == hostID && $0.isPaired }) { store.saveComposerDraft(text, hostID: hostID, conversationID: conversationID) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { cancelDictation(); persistHostDraft() }
+        }
         .onChange(of: conversationID) { cancelDictation() }
         .onChange(of: relay.coreConversationRemovalID) {
             if isLive && relay.coreRemovedSessionID == conversationID { cancelDictation(); dismiss() }
         }
-        .onDisappear { cancelDictation() }
+        .onDisappear { cancelDictation(); persistHostDraft() }
         .alert("Replace current goal?", isPresented: $showReplaceGoal) {
             Button("No", role: .cancel) { replacementDraft = nil; goalToReplace = nil; retryGoalMessageID = nil }
             Button("Yes, replace goal", role: .destructive) {
                 if let retryID = retryGoalMessageID, let goalID = goalToReplace {
-                    Task { await relay.retryOutgoingMessage(retryID, replacementGoalID: goalID) }
+                    relay.performHostAction { await relay.retryOutgoingMessage(retryID, replacementGoalID: goalID) }
                 } else if let submitted = replacementDraft, let goalID = goalToReplace { submit(submitted, replacing: goalID) }
                 replacementDraft = nil; goalToReplace = nil; retryGoalMessageID = nil
             }
@@ -274,6 +288,11 @@ struct ConversationCanvas: View {
         }
     }
 
+    private func persistHostDraft() {
+        guard let hostID = draftHostID, relay.hosts.contains(where: { $0.id == hostID && $0.isPaired }) else { return }
+        store.saveComposerDraft(draft, hostID: hostID, conversationID: conversationID, persist: true)
+    }
+
     private var composer: some View {
         VStack(spacing: 10) {
             if isLive, relay.coreSessionID == conversationID {
@@ -284,7 +303,7 @@ struct ConversationCanvas: View {
                     Spacer(minLength: 6)
                     Button {
                         let pending = store.liveSession?.questions.first(where: { $0.kind == "approval" })
-                        Task { await relay.setCoreYolo(!relay.coreYoloEnabled, questionID: pending?.id, sessionID: conversationID) }
+                        relay.performHostAction { await relay.setCoreYolo(!relay.coreYoloEnabled, questionID: pending?.id, sessionID: conversationID) }
                         BZZYTheme.haptic()
                     } label: {
                         Text(relay.coreYoloEnabled ? "YOLO ON" : "YOLO OFF").bzzyFont(11, weight: .bold, design: .monospaced)
@@ -312,7 +331,7 @@ struct ConversationCanvas: View {
                 goalShortcut("Resume goal", icon: "play.fill", id: "resume-goal",
                              enabled: isLive && relay.isCoreSessionReady(conversationID) && relay.canResumeStalledGoal && !voice.isBusy && voiceDraft == nil) {
                     prepareForSubmission()
-                    Task { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
+                    relay.performHostAction { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
                     BZZYTheme.haptic()
                 }
                 Spacer(minLength: 0)
@@ -423,8 +442,9 @@ struct ConversationCanvas: View {
         composerFocused = false
         voice.transcript = ""
         voiceDraft = VoiceDraft(original: draft)
+        let originHostID = draftHostID
         recordingTask = Task {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !isLive || originHostID == relay.activeHostID else { return }
             await voice.start(locale: SpeechLanguage.resolve(recognitionLanguage).rawValue)
         }
     }

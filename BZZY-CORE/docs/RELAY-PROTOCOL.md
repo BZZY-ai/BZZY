@@ -73,7 +73,7 @@ An authenticated transport receipt alone is never an application response.
 | `share.status` | `shareId` | Same share-bound resource; status and signed pending-recipient identities |
 | `share.approve` | `shareId`, `claimId`, `confirmedFingerprint` | Explicit independent recipient fingerprint confirmation; does not grant live execution |
 | `share.revoke` | `shareId` | Revokes future redemption/transfer; cannot recall an already received copy |
-| `notifications.register` | `deviceToken`, `environment`, `enabled`, optional `scope` | Private APNs binding to this device/resource, as described in [PUSH.md](PUSH.md); no arbitrary topic, destination or message |
+| `notifications.register` | `deviceToken`, `environment`, `enabled`, optional `scope`, `hostHints` | Private APNs binding to this device/resource, as described in [PUSH.md](PUSH.md); no arbitrary topic, destination or message |
 | `notifications.update` | `enabled` | Changes only this resource's saved notification preference |
 | `notifications.revoke` | `{}` | Removes only this resource's private device notification binding |
 | `assistant.status` | `{}` | `observe`; this Core assistant context's provider/model/effort, with no global configuration rights |

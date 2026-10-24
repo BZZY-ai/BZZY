@@ -195,7 +195,8 @@ final class RelayTransport {
         return id
     }
 
-    func request(_ op: String, fields: [String: WireValue] = [:]) async throws -> WireValue {
+    func request(_ op: String, fields: [String: WireValue] = [:], timeoutNanoseconds: UInt64 = 10_000_000_000) async throws -> WireValue {
+        guard (1_000_000...10_000_000_000).contains(timeoutNanoseconds) else { throw RelayFailure("INVALID_MESSAGE") }
         let allowed: [String: Set<String>] = ["invite.claim": ["code"], "invite.status": ["claimId"],
             "grant.list": [], "grant.inspect": ["grantId"], "route.send": ["grantId", "messageId", "box"], "delivery.ack": ["deliveryId"]]
         guard allowed[op] == Set(fields.keys) else { throw RelayFailure("INVALID_MESSAGE") }
@@ -212,7 +213,7 @@ final class RelayTransport {
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let timeout = Task { [weak self] in
-                    do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                    do { try await Task.sleep(nanoseconds: timeoutNanoseconds) } catch { return }
                     self?.finish(id, result: .failure(RelayFailure("UNCERTAIN")))
                 }
                 pending[id] = Pending(continuation: continuation, timeout: timeout)
@@ -246,8 +247,15 @@ final class RelayTransport {
         return try await inspection.value
     }
 
-    private func inspectFresh(_ grantID: String, connection: UUID) async throws -> WireValue {
-        let grant = try await request("grant.inspect", fields: ["grantId": .string(grantID)])
+    /// A bounded independent inspection for narrowly scoped background RPC.
+    /// Foreground observations keep their existing coalesced inspection path.
+    func inspect(_ grantID: String, timeoutNanoseconds: UInt64) async throws -> WireValue {
+        try RelayWire.opaque(grantID)
+        return try await inspectFresh(grantID, connection: generation, timeoutNanoseconds: timeoutNanoseconds)
+    }
+
+    private func inspectFresh(_ grantID: String, connection: UUID, timeoutNanoseconds: UInt64 = 10_000_000_000) async throws -> WireValue {
+        let grant = try await request("grant.inspect", fields: ["grantId": .string(grantID)], timeoutNanoseconds: timeoutNanoseconds)
         guard generation == connection, grant["id"].string == grantID, let expiry = grant["expiresAt"].integer, expiry > RelayWire.now,
               !revoked.contains(grantID), let host = grant["hostId"].string,
               grant["recipientId"].string == identity.certificate.id, grant["revokedAt"] == .null else {
@@ -281,9 +289,13 @@ final class RelayTransport {
         return grant
     }
 
-    func send(grantID: String, payload: WireValue) async throws -> WireValue {
+    func send(grantID: String, payload: WireValue, timeoutNanoseconds: UInt64? = nil,
+              beforeSend: (() throws -> Void)? = nil) async throws -> WireValue {
         let connection = generation
-        let grant = try await inspect(grantID)
+        let grant: WireValue
+        if let timeoutNanoseconds { grant = try await inspect(grantID, timeoutNanoseconds: timeoutNanoseconds) }
+        else { grant = try await inspect(grantID) }
+        try beforeSend?()
         guard connection == generation, grant["online"].bool == true,
               grant["spec"]["mode"].string != "portable",
               let receiverEpoch = grant["presence"]["epoch"].string else { throw RelayFailure("PEER_OFFLINE") }
@@ -294,7 +306,8 @@ final class RelayTransport {
             "expiresAt": .number(Double(RelayWire.now + 60_000)), "payload": payload])
         let box = try identity.seal(envelope, to: peer)
         guard generation == connection, !revoked.contains(grantID) else { throw RelayFailure("GRANT_UNAVAILABLE") }
-        return try await request("route.send", fields: ["grantId": .string(grantID), "messageId": .string(messageID), "box": box])
+        return try await request("route.send", fields: ["grantId": .string(grantID), "messageId": .string(messageID), "box": box],
+                                 timeoutNanoseconds: timeoutNanoseconds ?? 10_000_000_000)
     }
 
     private func receiveDelivery(_ data: WireValue, connection: UUID) async throws {

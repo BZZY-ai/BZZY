@@ -17,7 +17,7 @@ struct ActivityView: View {
                     HStack {
                         Text("Activity").bzzyFont(26, weight: .medium)
                         Spacer()
-                        if session != nil { Button("Refresh") { Task { await relay.refreshCore() } }.bzzyFont(12) }
+                        if session != nil { Button("Refresh") { relay.performHostAction { await relay.refreshCore() } }.bzzyFont(12) }
                     }
                     if let session {
                         VStack(alignment: .leading, spacing: 10) {

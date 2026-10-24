@@ -52,8 +52,9 @@ const publicState = row => {
 };
 
 export function registerDeviceNotifications(row, params) {
-  object(params, ['deviceToken', 'environment', 'enabled', 'scope'], 'Notification registration');
+  object(params, ['deviceToken', 'environment', 'enabled', 'scope', 'hostHints'], 'Notification registration');
   if (typeof params.enabled !== 'boolean' || !['sandbox', 'production'].includes(params.environment) ||
+    params.hostHints !== undefined && typeof params.hostHints !== 'boolean' ||
     params.scope !== undefined && !['session', 'terminals', 'authorized'].includes(params.scope)) fail('INVALID_REQUEST', 'Use a valid notification registration.');
   let token;
   try { token = deviceToken(params.deviceToken); } catch { fail('INVALID_REQUEST', 'Use a valid notification registration.'); }
@@ -62,7 +63,7 @@ export function registerDeviceNotifications(row, params) {
   const preserveWindow = existing && !existing.revokedAt && existing.enabled && params.enabled && existing.tokenDigest === tokenDigest &&
     existing.scope === scope && existing.environment === params.environment;
   const registration = { id, hostId: row.hostId, peerId: row.peerId, relayGrantId: row.id, relayUrl: row.relayUrl,
-    resource: row.resource, sessionId: row.sessionId, scope, deviceToken: token, tokenDigest, environment: params.environment,
+    resource: row.resource, sessionId: row.sessionId, scope, hostHints: params.hostHints === true, deviceToken: token, tokenDigest, environment: params.environment,
     enabled: params.enabled, registeredAt: Date.now(), enabledSince: preserveWindow ? existing.enabledSince : Date.now(), updatedAt: now() };
   if (!authorizedPushRegistration(registration)) fail('FORBIDDEN', 'Notification registration is outside this grant.', 403);
   const registrations = listRecords('core.push.registration');

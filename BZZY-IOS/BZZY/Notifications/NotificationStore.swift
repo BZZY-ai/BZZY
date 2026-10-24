@@ -10,16 +10,23 @@ enum NotificationDestination: String { case agents, terminal, connection, update
 
 struct NotificationHint {
     let eventID: String
+    let hostID: String?
     let destination: NotificationDestination
     let resource: String?
     let sessionID: String?
     let agentID: String?
     init?(_ userInfo: [AnyHashable: Any]) {
-        guard let value = userInfo["bzzy"] as? [String: Any], Set(value.keys).isSubset(of: ["v", "eventId", "destination", "resource", "sessionId", "agentId"]),
+        guard let value = userInfo["bzzy"] as? [String: Any], Set(value.keys).isSubset(of: ["v", "eventId", "hostId", "destination", "resource", "sessionId", "agentId"]),
               Set(["v", "eventId", "destination"]).isSubset(of: Set(value.keys)),
               let version = value["v"] as? Int, version == 1,
               let id = value["eventId"] as? String, id.range(of: "^[A-Za-z0-9_-]{1,80}$", options: .regularExpression) != nil,
               let raw = value["destination"] as? String, let route = NotificationDestination(rawValue: raw) else { return nil }
+        let suppliedHost = value["hostId"] as? String
+        if value["hostId"] != nil {
+            // Relay certificate IDs are SHA256 public-key fingerprints encoded
+            // as unpadded base64url. A valid hint is not proof of a known host.
+            guard let suppliedHost, suppliedHost.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else { return nil }
+        }
         let suppliedResource = value["resource"] as? String
         if value["resource"] != nil {
             guard [.terminal, .agents].contains(route), let suppliedResource,
@@ -34,7 +41,7 @@ struct NotificationHint {
             guard route == .agents, let suppliedAgent, UUID(uuidString: suppliedAgent) != nil,
                   suppliedResource != nil, suppliedSession != nil else { return nil }
         }
-        eventID = id; destination = route; resource = suppliedResource; sessionID = suppliedSession; agentID = suppliedAgent
+        eventID = id; hostID = suppliedHost; destination = route; resource = suppliedResource; sessionID = suppliedSession; agentID = suppliedAgent
     }
 }
 
@@ -46,6 +53,7 @@ final class NotificationStore {
     private(set) var pushStatus = "Host delivery not registered"
     private(set) var pushToken: String?
     private(set) var registrationRevision = 0
+    var destinationHostID: String?
     var destinationResource: String?
     var destinationSessionID: String?
     var destinationAgentID: String?
@@ -54,6 +62,15 @@ final class NotificationStore {
     var alertsEnabled: Bool {
         didSet {
             if enabled { UserDefaults.standard.set(alertsEnabled, forKey: "bzzy-notification-alerts") }
+            if !alertsEnabled {
+                // This preference applies to the phone, including computers
+                // currently offline and unable to receive a Core RPC.
+                stopRemoteRegistration(status: "Host activity alerts disabled")
+            } else if !oldValue {
+                pushToken = nil
+                pushStatus = "Waiting for device registration"
+                if enabled { Task { await refresh() } }
+            }
             registrationRevision += 1
         }
     }
@@ -81,6 +98,9 @@ final class NotificationStore {
         case .denied: permission = "Disabled in iOS Settings"
         default: permission = "Not enabled"
         }
+        if !authorized || !alertsEnabled {
+            stopRemoteRegistration(status: alertsEnabled ? "Notification permission unavailable" : "Host activity alerts disabled")
+        }
         registrationRevision += 1
         #if os(iOS)
         if authorized && alertsEnabled { UIApplication.shared.registerForRemoteNotifications() }
@@ -96,9 +116,12 @@ final class NotificationStore {
     }
 
     func receiveTap(_ info: [AnyHashable: Any]) {
-        guard let hint = NotificationHint(info), !handled.contains(hint.eventID) else { return }
-        handled.append(hint.eventID)
+        guard let hint = NotificationHint(info) else { return }
+        let receipt = "\(hint.hostID ?? "legacy"):\(hint.eventID)"
+        guard !handled.contains(receipt) else { return }
+        handled.append(receipt)
         if handled.count > 256 { handled.removeFirst(handled.count - 256) }
+        destinationHostID = hint.hostID
         destinationResource = hint.resource
         destinationSessionID = hint.sessionID
         destinationAgentID = hint.agentID
@@ -134,6 +157,13 @@ final class NotificationStore {
         }
     }
     func registeredForPush(_ token: Data) {
+        guard alertsEnabled else {
+            // A callback from an earlier register request cannot undo a newer
+            // app-wide disable while host preference updates are in flight.
+            stopRemoteRegistration(status: "Host activity alerts disabled")
+            registrationRevision += 1
+            return
+        }
         let encoded = token.map { String(format: "%02x", $0) }.joined()
         guard encoded.count >= 64, encoded.count <= 512 else { registrationFailed(); return }
         pushToken = encoded
@@ -142,11 +172,14 @@ final class NotificationStore {
     }
     func hostRegistrationStatus(_ status: String) { pushStatus = status }
     func hostAuthorizationRemoved() {
-        pushToken = nil; pushStatus = "Host authorization removed"
+        stopRemoteRegistration(status: "Host authorization removed")
+        registrationRevision += 1
+    }
+    private func stopRemoteRegistration(status: String) {
+        pushToken = nil; pushStatus = status
         #if os(iOS)
         if enabled { UIApplication.shared.unregisterForRemoteNotifications() }
         #endif
-        registrationRevision += 1
     }
     func registrationFailed() { pushToken = nil; pushStatus = "Push registration unavailable"; registrationRevision += 1 }
 }

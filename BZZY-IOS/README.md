@@ -2,6 +2,34 @@
 
 Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a complete single-eye app icon and celeste controls. Local pixel distortion animates the pupils and antennae without blinking, pauses in the background and respects Reduce Motion.
 
+Build **Debug 0.1.0 (17)** adds multiple saved Core computers. The celeste computer
+selector stays visible in chats and offline, with **Set default**, rename, add and
+remove actions. The default opens on a fresh app launch; explicit switches stay
+in place during that app session, including brief inactive overlays. Pairing a
+second computer preserves the first, and switching changes observation only:
+Core tasks continue on their original computer.
+
+Host authorization and pending receipts remain separate in device-only Keychain;
+protected host-scoped files cache catalogs/history, and typed drafts are scoped by
+host and conversation. Current single-host authorization migrates in place. The
+active computer is always named so test and production conversations stay distinct.
+New host-aware push hints open the correct saved computer after authentication;
+unknown or ambiguous legacy hints cannot silently route to another host.
+
+Pair each computer using its own CLI fingerprint approval. Each Core needs its
+own initial Relay host enrollment and provider setup; adding a phone profile does
+not enroll an arbitrary server or copy provider credentials. Keep the production
+Core separate from a transport-only Relay if Relay compromise must not expose
+Core's keys or chat storage. See [multiple computers](docs/MULTIPLE-COMPUTERS.md).
+
+The signed build 17 passed development APNs entitlement, privacy and signature
+checks, was installed in place on the connected iPhone, and launched successfully.
+CoreDevice confirmed **0.1.0 (17)**. Validation: **82 native Swift tests**, model
+and message-format checks, **241 Core tests**, four targeted Debug UI regressions
+and a separate visual readiness check pass. Multi-host transport tests run two
+isolated Core instances on one local Relay, including migration, default selection,
+offline behavior, continued work, global notification preferences and revocation.
+
 Build **Debug 0.1.0 (16)** follows Core's saved-chat deletions. A CLI deletion
 removes that terminal from the iPhone list after authenticated catalog revision
 synchronization. Deleting a terminal that originally anchored phone pairing keeps

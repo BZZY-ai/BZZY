@@ -16,13 +16,13 @@ struct TerminalView: View {
                         .frame(minHeight: 44)
                 }.buttonStyle(.plain).accessibilityIdentifier("host-status")
 
-                if relay.coreCatalogAvailable {
+                if relay.coreCatalogAvailable || !store.liveTerminals.isEmpty {
                     HStack {
-                        Text("Your terminals").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+                        Text(relay.coreCatalogAvailable ? "Your terminals" : "Saved terminals · Offline").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         Spacer()
-                        Button { Task { await relay.refreshCoreSessions() } } label: {
+                        Button { relay.performHostAction { await relay.refreshCoreSessions() } } label: {
                             Label(relay.coreCatalogRefreshing ? "Checking…" : "Refresh", systemImage: "arrow.clockwise")
-                        }.bzzyFont(12).disabled(relay.coreCatalogRefreshing).accessibilityIdentifier("refresh-terminals")
+                        }.bzzyFont(12).disabled(!relay.coreActionsAvailable || relay.coreCatalogRefreshing).accessibilityIdentifier("refresh-terminals")
                     }
                     if relay.coreSessionAttachmentPending {
                         Button("Cancel pending attachment") { relay.cancelCoreSessionAttachment() }.bzzyFont(12)
@@ -137,7 +137,7 @@ struct LiveSessionDetailsView: View {
                         Text(relay.coreOwnsInput ? "Input: this device" : session.inputOwner == nil ? "Input: available" : "Input: another client").bzzyFont(12)
                         if relay.corePermissions.contains("claim") {
                             Button(relay.coreOwnsInput ? "Release input" : "Claim input") {
-                                Task { if relay.coreOwnsInput { await relay.releaseCoreInput() } else { _ = await relay.claimCoreInput() } }
+                                relay.performHostAction { if relay.coreOwnsInput { await relay.releaseCoreInput() } else { _ = await relay.claimCoreInput() } }
                             }.disabled(!relay.coreActionsAvailable || relay.coreBusy)
                         }
                         if relay.corePermissions.contains("takeover") && !relay.coreOwnsInput {
@@ -146,16 +146,16 @@ struct LiveSessionDetailsView: View {
                         }
                         HStack(spacing: 20) {
                             if relay.corePermissions.contains("pause") {
-                                Button("Pause") { Task { await relay.controlCore("pause", sessionID: session.id) } }
+                                Button("Pause") { relay.performHostAction { await relay.controlCore("pause", sessionID: session.id) } }
                             }
                             if relay.corePermissions.contains("execute"), ["paused", "blocked"].contains(session.goalStatus ?? "") {
-                                Button("Resume goal") { Task { await relay.resumeCoreGoal(sessionID: session.id) } }
+                                Button("Resume goal") { relay.performHostAction { await relay.resumeCoreGoal(sessionID: session.id) } }
                             }
                             if relay.corePermissions.contains("cancel") { Button("Cancel", role: .destructive) { confirmCancel = true } }
                         }.disabled(!relay.coreActionsAvailable || relay.coreBusy || relay.coreCommandUncertain)
                         if session.activeSteering && relay.corePermissions.contains("steer") {
                             TextField("Steering instruction", text: $steering, axis: .vertical).textFieldStyle(.roundedBorder)
-                            Button("Send steering") { Task { if await relay.controlCore("steer", text: steering, sessionID: session.id) { steering = "" } } }
+                            Button("Send steering") { relay.performHostAction { if await relay.controlCore("steer", text: steering, sessionID: session.id) { steering = "" } } }
                                 .disabled(!relay.coreActionsAvailable || relay.coreBusy || steering.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                         ForEach(session.questions) { question in
@@ -165,9 +165,12 @@ struct LiveSessionDetailsView: View {
                     if !relay.coreTaskStatus.isEmpty { Text(relay.coreTaskStatus).bzzyFont(12) }
                     if !relay.coreCommandStatus.isEmpty { Text(relay.coreCommandStatus).bzzyFont(12) }
                     if let error = relay.coreError { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
-                    Button("Refresh authoritative state") { Task { await relay.refresh(); await relay.refreshCore() } }
+                    Button("Refresh authoritative state") {
+                        let origin = HostActionContext(hostID: relay.activeHostID)
+                        relay.performHostAction { await relay.refresh(); if origin.permits(relay.activeHostID) { await relay.refreshCore() } }
+                    }
                     if relay.coreCommandUncertain {
-                        Button("Check command status") { Task { await relay.reconcileCoreCommand() } }
+                        Button("Check command status") { relay.performHostAction { await relay.reconcileCoreCommand() } }
                         Button("Retry saved command") { confirmRetry = true }.disabled(!relay.coreActionsAvailable || relay.coreBusy)
                     }
                     Text("Activity").bzzyFont(16, weight: .medium)
@@ -179,13 +182,15 @@ struct LiveSessionDetailsView: View {
                 }.padding(25)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .confirmationDialog("Transfer input from the current client?", isPresented: $confirmTakeover, titleVisibility: .visible) {
-                    Button("Take over") { Task { await relay.claimCoreInput(takeover: true) } }
+                    Button("Take over") { relay.performHostAction { await relay.claimCoreInput(takeover: true) } }
                 }
                 .confirmationDialog("Cancel host execution?", isPresented: $confirmCancel, titleVisibility: .visible) {
-                    Button("Cancel execution", role: .destructive) { Task { await relay.controlCore("cancel", sessionID: store.liveSession?.id) } }
+                    Button("Cancel execution", role: .destructive) {
+                        if let sessionID = store.liveSession?.id { relay.performHostAction { await relay.controlCore("cancel", sessionID: sessionID) } }
+                    }
                 }
                 .confirmationDialog("Retry the exact saved command with its original request ID?", isPresented: $confirmRetry, titleVisibility: .visible) {
-                    Button("Retry saved command") { Task { await relay.retryCoreCommand() } }
+                    Button("Retry saved command") { relay.performHostAction { await relay.retryCoreCommand() } }
                 }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
     }
@@ -219,14 +224,14 @@ struct LiveQuestionView: View {
                     }.disabled(!relay.coreActionsAvailable || relay.coreBusy || relay.coreCommandUncertain)
                 } else {
                     TextField("Answer", text: $answer, axis: .vertical).textFieldStyle(.roundedBorder)
-                    Button("Submit answer") { Task { if await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) { answer = "" } } }
+                    Button("Submit answer") { relay.performHostAction { if await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) { answer = "" } } }
                         .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !relay.coreActionsAvailable || relay.coreBusy || relay.coreCommandUncertain)
                 }
             }
         }.panel()
     }
     private func approvalButton(_ title: String, symbol: String, answer: String, tone: Color) -> some View {
-        Button { Task { await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) }; BZZYTheme.haptic() } label: {
+        Button { relay.performHostAction { await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) }; BZZYTheme.haptic() } label: {
             Label(title, systemImage: symbol).bzzyFont(13, weight: .semibold).frame(maxWidth: .infinity, minHeight: 44)
                 .foregroundStyle(BZZYTheme.background).background(tone, in: RoundedRectangle(cornerRadius: 13))
         }.buttonStyle(BZZYPressStyle()).accessibilityIdentifier(answer == "yes" ? "approve-once" : "deny-approval")

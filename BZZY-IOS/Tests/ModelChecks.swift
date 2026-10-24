@@ -9,6 +9,18 @@ struct ModelChecks {
         let file = root.appendingPathComponent("workspace.json")
         let store = WorkspaceStore(persistenceURL: file)
         let production = WorkspaceStore(includeSamples: false)
+        checkDelayedHostActionIsolation()
+        production.saveComposerDraft("Test machine draft", hostID: "test-host", conversationID: "same-session", persist: true)
+        require(production.composerDraft(hostID: "real-host", conversationID: "same-session").isEmpty, "Identical session IDs on other computers cannot inherit unsent text")
+        production.saveComposerDraft("Real machine draft", hostID: "real-host", conversationID: "same-session")
+        production.clearLiveSession()
+        require(production.composerDraft(hostID: "test-host", conversationID: "same-session") == "Test machine draft", "Switching computers preserves each scoped draft")
+        production.retainHostDrafts(["real-host"])
+        require(production.composerDraft(hostID: "test-host", conversationID: "same-session").isEmpty && production.composerDraft(hostID: "real-host", conversationID: "same-session") == "Real machine draft", "Removing a computer purges only its drafts")
+        let scopedDraftStore = WorkspaceStore(persistenceURL: root.appendingPathComponent("scoped-drafts.json"), includeSamples: false)
+        scopedDraftStore.saveComposerDraft("Persisted Test text", hostID: "test-host", conversationID: "same-session", persist: true)
+        let restoredScopedDrafts = WorkspaceStore(persistenceURL: root.appendingPathComponent("scoped-drafts.json"), includeSamples: false)
+        require(restoredScopedDrafts.composerDraft(hostID: "test-host", conversationID: "same-session") == "Persisted Test text" && restoredScopedDrafts.composerDraft(hostID: "real-host", conversationID: "same-session").isEmpty, "Computer-scoped drafts retain isolation after a cold launch")
         try checkReplyBoundaries()
         require(production.agents.isEmpty && !production.showsDemoContent && production.demoConversation("session-design") == nil, "Production must not expose synthetic agent or terminal workspaces")
         require(!production.sendDemoMessage("Hello", conversationID: AgentProfile.samples[0].id.uuidString), "Production cannot fabricate sample assistant replies")
@@ -33,6 +45,7 @@ struct ModelChecks {
         let legacy = Data("{\"id\":\"00000000-0000-4000-8000-000000000009\",\"name\":\"Legacy\",\"subtitle\":\"\",\"purpose\":\"Task\",\"symbol\":\"leaf\",\"isSample\":false}".utf8)
         let migrated = try JSONDecoder().decode(AgentProfile.self, from: legacy)
         require(migrated.mode == .onDemand, "Existing drafts migrate to On demand")
+        checkNotificationHostHints()
         require(NotificationHint(["bzzy": ["v": 1, "eventId": "new-version", "destination": "updates"]])?.destination == .updates, "Update notifications open Settings without executing")
         require(NotificationHint(["bzzy": ["v": 1, "eventId": "new-version", "destination": "updates", "command": "install"]]) == nil, "Update notifications cannot carry an install command")
         require(NotificationHint(["bzzy": ["v": 1, "eventId": "test-event", "destination": "terminal"]])?.destination == .terminal, "Push hints may select an allowlisted screen")
@@ -61,6 +74,79 @@ struct ModelChecks {
         let preserved = try Data(contentsOf: file)
         require(preserved == damaged, "Damaged storage must be preserved")
         print("PASS: draft validation, restart persistence, conversation isolation, scoped deletion, corrupt-file preservation")
+    }
+
+    @MainActor private static func checkDelayedHostActionIsolation() {
+        // A copied Core database can contain exactly the same session UUID.
+        // Queue intents from both computers before changing the selected host.
+        let clonedSessionID = "12345678-1234-4234-8234-123456789abc"
+        var selectedHostID: String? = "test-host"
+        var writes: [String] = []
+        func queuedWrite() -> () -> Void {
+            let origin = HostActionContext(hostID: selectedHostID)
+            return {
+                guard origin.permits(selectedHostID) else { return }
+                writes.append("\(selectedHostID!):\(clonedSessionID)")
+            }
+        }
+        let testIntent = queuedWrite()
+        selectedHostID = "real-host"
+        let realIntent = queuedWrite()
+        testIntent(); realIntent()
+        require(writes == ["real-host:\(clonedSessionID)"], "An old queued permission/send/update intent cannot reach a different computer with the same session UUID")
+        selectedHostID = nil
+        let unpairedIntent = queuedWrite()
+        realIntent(); unpairedIntent()
+        require(writes.count == 1, "Unpaired and detached contexts cannot authorize delayed Core writes")
+        selectedHostID = "test-host"; testIntent()
+        require(writes.last == "test-host:\(clonedSessionID)", "A host context allows an intent only on its original computer")
+    }
+
+    @MainActor private static func checkNotificationHostHints() {
+        let firstHost = String(repeating: "H", count: 43), secondHost = String(repeating: "R", count: 43)
+        let sessionID = "12345678-1234-4234-8234-123456789abc"
+        let agentID = "12345678-1234-4234-8234-123456789aaa"
+        let terminal: [String: Any] = ["v": 1, "eventId": "shared-event", "hostId": firstHost,
+            "destination": "terminal", "resource": "approved", "sessionId": sessionID]
+        require(NotificationHint(["bzzy": terminal])?.hostID == firstHost, "Goal notifications preserve their public Core routing hint")
+        require(NotificationHint(["bzzy": ["v": 1, "eventId": "update", "hostId": firstHost, "destination": "updates"]])?.hostID == firstHost, "Update alerts preserve their originating Core without carrying commands")
+        require(NotificationHint(["bzzy": ["v": 1, "eventId": "agent", "hostId": firstHost, "destination": "agents", "resource": "approved", "sessionId": sessionID, "agentId": agentID]])?.hostID == firstHost, "Agent notifications carry the same scoped host hint")
+        require(NotificationHint(["bzzy": ["v": 1, "eventId": "legacy", "destination": "terminal"]])?.hostID == nil, "Legacy alerts remain distinguishable and cannot invent a host")
+        for invalid: Any in ["", String(repeating: "H", count: 42), String(repeating: "H", count: 44), "https://example.com/core", "run command", 17, NSNull()] {
+            var payload = terminal; payload["hostId"] = invalid
+            require(NotificationHint(["bzzy": payload]) == nil, "Malformed host hints must be rejected")
+        }
+        let notices = NotificationStore()
+        notices.receiveTap(["bzzy": terminal])
+        require(notices.destinationHostID == firstHost && notices.destinationSessionID == sessionID, "Tap retains host and session together for authorized routing")
+        notices.destination = nil
+        notices.receiveTap(["bzzy": terminal])
+        require(notices.destination == nil, "Duplicate events from the same host do not navigate twice")
+        var other = terminal; other["hostId"] = secondHost
+        notices.receiveTap(["bzzy": other])
+        require(notices.destination == .terminal && notices.destinationHostID == secondHost, "Equal event IDs from different hosts cannot suppress one another")
+        notices.destination = nil
+        var legacy = terminal; legacy.removeValue(forKey: "hostId")
+        notices.receiveTap(["bzzy": legacy])
+        require(notices.destination == .terminal && notices.destinationHostID == nil, "Legacy taps clear the previous host hint")
+        // Parsing an unknown but valid fingerprint does not add a pairing or
+        // assert authorization. Only the saved profile resolver may select it.
+        let unknown = String(repeating: "X", count: 43)
+        var unknownPayload = terminal; unknownPayload["hostId"] = unknown
+        require(NotificationHint(["bzzy": unknownPayload])?.hostID == unknown, "An unknown fingerprint remains an unauthenticated navigation hint")
+        let token = Data(repeating: 0xab, count: 32)
+        notices.registeredForPush(token)
+        require(notices.pushToken != nil, "A device callback makes its private token available for authorized host registration")
+        let enabledRevision = notices.registrationRevision
+        notices.alertsEnabled = false
+        require(notices.pushToken == nil && notices.registrationRevision > enabledRevision, "Disabling phone alerts immediately drops the token even when every Core is offline")
+        notices.registeredForPush(token)
+        require(notices.pushToken == nil, "A late Apple registration callback cannot re-enable disabled alerts")
+        notices.alertsEnabled = true
+        require(notices.pushToken == nil, "Re-enabling waits for a fresh Apple registration callback before enabling host delivery")
+        let waitingRevision = notices.registrationRevision
+        notices.registeredForPush(token)
+        require(notices.pushToken != nil && notices.registrationRevision > waitingRevision, "A fresh device callback triggers renewed registration on all authorized hosts")
     }
 
     @MainActor private static func checkLiveProjection() throws {

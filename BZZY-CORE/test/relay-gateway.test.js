@@ -182,6 +182,7 @@ test('a paired observer reads the existing session but cannot cross scope or gai
   const read = await f.rpc(paired, 'session.get');
   assert.equal(read.ok, true); assert.equal(read.result.session.id, session.id); assert.equal(read.result.session.cwd, fs.realpathSync(f.workspace));
   assert.equal(read.result.capabilities.relay, true); assert.equal(read.result.capabilities.portableSharing, false);
+  assert.equal(read.result.capabilities.notificationsHostRouting, true);
   for (const op of ['input.claim', 'execution.execute', 'question.answer', 'control.request']) {
     const params = op === 'control.request' ? { owner: 'phone', action: 'pause' } : op === 'execution.execute' ? { owner: 'phone', prompt: 'Forbidden' } : op === 'question.answer' ? { owner: 'phone', questionId: randomUUID(), answer: 'No' } : { owner: 'phone' };
     assert.equal((await f.rpc(paired, op, params)).error.code, 'FORBIDDEN');
@@ -879,6 +880,7 @@ test('deleting the phone pairing anchor preserves catalogs while disclosing only
   const snapshot = await f.rpc(paired, 'session.get');
   assert.equal(snapshot.ok, true); assert.equal(snapshot.result.session.id, base.id);
   assert.equal(snapshot.result.capabilities.sessionDeleted, true);
+  assert.equal(snapshot.result.capabilities.notificationsHostRouting, true);
   assert.deepEqual(snapshot.result.capabilities.permissions, ['observe']);
   assert.equal(snapshot.result.capabilities.durableEvents, true);
   assert.equal(snapshot.result.capabilities.sessionAccess, true);

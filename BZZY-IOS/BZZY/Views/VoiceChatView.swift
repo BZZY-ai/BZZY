@@ -15,6 +15,7 @@ struct VoiceChatView: View {
     @State private var intent = VoiceReleaseIntent()
     @State private var submitting = false
     @State private var sendingTask: Task<Void, Never>?
+    @State private var originHost: HostActionContext?
     @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var recognitionLanguage = SpeechLanguage.preferred.rawValue
     @AppStorage(SpeechLanguage.synthesisKey, store: SpeechLanguage.preferences) private var synthesisLanguage = SpeechLanguage.preferred.rawValue
     @GestureState private var held = false
@@ -32,7 +33,7 @@ struct VoiceChatView: View {
             HStack {
                 RoundButton(symbol: "xmark", label: "Close voice chat") { dismiss() }
                 Spacer()
-                RoundButton(symbol: "arrow.clockwise", label: "Check voice connection") { Task { await relay.prepareVoiceChat() } }
+                RoundButton(symbol: "arrow.clockwise", label: "Check voice connection") { relay.performHostAction { await relay.prepareVoiceChat() } }
             }.padding(.top, 18)
             Spacer(minLength: 35)
             VoiceFrequencyView(levels: capture.isRecording ? capture.spectrum : Array(repeating: 0, count: VoiceFrequencyAnalyzer.bandCount))
@@ -42,7 +43,7 @@ struct VoiceChatView: View {
                 Circle().stroke(BZZYTheme.accent.opacity(capture.isRecording ? 0.55 : 0.13), lineWidth: 1)
                     .frame(width: 118, height: 118)
                 if relay.voiceWaiting || submitting {
-                    control("stop.fill", label: "Stop assistant response") { speech.stop(); Task { await relay.stopVoiceTurn() } }
+                    control("stop.fill", label: "Stop assistant response") { speech.stop(); relay.performHostAction { await relay.stopVoiceTurn() } }
                 } else if speech.isSpeaking {
                     control("stop.fill", label: "Stop speaking") { speech.stop() }
                 } else if hasDraft {
@@ -74,18 +75,19 @@ struct VoiceChatView: View {
             .background(BZZYTheme.background.ignoresSafeArea()).preferredColorScheme(.dark)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("voice-only-chat")
-            .task { await relay.prepareVoiceChat() }
+            .onAppear { originHost = HostActionContext(hostID: relay.activeHostID) }
+            .task { guard originHost?.permits(relay.activeHostID) == true else { return }; await relay.prepareVoiceChat() }
             .onChange(of: held) { _, held in if held { beginRecording() } else { finishRecording() } }
             .onChange(of: capture.isRecording) { _, active in if active { intent.audioStarted() } }
             .onChange(of: capture.isBusy) { _, _ in sendReleasedRecording() }
             .onChange(of: relay.voicePhase) { _, phase in
-                if phase == "answered", !relay.voiceReply.isEmpty, scenePhase == .active {
+                if phase == "answered", !relay.voiceReply.isEmpty, scenePhase == .active, originHost?.permits(relay.activeHostID) == true {
                     capture.transcript = ""
                     lastReply = relay.voiceReply; say(lastReply)
                 }
             }
             .onChange(of: relay.voiceErrorCode) { _, code in
-                if let code, scenePhase == .active { say(NativeSpeechOutput.explanation(code, language: spokenLanguage)) }
+                if let code, scenePhase == .active, originHost?.permits(relay.activeHostID) == true { say(NativeSpeechOutput.explanation(code, language: spokenLanguage)) }
             }
             .onChange(of: capture.error) { _, error in
                 if let error, scenePhase == .active, !capture.isBusy {
@@ -93,14 +95,15 @@ struct VoiceChatView: View {
                 }
             }
             .onChange(of: relay.coreActionsAvailable) { _, available in
-                if !available { stopAudio(); if scenePhase == .active { say(NativeSpeechOutput.explanation("OFFLINE", language: spokenLanguage)) } }
-                else if scenePhase == .active { Task { await relay.prepareVoiceChat() } }
+                if !available { stopAudio(); if scenePhase == .active, originHost?.permits(relay.activeHostID) == true { say(NativeSpeechOutput.explanation("OFFLINE", language: spokenLanguage)) } }
+                else if scenePhase == .active, originHost?.permits(relay.activeHostID) == true { relay.performHostAction { await relay.prepareVoiceChat() } }
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { stopAudio(); relay.stopVoiceObservation() }
-                else { Task { await relay.prepareVoiceChat() } }
+                if phase != .active { stopAudio(); if originHost?.permits(relay.activeHostID) == true { relay.stopVoiceObservation() } }
+                else if originHost?.permits(relay.activeHostID) == true { relay.performHostAction { await relay.prepareVoiceChat() } }
             }
-            .onDisappear { stopAudio(); relay.stopVoiceObservation() }
+            .onChange(of: relay.activeHostID) { _, _ in stopAudio() }
+            .onDisappear { stopAudio(); if originHost?.permits(relay.activeHostID) == true { relay.stopVoiceObservation() } }
     }
     private func control(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button { BZZYTheme.haptic(); action() } label: {
@@ -110,9 +113,13 @@ struct VoiceChatView: View {
         }.buttonStyle(BZZYPressStyle()).accessibilityLabel(label)
     }
     private func beginRecording() {
-        guard !capture.isBusy, !relay.voiceWaiting, !submitting, relay.coreActionsAvailable, relay.voiceConfigured else { return }
+        guard originHost?.permits(relay.activeHostID) == true, !capture.isBusy, !relay.voiceWaiting, !submitting, relay.coreActionsAvailable, relay.voiceConfigured else { return }
         speech.stop(); capture.transcript = ""; intent.begin(); BZZYTheme.haptic()
-        recording = Task { await capture.start(locale: SpeechLanguage.resolve(recognitionLanguage).rawValue) }
+        let origin = originHost
+        recording = Task {
+            guard !Task.isCancelled, origin?.permits(relay.activeHostID) == true else { return }
+            await capture.start(locale: SpeechLanguage.resolve(recognitionLanguage).rawValue)
+        }
     }
     private func finishRecording() {
         if capture.isRecording { intent.audioStarted() }
@@ -125,9 +132,9 @@ struct VoiceChatView: View {
                                      allowed: scenePhase == .active && relay.coreActionsAvailable && relay.voiceConfigured) { submit(text) }
     }
     private func submit(_ text: String) {
-        guard !submitting, !relay.voiceWaiting else { return }
+        guard originHost?.permits(relay.activeHostID) == true, !submitting, !relay.voiceWaiting else { return }
         submitting = true
-        sendingTask = Task {
+        sendingTask = relay.performHostAction {
             guard !Task.isCancelled, scenePhase == .active, relay.coreActionsAvailable else { submitting = false; return }
             let accepted = await relay.sendVoiceText(text)
             if accepted || relay.voiceWaiting { capture.transcript = "" }

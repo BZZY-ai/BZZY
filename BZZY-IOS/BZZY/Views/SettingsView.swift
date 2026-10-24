@@ -24,7 +24,7 @@ struct SettingsView: View {
                         HStack(spacing: 14) {
                             Image(systemName: "desktopcomputer").bzzyFont(22, weight: .light).foregroundStyle(BZZYTheme.accent)
                             VStack(alignment: .leading, spacing: 7) {
-                                Text("Home host").bzzyFont(14, weight: .medium)
+                                Text(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Computer").bzzyFont(14, weight: .medium)
                                 Text(relay.corePairAuthorized ? relay.coreConnectionLabel : relay.hostStatus).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                             }
                             Spacer()
@@ -56,7 +56,7 @@ struct SettingsView: View {
                             Toggle("Allow updates from this iPhone", isOn: updatePreference("remoteUpdatesEnabled")).bzzyFont(12)
                             if let blocked = snapshot["blocked"].string { Text(blocked).bzzyFont(11).foregroundStyle(BZZYTheme.secondary) }
                         }
-                        Button("Check for updates") { Task { await relay.refreshCoreUpdates(checkNow: true) } }
+                        Button("Check for updates") { relay.performHostAction { await relay.refreshCoreUpdates(checkNow: true) } }
                             .bzzyFont(13).accessibilityIdentifier("check-bzzy-updates")
                         Button(relay.coreUpdatePending ? "Retry accepted update request" : "Update CLI and Core") { updateTarget = relay.coreUpdatePendingTarget ?? relay.coreUpdateSnapshot?["target"].string; confirmUpdate = true }
                             .bzzyFont(13, weight: .medium).foregroundStyle(BZZYTheme.accent)
@@ -76,16 +76,23 @@ struct SettingsView: View {
                 }.padding(25)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .task {
-                    while !Task.isCancelled {
+                    let origin = HostActionContext(hostID: relay.activeHostID)
+                    while !Task.isCancelled && origin.permits(relay.activeHostID) {
                         await relay.refreshCoreUpdates()
                         do { try await Task.sleep(for: .seconds(5)) } catch { return }
                     }
                 }
                 .confirmationDialog("Update CLI and Core to " + String((updateTarget ?? "checked version").prefix(16)) + "? Running work will be paused.", isPresented: $confirmUpdate, titleVisibility: .visible) {
-                    Button("Update CLI and Core") { Task { await relay.installCoreUpdate(expectedTarget: updateTarget) } }
+                    Button("Update CLI and Core") {
+                        let target = updateTarget
+                        relay.performHostAction { await relay.installCoreUpdate(expectedTarget: target) }
+                    }
                     Button("Cancel", role: .cancel) {}
                 }
-                .sheet(isPresented: $showConnection) { ConnectView() }
+                .sheet(isPresented: $showConnection) {
+                    if relay.hosts.isEmpty { ConnectView() }
+                    else { HostPickerView() }
+                }
                 .sheet(isPresented: $showNotifications) { NotificationsView() }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
     }
@@ -99,7 +106,7 @@ struct SettingsView: View {
     }
     private func updatePreference(_ key: String) -> Binding<Bool> {
         Binding(get: { relay.coreUpdateSnapshot?[key].bool ?? false }, set: { value in
-            Task { await relay.configureCoreUpdates([key: .bool(value)]) }
+            relay.performHostAction { await relay.configureCoreUpdates([key: .bool(value)]) }
         })
     }
     private func setting(_ icon: String, _ title: String, _ text: String) -> some View {

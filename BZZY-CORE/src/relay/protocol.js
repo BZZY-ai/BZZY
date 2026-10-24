@@ -10,7 +10,7 @@ const fields = Object.freeze({
   'voice.status': [], 'voice.send': ['text'], 'voice.poll': ['requestId', 'cursor'], 'voice.cancel': ['requestId'],
   'updates.status': [], 'updates.check': [], 'updates.configure': ['monitoringEnabled', 'notificationsEnabled', 'remoteUpdatesEnabled'], 'updates.install': ['target'],
   'session.get': [], 'session.usage': [], 'host.metrics': [],
-  'notifications.register': ['deviceToken', 'environment', 'enabled', 'scope'],
+  'notifications.register': ['deviceToken', 'environment', 'enabled', 'scope', 'hostHints'],
   'notifications.update': ['enabled'], 'notifications.revoke': [],
   'sessions.list': ['after', 'limit'], 'sessions.open': ['sessionId'],
   'agents.status': [], 'agents.providers': [], 'agents.models': ['provider', 'after', 'limit'], 'agents.list': ['after', 'limit'],
@@ -47,6 +47,7 @@ export function validateRequest(value) {
   if (!Object.hasOwn(fields, value.op)) fail('OPERATION_DENIED', 'This operation is not exposed by the gateway.', 403);
   object(value.params, fields[value.op], 'Operation parameters');
   if (value.params.coordinateInput !== undefined && typeof value.params.coordinateInput !== 'boolean') fail('INVALID_REQUEST', 'Input coordination must be boolean.');
+  if (value.params.hostHints !== undefined && typeof value.params.hostHints !== 'boolean') fail('INVALID_REQUEST', 'Notification host hints must be boolean.');
   return value;
 }
 

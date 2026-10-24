@@ -1,6 +1,78 @@
 import XCTest
 
 final class BZZYUITests: XCTestCase {
+    func testComputerSelectionSurvivesForegroundAndColdLaunchUsesDefaultWithoutLeakingSessions() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing", "--multi-host-testing"]
+        app.launch()
+        let selector = app.buttons["host-selector"]
+        XCTAssertTrue(selector.waitForExistence(timeout: 10))
+        XCTAssertEqual(selector.value as? String, "Real server")
+        XCTAssertEqual(app.staticTexts["connection-status-label"].label, "Offline")
+        selector.tap()
+        XCTAssertTrue(app.buttons["Select Test Mac"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Not selected · Status unknown"].exists)
+        app.buttons["Select Test Mac"].tap()
+        XCTAssertEqual(selector.value as? String, "Test Mac")
+        XCTAssertTrue(app.buttons["terminal-live"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Test only dummy chat"].exists)
+        XCTAssertFalse(app.buttons["terminal-live"].isEnabled)
+        XCTAssertTrue(selector.isEnabled)
+        XCUIDevice.shared.press(.home); app.activate()
+        XCTAssertEqual(selector.value as? String, "Test Mac")
+        let foregroundSelector = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in selector.isHittable }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [foregroundSelector], timeout: 5), .completed)
+        selector.tap(); app.buttons["Select Real server"].tap()
+        XCTAssertEqual(selector.value as? String, "Real server")
+        XCTAssertFalse(app.buttons["terminal-live"].exists)
+        XCTAssertFalse(app.staticTexts["Test only dummy chat"].exists)
+        selector.tap(); app.buttons["Select Test Mac"].tap()
+        app.terminate()
+        app.launchArguments = ["--ui-testing", "--multi-host-testing"]
+        app.launch()
+        XCTAssertTrue(selector.waitForExistence(timeout: 10))
+        XCTAssertEqual(selector.value as? String, "Real server")
+        XCTAssertFalse(app.staticTexts["Test only dummy chat"].exists)
+        attach(app, name: "Computer selector remains available offline and cold launch chooses Real server")
+    }
+
+    func testComputerFriendlyNameAndDefaultPersistAndAddingKeepsBothProfiles() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing", "--multi-host-testing"]
+        app.launch()
+        let selector = app.buttons["host-selector"]
+        XCTAssertTrue(selector.waitForExistence(timeout: 10))
+        selector.tap()
+        app.buttons["Options for Test Mac"].tap()
+        app.buttons["Rename"].tap()
+        let name = app.alerts.textFields.firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        name.tap(); name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Test Mac".count) + "Lab Mac")
+        app.alerts.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["Select Lab Mac"].exists)
+        app.buttons["Options for Lab Mac"].tap(); app.buttons["Set as default"].tap()
+        app.buttons["add-computer"].tap()
+        XCTAssertTrue(app.staticTexts["Add computer"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.secureTextFields["pairing-code"].exists)
+        app.buttons["close-connection"].tap()
+        XCTAssertTrue(app.buttons["Select Lab Mac"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Select Real server"].exists)
+        app.buttons["close-host-picker"].tap()
+        app.terminate()
+        app.launchArguments = ["--ui-testing", "--multi-host-testing"]
+        app.launch()
+        XCTAssertTrue(selector.waitForExistence(timeout: 10))
+        XCTAssertEqual(selector.value as? String, "Lab Mac")
+        selector.tap()
+        XCTAssertTrue((app.buttons["Select Lab Mac"].value as? String)?.contains("Default on launch") == true)
+        XCTAssertTrue(app.buttons["Select Real server"].exists)
+        let readySheet = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.buttons["add-computer"].isHittable && app.buttons["close-host-picker"].isHittable }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [readySheet], timeout: 5), .completed)
+        attach(app, name: "Friendly name and launch default survive relaunch")
+    }
+
     func testHistoryOpensAtLatestAndLoadsEarlierWithoutJumpingBackToBottom() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -71,12 +143,13 @@ final class BZZYUITests: XCTestCase {
     func testReleaseIgnoresPreviewArgumentsAndRequiresApprovedCorePair() {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "--reset-ui-testing", "--relay-smoke-test", "--core-offline-testing"]
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing", "--relay-smoke-test", "--core-offline-testing", "--multi-host-testing"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Pair BZZY Core"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["tab-agents"].exists)
         XCTAssertFalse(app.buttons["tab-terminal"].exists)
         XCTAssertFalse(app.buttons["create-agent"].exists)
+        XCTAssertFalse(app.buttons["host-selector"].exists)
         XCTAssertFalse(app.staticTexts["relay-smoke-result"].exists)
         XCTAssertFalse(app.buttons["Close"].exists)
         attach(app, name: "Release requires approved Core pairing")

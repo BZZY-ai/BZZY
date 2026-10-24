@@ -136,7 +136,9 @@ final class PairingConnectionTests: XCTestCase {
             XCTAssertFalse(connection.isCoreSessionReady(originalID))
             XCTAssertNil(connection.desiredCoreSessionID, "Deleted view intent cannot reopen the chat")
             XCTAssertTrue(streamed.isEmpty)
-            for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            let cacheFiles = try XCTUnwrap(FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]))
+            for case let file as URL in cacheFiles {
+                guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
                 let contents = String(data: try Data(contentsOf: file), encoding: .utf8) ?? ""
                 XCTAssertFalse(contents.contains("DELETION_SYNTHETIC_ANSWER"), "Deleted chat bodies cannot remain in its phone cache")
             }
@@ -162,7 +164,9 @@ final class PairingConnectionTests: XCTestCase {
             XCTAssertTrue(second["catalogEligible"].bool == true, "Disposable second session must be catalog-eligible")
             XCTAssertEqual(second["sessionCount"].integer, 2)
             connection.pause()
-            var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(savedAuthorization)) as? [String: Any])
+            let collection = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(savedAuthorization)) as? [String: Any])
+            let firstProfile = try XCTUnwrap((collection["profiles"] as? [[String: Any]])?.first)
+            var saved = try XCTUnwrap(firstProfile["state"] as? [String: Any])
             let scope = try XCTUnwrap(saved["coreCacheScope"] as? [String: Any])
             let unknownID = UUID().uuidString
             // Restore the old on-device schema with an unresolved request in A.
@@ -208,7 +212,9 @@ final class PairingConnectionTests: XCTestCase {
             let accepted = await restored.sendCoreMessage("SYNTHETIC_SECOND_SESSION", sessionID: secondID)
             XCTAssertTrue(accepted, "An unresolved receipt in A cannot disable input in B")
             try await eventually { try fixture.request(["op": .string("state")])["executionCount"].integer == 1 }
-            let migrated = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(savedAuthorization)) as? [String: Any])
+            let migratedCollection = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(savedAuthorization)) as? [String: Any])
+            let migratedProfile = try XCTUnwrap((migratedCollection["profiles"] as? [[String: Any]])?.first)
+            let migrated = try XCTUnwrap(migratedProfile["state"] as? [String: Any])
             XCTAssertNil(migrated["pendingCoreCommand"], "The legacy field is migrated on the next journal write")
             let journal = try XCTUnwrap(migrated["pendingCoreCommands"] as? [[String: Any]])
             XCTAssertTrue(journal.contains { $0["id"] as? String == unknownID }, "Unknown receipts retain their original request identity")
