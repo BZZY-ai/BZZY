@@ -281,10 +281,8 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
         const px = Math.max(0, Math.min(1, (x - cardWidth / 2) / Math.max(1, width - cardWidth))), py = Math.max(0, Math.min(1, (y - top - 3) / Math.max(1, available - cardHeight)));
         tui.localCommand(`/canvas move ${view.moveNode} ${px} ${py}`);
       } else if (hit?.type === 'canvas-node') {
-        const previous = view.focus; view.focus = hit.id;
+        view.focus = hit.id;
         if (view.linkFrom) tui.localCommand('/canvas connect ' + hit.id);
-        else if (previous === hit.id && Date.now() - (view.clickedAt || 0) < 400) tui.localCommand('/canvas chat');
-        view.clickedAt = Date.now();
       } else if (hit?.type === 'canvas-title' && view.canvas) tui.localCommand('/canvas rename');
     }
     tui.schedule(); return true;
@@ -361,6 +359,8 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
   } finally {
     stopped = true; clearInterval(interval); ui.onAnswerApproval = previousApproval; ui.permissionConnection = previousPermissions;
     if (ui.coreLifecycleInterrupted && view.canvas) ui.setSession(view.canvas.id);
-    ui.canvasView = null; ui.canvasRootId = null;
+    // Keep the final canvas mounted while Settings closes or the CLI reloads;
+    // clearing it here briefly exposed the other frontend before terminal exit.
+    if (ui.coreLifecycleInterrupted) { view.offline = true; view.drawer = false; }
   }
 }

@@ -1,7 +1,8 @@
 import { skillRows } from './skills-ui.js';
 import { namedTerminalSessions } from './session-browser.js';
 import readline from 'node:readline';
-import { renderCanvas } from './canvas-view.js';
+import { renderCanvasShell } from './canvas-panels.js';
+import { CanvasGraphics } from './canvas-graphics.js';
 import { clean, cellWidth, clip, wrap, wrapProse, duration } from './terminal-format.js';
 import { mascotCells, mascotLine } from './mascot.js';
 import { commandSuggestions, privateChatCommand } from './terminal-commands.js';
@@ -26,6 +27,7 @@ const targetKey = hit => hit?.type === 'settings' ? `settings:${hit.action}` : h
 export class TerminalChat {
   constructor(ui) {
     this.ui = ui; this.input = ui.input; this.output = ui.output;
+    this.canvasGraphics = new CanvasGraphics(this.output);
     this.theme = createTerminalTheme(this.output, process.env, ui.colorPalette);
     this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.panel = 'chat'; this.scroll = 0;
     this.assignments = new Map();
@@ -375,7 +377,11 @@ export class TerminalChat {
     this.hidden = false; resolve(answer); this.schedule();
   }
   canvasVisible() { return Boolean(this.ui.canvas && this.ui.canvasView && !this.ui.canvasView.drawer && this.panel === 'chat' && !this.promptDraft && !this.hidden && !this.ui.privateView); }
-  canCompose() { return this.canvasVisible() || this.selection || this.renderingPicker || ['settings', 'skills'].includes(this.panel) && !this.promptDraft ? false : Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft); }
+  canCompose() {
+    if (this.canvasVisible() || this.selection || this.renderingPicker) return false;
+    if (!this.promptDraft && (this.ui.canvasView?.historyThread || ['settings', 'skills'].includes(this.panel))) return false;
+    return Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft);
+  }
   submitMessage() {
     if (this.resolveInput) { this.finish(this.value); return; }
     if (!this.value.trim()) return;
@@ -492,6 +498,7 @@ export class TerminalChat {
   }
   mouse(button, x, y, released = false) {
     if (this.canvasVisible() && !this.selection && !this.textSelection) { this.ui.canvasView.onMouse?.(button, x, y, released); return; }
+    if (this.canvasOverlay && !this.selection && !this.textSelection && this.scrollDrag == null && !released && (x <= this.canvasOverlay.left || x > this.canvasOverlay.right || y <= this.canvasOverlay.top || y > this.canvasOverlay.bottom)) return;
     if (this.copyMode) return;
     const originalFrame = this.textSelection?.frame;
     if (released) {
@@ -549,6 +556,13 @@ export class TerminalChat {
     const hit = this.hitTargets?.findLast(target => y === target.row && x >= target.left && x <= target.right);
     if (this.selection && !hit) { if (['dropdown', 'context'].includes(this.selection.presentation) && !(this.popupRegion && x >= this.popupRegion.left && x <= this.popupRegion.right && y >= this.popupRegion.top && y <= this.popupRegion.bottom)) this.finishSelection(null); return; }
     if (hit) this.feedback(hit);
+    if (hit?.type === 'canvas-close') {
+      if (this.promptDraft) this.finish(null);
+      else if (this.panel !== 'chat') { if (this.ui.settingsOnly && this.panel === 'settings') this.finish(null); else this.setPanel('chat'); }
+      else this.localCommand('/canvas back');
+      return;
+    }
+    if (hit?.type === 'canvas-pane') { this.ui.canvasView.drawer = true; this.setPanel(hit.panel); return; }
     if (hit?.type === 'yolo') { this.permissionTask = this.ui.toggleYolo(); return; }
     if (hit?.type === 'approval') { this.approvalTask = this.ui.answerApproval(hit.answer); return; }
     if (hit?.type === 'approval-details') {
@@ -627,7 +641,7 @@ export class TerminalChat {
     }
     if (!this.selection && !this.hidden && !this.promptDraft && !this.aliasEdit && !this.copyMode && !this.textSelection && this.panel === 'chat' && this.ui.canvasView) {
       if (this.canvasVisible() && this.ui.canvasView.onKey?.(key)) { key.bzzyHandled = true; return; }
-      if (this.ui.canvasView.drawer && key.name === 'escape') { key.bzzyHandled = true; this.localCommand('/canvas back'); return; }
+      if (this.ui.canvasView.drawer && key.name === 'escape' && !this.completions().length) { key.bzzyHandled = true; this.localCommand('/canvas back'); return; }
     }
     if (this.aliasEdit) {
       key.bzzyHandled = true;
@@ -1247,7 +1261,7 @@ export class TerminalChat {
     this.writeFrame = () => {};
     try { this.renderScene({ force }); }
     finally { this.selection = picker; this.renderingPicker = null; this.writeFrame = writer; }
-    if (this.privateFrame) { this.paintedFrame = null; return this.renderScene({ force }); }
+    if (this.privateFrame) { this.writeFrame(this.canvasGraphics.clear()); this.paintedFrame = null; return this.renderScene({ force }); }
     const width = Math.max(16, (this.output.columns || 80) - 1), height = Math.max(8, this.output.rows || 24);
     const lines = (picker?.backgroundFrame || this.lastFrame).slice();
     this.popupRegion = null;
@@ -1268,7 +1282,7 @@ export class TerminalChat {
     }
     for (const hit of this.hitTargets) {
       const pressed = this.pressedTarget === targetKey(hit) && Date.now() < this.pressedUntil, hovered = this.hoverTarget === targetKey(hit);
-      if ((!pressed && !hovered) || hit.row < 1 || hit.row > height) continue;
+      if ((!pressed && !hovered) || hit.type === 'canvas-node' || hit.row < 1 || hit.row > height) continue;
       const text = clean(sliceCells(lines[hit.row - 1] || '', hit.left - 1, hit.right));
       lines[hit.row - 1] = replaceCells(lines[hit.row - 1] || '', hit.left - 1, fillSurface(text, hit.right - hit.left + 1, this.theme, pressed ? palette.accent : palette.hover, pressed ? palette.background : palette.text, true), width, this.theme, palette.background);
     }
@@ -1277,12 +1291,15 @@ export class TerminalChat {
       const row = Math.max(0, Math.min(height - 2, (this.composerRow || height - 3) - 4));
       lines[row] = replaceCells(lines[row] || '', Math.max(0, width - size - 2), fillSurface(text, size, this.theme, palette.selection, this.actionNotice.warning ? palette.warning : palette.accent), width, this.theme, palette.background);
     }
-    let frame = '\x1b[?25l';
+    const blocked = [this.canvasOverlay, this.popupRegion && { left: this.popupRegion.left - 1, right: this.popupRegion.right + 1, top: this.popupRegion.top - 1, bottom: this.popupRegion.bottom + 1 }].filter(Boolean);
+    const graphics = this.canvasGraphics.prepare(this.ui.canvas && this.ui.canvasView ? this.canvasSprites : [], blocked, { force: force || !this.paintedFrame });
+    let frame = '\x1b[?25l' + graphics.before;
     for (let row = 0; row < height; row++) {
       const line = lines[row] || '';
       if (this.paintedFrame?.[row] !== line || force) frame += `\x1b[${row + 1};1H${this.theme.background(palette.background)}${this.theme.foreground(palette.text)}\x1b[2K${line}\x1b[0m`;
     }
     this.lastFrame = lines; this.paintedFrame = lines.slice();
+    frame += graphics.after;
     if (this.canCompose() && !this.aliasEdit) {
       const before = this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
       frame += `\x1b[${Math.min(height, this.composerRow)};${Math.max(1, Math.min(width - 1, (this.composerLeft || 0) + 3 + cellWidth(before) - (this.composerOffset || 0)))}H\x1b[?25h`;
@@ -1291,7 +1308,7 @@ export class TerminalChat {
   }
   renderScene({ force = false } = {}) {
     if (this.closed || this.outputBlocked || this.copyMode && !force) return;
-    if (this.canvasVisible()) { renderCanvas(this, Math.max(16, (this.output.columns || 80) - 1), Math.max(8, this.output.rows || 24)); return; }
+    if (this.ui.canvas && this.ui.canvasView) { renderCanvasShell(this, Math.max(16, (this.output.columns || 80) - 1), Math.max(8, this.output.rows || 24)); return; }
     if (!this.ui.canvas && !this.ui.minimal && !this.dashboardRendering && !this.ui.privateView && !this.ui.settings?.qrView && (this.output.columns || 80) >= 100 && (this.output.rows || 24) >= 28 && !this.textSelection) { this.renderDashboard((this.output.columns || 80) - 1, this.output.rows || 24); return; }
     if (!this.dashboardRendering) { this.dashboardActive = false; this.composerLeft = 0; this.dashboardFrame = null; }
     this.privateFrame = false; this.hitTargets = [];
@@ -1466,8 +1483,9 @@ export class TerminalChat {
     }
     this.writeFrame(frame);
   }
-  restore(preserveScreen = false) { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l' + (preserveScreen ? '' : '\x1b[?1049l')); }
+  restore(preserveScreen = false) { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write(this.canvasGraphics.clear() + '\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l' + (preserveScreen ? '' : '\x1b[?1049l')); }
   close({ preserveScreen = false } = {}) {
+    this.writeFrame(this.canvasGraphics.clear());
     if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer); clearTimeout(this.feedbackTimer); clearTimeout(this.noticeTimer);
     this.finish(null); this.finishSelection(null, true); this.input.removeListener('keypress', this.onKey); this.output.removeListener?.('resize', this.onResize); this.output.removeListener?.('drain', this.onDrain); process.removeListener('exit', this.onExit); this.restore(preserveScreen); this.input.pause();
   }

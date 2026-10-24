@@ -14,10 +14,22 @@ terminal catalog, and they reopen in their original directory without inference.
 
 Each character is a saved model slot with its own provider/model/effort and an
 original, randomly assigned silhouette. Appearance stays stable when reopening
-or changing the model. Bodies are shaded with terminal colors; monochrome and
-small terminals have readable fallbacks. `--no-pet` disables character motion.
+or changing the model. Warp, Kitty, Ghostty and iTerm2 3.6+ use smooth PNG
+illustrations with clear eyes; other terminals use a denser eight-sample Unicode
+renderer. Detection uses the terminal's environment metadata, so SSH sessions
+that do not forward that information use the Unicode fallback. Monochrome and
+small terminals remain supported. `--no-pet` disables character motion.
+
+The canvas remains mounted throughout interaction. Goal entry, renaming, private
+key entry and Settings open as canvas dialogs. Conversations open in a drawer,
+beside the character on wide terminals or in a larger window on compact screens.
+The close button and Esc return to the same canvas and preserve the draft.
+Only explicitly opening a conversation enters its drawer; repeated ordinary
+clicks on a character just select it. Private sharing/QR screens retain their
+uncached rendering and full QR quiet zones.
 
 - **Tab / arrows** select a character; **Enter** opens its conversation.
+- **Click** selects; **Close × / Esc** closes the foreground window.
 - **F10 / right-click** opens the selected character's actions.
 - **Esc** closes a conversation and returns to its canvas; work continues.
 - **Set goal**, **Pause work** and **Resume paused goal** use Core's existing
@@ -58,3 +70,12 @@ Agents. iPhone and Relay retain their existing terminal protocol and grants;
 the canvas graph is a CLI presentation and does not widen phone/observer access.
 Portable project sharing retains its existing history and evidence behavior;
 canvas layout, private bindings and active graph connections are not transferred.
+
+Native artwork uses the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
+also supported by [Warp](https://docs.warp.dev/terminal/more-features/files-and-links),
+[Ghostty](https://ghostty.org/docs/features) and recent [iTerm2](https://iterm2.com/documentation-images.html).
+Images travel as bounded direct PNG chunks, with responses suppressed. No file
+paths or terminal filesystem access are used. The compositor removes its own
+placements before overlapping dialogs, private views and exit; it does not
+delete another application's images. Tmux/screen and unknown terminals retain
+the Unicode path. `BZZY_CANVAS_GRAPHICS=off` disables native graphics if needed.

@@ -42,7 +42,7 @@ test('canvas fits normal and compact terminals, keeps identity, exact model-effo
       const text = tui.lastFrame.map(clean).join('\n'); assert.match(text, /starbucks-japan/);
       assert.match(text, /BRAIN/); assert.ok(tui.hitTargets.some(hit => hit.type === 'canvas-node'));
       if (columns >= 80) { assert.match(text, /HANDS/); assert.match(text, /same-model · high/); assert.match(text, /Goal achieved/); assert.match(text, /Paused/); }
-      if (rows >= 38) assert.match(text, /BRAIN ↓ HANDS/, 'the hierarchy label must remain above character surfaces');
+      if (rows >= 46) assert.match(text, /BRAIN ↓ HANDS/, 'the hierarchy label must remain above character surfaces');
       assert.equal(tui.canCompose(), false); assert.equal(tui.dashboardActive, false);
       assert.match(tui.lastFrame.join(''), /\x1b\[38;2;/, 'composition must preserve sprite colors');
     }
@@ -68,7 +68,16 @@ test('live canvas pauses and links real Core sessions, runs delegate work, opens
     tui.finishSelection('delegate');
     await ready(() => ui.canvasView.canvas.groups.length === 1 && tui.resolveInput);
     assert.equal(loadSession(session.id).executionState, 'paused'); assert.equal(loadSession(hands.sessionId).executionState, 'paused'); assert.equal(listRecords('execution').length, 0);
-    await command('/goal Assess supplied evidence');
+    tui.render(); const character = tui.hitTargets.find(hit => hit.type === 'canvas-node' && hit.id === brain.id);
+    tui.mouse(0, character.left + 4, character.row); tui.mouse(0, character.left + 4, character.row);
+    assert.equal(ui.canvasView.drawer, false, 'repeated character clicks only select; opening a conversation is explicit');
+    tui.mouse(2, character.left + 4, character.row);
+    await ready(() => tui.selection && !tui.selection.loading); tui.render();
+    const goalIndex = tui.selection.choices.findIndex(choice => choice.value === 'goal'), goalChoice = tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === goalIndex);
+    assert.ok(goalChoice); tui.mouse(0, goalChoice.left + 2, goalChoice.row);
+    await ready(() => tui.promptDraft && /Goal/.test(tui.question)); tui.render(); assert.equal(tui.canvasOverlay.kind, 'prompt');
+    tui.value = 'Assess supplied evidence'; tui.cursor = [...tui.value].length; tui.render();
+    const confirm = tui.hitTargets.find(hit => hit.type === 'confirm'); tui.mouse(0, confirm.left + 1, confirm.row);
     await ready(() => loadSession(session.id).goal?.status === 'complete');
     await ready(() => ui.canvasView.bindings.get(hands.id).sessionId && ui.canvasView.bindings.get(hands.id).sessionId !== hands.sessionId);
     const executions = listRecords('execution').length;
@@ -106,7 +115,7 @@ test('all original silhouettes render in each terminal color mode, respect reduc
     const theme = createTerminalTheme({ isTTY: true }, { FORCE_COLOR: level }, 'blue');
     for (let i = 0; i < 12; i++) {
       const a = characterSprite(i, 'working', 0, theme, { animate: false }), b = characterSprite(i, 'working', 4, theme, { animate: false });
-      assert.deepEqual(a, b); assert.equal(a.length, 10); assert.ok(a.every(line => cellWidth(line) === 22));
+      assert.deepEqual(a, b); assert.equal(a.length, 12); assert.ok(a.every(line => cellWidth(line) === 28));
       assert.doesNotMatch(a.map(clean).join(''), /\x1b/);
       if (level === '1') { assert.match(a.map(clean).join(''), /[\u2801-\u28ff]/); assert.doesNotMatch(a.join(''), /▀/); }
     }

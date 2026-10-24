@@ -42,6 +42,8 @@ export class UI {
 
   openTerminal() {
     if (!this.interactive) return;
+    if (this.canvas && !this.canvasView && !this.sessionId) this.canvasView = { canvas: null, alias: '', focus: null, drawer: false,
+      bindings: new Map(), snapshots: new Map(), bubbles: new Map(), exchanges: new Map() };
     this.tui ||= new TerminalChat(this);
     if (this.connectionStatusEnabled && !this.connectionMonitor && !this.closed) {
       this.connectionMonitor = new ConnectionStatusMonitor(sample => { this.connectionStatus = sample; this.tui?.schedule(); }).start();
@@ -258,6 +260,7 @@ export class UI {
   ask(question) {
     this.beforeOutput?.();
     if (!this.interactive) return Promise.resolve('');
+    if (this.canvas && !this.tui) this.openTerminal();
     const operation = this.promptQueue.then(() => {
       if (this.closed) return null;
       if (this.tui) return this.tui.ask(question);
@@ -297,6 +300,7 @@ export class UI {
 
   async secret(question) {
     if (!this.interactive || !this.input.setRawMode) throw new Error('Run authentication in a terminal, or set the provider API-key environment variable.');
+    if (this.canvas && !this.tui) this.openTerminal();
     if (this.tui) return this.tui.ask(question, { hidden: true });
     this.output.write(question);
     const wasRaw = this.input.isRaw;

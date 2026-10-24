@@ -49,8 +49,9 @@ for compatibility. Core's daemon and workers run without this CLI installed.
 
 `bzzy` now opens a character canvas: insert model/effort characters, set goals,
 and connect them for Delegate, Debate, Besties or Parallel. Right-click or F10
-opens the context menu; Enter opens the full conversation and Esc returns to
-the canvas. Links pause affected work before reconfiguration. `bzzy --minimal`
+opens the context menu; Enter opens the conversation drawer and Esc returns to
+the canvas. Goal entry and Settings stay in canvas dialogs. Supported terminals
+display smooth character illustrations. Links pause affected work before reconfiguration. `bzzy --minimal`
 keeps the transcript interface described below. See [canvas controls and limits](docs/CANVAS.md).
 
 In a minimal solo, Delegate or Debate chat, pause with `/pause` or `/goal pause`,
