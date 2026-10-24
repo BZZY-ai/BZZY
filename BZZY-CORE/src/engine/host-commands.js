@@ -96,13 +96,16 @@ export async function controlSavedGoal(session, action, options, events) {
   }
   const unlock = lockSession(session);
   try {
-    if (session.backend === 'codex' && session.engineThreadId) {
+    if (session.backend === 'codex' && session.engineThreadId && !(action === 'pause' && session.goal.status === 'complete')) {
       const engine = new CodexEngine(getProvider(session.provider), session, options, events);
       try { await engine.setGoalStatus(action === 'clear' ? 'clear' : 'paused'); }
       finally { await engine.close(); }
     }
     if (action === 'clear') { putRecord('goal-history', session.goal.id, { sessionId: session.id, ...session.goal, clearedAt: new Date().toISOString() }); session.goal = null; }
-    else session.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
+    else {
+      if (!(action === 'pause' && session.goal.status === 'complete')) session.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
+      session.executionState = action === 'cancel' ? 'cancelled' : 'paused';
+    }
     saveSession(session); return { requested: false, session };
   } finally { unlock(); }
 }

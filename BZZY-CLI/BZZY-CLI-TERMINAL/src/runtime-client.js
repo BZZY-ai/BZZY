@@ -11,7 +11,11 @@ import { exportProject } from './project-bundle.js';
 import { shareTerminal, importTerminal, forgetPrivateImportInput } from './share-ui.js';
 import { skillThat } from './skill-that.js';
 import { checkConnections } from './connection-check.js';
-import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider, executionRecord } from '@bzzy/core/engine/session-operations.js';
+import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider, setSessionMode, assertSessionModeSwitch, executionRecord } from '@bzzy/core/engine/session-operations.js';
+import { modeDefault, getProvider, ensureApiKey } from './providers.js';
+import { chooseSavedCombo } from './mode-presets.js';
+import { chooseDelegation } from './delegation-setup.js';
+import { chooseDebate } from './debate-setup.js';
 import { initializeLaunchYolo } from './permission-controls.js';
 import { confirmGoalReplacement } from './goal-controls.js';
 
@@ -60,18 +64,18 @@ async function replayRoom(api, roomSessionId, ui, selected = () => true) {
     if (!batch.hasMore) { if (batch.events.length) ui.redrawPrompt?.(); return; }
   }
 }
-async function editConversation(sessionId, ui, connection, choose, apply) {
+async function editConversation(sessionId, ui, connection, choose, apply, { assert = assertModelIdle, message } = {}) {
   const info = connection?.info || await ensureRuntime(), owner = connection?.owner || randomUUID(), api = client(info, sessionId, owner);
   if (connection?.acquire) await connection.acquire({ localMutation: true });
   else if (!connection) await api('POST', 'claim', { takeover: true });
   const heartbeat = !connection ? setInterval(() => api('POST', 'claim', {}).catch(() => ui.reader?.close()), 10000) : null;
   try {
-    const current = (await api('GET')).session; assertModelIdle(current);
+    const current = (await api('GET')).session; assert(current);
     const selected = await choose(current);
     if (!selected) return current;
     const session = apply(sessionId, owner, selected, { authorize: () => connection?.authorize?.() });
     ui.updateSession?.(await api('GET'));
-    ui.event('info', { message: `${session.provider} · ${session.model || 'provider default'}${session.selectedEffort ? ' · effort ' + session.selectedEffort : ''} · conversation retained · applies to the next message.` });
+    ui.event('info', { message: message ? message(session) : `${session.provider} · ${session.model || 'provider default'}${session.selectedEffort ? ' · effort ' + session.selectedEffort : ''} · conversation retained · applies to the next message.` });
     return session;
   } finally { clearInterval(heartbeat); if (!connection) await api('POST', 'release', {}).catch(() => {}); }
 }
@@ -84,6 +88,46 @@ export async function changeSessionSelection(sessionId, selected, ui, connection
 export async function changeSessionProvider(source, provider, selected, ui, connection) {
   return editConversation(source.id, ui, connection, () => selected,
     (sessionId, owner, selection, authorization) => setSessionProvider(sessionId, owner, source.provider, provider.id, selection, authorization));
+}
+
+export async function changeSessionMode(sessionId, mode, ui, connection) {
+  if (ui.sessionMode === 'VIEW' && !connection) throw new Error('This is a read-only view. Attach to change the chat mode.');
+  return editConversation(sessionId, ui, connection, async current => {
+    let selection;
+    if (mode === 'delegate') {
+      const saved = await chooseSavedCombo('delegate', { useDefault: Boolean(modeDefault('delegate')) }, ui);
+      selection = saved === false ? await chooseDelegation({ cwd: current.cwd, provider: current.provider, model: current.model,
+        effort: current.selectedEffort, executor: current.executor?.provider, executorModel: current.executor?.model }, ui)
+        : saved && { supervisor: saved[0], executor: saved[1] };
+      if (!selection) return null;
+    } else if (mode === 'debate') {
+      const agents = await chooseDebate({ cwd: current.cwd, provider: current.provider, model: current.model,
+        effort: current.selectedEffort, useDefault: Boolean(modeDefault('debate')) }, ui);
+      if (!agents) return null;
+      selection = { agents };
+    }
+    if (selection) {
+      for (const agent of selection.agents || [selection.supervisor, selection.executor]) {
+        const provider = getProvider(agent.provider);
+        if (provider.auth === 'api-key') await ensureApiKey(provider, ui);
+      }
+    }
+    return { mode, selection, expectedUpdatedAt: current.updatedAt };
+  }, (id, owner, selected, authorization) => setSessionMode(id, owner, selected, authorization), {
+    assert: assertSessionModeSwitch,
+    message: session => `${session.mode === 'delegate' ? `Delegate · brain: ${session.provider} · ${session.model || 'provider default'} · executor: ${session.executor.provider} · ${session.executor.model || 'provider default'}`
+      : session.mode === 'debate' ? `Debate · ${session.debateAgents.map(agent => `${agent.provider} · ${agent.model || 'provider default'}`).join(' / ')}`
+      : `Solo · ${session.provider} · ${session.model || 'provider default'}`} · same chat retained · still paused. Send a message or use /goal resume when ready.`,
+  });
+}
+
+export async function conversationModeCommand(input, sessionId, ui, connection) {
+  const command = /^\/(delegate|debate|solo|singular)(?:\s|$)/.exec(input);
+  if (!command) return false;
+  if (command[1] === 'debate' && input.trim() !== '/debate') return false; // Keep /debate <focus> for a selected-reply challenge.
+  if (input.trim() !== '/' + command[1]) throw new Error('Use /delegate, /debate or /solo without arguments after pausing the chat.');
+  await changeSessionMode(sessionId, command[1] === 'singular' ? 'solo' : command[1], ui, connection);
+  return true;
 }
 export async function executeManaged(provider, session, options, ui, prompt, flags = {}) {
   options = ui.executionOptions?.(options, session) || options;
@@ -241,6 +285,17 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           continue;
         }
         const selectedApi = client(info, activeId, owner);
+        if (/^\/(?:delegate|solo|singular)(?:\s|$)/.test(text) || text === '/debate') {
+          modalTask = true;
+          try {
+            await conversationModeCommand(text, activeId, ui, { info, owner, authorize: () => requireOwner(activeId, owner) });
+            const fresh = loadSession(activeId);
+            options.executionOptions = { ...options.executionOptions, mode: fresh.mode, provider: fresh.provider, model: fresh.model,
+              effort: fresh.selectedEffort, executor: fresh.executor?.provider, executorModel: fresh.executor?.model, debateAgents: fresh.debateAgents };
+          }
+          finally { modalTask = false; }
+          continue;
+        }
         if (/^\/models?(?:\s|$)/.test(text)) {
           if (children.length && activeId === sessionId) throw new Error('Select an agent chat tab before changing its model.');
           modalTask = true;

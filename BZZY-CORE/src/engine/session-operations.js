@@ -4,7 +4,7 @@ import { delay } from './delegation.js';
 import { loadSession, sessionPath, writeJson } from './store.js';
 import { prepareTask } from './task.js';
 import { newGoal, needsGoalReplacement } from './goals.js';
-import { getProvider } from './providers.js';
+import { getProvider, selectionFromSession, defaultSelection } from './providers.js';
 import { assertModelIdle, assertSessionIdle } from './models.js';
 import { reserveRequest, database, transaction, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
 import { conversationCursor } from './conversation.js';
@@ -84,7 +84,9 @@ export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume =
         if (!objective?.trim()) throw new Error('Supply an objective to start persistent work.');
         const previousGoal = fresh.goal;
         const boundary = fresh.contract, strict = fresh.strictPolicy;
-        prepareTask(fresh, options, objective, { persist: false });
+        prepareTask(fresh, { ...options, mode: fresh.mode || options.mode || 'solo',
+          ...(fresh.mode === 'delegate' && fresh.executor ? { executor: fresh.executor.provider, executorModel: fresh.executor.model } : {}),
+          ...(fresh.mode === 'debate' && fresh.debateAgents ? { debateAgents: fresh.debateAgents } : {}) }, objective, { persist: false });
         if (boundary && !options.contract) {
           fresh.contract = normalizeContract({ ...fresh.contract, constraints: [...new Set([...boundary.constraints, ...fresh.contract.constraints])],
             scope: { ...fresh.contract.scope, ...boundary.scope }, policy: options.readOnly ? { ...boundary.policy, mode: 'read-only', writablePaths: [] } : boundary.policy,
@@ -107,7 +109,10 @@ export function updateIdleGoal(sessionId, owner, action) {
     requireOwner(sessionId, owner); const fresh = loadSession(sessionId); assertSessionIdle(fresh);
     if (!fresh.goal) throw new Error('This session has no goal.');
     if (action === 'clear') { putRecord('goal-history', fresh.goal.id, { sessionId: fresh.id, ...fresh.goal, clearedAt: now() }, db); fresh.goal = null; }
-    else fresh.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
+    else {
+      if (!(action === 'pause' && fresh.goal.status === 'complete')) fresh.goal.status = action === 'cancel' ? 'cancelled' : 'paused';
+      fresh.executionState = action === 'cancel' ? 'cancelled' : 'paused';
+    }
     fresh.updatedAt = now(); putRecord('session', fresh.id, fresh, db);
     appendEvent(fresh.id, 'lifecycle', { status: fresh.goal?.status || null, executionState: fresh.executionState, reason: 'user_' + action }, db); return fresh;
   });
@@ -135,15 +140,12 @@ export function setSessionModel(sessionId, owner, selected, { authorize, db } = 
   }, authorize, db);
 }
 
-export function setSessionProvider(sessionId, owner, expectedProvider, providerId, selected, { authorize, db } = {}) {
-  const provider = getProvider(providerId);
-  return editSession(sessionId, owner, (session, db) => {
-    if (session.provider !== expectedProvider) throw new Error('The provider changed while selection was open. Choose it again.');
+function applyProviderSelection(session, provider, selected, db, { preservePause = false } = {}) {
     const previous = { provider: session.provider, model: session.model, threadId: session.engineThreadId };
     Object.assign(session, {
       modelSelectionRequired: false, provider: provider.id, backend: provider.backend, model: selected.model, modelCapabilities: selected.capabilities, selectedEffort: selected.effort,
       engineThreadId: null, engineSessionId: provider.backend === 'claude' ? randomUUID() : null, engineHome: null,
-      resolvedModel: null, reasoningEffort: null, failure: null, executionState: 'idle',
+      resolvedModel: null, reasoningEffort: null, failure: null, executionState: preservePause ? 'paused' : 'idle',
       engineTokenOffset: session.usage?.tokens || 0,
       conversationHandoff: { throughSeq: conversationCursor(session.id, db), pending: true },
     });
@@ -154,6 +156,73 @@ export function setSessionProvider(sessionId, owner, expectedProvider, providerI
     }
     appendEvent(session.id, 'provider.changed', { previousProvider: previous.provider, previousModel: previous.model, previousThreadId: previous.threadId,
       provider: session.provider, model: session.model, effort: session.selectedEffort, conversationThrough: session.conversationHandoff.throughSeq, appliesTo: 'next_turn' }, db);
+}
+
+export function setSessionProvider(sessionId, owner, expectedProvider, providerId, selected, { authorize, db } = {}) {
+  const provider = getProvider(providerId);
+  return editSession(sessionId, owner, (session, db) => {
+    if (session.provider !== expectedProvider) throw new Error('The provider changed while selection was open. Choose it again.');
+    applyProviderSelection(session, provider, selected, db);
+  }, authorize, db);
+}
+
+export function assertSessionModeSwitch(session) {
+  if (!session || session.purpose === 'agent' || session.parentSessionId || session.parallelSessionId || !['solo', 'delegate', 'debate'].includes(session.mode || 'solo')) {
+    throw new Error('Switch modes in a solo, Delegate or Debate terminal chat, not an Agent or parallel/besties group.');
+  }
+  assertSessionIdle(session);
+  if (session.executionState !== 'paused') throw Object.assign(new Error('Pause this chat with /pause or /goal pause before switching modes.'), { code: 'CONFLICT', status: 409 });
+  const children = listRecords('session', { parentSessionId: session.id });
+  for (const child of children) assertSessionIdle(child);
+  if (listRecords('assignment', { parentSessionId: session.id }).some(job => ['starting', 'running'].includes(getRecord('round', `${job.id}:${job.currentRound}`)?.state))) {
+    throw Object.assign(new Error('Delegate workers are still stopping. Wait for the pause to finish before switching modes.'), { code: 'CONFLICT', status: 409 });
+  }
+}
+
+const modeSelection = selected => {
+  if (typeof selected?.provider !== 'string') throw new Error('Choose an installed provider for each agent.');
+  return selectionFromSession({ provider: selected.provider, model: selected.model,
+    selectedEffort: selected.effort, modelCapabilities: selected.capabilities });
+};
+
+// Trusted local terminal operation. Changing mode never queues work, replaces a
+// goal, changes its policy, or transfers private account bindings.
+export function setSessionMode(sessionId, owner, input, { authorize, db } = {}) {
+  if (!['solo', 'delegate', 'debate'].includes(input?.mode)) throw new Error('Choose /delegate, /debate or /solo.');
+  return editSession(sessionId, owner, (session, db) => {
+    assertSessionModeSwitch(session);
+    if (typeof input.expectedUpdatedAt !== 'string' || input.expectedUpdatedAt !== session.updatedAt) {
+      throw Object.assign(new Error('The chat changed while choosing its mode. Try the switch again.'), { code: 'CONFLICT', status: 409 });
+    }
+    const previous = session.mode || 'solo';
+    if (input.mode === 'solo' && previous === 'solo') return;
+    if (previous === 'solo') session.soloSelection = { ...selectionFromSession(session), modelSelectionRequired: session.modelSelectionRequired === true };
+    let selected;
+    if (input.mode === 'delegate') {
+      if (!input.selection?.supervisor || !input.selection?.executor) throw new Error('Choose both the Delegate supervisor and executor.');
+      selected = modeSelection(input.selection.supervisor);
+      const executor = modeSelection(input.selection.executor);
+      session.executor = executor;
+      delete session.debateAgents;
+    } else if (input.mode === 'debate') {
+      if (!Array.isArray(input.selection?.agents) || input.selection.agents.length < 2 || input.selection.agents.length > 3) throw new Error('Choose two or three Debate agents.');
+      session.debateAgents = input.selection.agents.map(modeSelection);
+      selected = session.debateAgents[0];
+      delete session.executor;
+    } else {
+      selected = session.soloSelection || defaultSelection() || selectionFromSession(session);
+      selected = { ...modeSelection(selected), modelSelectionRequired: selected.modelSelectionRequired === true };
+      delete session.executor;
+      delete session.debateAgents;
+    }
+    // A fresh backend thread receives the durable conversation, so old mode
+    // instructions/tools cannot survive the switch, even with the same model.
+    applyProviderSelection(session, getProvider(selected.provider), selected, db, { preservePause: true });
+    session.modelSelectionRequired = selected.modelSelectionRequired === true;
+    session.mode = input.mode;
+    appendEvent(session.id, 'mode.changed', { previousMode: previous, mode: session.mode, provider: session.provider,
+      model: session.model, effort: session.selectedEffort, ...(session.executor ? { executor: session.executor } : {}),
+      ...(session.debateAgents ? { agents: session.debateAgents } : {}), appliesTo: 'next_turn', paused: true }, db);
   }, authorize, db);
 }
 

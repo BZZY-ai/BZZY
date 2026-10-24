@@ -6,6 +6,10 @@ export const chatHelp = `Modes
 
 /goal <objective>  Start a goal, replacing the current one.
 /goal resume       Continue a paused or stalled goal from its saved checkpoint.
+/delegate          Switch this paused chat to the saved Delegate combo (or choose its two agents).
+/debate            Switch this paused chat to the saved Debate combo (or choose 2–3 agents).
+/solo              Return this paused chat to its previous single agent; /singular is an alias.
+Pause with /pause or /goal pause before either switch. History and the saved goal stay in this chat; switching never resumes work.
 /default           Save this mode’s agents, models and efforts separately.
 --parallel, --besties, --debate, --delegate reuse their saved presets automatically.
 --default requires a matching saved preset.
@@ -35,11 +39,13 @@ export const chatCommands = [
   { command: '/skills', description: 'View, create, import and enable shared Core skills' },
   { command: '/goal', description: 'Work until an objective is resolved', argument: true },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
-  { command: '/debate', description: 'Choose agents to challenge the latest reply' },
+  { command: '/debate', description: 'Switch this paused chat to Debate; add a focus to challenge a reply' },
   { command: '/models', description: 'Choose a model and reasoning effort' },
   { command: '/color', description: 'Switch the full palette: blue, black or white', argument: true },
   { command: '/providers', description: 'Choose a provider and model from Core' },
   { command: '/default', description: 'Save this mode’s provider, models, efforts and full agent combo' },
+  { command: '/delegate', description: 'Switch this paused chat to Delegate' },
+  { command: '/solo', description: 'Switch this paused chat back to a single agent' },
   { command: '/alias', description: 'Name this session and keep its working directory' },
   { command: '/sessions', description: 'Open a saved named terminal chat' },
   { command: '/export', description: 'Export the complete project and context as a ZIP' },

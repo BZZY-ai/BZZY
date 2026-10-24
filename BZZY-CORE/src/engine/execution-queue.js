@@ -22,7 +22,10 @@ export function enqueueExecution(sessionId, input, requestId, { authorize, prepa
     if (typeof input.prompt !== 'string') throw new Error('Execution needs a prompt.');
     prepare?.(session, db);
     effectivePolicy(session, input.options || {});
-    const options = { ...input.options, yolo: terminalYolo(sessionId) ?? input.options?.yolo ?? false };
+    const options = { ...input.options, mode: session.mode || input.options?.mode || 'solo',
+      ...(session.mode === 'delegate' && session.executor ? { executor: session.executor.provider, executorModel: session.executor.model } : {}),
+      ...(session.mode === 'debate' && session.debateAgents ? { debateAgents: session.debateAgents } : {}),
+      yolo: terminalYolo(sessionId) ?? input.options?.yolo ?? false };
     effectivePolicy(session, options);
     if (input.goal && !session.goal) throw new Error('This session has no goal contract. Create its goal through the CLI first.');
     if ((input.goal || input.resumeGoal) && session.goal?.importedHistorical) {

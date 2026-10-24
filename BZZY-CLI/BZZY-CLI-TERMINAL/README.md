@@ -47,6 +47,16 @@ conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
+In an existing solo, Delegate or Debate chat, pause with `/pause` or `/goal pause`,
+then use `/delegate`, `/debate` or `/solo` (`/singular` is an alias). Delegate and
+Debate use their saved agent presets, or open setup if none exists. Solo restores
+the model and effort used before either mode; chats launched in these modes use the saved
+solo default, or their current primary model if none exists. Both switches keep
+the same chat, working directory, history and goal. Work stays paused until you
+send a message or explicitly run `/goal resume`. Wait for active replies and
+workers to finish stopping before switching; idle alone is not a pause.
+`/debate <focus>` retains the one-off challenge of the latest reply.
+
 Core's coordinator has its own provider/model/effort configuration, editable with
 `bzzy-core assistant set`. `/default` and
 `--default` select terminal chat presets independently. New providers/model

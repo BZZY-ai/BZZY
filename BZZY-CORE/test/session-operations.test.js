@@ -5,13 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createSession, loadSession, saveSession } from '../src/engine/store.js';
-import { BUILTINS } from '../src/engine/providers.js';
+import { BUILTINS, saveDefaultSelection, defaultSelection } from '../src/engine/providers.js';
 import { appendEvent, events, getRecord, putRecord, listRecords } from '../src/engine/database.js';
 import { claimInput } from '../src/engine/runtime.js';
 import { prepareTask } from '../src/engine/task.js';
 import { newGoal } from '../src/engine/goals.js';
-import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider } from '../src/engine/session-operations.js';
-import { createTaskSession, activateTaskGoal, createChatSession, newConversation, startConversationGoal, prepareResume } from '../src/engine/host-commands.js';
+import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider, setSessionMode } from '../src/engine/session-operations.js';
+import { createTaskSession, activateTaskGoal, createChatSession, newConversation, startConversationGoal, prepareResume, controlSavedGoal } from '../src/engine/host-commands.js';
 import { CodexEngine } from '../src/engine/engines/codex.js';
 import { recoverOrphanedVerification } from '../src/engine/recovery.js';
 
@@ -35,6 +35,154 @@ function goalSession() {
   session.goal = newGoal(session.contract.objective, 1000); saveSession(session);
   return session;
 }
+
+const delegateSelection = { supervisor: { provider: 'claude', model: 'fixture-brain', effort: 'high', capabilities: { supportsEffort: true } },
+  executor: { provider: 'codex', model: 'fixture-hands', effort: 'low', capabilities: { supportedEfforts: ['low'] } } };
+function switchMode(session, owner, mode, selection = delegateSelection, expectedUpdatedAt = loadSession(session.id).updatedAt) {
+  return setSessionMode(session.id, owner, { mode, selection, expectedUpdatedAt });
+}
+
+test('paused solo/delegate switches preserve the same chat, goal, policies, history and usage, then restore the original solo choice', () => {
+  const session = goalSession(), owner = randomUUID();
+  Object.assign(session, { model: 'original-solo', selectedEffort: 'xhigh', modelCapabilities: { supportedEfforts: ['xhigh'] },
+    alias: 'Keep this chat', engineThreadId: 'old-thread', usage: { tokens: 90 }, checkpoint: { phase: 'review' } });
+  Object.assign(session.goal, { tokensUsed: 60, nativeTokensUsed: 40, delegatedTokensUsed: 20, evidence: ['original-evidence'] });
+  saveSession(session); claimInput(session.id, owner); updateIdleGoal(session.id, owner, 'pause');
+  const original = loadSession(session.id), contract = structuredClone(original.contract);
+  appendEvent(session.id, 'message.user', { text: 'Keep all this context.' });
+  const reply = appendEvent(session.id, 'text', { text: '[b]Original response[/b]' });
+  const delegated = switchMode(session, owner, 'delegate');
+  assert.equal(delegated.id, original.id); assert.equal(delegated.cwd, original.cwd); assert.equal(delegated.alias, original.alias);
+  assert.equal(delegated.mode, 'delegate'); assert.equal(delegated.provider, 'claude'); assert.equal(delegated.selectedEffort, 'high');
+  assert.deepEqual(delegated.executor, delegateSelection.executor);
+  assert.equal(delegated.executionState, 'paused'); assert.equal(delegated.goal.id, original.goal.id); assert.equal(delegated.goal.status, 'paused');
+  assert.equal(delegated.goal.tokensUsed, 60); assert.equal(delegated.goal.nativeTokenOffset, 40); assert.equal(delegated.engineTokenOffset, 90);
+  assert.deepEqual(delegated.contract, contract); assert.deepEqual(delegated.policy, original.policy); assert.deepEqual(delegated.checkpoint, original.checkpoint);
+  assert.deepEqual(delegated.goal.evidence, original.goal.evidence); assert.equal(delegated.engineThreadId, null);
+  assert.equal(delegated.conversationHandoff.pending, true); assert.ok(delegated.conversationHandoff.throughSeq >= reply.seq);
+  const solo = switchMode(session, owner, 'solo');
+  assert.equal(solo.id, session.id); assert.equal(solo.mode, 'solo'); assert.equal(solo.provider, 'codex'); assert.equal(solo.model, 'original-solo');
+  assert.equal(solo.selectedEffort, 'xhigh'); assert.deepEqual(solo.modelCapabilities, original.modelCapabilities);
+  assert.equal(solo.executor, undefined); assert.equal(solo.goal.id, original.goal.id); assert.equal(solo.executionState, 'paused');
+  assert.equal(solo.goal.tokensUsed, 60); assert.equal(solo.goal.tokenBudget, original.goal.tokenBudget);
+  assert.equal(events(session.id).find(event => event.seq === reply.seq).data.text, '[b]Original response[/b]');
+  assert.equal(events(session.id).filter(event => event.type === 'mode.changed').length, 2);
+  assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('session').length, 1); assert.equal(defaultSelection(), null);
+});
+
+test('mode switches always require a paused chat and reject queued work, live workers and group/Agent contexts', () => {
+  const session = goalSession(), owner = randomUUID(); claimInput(session.id, owner);
+  for (const state of ['idle', 'failed', 'cancelled']) {
+    session.executionState = state; session.goal.status = 'paused'; saveSession(session);
+    assert.throws(() => switchMode(session, owner, 'delegate'), /\/pause or \/goal pause/);
+    assert.throws(() => switchMode(session, owner, 'solo'), /\/pause or \/goal pause/);
+  }
+  session.executionState = 'paused'; saveSession(session);
+  putRecord('execution', 'busy', { id: 'busy', sessionId: session.id, state: 'queued' });
+  assert.throws(() => switchMode(session, owner, 'delegate'), /still running/);
+  putRecord('execution', 'busy', { id: 'busy', sessionId: session.id, state: 'finished' });
+  putRecord('assignment', 'worker', { id: 'worker', parentSessionId: session.id, goalId: 'an-older-goal', currentRound: 1 });
+  putRecord('round', 'worker:1', { state: 'starting' });
+  assert.throws(() => switchMode(session, owner, 'solo'), /workers are still stopping/);
+  putRecord('round', 'worker:1', { state: 'cancelled' });
+  for (const marker of [{ purpose: 'agent' }, { parentSessionId: 'parent' }, { mode: 'besties' }, { mode: 'parallel' }]) {
+    const fresh = { ...session, ...marker }; saveSession(fresh);
+    assert.throws(() => switchMode(fresh, owner, 'solo'), /solo, Delegate or Debate|individual agent/);
+    saveSession(session);
+  }
+  assert.equal(loadSession(session.id).mode, 'solo');
+});
+
+test('/goal pause from the local idle chat confirms a pause without reopening a completed goal', async () => {
+  for (const completed of [false, true]) {
+    const session = goalSession();
+    if (completed) { session.goal.status = 'complete'; session.acceptance = { passed: true }; saveSession(session); }
+    await controlSavedGoal(session, 'pause', {}, { event() {} });
+    const paused = loadSession(session.id); assert.equal(paused.executionState, 'paused');
+    assert.equal(paused.goal.status, completed ? 'complete' : 'paused');
+    claimInput(session.id, 'owner');
+    assert.equal(switchMode(session, 'owner', 'delegate').executionState, 'paused');
+    assert.equal(listRecords('execution').length, 0);
+  }
+});
+
+test('paused solo/debate/delegate switches retain the original solo selection and use persisted Debate agents for explicit work', async () => {
+  const session = goalSession(); session.model = 'solo-original'; session.selectedEffort = 'xhigh'; saveSession(session);
+  claimInput(session.id, 'owner'); updateIdleGoal(session.id, 'owner', 'pause');
+  const agents = [delegateSelection.supervisor, delegateSelection.executor, { provider: 'codex', model: 'third-agent', effort: 'default', capabilities: null }];
+  assert.throws(() => switchMode(session, 'owner', 'debate', { agents: agents.slice(0, 1) }), /two or three/);
+  const changed = switchMode(session, 'owner', 'debate', { agents });
+  assert.equal(changed.mode, 'debate'); assert.deepEqual(changed.debateAgents, agents); assert.equal(changed.executor, undefined);
+  assert.equal(changed.goal.id, session.goal.id); assert.equal(changed.goal.status, 'paused'); assert.equal(changed.executionState, 'paused');
+  switchMode(session, 'owner', 'delegate');
+  assert.equal(loadSession(session.id).debateAgents, undefined);
+  const solo = switchMode(session, 'owner', 'solo');
+  assert.equal(solo.model, 'solo-original'); assert.equal(solo.selectedEffort, 'xhigh'); assert.equal(solo.executionState, 'paused');
+  switchMode(session, 'owner', 'debate', { agents });
+  assert.equal(listRecords('execution').length, 0);
+  const job = await enqueueGoalTurn(session.id, 'owner', { mode: 'delegate', debateAgents: [agents[0], agents[0]] }, {
+    resume: true, requestId: randomUUID(),
+  });
+  assert.equal(getRecord('execution', job.executionId).options.mode, 'debate');
+  assert.deepEqual(getRecord('execution', job.executionId).options.debateAgents, agents);
+  assert.equal(loadSession(session.id).goal.id, session.goal.id);
+});
+
+test('mode mutation rechecks ownership, authorization, the selected revision and both agent choices atomically', () => {
+  const session = goalSession(), owner = randomUUID();
+  assert.throws(() => switchMode(session, owner, 'delegate'), /own input/);
+  claimInput(session.id, owner); updateIdleGoal(session.id, owner, 'pause');
+  const paused = loadSession(session.id), eventCount = events(session.id).length;
+  assert.throws(() => switchMode(session, owner, 'delegate', delegateSelection, 'stale'), { code: 'CONFLICT' });
+  assert.throws(() => switchMode(session, owner, 'delegate', { supervisor: delegateSelection.supervisor }), /both/);
+  assert.throws(() => switchMode(session, owner, 'delegate', { ...delegateSelection, executor: { provider: 'missing-provider' } }), /Unknown provider/);
+  assert.throws(() => switchMode(session, owner, 'delegate', { ...delegateSelection, executor: {} }), /installed provider/);
+  assert.throws(() => setSessionMode(session.id, owner, { mode: 'delegate', selection: delegateSelection, expectedUpdatedAt: paused.updatedAt },
+    { authorize() { throw new Error('Revoked'); } }), /Revoked/);
+  assert.deepEqual(loadSession(session.id), paused); assert.equal(events(session.id).length, eventCount);
+  claimInput(session.id, 'other-client', true);
+  assert.throws(() => switchMode(session, owner, 'delegate'), /own input/);
+  assert.deepEqual(loadSession(session.id), paused);
+});
+
+test('a chat launched as Delegate can return to its saved solo default without changing either default', () => {
+  const preset = createSession(BUILTINS.codex, workspace, 'solo-default'); preset.selectedEffort = 'low';
+  saveDefaultSelection(preset); const savedDefault = defaultSelection();
+  const session = createSession(BUILTINS.claude, workspace, 'delegate-brain');
+  Object.assign(session, { mode: 'delegate', executor: delegateSelection.executor, executionState: 'paused' }); saveSession(session);
+  claimInput(session.id, 'owner');
+  const solo = switchMode(session, 'owner', 'solo');
+  assert.equal(solo.provider, savedDefault.provider); assert.equal(solo.model, savedDefault.model); assert.equal(solo.selectedEffort, savedDefault.effort);
+  assert.deepEqual(defaultSelection(), savedDefault); assert.equal(solo.executionState, 'paused');
+});
+
+test('pausing a completed goal permits a mode switch without reopening verified completion', () => {
+  const session = goalSession(); session.goal.status = 'complete'; session.acceptance = { passed: true }; saveSession(session);
+  claimInput(session.id, 'owner'); const paused = updateIdleGoal(session.id, 'owner', 'pause');
+  assert.equal(paused.goal.status, 'complete'); assert.equal(paused.executionState, 'paused');
+  const changed = switchMode(session, 'owner', 'delegate');
+  assert.equal(changed.goal.status, 'complete'); assert.deepEqual(changed.acceptance, { passed: true });
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('an explicit new goal after switching uses the persisted mode/executor despite stale launch options', async () => {
+  const session = goalSession(); claimInput(session.id, 'owner'); updateIdleGoal(session.id, 'owner', 'pause');
+  switchMode(session, 'owner', 'delegate');
+  const job = await enqueueGoalTurn(session.id, 'owner', { mode: 'solo', executor: 'deepseek', executorModel: 'stale-executor' }, {
+    objective: 'New delegated objective', replaceGoalId: session.goal.id,
+    request: async () => ({ capabilities: {}, execution: null }),
+  });
+  const fresh = loadSession(session.id);
+  assert.equal(fresh.mode, 'delegate'); assert.deepEqual(fresh.executor, delegateSelection.executor);
+  assert.equal(fresh.goal.objective, 'New delegated objective'); assert.equal(listRecords('execution').length, 1);
+  putRecord('execution', job.executionId, { ...getRecord('execution', job.executionId), state: 'finished' });
+  updateIdleGoal(session.id, 'owner', 'pause'); switchMode(session, 'owner', 'solo');
+  await enqueueGoalTurn(session.id, 'owner', { mode: 'delegate', executor: 'deepseek' }, {
+    objective: 'New solo objective', replaceGoalId: fresh.goal.id,
+    request: async () => ({ capabilities: {}, execution: null }),
+  });
+  assert.equal(loadSession(session.id).mode, 'solo'); assert.equal(loadSession(session.id).executor, undefined);
+});
 
 test('Core model mutations reject missing and transferred input ownership', () => {
   const session = goalSession(), owner = randomUUID(), selection = { model: 'core-fixture-model', effort: 'default', capabilities: null };

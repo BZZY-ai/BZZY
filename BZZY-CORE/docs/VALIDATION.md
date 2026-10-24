@@ -1,3 +1,22 @@
+# Paused terminal mode switches (2026-10-24)
+
+Node 24 on Apple Silicon macOS: Core **253 passed, 1 platform skip**; CLI
+**462 passed, 21 platform skips**. Both syntax checks passed. Native Linux
+service verification remains a platform check; these are not VPS deployment results.
+
+Core checks solo/Delegate/Debate switches against confirmed paused execution,
+input ownership, the selected revision, queued work and unfinished worker rounds.
+They retain the chat/goal IDs, cwd, transcript, contract, policy, evidence and
+budget; returning to solo restores the prior selection. Explicit work reads the
+persisted mode/agents even when an older client supplies stale launch options.
+
+CLI checks use the real local daemon and a real PTY: an unpaused switch is denied;
+`/pause`, `/delegate`, `/debate`, `/solo` remain in one chat and start no inference.
+Attached chats support the same commands; read-only views cannot switch, and
+picker cancellation/ownership transfer preserve the paused conversation. Local
+idle `/goal pause` also confirms a pause without reopening verified completion.
+The existing `/debate <focus>` reply-challenge path remains available.
+
 # Current integrated platform validation
 
 Validated across 2026-10-22/23 with Node.js 24.22.1 on Apple Silicon macOS. Automated

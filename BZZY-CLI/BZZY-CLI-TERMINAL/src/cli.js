@@ -13,7 +13,7 @@ import { checkConnections } from './connection-check.js';
 import { UI } from './ui.js';
 import { Pet } from './mascot.js';
 import { NotificationHub } from './notifications.js';
-import { executeManaged, submitManagedGoal, viewSession, attachSession, changeSessionModel } from './runtime-client.js';
+import { executeManaged, submitManagedGoal, viewSession, attachSession, changeSessionModel, conversationModeCommand, controlSession } from './runtime-client.js';
 import { ensureRuntime, runtimeInfo, runtimeRequest } from './runtime.js';
 import { agentChoice } from './delegation.js';
 import { readContextFile } from './task.js';
@@ -133,13 +133,15 @@ Options:
   -h, --help            Show help
   -v, --version         Show version
 
-Chat commands: /goal <objective>, /goal status|pause|resume|clear,
+Chat commands: /goal <objective>, /goal status|pause|resume|clear, /delegate, /debate, /solo,
 /new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skill_that [name], /providers [name], /models [name|default], /default, /usage, /settings, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
 /default saves a separate preset for normal chat, delegate, debate, besties or parallel.
 Mode flags automatically use their saved defaults; --default also requires a saved preset.
+/delegate and /debate switch this paused chat to their saved combo; /solo (or /singular) restores its previous single agent.
+Use /pause or /goal pause first. Switching preserves history and goals and never resumes work.
 /models: ↑/↓ chooses a model; ←/→ sets supported effort; Enter confirms.
 /provider and /model are aliases. /quit also exits.
 Delegation: choose a strong brain and a less expensive executor; describe one overall goal.
@@ -371,6 +373,18 @@ async function chat(provider, options, ui, existingSession) {
     if (await ui.settingsCommand(input)) continue;
     options = ui.executionOptions(options, session);
     try {
+      if (await conversationModeCommand(input, session.id, ui)) {
+        session = loadSession(session.id); provider = getProvider(session.provider);
+        options = { ...options, mode: session.mode, provider: session.provider, model: session.model, effort: session.selectedEffort,
+          executor: session.executor?.provider, executorModel: session.executor?.model, debateAgents: session.debateAgents };
+        continue;
+      }
+      if (input === '/pause' || input === '/cancel') {
+        await controlSession(session, input.slice(1));
+        session = loadSession(session.id); ui.updateSession?.(session);
+        ui.event('info', { message: input === '/pause' ? 'Chat paused. You can use /delegate, /debate or /solo; work stays paused until you continue.' : 'Chat cancelled.' });
+        continue;
+      }
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
       if (input === '/sessions') { const selected = await chooseSavedSession(ui); if (selected) return await attachSession(selected.session, options, ui); continue; }
       if (input === '/doctor') { await checkConnections(ui, { providerId: session.provider, live: true, model: session.model, effort: session.selectedEffort, session }); continue; }
@@ -421,7 +435,7 @@ async function chat(provider, options, ui, existingSession) {
 
 async function debateConversation(source, focus, options, ui) {
   if (!source) throw new Error('No conversation selected.');
-  const agents = options.debateAgents || await chooseDebate({ ...options, provider: source.provider, model: source.model }, ui);
+  const agents = (source.mode === 'debate' && source.debateAgents) || options.debateAgents || await chooseDebate({ ...options, provider: source.provider, model: source.model }, ui);
   if (!agents) return;
   const selected = agents.slice(1);
   const debate = prepareChatDebate(source, focus, selected, { ...options, debateAgents: agents });

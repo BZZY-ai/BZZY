@@ -12,6 +12,12 @@ the same engine and private state.
 
 Implemented:
 
+- Paused terminal conversations can switch between solo, Delegate and Debate through
+  Core's owner operations, preserving chat/goal identity, history, policies and
+  budgets. CLI `/delegate` and `/debate` use saved mode defaults or setup; `/solo` restores
+  the prior solo model. Switching requires a confirmed pause with stopped
+  workers and never submits inference or resumes a goal.
+
 - Local-owner deletion of saved terminal chats, shared by the CLI and iPhone
   catalog. Durable tombstones prevent old snapshots from restoring a removed
   conversation; active work must stop first. Project files and private execution/
