@@ -1,4 +1,4 @@
-import { officialRepository, isPackagedInstallation, updatePackagedInstallation, updateRepositoryInstallation } from './installation-update.js';
+import { officialRepository, isPackagedInstallation, isCoreInstallation, updatePackagedInstallation, updateRepositoryInstallation } from './installation-update.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -63,7 +63,7 @@ export async function updateCoreAndCLI(directory = installationRoot, { expectedC
   try {
     const workspace = path.resolve(directory, '../..');
     const fullWorkspace = path.resolve(directory) === path.join(workspace, 'BZZY-CLI', 'BZZY-CLI-TERMINAL') && fs.existsSync(path.join(workspace, 'BZZY-CORE', 'package.json'));
-    if (!fullWorkspace && isPackagedInstallation(directory)) return await updatePackagedInstallation(directory, { expectedCommit, lockHeld: true });
+    if (!fullWorkspace && (isPackagedInstallation(directory) || isCoreInstallation(directory))) return await updatePackagedInstallation(directory, { expectedCommit, lockHeld: true });
     const { checkInstallationUpdate } = await import('./update-check.js');
     const check = await checkInstallationUpdate({ directory });
     if (check.blocked) throw new Error(check.blocked);

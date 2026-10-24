@@ -24,11 +24,12 @@ function fixture(t) {
  };
  return { root, directory, state, run };
 }
-test('the combined checker accepts only BZZY GitHub and protects local changes', async t => {
+test('the combined checker selects official releases without requiring a clean or attached source checkout', async t => {
  const f = fixture(t), check = await checkInstallationUpdate(f);
  assert.equal(check.available, true); assert.equal(check.blocked, null); assert.equal(f.state.installs.length, 0);
- f.state.dirty = ' M BZZY-CORE/source.js'; assert.match((await checkInstallationUpdate(f)).blocked, /Local changes/);
- f.state.dirty = ''; f.state.branch = 'feature'; assert.match((await checkInstallationUpdate(f)).blocked, /Switch/);
+ f.state.dirty = ' M BZZY-CORE/source.js\n?? user-reference/'; assert.equal((await checkInstallationUpdate(f)).blocked, null);
+ f.state.branch = 'feature'; assert.equal((await checkInstallationUpdate(f)).blocked, null);
+ f.state.branch = null; assert.equal((await checkInstallationUpdate(f)).available, true);
  f.state.origin = 'https://github.com/other/project.git'; await assert.rejects(checkInstallationUpdate(f), /origin must be BZZY/);
  assert.equal(officialRepository('https://github.com/BZZY-ai/BZZY.git'), true);
  assert.equal(officialRepository('https://github.com/BZZY-ai/BZZY.git?token=private'), false);

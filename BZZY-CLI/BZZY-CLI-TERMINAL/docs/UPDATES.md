@@ -40,18 +40,27 @@ A CLI that predates this behavior still uses its already-loaded updater for the
 first upgrade. Reopen it once after that upgrade; subsequent TUI updates reload
 automatically.
 
-Checks enforce a complete Git checkout, an official GitHub origin, an attached
-default branch and a clean worktree across the entire workspace. Local edits,
-untracked files, detached/divergent history and unexpected origins block updates.
-The installation and remote revision are rechecked before applying. A lock
-prevents concurrent updates, and a separate Git checkout uses the exact revision
-shown in the checker rather than a moving branch tip. There is no reset, merge
-commit, auto-stash, credential transfer or change to global Git trust.
+Source checks verify the complete installation and its official GitHub origin,
+then select the official default-branch revision. The installed checkout can be
+dirty, detached, on another branch, or contain local commits and untracked user
+files. Its location and the shell's current directory do not affect the update:
+Core resolves the running installation, and activation uses the existing launcher
+location. The original checkout is retained without a pull, reset, auto-stash,
+cleanup or dependency replacement. Local customizations stay there; the new
+release runs the official product code.
+
+The exact reviewed revision is installed in a separate owned release directory.
+If a cached copy of that revision has local edits, unexpected history/origin or
+incomplete dependencies, it is retained and a fresh uniquely named checkout is
+prepared instead. An unsafe release-root/launcher location, a concurrent update,
+missing permissions or unavailable GitHub access still causes a visible failure;
+no updater can bypass those requirements. Git trust is scoped to individual
+commands and never added globally.
 
 The existing `bzzy --update` command remains available. Installer failures return
 an explicit retry instruction; downloaded source remains available for repair.
 A failed installation is not reported as success. Packaged installations use the
-same checker and fetch the official GitHub repository into an owned managed
+same checker (including standalone Core packages) and fetch the official GitHub repository into an owned managed
 release under `~/.local/share/bzzy/versions/<commit>`. The exact checked revision is
 installed there, and the existing CLI/Core launchers are switched by the
 installer. The old package and all private Core state remain available; a failed
@@ -90,3 +99,21 @@ hash only). These APIs expose safe update metadata and job state, never local
 installation paths, credentials, raw helper logs or owner tokens. The iOS app
 itself still needs its separately built/distributed app update to display these
 controls; host updates install CLI/Core, not the iOS binary.
+
+## Older updater compatibility
+
+An already-installed updater may still display “Local changes must be committed
+or stashed before updating.” It cannot acquire its own fix through that blocked
+check. As your usual BZZY user, run this once from any directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BZZY-ai/BZZY/main/BZZY-CORE/scripts/repair-updater.py | python3
+```
+
+The repair reads the installed managed launcher to find its package and Node 24+
+runtime, downloads the official updater at a verified commit and invokes the same
+separate-release installer. It preserves the original checkout, private state,
+existing launcher location and active execution sources. Reopen BZZY afterward;
+future updates use `bzzy --update`. A manual/nonstandard launcher can use explicit
+`--installation /absolute/package` and `--node /absolute/node` paths after saving
+the script locally. No private account configuration is part of the repair.

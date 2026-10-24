@@ -1,4 +1,4 @@
-import { checkPackagedUpdate, isPackagedInstallation, officialRepository, updateRepository, parseUpdateHead } from './installation-update.js';
+import { checkPackagedUpdate, isPackagedInstallation, isCoreInstallation, officialRepository, updateRepository, parseUpdateHead } from './installation-update.js';
 export { officialRepository, updateRepository } from './installation-update.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,7 @@ export function installationDirectory() {
   const workspace = path.resolve(core, '../BZZY-CLI/BZZY-CLI-TERMINAL');
   if (fs.existsSync(path.join(workspace, 'package.json'))) return workspace;
   const packaged = path.resolve(core, '../../..');
-  return isPackagedInstallation(packaged) ? packaged : null;
+  return isPackagedInstallation(packaged) ? packaged : isCoreInstallation(core) ? core : null;
 }
 export function runUpdateCommand(command, args, { cwd, signal, inherit = false, target } = {}) {
   return new Promise((resolve, reject) => {
@@ -29,21 +29,18 @@ export async function checkInstallationUpdate({ directory = installationDirector
   if (!directory) throw new Error('A complete CLI/Core installation is required for combined updates.');
   const cwd = fs.realpathSync(directory), workspace = path.resolve(cwd, '../..');
   if (cwd !== path.join(workspace, 'BZZY-CLI', 'BZZY-CLI-TERMINAL') || !fs.existsSync(path.join(workspace, 'BZZY-CORE', 'package.json'))) {
-    if (isPackagedInstallation(cwd)) return checkPackagedUpdate(cwd, { run, signal });
+    if (isPackagedInstallation(cwd) || isCoreInstallation(cwd)) return checkPackagedUpdate(cwd, { run, signal });
     throw new Error('Combined updates require a BZZY workspace or an installed BZZY package.');
   }
   const git = args => run('git', ['-c', `safe.directory=${workspace}`, ...args], { cwd: workspace, signal });
   if (fs.realpathSync(await git(['rev-parse', '--show-toplevel'])) !== workspace) throw new Error('The installation is not a complete BZZY checkout.');
-  const [head, branch, origin, dirty] = await Promise.all([
-    git(['rev-parse', 'HEAD']), git(['symbolic-ref', '--quiet', '--short', 'HEAD']), git(['remote', 'get-url', 'origin']), git(['status', '--porcelain', '--untracked-files=normal']),
-  ]);
+  const [head, origin] = await Promise.all([git(['rev-parse', 'HEAD']), git(['remote', 'get-url', 'origin'])]);
   if (!officialRepository(origin)) throw new Error('The installation origin must be BZZY-ai/BZZY on GitHub.');
   const remote = await git(['ls-remote', '--symref', 'origin', 'HEAD']);
   const { target, branch: targetBranch } = parseUpdateHead(remote);
-  const blocked = dirty ? 'Local changes must be committed or stashed before updating.' : branch !== targetBranch ? `Switch the installation to ${targetBranch} before updating.` : null;
-  let ahead = false;
-  if (head !== target) { try { await git(['merge-base', '--is-ancestor', target, head]); ahead = true; } catch {} }
-  return { repository: updateRepository, current: head, target, branch: targetBranch, available: head !== target && !ahead, blocked: blocked || (ahead ? 'This checkout is ahead of GitHub. No downgrade will be performed.' : null), checkedAt: Date.now(), directory: cwd };
+  // The source is retained verbatim. Installation switches launchers to a new
+  // official release, so local edits, branches and detached HEADs need no repair.
+  return { repository: updateRepository, current: head, target, branch: targetBranch, available: head !== target, blocked: null, checkedAt: Date.now(), directory: cwd };
 }
 
 export async function applyInstallationUpdate(check, { run = runUpdateCommand, inherit = true } = {}) {

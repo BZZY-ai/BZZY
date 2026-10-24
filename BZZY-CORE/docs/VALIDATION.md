@@ -362,3 +362,16 @@ environment handling; rerun that harness for its current status.
 Normal reinstalls retain one identity only while the same private BZZY_HOME is
 preserved. Full private-state deletion creates a fresh identity deliberately.
 The installed user CLI/Core and physical iPhone were not automatically updated.
+
+## Updater installation-location recovery (2026-10-24)
+
+All 244 Core tests and the CLI suite (444 pass, 21 platform/optional skips) pass.
+The updater cases use disposable local Git remotes and verify that source edits,
+untracked projects, detached/local-only history, custom paths and old dependencies
+remain byte-for-byte intact while launchers activate a separately staged official
+revision. Cached dirty/incomplete releases are retained and bypassed. Standalone
+Core packages use the same release installer. Two additional Python-bootstrap
+fixtures pass for managed-launcher discovery and explicit custom paths from an
+unrelated cwd, with whitespace/apostrophes in installation paths. They verify
+exact revision selection and preservation of the original source. No real
+installation is updated by these tests.

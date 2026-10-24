@@ -58,6 +58,13 @@ export function isPackagedInstallation(directory) {
   } catch { return false; }
 }
 
+export function isCoreInstallation(directory) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')).name === '@bzzy/core'
+      && fs.existsSync(path.join(directory, 'bin', 'bzzy-core.js')) && fs.existsSync(path.join(directory, 'node_modules', '@bzzy', 'relay', 'package.json'));
+  } catch { return false; }
+}
+
 export function parseUpdateHead(output) {
   const target = /^([a-f0-9]{40,64})\s+HEAD$/m.exec(output)?.[1];
   const branch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(output)?.[1];
@@ -66,7 +73,7 @@ export function parseUpdateHead(output) {
 }
 
 export async function checkPackagedUpdate(directory, { run, signal } = {}) {
-  if (!isPackagedInstallation(directory)) throw new Error('This is not an installed BZZY package.');
+  if (!isPackagedInstallation(directory) && !isCoreInstallation(directory)) throw new Error('This is not an installed BZZY CLI or Core package.');
   const output = await run('git', ['ls-remote', '--symref', updateRepository, 'HEAD'], { cwd: directory, signal });
   const { target, branch } = parseUpdateHead(output);
   let current = 'packaged-release';
@@ -114,7 +121,7 @@ export async function withPausedCore(directory, install, { run = spawnSync, life
 }
 
 export async function updatePackagedInstallation(directory, options = {}) {
-  if (!isPackagedInstallation(directory)) throw new Error('This is not an installed BZZY package.');
+  if (!isPackagedInstallation(directory) && !isCoreInstallation(directory)) throw new Error('This is not an installed BZZY CLI or Core package.');
   return updateRepositoryInstallation(directory, options);
 }
 
@@ -138,7 +145,22 @@ export async function updateRepositoryInstallation(directory, { expectedCommit =
     if (!revision(target)) throw new Error('Invalid checked BZZY revision.');
     ownedDirectory(releaseRoot);
     const versions = path.join(releaseRoot, 'versions'); ownedDirectory(versions);
-    const checkout = path.join(versions, target), prepared = path.join(versions, target + '.prepared');
+    let checkout = path.join(versions, target);
+    let retained;
+    try { retained = fs.lstatSync(checkout); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (retained) {
+      let reusable = false;
+      if (retained.isDirectory() && !retained.isSymbolicLink() && !(retained.mode & 0o022) && (!process.getuid || retained.uid === process.getuid())) {
+        try {
+          reusable = officialRepository(git(['remote', 'get-url', 'origin'], checkout))
+            && git(['rev-parse', 'HEAD'], checkout) === target
+            && !git(['status', '--porcelain', '--untracked-files=normal'], checkout)
+            && (fs.existsSync(checkout + '.prepared') || !fs.existsSync(path.join(checkout, 'BZZY-CLI/BZZY-CLI-TERMINAL/node_modules')));
+        } catch { /* Keep an altered or incomplete release intact; prepare a fresh one. */ }
+      }
+      if (!reusable) checkout = path.join(versions, `${target}-${randomUUID()}`);
+    }
+    const prepared = checkout + '.prepared';
     if (!fs.existsSync(checkout)) {
       const stage = fs.mkdtempSync(path.join(releaseRoot, '.update-'));
       try {

@@ -4,10 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { updateRepository, checkPackagedUpdate, updatePackagedInstallation } from '../src/packaged-update.js';
+import { updateRepository, checkPackagedUpdate, updatePackagedInstallation, updateRepositoryInstallation, isCoreInstallation } from '../src/packaged-update.js';
+import { checkInstallationUpdate } from '../src/update-checker.js';
 import { lockFile } from '@bzzy/core/engine/store.js';
 
-function fixture(t, { failInstall = false, failPrepare = false, running = true } = {}) {
+function fixture(t, { failInstall = false, failPrepare = false, running = true, coreOnly = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-package-update-'));
   const bin = path.join(root, 'bin'), previousBin = process.env.BZZY_BIN_DIR, previousHome = process.env.BZZY_HOME;
   process.env.BZZY_BIN_DIR = bin; process.env.BZZY_HOME = path.join(root, 'private'); fs.mkdirSync(bin);
@@ -25,8 +26,12 @@ function fixture(t, { failInstall = false, failPrepare = false, running = true }
   fs.writeFileSync(path.join(cli, 'install.sh'), '#!/bin/sh\nif [ "$1" = --prepare-only ]; then exit ' + (failPrepare ? '21' : '0') + '; fi\nmkdir -p "$BZZY_BIN_DIR"\nprintf "# bzzy-managed launcher\\nnew revision\\n" > "$BZZY_BIN_DIR/bzzy"\n' + (failInstall ? 'exit 23\n' : 'exit 0\n'));
   fs.writeFileSync(path.join(author, 'version.txt'), 'checked'); git(author, 'add', '.'); git(author, 'commit', '-m', 'Checked release'); git(author, 'push', 'origin', 'main');
   const checked = git(author, 'rev-parse', 'HEAD');
-  fs.mkdirSync(path.join(directory, 'bin'), { recursive: true }); fs.mkdirSync(path.join(directory, 'node_modules/@bzzy/core'), { recursive: true });
-  fs.writeFileSync(path.join(directory, 'package.json'), '{"name":"bzzy-cli"}'); fs.writeFileSync(path.join(directory, 'bin/bzzy.js'), '// old package'); fs.writeFileSync(path.join(directory, 'node_modules/@bzzy/core/package.json'), '{}');
+  fs.mkdirSync(path.join(directory, 'bin'), { recursive: true });
+  const dependency = path.join(directory, coreOnly ? 'node_modules/@bzzy/relay' : 'node_modules/@bzzy/core');
+  fs.mkdirSync(dependency, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ name: coreOnly ? '@bzzy/core' : 'bzzy-cli' }));
+  fs.writeFileSync(path.join(directory, coreOnly ? 'bin/bzzy-core.js' : 'bin/bzzy.js'), '// old package');
+  fs.writeFileSync(path.join(dependency, 'package.json'), '{}');
   for (const name of ['bzzy', 'bzzy-core']) fs.writeFileSync(path.join(bin, name), '# bzzy-managed launcher\nold revision\n', { mode: 0o755 });
   const service = [], commands = [];
   const lifecycle = { async coreHostStatus() { return { running, operatorStopped: !running }; }, beginCoreMaintenance() { service.push('maintenance'); return () => service.push('release'); }, async suspendCoreHost() { service.push('suspend'); commands.push({ executable: 'core-suspend', args: [] }); }, async stopCoreHost() { assert.fail('Updates must not pause executions'); } };
@@ -61,8 +66,12 @@ test('the old packaged CLI fetches the checked revision and installs CLI/Core to
   const suspend = f.commands.findIndex(c => c.executable === 'core-suspend');
   assert.ok(prepare >= 0 && prepare < suspend, 'dependencies are prepared while existing Core is still running');
   fs.writeFileSync(path.join(checkout, 'BZZY-CORE/package.json'), '{"local":true}');
-  await assert.rejects(updatePackagedInstallation(f.directory, { expectedCommit: f.checked, releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle }), /local changes/);
-  assert.equal(f.service.length, 4, 'a dirty retained release cannot suspend Core or install');
+  await updatePackagedInstallation(f.directory, { expectedCommit: f.checked, releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle });
+  assert.equal(fs.readFileSync(path.join(checkout, 'BZZY-CORE/package.json'), 'utf8'), '{"local":true}', 'modified retained releases stay intact');
+  const fresh = fs.readdirSync(path.join(f.releaseRoot, 'versions')).filter(name => name.startsWith(f.checked + '-') && !name.endsWith('.prepared'));
+  assert.equal(fresh.length, 1);
+  assert.equal(f.git(path.join(f.releaseRoot, 'versions', fresh[0]), 'status', '--porcelain'), '');
+  assert.equal(f.service.length, 8);
 });
 
 test('failed package upgrades restore old launchers and recover the retained old service', async t => {
@@ -110,4 +119,61 @@ test('preparation failure leaves Core, launchers and all active releases untouch
   await assert.rejects(updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle }), /update command failed/);
   assert.deepEqual(f.service, []);
   assert.match(fs.readFileSync(path.join(f.bin, 'bzzy'), 'utf8'), /old revision/);
+});
+
+
+test('a standalone Core package checks and updates from an arbitrary path into the combined release', async t => {
+  const f = fixture(t, { coreOnly: true });
+  assert.equal(isCoreInstallation(f.directory), true);
+  const run = async (executable, args, options) => {
+    const result = f.run(executable, args, options);
+    if (result.status !== 0) throw new Error('Fixture command failed');
+    return result.stdout.trim();
+  };
+  const check = await checkInstallationUpdate({ directory: f.directory, run });
+  assert.equal(check.packaged, true); assert.equal(check.target, f.checked); assert.equal(check.blocked, null);
+  await updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, expectedCommit: check.target, run: f.run, lifecycle: f.lifecycle });
+  assert.equal(fs.readFileSync(path.join(f.directory, 'bin/bzzy-core.js'), 'utf8'), '// old package');
+  assert.equal(f.git(path.join(f.releaseRoot, 'versions', f.checked), 'rev-parse', 'HEAD'), f.checked);
+});
+
+test('official source updates retain dirty files, untracked projects, detached local history and the original path', async t => {
+  const f = fixture(t), source = path.join(f.root, "arbitrary server folder's source");
+  f.git(f.root, 'clone', path.join(f.root, 'remote.git'), source);
+  f.git(source, 'remote', 'set-url', 'origin', updateRepository);
+  fs.writeFileSync(path.join(source, 'local-commit.txt'), 'private custom behavior');
+  f.git(source, 'add', '.'); f.git(source, 'commit', '-m', 'Local-only history');
+  f.git(source, 'checkout', '--detach');
+  const localHead = f.git(source, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(source, 'BZZY-CORE/package.json'), '{"local":true}');
+  fs.mkdirSync(path.join(source, 'user references')); fs.writeFileSync(path.join(source, 'user references/notes.txt'), 'untracked project notes');
+  const before = f.git(source, 'status', '--porcelain');
+  fs.writeFileSync(path.join(f.author, 'version.txt'), 'official next'); f.git(f.author, 'add', '.'); f.git(f.author, 'commit', '-m', 'Next official release'); f.git(f.author, 'push', 'origin', 'main');
+  const target = f.git(f.author, 'rev-parse', 'HEAD');
+  const run = async (executable, args, options) => {
+    const result = f.run(executable, args, options);
+    if (result.status !== 0) throw new Error('Fixture command failed');
+    return result.stdout.trim();
+  };
+  const directory = path.join(source, 'BZZY-CLI/BZZY-CLI-TERMINAL');
+  const check = await checkInstallationUpdate({ directory, run });
+  assert.equal(check.current, localHead); assert.equal(check.target, target); assert.equal(check.blocked, null);
+  await updateRepositoryInstallation(directory, { expectedCommit: target, releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle });
+  assert.equal(f.git(source, 'rev-parse', 'HEAD'), localHead);
+  assert.equal(f.git(source, 'status', '--porcelain'), before);
+  assert.equal(fs.readFileSync(path.join(source, 'BZZY-CORE/package.json'), 'utf8'), '{"local":true}');
+  assert.equal(fs.readFileSync(path.join(source, 'user references/notes.txt'), 'utf8'), 'untracked project notes');
+  assert.equal(fs.readFileSync(path.join(f.releaseRoot, 'versions', target, 'version.txt'), 'utf8'), 'official next');
+  assert.ok(f.commands.every(command => command.executable !== 'git' || !command.args.some(arg => ['merge', 'pull', 'reset', 'stash', 'clean'].includes(arg))));
+});
+
+test('incomplete prepared releases are retained and replaced by a fresh checkout', async t => {
+  const f = fixture(t);
+  await updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle });
+  const retained = path.join(f.releaseRoot, 'versions', f.checked), modules = path.join(retained, 'BZZY-CLI/BZZY-CLI-TERMINAL/node_modules');
+  fs.mkdirSync(modules); fs.writeFileSync(path.join(modules, 'active-runner.js'), 'retain this dependency');
+  fs.unlinkSync(retained + '.prepared');
+  await updatePackagedInstallation(f.directory, { releaseRoot: f.releaseRoot, run: f.run, lifecycle: f.lifecycle });
+  assert.equal(fs.readFileSync(path.join(modules, 'active-runner.js'), 'utf8'), 'retain this dependency');
+  assert.equal(fs.readdirSync(path.dirname(retained)).filter(name => name.startsWith(f.checked) && !name.endsWith('.prepared')).length, 2);
 });

@@ -41,6 +41,11 @@ Implemented:
   managed folder through encrypted text-only requests, durable acceptance and
   read-only reply recovery. Apple Speech/TTS remain in iOS; see [voice](docs/VOICE.md).
 
+- Location-independent CLI/Core updates retain dirty, detached or customized
+  installations and stage the official revision separately. Modified cached
+  releases remain intact; standalone Core packages use the same combined update.
+  See [combined updates](../BZZY-CLI/BZZY-CLI-TERMINAL/docs/UPDATES.md).
+
 - Core-owned GitHub update discovery, durable update alerts and explicit full-phone remote update jobs. CLI and iOS use the same updater; see [combined updates](../BZZY-CLI/BZZY-CLI-TERMINAL/docs/UPDATES.md).
 
 - One versioned shared skills library with explicit enable/disable, folder/ZIP import, creation, bounded discovery/resource reads and provider-independent tools. See [skills](docs/SKILLS.md).
