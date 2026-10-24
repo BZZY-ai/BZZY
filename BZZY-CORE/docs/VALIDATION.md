@@ -1,3 +1,19 @@
+# Codex skill sync across models (2026-10-24)
+
+Node 24 on Apple Silicon: Core **266 passed, 1 platform skip**; CLI **464
+passed, 21 skips**. Both syntax checks passed. The existing Skills UI exercises
+sync, review and explicit enable without starting inference or changing chats.
+
+Isolated filesystem fixtures cover Linux/macOS discovery roots, project ancestry,
+full package/resources, duplicate names, repeat-run enable preservation, managed
+updates, independent local edits, source deletion, invalid UTF-8, source changes
+after preview, linked folders and credential rejection. Helpers never execute.
+Two arbitrary model selections on each of Codex, Claude, DeepSeek, Abliteration
+and OrcaRouter read the same enabled instructions/reference through Core tools.
+These verify shared library access and request instructions, not live model
+compliance or third-party integration availability. Tests use synthetic skill
+folders; no real private Codex skills were synced or installed.
+
 # iOS chat layout and five paused modes (2026-10-24)
 
 Node 24 on Apple Silicon: Core **260 passed, 1 platform skip**; CLI **463

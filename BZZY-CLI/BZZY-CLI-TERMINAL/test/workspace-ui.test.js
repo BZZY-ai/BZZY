@@ -10,6 +10,8 @@ import { createChatSession } from '@bzzy/core/engine/host-commands.js';
 import { getProvider } from '../src/providers.js';
 import { createSkill, inspectSkill } from '@bzzy/core/engine/skills.js';
 import { listRecords } from '../src/database.js';
+import { skillsCommand, skillRows } from '../src/skills-ui.js';
+import { syncCodexSkills } from '@bzzy/core/engine/skill-sync.js';
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-workspace-ui-')), previous = process.env.BZZY_HOME;
 process.env.BZZY_HOME = path.join(directory, 'private');
 test.after(() => { if (previous == null) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous; fs.rmSync(directory, { recursive: true, force: true }); });
@@ -21,6 +23,23 @@ function terminal() {
  ui.setSession(session.id); ui.updateSession({ ...session, alias: 'COOL' });
  return { ui, output, session };
 }
+
+test('Skills sync imports from Codex into the shared library and stays idle until explicit enable', async () => {
+ const { ui, session } = terminal(), source = path.join(directory, '.agents', 'skills', 'synced-ui-skill');
+ fs.mkdirSync(path.join(directory, '.git'), { recursive: true }); fs.mkdirSync(source, { recursive: true });
+ fs.writeFileSync(path.join(source, 'SKILL.md'), '---\nname: synced-ui-skill\ndescription: Review a UI across selected models.\n---\nInspect and verify the layout.\n');
+ try {
+  ui.tui.cwd = directory;
+  const before = listRecords('execution').length;
+  assert.ok(skillRows(ui).some(row => row.action === 'sync'));
+  await skillsCommand('/skills sync', ui, { sync: input => syncCodexSkills({ ...input, userHome: path.join(directory, 'empty-home'), codexHome: null, bzzyCodexHome: null, adminRoot: path.join(directory, 'empty-admin') }) });
+  assert.equal(ui.skillSyncResult.imported, 1); assert.equal(inspectSkill('synced-ui-skill').enabled, false);
+  assert.equal(listRecords('execution').length, before); assert.equal(ui.sessionId, session.id);
+  ui.chooseOne = async () => 'enable'; await skillsCommand('/skills toggle:synced-ui-skill', ui);
+  assert.equal(inspectSkill('synced-ui-skill').enabled, true);
+  assert.ok(skillRows(ui).some(row => row.text.includes('Codex → BZZY')));
+ } finally { ui.close(); }
+});
 test('empty first chat exposes model/effort/Save clicks and preserves unsent text', async () => {
  const { ui, output, session } = terminal();
  try {

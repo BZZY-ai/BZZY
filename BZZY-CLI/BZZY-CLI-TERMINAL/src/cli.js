@@ -38,6 +38,7 @@ import { readUpdateHandoff, execUpdatedCLI } from './update-handoff.js';
 import { retireTelegram } from './migrations.js';
 import { backendCommand } from '@bzzy/core/engine/entry.js';
 import { activateCLIHost, coreHostStatus, stopCoreHost, restartCoreHost } from '@bzzy/core/engine/host-service.js';
+import { syncCodexSkills, skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
@@ -48,6 +49,7 @@ Usage:
   bzzy "initial context" --goal "task"  Send context first, then start a durable goal
   bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
+  bzzy skills sync                     Sync Codex skills into the shared BZZY library
   bzzy --delegate                       Choose brain and hands; chat normally or start /goal
   bzzy --besties                        Choose two peers; chat normally or start a shared /goal
   bzzy --parallel [2|3]                 Select agents, enter a goal, then open their chat tabs
@@ -134,7 +136,7 @@ Options:
   -v, --version         Show version
 
 Chat commands: /goal <objective>, /goal status|pause|resume|clear, /delegate, /debate, /solo,
-/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skill_that [name], /providers [name], /models [name|default], /default, /usage, /settings, /help, /exit
+/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /skill_that [name], /providers [name], /models [name|default], /default, /usage, /settings, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
@@ -495,7 +497,7 @@ export async function main(argv) {
   options.cwd = fs.realpathSync(options.cwd);
   await retireTelegram();
   const launchCommand = args[0];
-  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth']);
+  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills']);
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
@@ -506,6 +508,11 @@ export async function main(argv) {
   ui.onSessions = () => queueSessionBrowser(ui);
   const launch = async () => {
     const [command, ...rest] = args;
+    if (command === 'skills') {
+      if (rest.length !== 1 || rest[0] !== 'sync') throw new Error('Use bzzy skills sync, or open Skills in the terminal.');
+      const result = syncCodexSkills({ cwd: options.cwd });
+      ui.event('info', { ...skillSyncReport(result), message: skillSyncSummary(result) }); return 0;
+    }
     if (command === 'settings') {
       if (!ui.interactive) throw new Error('Run bzzy settings in a private interactive terminal.');
       ui.settingsOnly = true; ui.openSettings();

@@ -54,7 +54,7 @@ Implemented:
 
 - Core-owned GitHub update discovery, durable update alerts and explicit full-phone remote update jobs. CLI and iOS use the same updater; see [combined updates](../BZZY-CLI/BZZY-CLI-TERMINAL/docs/UPDATES.md).
 
-- One versioned shared skills library with explicit enable/disable, folder/ZIP import, creation, bounded discovery/resource reads and provider-independent tools. See [skills](docs/SKILLS.md).
+- One versioned shared skills library with explicit enable/disable, folder/ZIP import, Codex skill sync on Linux/macOS, creation, bounded discovery/resource reads and provider-independent tools. Enabled skills stay available across model changes. See [skills](docs/SKILLS.md).
 
 - Sample host CPU/RAM and Core process usage once per second in the daemon.
   CLI and paired iOS display this shared cached telemetry; see

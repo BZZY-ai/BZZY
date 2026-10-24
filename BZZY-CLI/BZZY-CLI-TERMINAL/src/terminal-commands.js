@@ -21,6 +21,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /export [FILE.zip] Export the complete project, sessions, history, notes and evidence.
 /share             Share this complete terminal through Relay with an expiring QR/code.
 /import [CODE]     Import a terminal copy here; omit CODE for hidden entry.
+/skills            Browse shared workflows; /skills sync copies Codex skills for all models.
 --import FILE.zip|CODE Restore a project ZIP or Relay terminal copy here; keeps work paused.
 /skill_that [name] Turn the last completed goal into SKILL.md with detailed steps and references.
 /doctor            Test the current subscription login, backend connection and model reply.
@@ -36,7 +37,7 @@ Tab / Shift+Tab switch agent chats. bzzy --help lists options; bzzy --whoami exp
 
 export const chatCommands = [
   { command: '/update', description: 'Check GitHub and update CLI and Core together' },
-  { command: '/skills', description: 'View, create, import and enable shared Core skills' },
+  { command: '/skills', description: 'View, sync Codex skills, import and enable shared Core skills' },
   { command: '/goal', description: 'Work until an objective is resolved', argument: true },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/debate', description: 'Switch this paused chat to Debate; add a focus to challenge a reply' },

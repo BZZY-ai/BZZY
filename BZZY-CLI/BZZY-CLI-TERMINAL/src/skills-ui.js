@@ -1,6 +1,16 @@
 import { listSkills, inspectSkill, readSkill, importSkill, createSkill, setSkillEnabled } from '@bzzy/core/engine/skills.js';
+import { syncCodexSkills, skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
 
 export function skillRows(ui) {
+  if (ui.skillSyncDetails && ui.skillSyncResult) {
+    const result = ui.skillSyncResult, items = [...result.results.filter(item => ['conflict', 'rejected'].includes(item.status)), ...result.issues];
+    const offset = ui.skillSyncOffset || 0;
+    return [{ text: 'Codex sync details', tone: 'accent' },
+      ...items.slice(offset, offset + 20).flatMap(item => [{ text: `${item.name || item.scope} · ${item.status || 'skipped'}` }, { text: item.reason, tone: 'muted' }]),
+      ...(offset ? [{ text: 'Previous details', action: 'sync-previous' }] : []),
+      ...(offset + 20 < items.length ? [{ text: 'More details', action: 'sync-next' }] : []),
+      { text: 'Back to library', action: 'library' }];
+  }
   if (ui.skillPreview) {
     const page = ui.skillPreview;
     return [{ text: `${page.name}/${page.file} · ${page.version.slice(0, 8)}`, tone: 'accent' }, { text: page.text },
@@ -9,24 +19,34 @@ export function skillRows(ui) {
   const query = ui.skillQuery || '', offset = ui.skillOffset || 0;
   const page = listSkills({ query, offset, limit: 30 });
   const rows = [ { text: 'One Core library · all providers and models', tone: 'muted' },
-    { text: 'Import folder or ZIP', action: 'import' }, { text: 'Create skill', action: 'create' }, { text: `Search${query ? ': ' + query : '…'}`, action: 'search' }, { text: '' } ];
+    { text: 'Sync Codex skills', action: 'sync' }, { text: 'Import folder or ZIP', action: 'import' }, { text: 'Create skill', action: 'create' }, { text: `Search${query ? ': ' + query : '…'}`, action: 'search' }, { text: '' } ];
+  if (ui.skillSyncResult) {
+    rows.push({ text: skillSyncSummary(ui.skillSyncResult), tone: 'muted' });
+    if (ui.skillSyncResult.conflicts || ui.skillSyncResult.rejected || ui.skillSyncResult.unavailable) rows.push({ text: 'Sync details', action: 'sync-details' });
+  }
   for (const skill of page.skills) {
     rows.push({ text: `${skill.enabled ? '●' : '○'} ${skill.name} · ${skill.enabled ? 'enabled' : 'disabled'}`, action: `view:${skill.name}` });
     rows.push({ text: '  ' + skill.description, tone: 'muted' });
     rows.push({ text: `  ${skill.enabled ? 'Disable' : 'Enable'} · ${skill.version.slice(0, 8)}`, action: `toggle:${skill.name}` });
   }
-  if (!page.total) rows.push({ text: 'No skills yet. Import a skill folder/ZIP, or create one.', tone: 'muted' });
+  if (!page.total) rows.push({ text: 'No skills yet. Sync Codex skills, import a folder/ZIP, or create one.', tone: 'muted' });
   if (offset) rows.push({ text: 'Previous page', action: 'previous' });
   if (page.nextOffset != null) rows.push({ text: 'Next page', action: 'next' });
   return rows;
 }
 
-export async function skillsCommand(text, ui) {
+export async function skillsCommand(text, ui, { sync = syncCodexSkills } = {}) {
   if (!/^\/skills(?:\s|$)/.test(text)) return false;
   ui.openTerminal(); ui.tui.setPanel('skills');
   const action = text.slice(7).trim();
   try {
-    if (action === 'import') {
+    if (action === 'sync' || action === 'sync codex') {
+      const result = sync({ cwd: ui.tui.cwd || process.cwd() });
+      ui.skillSyncResult = skillSyncReport(result); ui.skillSyncDetails = false; ui.skillPreview = null; ui.skillQuery = ''; ui.skillOffset = 0;
+      ui.event('info', { message: skillSyncSummary(result) });
+    } else if (action === 'sync-details') { ui.skillSyncDetails = true; ui.skillSyncOffset = 0; }
+    else if (action === 'sync-next' || action === 'sync-previous') ui.skillSyncOffset = Math.max(0, (ui.skillSyncOffset || 0) + (action === 'sync-next' ? 20 : -20));
+    else if (action === 'import') {
       const source = (await ui.ask('Skill folder or ZIP · absolute path · Esc cancels'))?.trim();
       if (source) { const skill = importSkill(source); ui.event('info', { message: `Imported ${skill.name}. Review it before enabling.` }); }
     } else if (action === 'create') {
@@ -46,7 +66,7 @@ export async function skillsCommand(text, ui) {
       setSkillEnabled(skill.name, !skill.enabled, skill.revision);
     } else if (action.startsWith('view:')) {
       ui.skillPreview = readSkill(action.slice(5), { enabledOnly: false });
-    } else if (action === 'library') ui.skillPreview = null;
+    } else if (action === 'library') { ui.skillPreview = null; ui.skillSyncDetails = false; }
     else if (action === 'read-next' && ui.skillPreview?.nextOffset != null) {
       const page = ui.skillPreview;
       ui.skillPreview = readSkill(page.name, { file: page.file, offset: page.nextOffset, version: page.version, enabledOnly: false });
