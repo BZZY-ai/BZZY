@@ -122,8 +122,8 @@ installed package and its configured Node 24+ runtime, including when the shellâ
 system Node is older. It downloads the official updater at a verified commit and invokes the same
 separate-release installer. It preserves the original checkout, private state,
 existing launcher location and active execution sources. Reopen BZZY afterward;
-future updates use `bzzy --update`. Linux root installations use the root-owned systemd system
-service; regular accounts retain user services. Run the repair as the installation
-account so its existing private Core state and pairing are retained. A manual/nonstandard launcher can use explicit
+future updates use `bzzy --update`. Coreâ€™s supervised service requires a
+non-root account; run installation from that account with its existing private
+Core state. A manual/nonstandard launcher can use explicit
 `--installation /absolute/package` and `--node /absolute/node` paths after saving
 the script locally. No private account configuration is part of the repair.

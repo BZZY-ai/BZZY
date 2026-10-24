@@ -140,7 +140,7 @@ export class RelayGateway extends EventEmitter {
 
   async start() {
     this.#check();
-    if (process.getuid?.() === 0 && process.platform !== 'linux') fail('NON_ROOT_REQUIRED', 'macOS Core hosting requires an ordinary user account.');
+    if (process.getuid?.() === 0) fail('NON_ROOT_REQUIRED', 'Run the gateway and model execution as a non-root user.');
     if (this.#started) return this.status();
     this.#unlock = lockFile(path.join(privateRelayDirectory(), 'gateway.lock'), 'A Core Relay gateway already owns this host identity.');
     try {

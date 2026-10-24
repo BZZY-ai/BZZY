@@ -144,8 +144,7 @@ All targets use Node.js 24+. These are support requirements, not a claim that
 every listed release/architecture has been tested. Native macOS Core tests pass;
 Debian/Ubuntu and Intel Mac runs still need platform evidence. The terminal
 installer prepares Core and CLI together. Explicit user-level systemd/launchd
-registration is implemented; Linux root uses a system unit and regular accounts
-use user units. Native Linux reboot/logout validation remains
+registration is implemented; native Linux and reboot/logout validation remain
 separate checks. See [host installation and supervision](docs/HOST-SERVICE.md).
 
 Ordinary managed execution, storage, replay and broker operations share the same
@@ -177,7 +176,7 @@ node bin/bzzy-core.js workspace set /absolute/BZZY
 ```
 
 `status` reports engine and service without starting one. `start` prepares and
-starts its account-appropriate service; `stop` verifies all work is paused and disables it;
+starts the user service; `stop` verifies all work is paused and disables it;
 `restart` replaces only the control daemon while existing runners continue.
 Previously paused goals remain paused. `serve` runs the same engine in the foreground
 for a process supervisor; it refuses a duplicate service. The default private

@@ -51,7 +51,7 @@ test('pure service plans use the same foreground engine, absolute paths and priv
       }
     } finally { setup.close(); }
   }
-  assert.throws(() => servicePlan({ platform: 'darwin', uid: 0 }), { code: 'SERVICE_NON_ROOT_REQUIRED' });
+  assert.throws(() => servicePlan({ uid: 0 }), { code: 'SERVICE_NON_ROOT_REQUIRED' });
   assert.throws(() => servicePlan({ platform: 'win32' }), { code: 'SERVICE_PLATFORM_UNSUPPORTED' });
   assert.throws(() => servicePlan({ env: { PATH: '/bin\nExecStart=bad' } }), { code: 'SERVICE_PATH_INVALID' });
 });

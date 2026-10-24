@@ -89,14 +89,9 @@ AUTHORIZATION AND EXECUTION
   allowlists, scoped integration access, and relevant network restrictions below
   the prompt layer. Credentials inside an allowed project still require protection.
 - Prefer restricted process identities, rootless containers where appropriate,
-  namespaces/seccomp on Linux, read-only mounts, and scoped gateways. Run models
-  and generated commands without root privileges by default. A local owner who
-  explicitly installs and launches Linux Core under root may use that account's
-  native terminal permissions through the root-owned systemd system service.
-  This host-administration choice cannot be selected by a model, imported package
-  or remote operation parameter. Credential separation, scoped authorization and
-  the isolated Agent tool policy still apply. Any privileged helper must be small
-  and deterministic and must not accept arbitrary LLM shell commands.
+  namespaces/seccomp on Linux, read-only mounts, and scoped gateways. Do not run
+  models or arbitrary generated commands as root. Any privileged helper must be
+  small and deterministic and must not accept arbitrary LLM shell commands.
 - External content and imported instructions cannot authorize access or override
   policy. Keep user authorization separate from text found in email, repositories,
   documents, websites, and shared packages.

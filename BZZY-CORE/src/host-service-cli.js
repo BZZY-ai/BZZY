@@ -1,7 +1,7 @@
 import { servicePlan, installationDoctor, installService, serviceStatus, uninstallService,
   coreHostStatus, startCoreHost, stopCoreHost, restartCoreHost } from './engine/host-service.js';
 
-const usage = 'Usage: bzzy-core service <plan|install [--dry-run]|status|start|stop|restart|uninstall>\nSimple commands: bzzy-core start|status|stop|restart\nCore supervision (Linux root uses systemd system scope; regular users use user scope); no model is started.\nplan/--dry-run print the exact manifest without writing files or loading a service.\ninstall prepares the owned manifest; start enables and starts it; stop pauses work and disables it.\nPrivate state, provider bindings and projects are preserved by uninstall.';
+const usage = 'Usage: bzzy-core service <plan|install [--dry-run]|status|start|stop|restart|uninstall>\nSimple commands: bzzy-core start|status|stop|restart\nUser-level supervision of the existing Core engine; no model is started.\nplan/--dry-run print the exact manifest without writing files or loading a service.\ninstall prepares the owned manifest; start enables and starts it; stop pauses work and disables it.\nPrivate state, provider bindings and projects are preserved by uninstall.';
 const print = value => console.log(JSON.stringify(value, null, 2));
 
 export async function hostServiceCommand(args) {
@@ -18,7 +18,7 @@ export async function hostServiceCommand(args) {
   if (command === 'install') {
     const doctor = installationDoctor();
     if (!doctor.ready) { print(doctor); process.exitCode = 1; return; }
-    print({ ...installService(plan), loadRequested: false, startup: plan.startup, next: 'Run bzzy-core service start to enable this Core service.' }); return;
+    print({ ...installService(plan), loadRequested: false, startup: plan.startup, next: 'Run bzzy-core service start to enable this user service.' }); return;
   }
   if (command === 'uninstall') { await stopCoreHost({ plan }); print(uninstallService(plan)); return; }
   await coreLifecycleCommand(command, [], { plan });
