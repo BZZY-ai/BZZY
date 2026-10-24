@@ -7,7 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { updateRepository } from '../src/packaged-update.js';
 
 const repair = new URL('../../../BZZY-CORE/scripts/repair-updater.py', import.meta.url).pathname;
-for (const explicit of [false, true]) test(`old updater recovery works from another cwd with ${explicit ? 'explicit installation paths' : 'a managed launcher'} and preserves the old source`, t => {
+for (const layout of ['managed', 'multiline', 'multiline-crlf', 'multiline-legacy', 'explicit']) test(`old updater recovery works from another cwd with ${layout} paths and preserves the old source`, t => {
+  const explicit = layout === 'explicit';
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bzzy repair's fixture-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const author = path.join(root, 'author'), remote = path.join(root, 'remote.git'), old = path.join(root, 'custom install'), bin = path.join(root, 'custom bin');
@@ -25,7 +26,7 @@ for (const explicit of [false, true]) test(`old updater recovery works from anot
   fs.writeFileSync(helper, `import fs from 'node:fs'; import path from 'node:path';
 export async function updateRepositoryInstallation(directory, options) {
   if (fs.readFileSync(path.join(directory, 'local-notes.txt'), 'utf8') !== 'preserve my local files') throw new Error('Local files changed');
-  fs.writeFileSync(process.env.BZZY_REPAIR_TEST_RECEIPT, JSON.stringify({ directory, target: options.expectedCommit, bin: process.env.BZZY_LAUNCHER_BIN_DIR }));
+  fs.writeFileSync(process.env.BZZY_REPAIR_TEST_RECEIPT, JSON.stringify({ directory, target: options.expectedCommit, bin: process.env.BZZY_LAUNCHER_BIN_DIR, runtime: process.execPath, version: process.versions.node }));
 }`);
   git(author, 'add', '.'); git(author, 'commit', '-m', 'Official repair fixture'); git(author, 'push', 'origin', 'main');
   const target = git(author, 'rev-parse', 'HEAD');
@@ -41,11 +42,24 @@ export async function updateRepositoryInstallation(directory, options) {
     const installed = spawnSync(process.execPath, [writer, bin, process.execPath], { env, encoding: 'utf8' });
     assert.equal(installed.status, 0, installed.stderr);
   }
+  // The host shell can use Node 20 while BZZY's launcher pins its own Node 24.
+  fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\necho v20.20.2\n', { mode: 0o755 });
+  if (layout.startsWith('multiline')) {
+    const newline = layout === 'multiline-crlf' ? '\r\n' : '\n';
+    const continuation = String.fromCharCode(92);
+    fs.writeFileSync(path.join(bin, 'bzzy'), [
+      '#!/bin/sh', layout === 'multiline-legacy' ? '# older BZZY launcher' : '# bzzy-managed launcher', '  exec ' + continuation,
+      '    ' + quote(process.execPath) + ' ' + continuation,
+      '    ' + quote(path.join(old, 'bin/bzzy.js')) + ' ' + continuation,
+      '    "$@"', '',
+    ].join(newline), { mode: 0o755 });
+  }
   const args = [repair, ...(explicit ? ['--installation', old, '--node', process.execPath] : [])];
   const result = spawnSync('python3', args, { cwd: os.tmpdir(), env, encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.stderr);
   const actual = JSON.parse(fs.readFileSync(receipt, 'utf8'));
   assert.equal(actual.directory, fs.realpathSync(old)); assert.equal(actual.target, target);
+  assert.equal(actual.runtime, process.execPath); assert.ok(Number(actual.version.split('.')[0]) >= 24);
   if (!explicit) assert.equal(actual.bin, bin);
   assert.equal(fs.readFileSync(path.join(old, 'local-notes.txt'), 'utf8'), 'preserve my local files');
   assert.equal(fs.readFileSync(path.join(old, 'bin/bzzy.js'), 'utf8'), '// installed CLI');

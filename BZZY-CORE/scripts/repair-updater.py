@@ -34,9 +34,12 @@ def main():
             raise RuntimeError('REPAIR_LAUNCHER_PERMISSION: Run the repair as the account that owns the BZZY installation.')
         except UnicodeError:
             raise RuntimeError('REPAIR_LAUNCHER_FORMAT: This launcher is not a text script. Use --installation and --node with the installed paths.')
-        if '# bzzy-managed launcher' in body:
+        if '# bzzy-managed launcher' in body or source.name not in ('bzzy.js', 'bzzy-core.js'):
             try:
-                entries = [shlex.split(line) for line in body.splitlines() if line.startswith('exec ')]
+                # Shell continuations join physical lines before tokenization.
+                # shlex.split on an isolated `exec \` line raises ValueError.
+                logical = re.sub(r'\\\r?\n', '', body)
+                entries = [shlex.split(line) for line in logical.splitlines() if line.lstrip().startswith('exec ')]
             except ValueError:
                 raise RuntimeError('REPAIR_LAUNCHER_FORMAT: The launcher command could not be parsed. Use --installation and --node explicitly.')
             if len(entries) != 1 or len(entries[0]) != 4 or entries[0][-1] != '$@':

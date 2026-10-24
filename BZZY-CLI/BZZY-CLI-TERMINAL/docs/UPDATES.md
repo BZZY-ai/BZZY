@@ -117,10 +117,13 @@ The repository is private. Use the same account/environment whose GitHub
 authentication already works for BZZY. An unauthenticated raw-file download
 returns 404; it does not use credentials configured for Git.
 
-The repair reads the installed managed launcher to find its package and Node 24+
-runtime, downloads the official updater at a verified commit and invokes the same
+The repair reads single-line or continued shell launcher commands to find the
+installed package and its configured Node 24+ runtime, including when the shell’s
+system Node is older. It downloads the official updater at a verified commit and invokes the same
 separate-release installer. It preserves the original checkout, private state,
 existing launcher location and active execution sources. Reopen BZZY afterward;
-future updates use `bzzy --update`. A manual/nonstandard launcher can use explicit
+future updates use `bzzy --update`. Core’s supervised service requires a
+non-root account; run installation from that account with its existing private
+Core state. A manual/nonstandard launcher can use explicit
 `--installation /absolute/package` and `--node /absolute/node` paths after saving
 the script locally. No private account configuration is part of the repair.
