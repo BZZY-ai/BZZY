@@ -214,6 +214,9 @@ public final class RelayConnection {
     @ObservationIgnored private var coreMonitor: Task<Void, Never>?
     @ObservationIgnored private var coreMonitorEpoch = UUID()
     public var coreActionsAvailable: Bool { coreConnected && coreHealth.isOnline() && corePairAuthorized && !suspended && transport?.online == true && coreClient != nil }
+    public var connectionOnline: Bool { coreActionsAvailable }
+    public var connectionVerifiedAt: Date? { coreHealth.verifiedAt }
+    public private(set) var coreCatalogRefreshing = false
     public var coreConnectionLabel: String {
         if coreActionsAvailable { return "Core online" }
         return status == .connecting || coreHealth.phase == .connecting ? "Connecting to Core" : "Core offline"
@@ -440,6 +443,10 @@ public final class RelayConnection {
     }
 
     public func refresh() async { await reconcile(); scheduleCoreMonitor() }
+    public func checkConnection() async {
+        await resume(); await refresh()
+        if coreConnected { await refreshCore() }
+    }
 
     public func forgetHost() async {
         guard !forgettingHost else { return }
@@ -580,12 +587,12 @@ public final class RelayConnection {
                         $0["id"].string == selected.sessionID && $0["existingResource"].string == selected.resource
                     })
                 }
-                guard permitted else {
+                if !permitted {
                     removeSelectedCoreContext()
                     coreError = "The saved conversation is no longer authorized. Choose another available conversation."
-                    onCoreAvailability?(false, coreError!); return
+                } else {
+                    resource = selected.resource
                 }
-                resource = selected.resource
             }
             let client: CoreRelayClient
             if let current = coreClient, current.resource == resource, current.grantID == host.grantID { client = current }
@@ -718,8 +725,17 @@ public final class RelayConnection {
     }
 
     public func refreshCoreSessions() async {
-        guard coreActionsAvailable, coreCatalogReady, coreCatalogAvailable, let catalog = catalogClient else { return }
-        do { try await loadCoreSessions(using: catalog) }
+        guard !coreCatalogRefreshing else { return }
+        coreCatalogRefreshing = true; defer { coreCatalogRefreshing = false }
+        if !coreActionsAvailable { await resume(); await refresh() }
+        guard coreActionsAvailable, coreCatalogReady, coreCatalogAvailable, let catalog = catalogClient else {
+            coreError = "Offline. Waiting for a confirmed Core connection."; return
+        }
+        do {
+            try await loadCoreSessions(using: catalog)
+            guard catalogClient === catalog, !suspended else { return }
+            await refreshCore(); if coreActionsAvailable { coreError = nil }
+        }
         catch {
             guard catalogClient === catalog else { return }
             let code = (error as? CoreApplicationError)?.code
@@ -730,10 +746,11 @@ public final class RelayConnection {
 
     /// Opening is an authorized attachment to an existing CLI session. It never creates or executes a terminal.
     public func openCoreSession(_ sessionID: String) async -> Bool {
-        guard coreActionsAvailable, !coreBusy, !coreStarting, !coreCommandUncertain, state.pendingCoreCommand == nil,
+        if !coreActionsAvailable { await resume(); await refresh() }
+        guard coreActionsAvailable, !coreBusy, !coreStarting,
               coreCatalogReady, coreCatalogAvailable, let catalog = catalogClient,
               let transport, let host = state.host, UUID(uuidString: sessionID) != nil,
-              catalogEntries.contains(where: { $0["id"].string == sessionID }) else { return false }
+              catalogEntries.contains(where: { $0["id"].string == sessionID }) else { coreError = "This terminal is unavailable. Refresh the connection and try again."; return false }
         if state.openingAgent != nil { coreError = "Resolve or cancel the pending agent attachment first."; return false }
         if coreConnected && coreSessionID == sessionID { return true }
         if let opening = state.openingSession, opening.sessionID != sessionID {
@@ -1033,6 +1050,7 @@ public final class RelayConnection {
     }
 
     public func refreshCoreAgents() async {
+        if !coreActionsAvailable { await checkConnection() }
         guard coreActionsAvailable, coreAgentsAvailable, coreCatalogReady, let catalog = catalogClient else { return }
         do { try await loadCoreAgents(using: catalog); await reconcileCoreAgentCommand() }
         catch { if catalogClient === catalog { coreAgentStatus = "Agent list could not be refreshed." } }
@@ -1203,7 +1221,7 @@ public final class RelayConnection {
     }
 
     public func openCoreAgent(_ agentID: String) async -> Bool {
-        guard coreActionsAvailable, !coreBusy, !coreStarting, !coreCommandUncertain, state.pendingCoreCommand == nil, state.pendingAgentCommand == nil,
+        guard coreActionsAvailable, !coreBusy, !coreStarting,
               coreAgentsAvailable, coreCatalogReady, let catalog = catalogClient, let transport,
               let host = state.host, UUID(uuidString: agentID) != nil,
               let entry = agentEntries.first(where: { $0["id"].string == agentID }) else { return false }
@@ -1351,9 +1369,20 @@ public final class RelayConnection {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 guard let self, self.coreMonitorEpoch == epoch, self.transport === transport,
                       transport.online, self.state.host != nil, !self.suspended else { return }
-                if self.coreConnected && !self.coreStarting && !self.coreBusy && !self.coreHealth.isOnline() {
-                    self.stopCore(purge: false)
-                    self.coreError = "Core did not confirm its online state. Start Core on your host and reconnect."
+                if self.coreConnected, !self.coreStarting, self.coreHealth.needsProbe(), let client = self.coreClient {
+                    let generation = self.coreHealth.generation
+                    do {
+                        let snapshot = try await client.request("session.get", readTimeoutNanoseconds: 3_000_000_000)
+                        guard self.coreMonitorEpoch == epoch, self.coreClient === client, !self.suspended else { continue }
+                        guard snapshot["session"]["id"].string == self.coreSessionID else { throw CoreApplicationError("INVALID_RESPONSE") }
+                        guard self.coreHealth.confirm(generation, scope: client.resource) else { continue }
+                    } catch {
+                        guard self.coreMonitorEpoch == epoch, self.coreClient === client else { continue }
+                        if (error as? CoreApplicationError)?.code != "CAPACITY" || !self.coreHealth.isOnline() {
+                            self.stopCore(purge: false)
+                            self.coreError = "Offline. Core did not confirm the connection. Reconnecting automatically."
+                        }
+                    }
                 }
                 if !self.coreConnected && !self.coreStarting && !self.coreBusy { await self.reconcile() }
             }
@@ -1405,7 +1434,7 @@ public final class RelayConnection {
                         return
                     }
                 }
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                do { try await Task.sleep(for: .seconds(4)) } catch { return }
             }
         }
     }

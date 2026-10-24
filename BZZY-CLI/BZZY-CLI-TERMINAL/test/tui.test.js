@@ -23,6 +23,19 @@ test('CLI and iOS share assistant message boundaries for native, legacy and inte
     } finally { ui.close(); }
   }
 });
+test('connection indicators remain independent of busy model work and preserve the chat draft', () => {
+  const { ui, output } = terminal();
+  try {
+    Object.assign(output, { columns: 150, rows: 40 });
+    ui.tui.value = 'Keep typing'; ui.tui.cursor = 4; ui.tui.busy = true; ui.tui.state = 'responding';
+    ui.connectionStatus = { core: true, relay: false }; ui.tui.render();
+    assert.match(clean(ui.tui.lastFrame[1]), /Core Online.*Relay Offline/);
+    ui.connectionStatus = null; ui.tui.render();
+    assert.match(clean(ui.tui.lastFrame[1]), /Core Offline.*Relay Offline/);
+    assert.equal(ui.tui.value, 'Keep typing'); assert.equal(ui.tui.cursor, 4);
+    assert.equal(ui.tui.entries.length, 0, 'connection checks never become conversation events');
+  } finally { ui.close(); }
+});
 function terminal(options = {}) {
   const input = new PassThrough(); input.isTTY = true; input.isRaw = false; input.setRawMode = value => { input.isRaw = value; };
   const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 32, columns: 100 });
@@ -40,7 +53,8 @@ test('minimal chat uses the full terminal and retains conversation, input, mouse
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /A minimal question/); assert.match(frame, /A visible answer/); assert.match(frame, /Unsent draft/);
       assert.doesNotMatch(frame, /BZZY|Session:|YOLO|Latest|Settings|Your next goal|CPU|Memory/);
-      assert.equal(ui.tui.dashboardActive, false); assert.equal(ui.tui.textRegion.top, 1);
+      assert.equal(ui.tui.dashboardActive, false); assert.equal(ui.tui.textRegion.top, 2);
+      assert.match(frame, /Core Offline.*Relay Offline/);
       const send = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(send); assert.equal(send.row, rows - 1);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
     }

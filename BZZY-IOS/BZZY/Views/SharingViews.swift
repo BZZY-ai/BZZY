@@ -387,7 +387,7 @@ struct LiveTerminalShareView: View {
                     if !shareState.isEmpty { Text(shareState.capitalized).bzzyFont(14) }
                     if shareID == nil && !uncertain {
                         AccentButton(title: "Generate temporary code", symbol: "qrcode") { Task { await create() } }
-                            .disabled(isBusy || !relay.coreConnected || !relay.coreSharingAllowed)
+                            .disabled(isBusy || !relay.coreActionsAvailable || !relay.coreSharingAllowed)
                     } else if let shareID {
                         if invitation == nil && ["open", "pending", "approved"].contains(shareState) {
                             Text("The code is hidden. You can still approve a recipient or revoke this transfer.")
@@ -400,7 +400,7 @@ struct LiveTerminalShareView: View {
                                 Text(kind == .agent ? "Compare the complete fingerprint with the one shown in your recipient’s iPhone import screen." : "Compare the complete fingerprint with the one shown in your recipient’s BZZY CLI.")
                                     .bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                                 Button("I verified this fingerprint") { selectedClaim = claim }
-                                    .disabled(isBusy || !relay.coreConnected)
+                                    .disabled(isBusy || !relay.coreActionsAvailable)
                             }.panel()
                         }
                         Button("Refresh transfer status") { Task { await refreshStatus(shareID) } }.disabled(isBusy)
@@ -412,7 +412,7 @@ struct LiveTerminalShareView: View {
                     }
                     if uncertain {
                         Text("Share preparation is not confirmed. No automatic retry.").bzzyFont(12).foregroundStyle(BZZYTheme.amber)
-                        Button("Check request status") { Task { await reconcile() } }.disabled(isBusy || !relay.coreConnected)
+                        Button("Check request status") { Task { await reconcile() } }.disabled(isBusy || !relay.coreActionsAvailable)
                     }
                     if let error { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
                     Text(kind == .agent ? "Both Cores must stay online. Your recipient imports on iPhone; Core restores a fresh paused agent beneath their own Agents workspace. Their accounts and permissions stay separate." : "The source Core must stay online. Your recipient imports the code in their BZZY CLI, restores it into their current directory, and authorizes their own accounts.")

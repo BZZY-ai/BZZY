@@ -31,14 +31,26 @@ struct FlyAnimationClock {
 struct FlyAnimationPose {
     let target: CGPoint
     let energy: Double
-    init(time: Double, mood: FlyMood, touchAge: Double, touch: CGPoint, still: Bool) {
-        guard !still else { target = .zero; energy = 0; return }
-        let time = time.isFinite ? max(0, time) : 0
-        func smooth(_ a: Double, _ b: Double) -> Double {
-            let x = min(1, max(0, (time.truncatingRemainder(dividingBy: 13) - a) / (b - a)))
-            return x * x * (3 - 2 * x)
+    let scanning: Bool
+    private static let scanPath: [(CGPoint, Double)] = [
+        (CGPoint(x: -0.70, y: -0.16), 0.74), (CGPoint(x: 0.52, y: 0.14), 0.95),
+        (CGPoint(x: 0.02, y: -0.48), 0.68), (CGPoint(x: 0.78, y: -0.10), 0.88),
+        (CGPoint(x: -0.28, y: 0.26), 0.62), (CGPoint(x: -0.62, y: -0.38), 1.05),
+        (CGPoint(x: 0.44, y: -0.32), 0.76), (CGPoint(x: 0.12, y: 0.02), 0.90),
+    ]
+    private static func scan(at time: Double) -> CGPoint {
+        var phase = time.truncatingRemainder(dividingBy: scanPath.reduce(0) { $0 + $1.1 })
+        for (point, hold) in scanPath {
+            if phase < hold { return point }
+            phase -= hold
         }
+        return scanPath[0].0
+    }
+    init(time: Double, mood: FlyMood, touchAge: Double, touch: CGPoint, still: Bool) {
+        guard !still else { target = .zero; energy = 0; scanning = false; return }
+        let time = time.isFinite ? max(0, time) : 0
         let delight = max(0, 1 - max(0, touchAge) / 2.2)
+        scanning = delight == 0 && ![.thinking, .listening, .resting].contains(mood)
         energy = mood == .resting ? 0.35 : mood == .listening || delight > 0 ? 1.2 : 1
         if delight > 0 {
             target = CGPoint(x: min(1, max(-1, touch.x)) * delight, y: min(1, max(-1, touch.y)) * delight)
@@ -47,8 +59,7 @@ struct FlyAnimationPose {
         } else if mood == .listening {
             target = CGPoint(x: sin(time * 0.8) * 0.12, y: -0.12)
         } else {
-            let right = smooth(1.4, 2.3) - smooth(4.6, 5.4), left = smooth(7.4, 8.2) - smooth(10.4, 11.2)
-            target = CGPoint(x: right * 0.62 - left * 0.45, y: sin(time * 0.55) * 0.09)
+            target = Self.scan(at: mood == .resting ? time * 0.45 : time)
         }
     }
 }
@@ -57,7 +68,7 @@ struct FlyAnimationPose {
 struct GazeMotion {
     private(set) var position = CGPoint.zero
     private var previousTime: TimeInterval?
-    mutating func advance(toward target: CGPoint, time: TimeInterval) {
+    mutating func advance(toward target: CGPoint, time: TimeInterval, rapid: Bool = false) {
         guard time.isFinite, target.x.isFinite, target.y.isFinite else { return }
         let elapsed = previousTime.map { time - $0 } ?? (1.0 / 30)
         previousTime = time
@@ -65,10 +76,11 @@ struct GazeMotion {
         // A paused/delayed frame must not fast-forward the eyes across the screen.
         let dt = elapsed > 0.1 ? 1.0 / 30 : elapsed
         let desired = CGPoint(x: min(1, max(-1, target.x)), y: min(1, max(-1, target.y)))
-        let alpha = 1 - exp(-dt / 0.36)
+        if rapid && hypot(desired.x - position.x, desired.y - position.y) < 0.002 { position = desired; return }
+        let alpha = 1 - exp(-dt / (rapid ? 0.035 : 0.36))
         var dx = (desired.x - position.x) * alpha
         var dy = (desired.y - position.y) * alpha
-        let distance = hypot(dx, dy), maximum = 1.65 * dt
+        let distance = hypot(dx, dy), maximum = (rapid ? 12 : 1.65) * dt
         if distance > maximum { dx *= maximum / distance; dy *= maximum / distance }
         position.x += dx; position.y += dy
     }

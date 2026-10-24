@@ -141,6 +141,13 @@ export async function serveRuntime() {
         const result = await (await relay()).request(request.method, pathname.slice('/relay/'.length), request.method === 'POST' ? await readBody(request) : {});
         send(response, 200, result); return;
       }
+      if (request.method === 'GET' && pathname === '/connections') {
+        if (!rootToken) { send(response, 403, { error: 'Only the local owner can inspect host connectivity.' }); return; }
+        const service = (await relay()).snapshot().status;
+        send(response, 200, { version: 1, sampledAt: now(), identity, core: { online: true },
+          relay: { online: service.enabled === true && service.connection?.online === true,
+            verifiedAt: service.connection?.verifiedAt || null, maximumAgeMs: 6000 } }); return;
+      }
       if (request.method === 'GET' && pathname === '/health') { send(response, 200, { ok: true, identity, runtimeBuild, installationId: digest(root), environment, version: '0.2.0', apiVersion: 1, codexBaseline: '0.162.0' }); return; }
       if (request.method === 'GET' && pathname === '/metrics') { send(response, 200, metrics.read()); return; }
       if (request.method === 'GET' && pathname === '/schema') { send(response, 200, readJson(path.join(root, 'assets', 'events.schema.json'))); return; }

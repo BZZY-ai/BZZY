@@ -1,4 +1,5 @@
-import { ensureRuntime, runtimeRequest } from './engine/runtime.js';
+import { runtimeInfo, runtimeRequest, operatorStopRequested } from './engine/runtime.js';
+import { identityAlive } from './engine/process-identity.js';
 import { home } from './engine/files.js';
 import { fail } from './validation.js';
 
@@ -12,7 +13,9 @@ export class CoreMetricsClient {
   async read() {
     this.#check();
     try {
-      this.#info ||= await ensureRuntime();
+      this.#info = runtimeInfo();
+      if (operatorStopRequested()) throw Object.assign(new Error('Core was stopped explicitly.'), { code: 'CORE_STOPPED' });
+      if (!this.#info || !identityAlive(this.#info.identity)) throw Object.assign(new Error('Core is offline.'), { code: 'CORE_OFFLINE' });
       this.#check();
       const sample = await runtimeRequest(this.#info, 'GET', '/v1/metrics');
       this.#check();

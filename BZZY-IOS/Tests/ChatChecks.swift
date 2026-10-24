@@ -61,6 +61,16 @@ struct ChatChecks {
         motion.pause(); motion.advance(toward: CGPoint(x: -1, y: 0), time: 1000)
         require(beforePause - motion.position.x <= 0.056, "Resuming cannot fast-forward into a jump")
         var clock = FlyAnimationClock()
+        var alert = GazeMotion()
+        let alertTarget = FlyAnimationPose(time: 0.8, mood: .idle, touchAge: 100, touch: .zero, still: false)
+        require(alertTarget.scanning, "Idle eyes use deliberate quick scans")
+        for frame in 0...5 { alert.advance(toward: alertTarget.target, time: Double(frame) / 30, rapid: true) }
+        require(hypot(alert.position.x - alertTarget.target.x, alert.position.y - alertTarget.target.y) < 0.01, "A gaze dart finishes in under 200 milliseconds")
+        let hold = FlyAnimationPose(time: 1.25, mood: .idle, touchAge: 100, touch: .zero, still: false)
+        require(hold.target == alertTarget.target, "A quick move is followed by a real stationary pause")
+        let next = FlyAnimationPose(time: 1.75, mood: .idle, touchAge: 100, touch: .zero, still: false)
+        require(next.target != hold.target, "The next quick scan checks another direction")
+        require(!FlyAnimationPose(time: 1, mood: .idle, touchAge: 0, touch: .zero, still: false).scanning, "Touch retains smooth tracking rather than idle darts")
         clock.advance(10); let firstFrame = clock.elapsed
         clock.pause(); clock.advance(1000)
         require(clock.elapsed - firstFrame < 0.04, "Background time must not advance antenna or eye motion")

@@ -174,8 +174,8 @@ hints map to terminal emphasis/dim. Raw history/JSON events remain unchanged and
 clipboard copies are readable text. Invalid or incomplete markup falls back to
 literal safe text; markup never executes actions or grants permissions.
 
-Run `bzzy --minimal` for only the conversation and bottom message input, at any
-terminal size. It keeps the same sessions, mouse input, command picker and
+Run `bzzy --minimal` for the conversation and bottom message input, with a small
+connection strip, at any terminal size. It keeps the same sessions, mouse input, command picker and
 approval controls. Use `/models`, `/settings`, `/sessions` or `/update` when
 needed. The layout and unsent draft survive an update.
 
@@ -281,3 +281,9 @@ Peer edits stay in their private workspaces until integrated. A group with unapp
 For runtime troubleshooting, run `BZZY_DIRECT=1 bzzy run "Reply only BZZY_OK without using tools" --claude --runtime 30 --json` to test the backend without the managed runtime. Replace `--claude` with `--codex` or `--deepseek` as needed.
 
 The [review assessment](docs/REVIEW-2026-10.md) records which external recommendations were implemented, qualified or deferred.
+
+The top left shows separate **Core Online/Offline** and **Relay Online/Offline**
+indicators. Green requires a fresh Core response and, for Relay, a verified
+heartbeat on Core's authenticated socket. Stale or failed checks turn red; busy
+model work and cached state do not establish connectivity. The compact pairing
+header retains both indicators without reducing the QR quiet zone.

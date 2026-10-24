@@ -52,7 +52,7 @@ struct ConversationCanvas: View {
     private var isLive: Bool { remoteSession || store.liveSession?.id == conversationID }
     private var canSubmit: Bool {
         voiceDraft == nil && !voice.isBusy && !voiceHeld && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        (!isLive || relay.coreConnected && relay.coreSessionID == conversationID && relay.corePermissions.contains("execute") && !relay.coreBusy && !relay.coreCommandUncertain)
+        (!isLive || relay.coreActionsAvailable && relay.coreSessionID == conversationID && relay.corePermissions.contains("execute") && !relay.coreBusy && !relay.coreCommandUncertain)
     }
     private func submit(_ submitted: String, replacing goalID: String? = nil) {
         pendingSubmittedDraft = submitted
@@ -207,7 +207,6 @@ struct ConversationCanvas: View {
             if isLive { LiveSessionDetailsView(store: store).coreAvailabilityGate() }
             else { WorkspaceDetailsView(title: title, subtitle: subtitle, agent: agent, instructions: instructions).coreAvailabilityGate() }
         }
-        .coreAvailabilityGate()
     }
 
     private var composer: some View {
@@ -302,7 +301,7 @@ struct ConversationCanvas: View {
             }.background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 21))
                 .overlay(RoundedRectangle(cornerRadius: 21).stroke(BZZYTheme.line, lineWidth: 0.7))
             HStack(spacing: 10) {
-                Text(voice.error ?? (voice.isStarting ? "Allow speech access, then hold again" : voice.isRecording ? "Listening · Release to finish" : voice.isFinishing ? "Finishing transcript…" : isLive ? (relay.coreError ?? (!relay.coreCommandStatus.isEmpty ? relay.coreCommandStatus : relay.coreConnected ? (relay.coreInputStatus ?? (relay.corePermissions.contains("execute") ? "Connected to Core" : "Observer · Read only")) : store.liveStatus)) : isDemo ? "Demo · On device" : "Not connected"))
+                Text(voice.error ?? (voice.isStarting ? "Allow speech access, then hold again" : voice.isRecording ? "Listening · Release to finish" : voice.isFinishing ? "Finishing transcript…" : isLive ? (relay.coreError ?? (!relay.coreCommandStatus.isEmpty ? relay.coreCommandStatus : relay.coreActionsAvailable ? (relay.coreInputStatus ?? (relay.corePermissions.contains("execute") ? "Connected to Core" : "Observer · Read only")) : store.liveStatus)) : isDemo ? "Demo · On device" : "Not connected"))
                     .bzzyFont(10).foregroundStyle(voice.error == nil ? BZZYTheme.muted : BZZYTheme.amber)
                 if voice.isBusy {
                     Button("Cancel") { cancelDictation() }.bzzyFont(10).buttonStyle(.plain)

@@ -278,6 +278,14 @@ final class PairingConnectionTests: XCTestCase {
             XCTAssertEqual(connection.status, .connected, "Relay can remain online while Core is explicitly stopped")
             XCTAssertTrue(connection.corePairAuthorized, "An offline Core does not revoke the valid pairing")
             XCTAssertFalse(connection.coreActionsAvailable, "A failed fallback must lock Core-dependent actions")
+            XCTAssertFalse(connection.connectionOnline, "Relay availability cannot make the bottom indicator green")
+            await connection.refreshCoreSessions()
+            XCTAssertFalse(connection.connectionOnline)
+            XCTAssertEqual(try fixture.request(["op": .string("core-restart")])["restarted"].bool, true)
+            try await eventually { connection.connectionOnline }
+            XCTAssertTrue(connection.coreActionsAvailable, "Actions reactivate automatically after a fresh Core response")
+            await connection.refreshCoreSessions()
+            XCTAssertNil(connection.coreError)
         }
     }
 

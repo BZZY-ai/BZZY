@@ -2,6 +2,20 @@
 
 Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a complete single-eye app icon and celeste controls. Local pixel distortion animates the pupils and antennae without blinking, pauses in the background and respects Reduce Motion.
 
+Build **Debug 0.1.0 (14)** keeps the paired workspace visible while offline.
+A small bottom **Online/Offline** indicator uses an authenticated Core response
+through Relay, with an eight-second monotonic lease and immediate invalidation
+on disconnect/failure. A connected Relay socket or cached catalog cannot turn it
+green. Core actions disable offline and re-enable on confirmed reconnection;
+Refresh actively reconnects instead of silently returning. Viewing another
+terminal no longer waits for an unrelated message receipt. Settings and Refresh
+remain accessible. The previous full-screen Core disconnect shield is removed.
+The eyes now make short, fast gaze darts followed by stationary pauses, checking
+different directions rather than drifting continuously. Touch tracking remains
+smooth, the eyes never blink, and Reduce Motion/background pausing still apply.
+The signed build 14 artifact passed development APNs/privacy/signature checks
+and is prepared for installation when the phone is reconnected.
+
 Build **Debug 0.1.0 (13)** preserves the CLI's assistant-message boundaries in
 live and saved conversations. Different item/turn identities and tool/approval
 boundaries create separate bubbles; deltas belonging to one reply stay together.
@@ -119,7 +133,7 @@ The transport uses wire-compatible Curve25519/XSalsa20/Poly1305 boxes with 24-by
 
 The app uses the strict encrypted `bzzy-core` v1 contract for actual Core state. Approved terminal catalog access shows running and historical CLI sessions with their original directories. iPhone opens existing sessions and can view, resume and interact according to its grant; it never creates terminals or browses arbitrary host folders. Separate immutable resource clients retain raw history, independent cursors and uncertain-command IDs. Chat and a quick Activity view show actual execution, goal, question, evidence and tool events. Core owns the gateway independently of CLI lifetime. The installed Mac Core and production Relay passed a disposable native observer check. Manual phone pairing and its live behavior remain the next checks.
 
-After authorized Core pairing, a compact status bar shows the execution host's actual CPU and used/total RAM. Foreground reads update about every two seconds from Core's cached sampler; CPU is unknown during initial warmup. Scope changes, disconnects and backgrounding cancel reads and clear the display. These are host measurements, never the phone's CPU/RAM.
+After authorized Core pairing, a compact status bar shows the execution host's actual CPU and used/total RAM. Foreground reads update about every four seconds from Core's cached sampler; CPU is unknown during initial warmup. Scope changes, disconnects and backgrounding cancel reads and clear the display. These are host measurements, never the phone's CPU/RAM.
 
 The initial Relay protocol has no forward secrecy/ratchet and has not received an independent cryptographic audit. See [the iOS integration notes](docs/relay-and-notifications.md) and [runtime assessment](docs/runtime-assessment.md).
 

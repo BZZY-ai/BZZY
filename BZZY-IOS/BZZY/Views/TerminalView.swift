@@ -20,8 +20,9 @@ struct TerminalView: View {
                     HStack {
                         Text("Your terminals").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         Spacer()
-                        Button { Task { await relay.refreshCoreSessions() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }.bzzyFont(12)
-                            .disabled(!relay.coreCatalogReady)
+                        Button { Task { await relay.refreshCoreSessions() } } label: {
+                            Label(relay.coreCatalogRefreshing ? "Checking…" : "Refresh", systemImage: "arrow.clockwise")
+                        }.bzzyFont(12).disabled(relay.coreCatalogRefreshing).accessibilityIdentifier("refresh-terminals")
                     }
                     if relay.coreSessionAttachmentPending {
                         Button("Cancel pending attachment") { relay.cancelCoreSessionAttachment() }.bzzyFont(12)
@@ -37,7 +38,7 @@ struct TerminalView: View {
                             } label: {
                                 sessionRow(name: terminal.title, symbol: "terminal")
                             }.buttonStyle(.plain)
-                                .disabled(!relay.coreCatalogReady || relay.coreBusy || relay.coreCommandUncertain)
+                                .disabled(!relay.coreActionsAvailable || !relay.coreCatalogReady || relay.coreBusy)
                                 .accessibilityIdentifier("terminal-host-\(terminal.id)")
                             Rectangle().fill(BZZYTheme.line.opacity(0.6)).frame(height: 0.5)
                         }
@@ -50,7 +51,7 @@ struct TerminalView: View {
                                 subtitle: "\(session.model) · \(store.liveAvailable ? session.execution : "Disconnected")", assistantName: session.model, remoteSession: true)
                         } label: {
                             sessionRow(name: session.title, symbol: "terminal")
-                        }.buttonStyle(.plain).accessibilityIdentifier("terminal-live")
+                        }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable).accessibilityIdentifier("terminal-live")
                     }
                 }
                 if !store.terminalDrafts.isEmpty {
@@ -79,6 +80,9 @@ struct TerminalView: View {
                     }
                 }
                 Text("Sample sessions").bzzyFont(10).foregroundStyle(BZZYTheme.muted)
+                }
+                if let message = relay.coreError {
+                    Text(message).bzzyFont(11).foregroundStyle(BZZYTheme.amber).accessibilityIdentifier("terminal-status-message")
                 }
             }.padding(.horizontal, 25).padding(.top, 26).padding(.bottom, 20)
         }.scrollIndicators(.hidden)
@@ -133,10 +137,10 @@ struct LiveSessionDetailsView: View {
                         if relay.corePermissions.contains("claim") {
                             Button(relay.coreOwnsInput ? "Release input" : "Claim input") {
                                 Task { if relay.coreOwnsInput { await relay.releaseCoreInput() } else { _ = await relay.claimCoreInput() } }
-                            }.disabled(!relay.coreConnected || relay.coreBusy)
+                            }.disabled(!relay.coreActionsAvailable || relay.coreBusy)
                         }
                         if relay.corePermissions.contains("takeover") && !relay.coreOwnsInput {
-                            Button("Take over input") { confirmTakeover = true }.disabled(!relay.coreConnected)
+                            Button("Take over input") { confirmTakeover = true }.disabled(!relay.coreActionsAvailable)
                         }
                         }
                         HStack(spacing: 20) {
@@ -147,11 +151,11 @@ struct LiveSessionDetailsView: View {
                                 Button("Resume goal") { Task { await relay.resumeCoreGoal(sessionID: session.id) } }
                             }
                             if relay.corePermissions.contains("cancel") { Button("Cancel", role: .destructive) { confirmCancel = true } }
-                        }.disabled(!relay.coreConnected || relay.coreBusy || relay.coreCommandUncertain)
+                        }.disabled(!relay.coreActionsAvailable || relay.coreBusy || relay.coreCommandUncertain)
                         if session.activeSteering && relay.corePermissions.contains("steer") {
                             TextField("Steering instruction", text: $steering, axis: .vertical).textFieldStyle(.roundedBorder)
                             Button("Send steering") { Task { if await relay.controlCore("steer", text: steering, sessionID: session.id) { steering = "" } } }
-                                .disabled(!relay.coreConnected || relay.coreBusy || steering.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                .disabled(!relay.coreActionsAvailable || relay.coreBusy || steering.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                         ForEach(session.questions) { question in
                             LiveQuestionView(question: question, sessionID: session.id)
@@ -163,7 +167,7 @@ struct LiveSessionDetailsView: View {
                     Button("Refresh authoritative state") { Task { await relay.refresh(); await relay.refreshCore() } }
                     if relay.coreCommandUncertain {
                         Button("Check command status") { Task { await relay.reconcileCoreCommand() } }
-                        Button("Retry saved command") { confirmRetry = true }.disabled(!relay.coreConnected || relay.coreBusy)
+                        Button("Retry saved command") { confirmRetry = true }.disabled(!relay.coreActionsAvailable || relay.coreBusy)
                     }
                     Text("Activity").bzzyFont(16, weight: .medium)
                     ForEach(store.liveActivity.reversed()) { item in
@@ -215,7 +219,7 @@ struct LiveQuestionView: View {
                 } else {
                     TextField("Answer", text: $answer, axis: .vertical).textFieldStyle(.roundedBorder)
                     Button("Submit answer") { Task { if await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) { answer = "" } } }
-                        .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !relay.coreConnected || relay.coreBusy || relay.coreCommandUncertain)
+                        .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !relay.coreActionsAvailable || relay.coreBusy || relay.coreCommandUncertain)
                 }
             }
         }.panel()
@@ -237,7 +241,7 @@ private struct RemoteTerminalConversationView: View {
         ConversationCanvas(store: store, conversationID: terminal.id, title: terminal.title,
             subtitle: terminal.directory, assistantName: terminal.model, remoteSession: true)
             .task(id: terminal.id) {
-                if !relay.coreConnected || relay.coreSessionID != terminal.id {
+                if !relay.coreActionsAvailable || relay.coreSessionID != terminal.id {
                     openFailed = !(await relay.openCoreSession(terminal.id))
                 }
             }

@@ -8,6 +8,7 @@ import { backendVisit } from './backend-traffic.js';
 import { accountStatusLabels } from './account-status.js';
 import { copyText, readClipboard } from './clipboard.js';
 import { palette, createTerminalTheme } from './terminal-theme.js';
+import { connectionStatusLabel } from './connection-status.js';
 import { messageBodyToPlainText, parseMessageBody } from '@bzzy/core/message-format';
 import { renderMessageContent } from './message-renderer.js';
 import { hostMetricsLabel } from './host-metrics.js';
@@ -990,9 +991,10 @@ export class TerminalChat {
       const controlWidth = cellWidth(controls), modelSpace = Math.max(1, textWidth - controlWidth - 2);
       brand = color(clip(`bzzy / ${provider} · ${this.model}`, modelSpace), palette.accent, true);
       this.compactControlLeft = left + (eyeRows ? eyeWidth + gap : 0) + cellWidth(brand) + 3;
-      text = [brand + (controls ? muted('  ' + controls) : ''), muted(clip(this.tokenLabel() + ' · ' + hostMetricsLabel(this.ui.hostMetrics, Math.min(64, textWidth)), textWidth))];
+      const connection = connectionStatusLabel(this.ui.connectionStatus, this.theme, true);
+      text = [brand + (controls ? muted('  ' + controls) : ''), connection + muted(clip(' · ' + this.tokenLabel() + ' · ' + hostMetricsLabel(this.ui.hostMetrics, Math.min(64, textWidth)), Math.max(1, textWidth - cellWidth(connection))))];
     }
-    const header = [];
+    const header = compact ? [] : [connectionStatusLabel(this.ui.connectionStatus, this.theme)];
     this.eyeRegion = null;
     if (!compact && height >= 30) header.push('');
     if (eyeRows) {
@@ -1194,7 +1196,7 @@ export class TerminalChat {
     this.composerLeft = contentLeft; this.composerRow += bodyTop;
     const state = this.copyMode ? 'COPY MODE' : this.ui.coreLifecycleInterrupted ? '○ Core stopped' : this.busy ? '● Working' : '● Ready';
     const timestamp = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-    const status = `${timestamp}   │   ${state} `, brand = ' ● bzzy  ~';
+    const status = `${timestamp}   │   ${state} `, brand = ' ' + connectionStatusLabel(this.ui.connectionStatus, this.theme) + '  bzzy ~';
     const lines = [edge('╭' + '─'.repeat(width - 2) + '╮'), edge('│') + accent(brand) + ' '.repeat(Math.max(0, width - 2 - cellWidth(brand + status))) + muted(status) + edge('│'), edge('├' + '─'.repeat(sidebarWidth) + '┬' + '─'.repeat(contentWidth) + '┤')];
     for (let index = 0; index < bodyHeight; index++) {
       const main = raw[index] || '', sidebar = side[index];
@@ -1284,7 +1286,7 @@ export class TerminalChat {
     const pinned = this.pinned && this.panel !== 'settings' && (!this.dashboardRendering || this.busy || this.scroll > 0 || this.goal) ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
     const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
     if (this.ui.minimal) this.eyeRegion = null;
-    const header = this.ui.minimal ? [] : this.persistentHeader(width, height);
+    const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme)] : this.persistentHeader(width, height);
     if (pinned.length && !this.ui.minimal) {
       header.push(color('  YOU ASKED', palette.user, true));
       for (const [index, line] of pinned.slice(0, maximumPinned).entries()) header.push(color('  │ ' + clip(line + (index === maximumPinned - 1 && pinned.length > maximumPinned ? ' …' : ''), width - 5), palette.accent));

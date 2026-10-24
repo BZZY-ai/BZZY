@@ -133,6 +133,9 @@ test('a metrics view recovers after its daemon stops and cannot follow a changed
   assert.equal(identityAlive(old.identity), false);
   await assert.rejects(client.read());
   assert.equal(runtimeInfo(), null);
+  await assert.rejects(client.read(), 'polling cannot restart Core');
+  assert.equal(runtimeInfo(), null);
+  await core.start();
   const recovered = await client.read();
   assert.equal(recovered.version, 1); assert.ok(Date.parse(recovered.sampledAt) >= Date.parse(before.sampledAt));
   assert.notDeepEqual(runtimeInfo().identity, old.identity);

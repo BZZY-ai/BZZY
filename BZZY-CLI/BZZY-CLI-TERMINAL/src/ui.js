@@ -10,6 +10,7 @@ import { MESSAGE_FORMAT_LIMITS, parseMessageBody } from '@bzzy/core/message-form
 import { renderMessageContent } from './message-renderer.js';
 import { createTerminalTheme, palettes } from './terminal-theme.js';
 import { HostMetricsMonitor } from './host-metrics.js';
+import { ConnectionStatusMonitor } from './connection-status.js';
 import { shareSavedSession } from './session-browser.js';
 import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 export { clean } from './terminal-format.js';
@@ -26,6 +27,7 @@ export class UI {
     this.interactive = Boolean(input.isTTY && output.isTTY && !json);
     this.hostMetricsEnabled = hostMetrics && this.interactive && !minimal;
     this.metricsLoader = metricsLoader;
+    this.connectionStatusEnabled = hostMetrics && this.interactive;
     this.lineOpen = false;
     this.reader = null;
     this.promptQueue = Promise.resolve();
@@ -39,6 +41,9 @@ export class UI {
   openTerminal() {
     if (!this.interactive) return;
     this.tui ||= new TerminalChat(this);
+    if (this.connectionStatusEnabled && !this.connectionMonitor && !this.closed) {
+      this.connectionMonitor = new ConnectionStatusMonitor(sample => { this.connectionStatus = sample; this.tui?.schedule(); }).start();
+    }
     if (this.updateHandoff) {
       this.tui.drafts = new Map(this.updateHandoff.drafts);
       Object.assign(this.tui, this.tui.drafts.get(this.activeTab || this.sessionId) || { value: '', cursor: 0 });
@@ -311,6 +316,7 @@ export class UI {
   }
 
   close({ preserveScreen = false } = {}) {
+    this.connectionMonitor?.close();
     if (this.closed) return;
     this.hostMetricsMonitor?.close();
     void this.settings?.close();

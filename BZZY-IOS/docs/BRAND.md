@@ -8,6 +8,9 @@ The view displays it 25% larger, clipping only unused black side margins.
 `FlyMotion.metal` gently distorts the original pixels for pupil tracking, antenna
 sway and breathing; it never replaces the compound-eye texture or draws eyelids.
 There is no blinking or eye-closing state. Touch targets ease with a speed limit;
+idle gaze now uses rapid darts of roughly 100–200 ms, separated by varied
+half-second-to-one-second holds while checking nearby directions. Touch tracking
+keeps its separate slower easing rather than inheriting the idle dart speed;
 the animation clock pauses offscreen/background and ignores long frame gaps.
 Reduce Motion disables the distortion and returns to the original still image.
 The Xcode Metal toolchain compiles the shader; native macOS previews compile and

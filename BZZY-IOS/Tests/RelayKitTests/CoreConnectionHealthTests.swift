@@ -2,6 +2,14 @@ import XCTest
 @testable import RelayKit
 
 final class CoreConnectionHealthTests: XCTestCase {
+    func testProductionLeaseUsesMonotonicTimeInsteadOfWallClock() {
+        var health = CoreConnectionHealth()
+        let epoch = health.begin(scope: "session")
+        XCTAssertTrue(health.confirm(epoch, scope: "session", at: .distantPast))
+        XCTAssertTrue(health.isOnline(), "Changing wall clock does not create or extend the monotonic lease")
+        XCTAssertFalse(health.needsProbe())
+        health.disconnect(); XCTAssertFalse(health.isOnline()); XCTAssertTrue(health.needsProbe())
+    }
     func testRelayPresenceAloneCannotUnlockCoreAndAHeartbeatExpires() {
         var health = CoreConnectionHealth()
         let now = Date(timeIntervalSince1970: 1000)

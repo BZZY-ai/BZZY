@@ -374,3 +374,12 @@ and an offline backend fixture, never production provider accounts. They exercis
 the actual shared daemon, execution queue, scoped tokens, restart/replay and
 the deterministic broker boundaries. [VALIDATION.md](docs/VALIDATION.md) records
 the checks performed for this implementation.
+
+## Confirmed connection status
+
+The local-owner `GET /v1/connections` endpoint reports the serving Core identity
+and separate Relay liveness. Relay requires a matching ping/pong challenge on the
+authenticated current socket, with a six-second freshness bound; an open socket
+or old status file is insufficient. This probes no model or application command.
+The `@bzzy/core/connections` facade validates the Core identity and returns only
+safe state to the CLI. Connection and metrics polling never start a stopped Core.

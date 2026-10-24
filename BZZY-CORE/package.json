@@ -5,7 +5,7 @@
   "type": "module",
   "description": "BZZY's shared execution engine, host API, scoped tool broker and Relay gateway.",
   "engines": { "node": ">=24" },
-  "exports": { ".": "./src/index.js", "./client": "./src/client.js", "./relay": "./src/relay/index.js", "./engine/*": "./src/engine/*", "./message-format": "./src/message-format.js", "./workspaces": "./src/workspaces.js", "./metrics": "./src/metrics.js", "./command": "./bin/bzzy-core.js" },
+  "exports": { ".": "./src/index.js", "./client": "./src/client.js", "./relay": "./src/relay/index.js", "./engine/*": "./src/engine/*", "./message-format": "./src/message-format.js", "./workspaces": "./src/workspaces.js", "./metrics": "./src/metrics.js", "./connections": "./src/connections.js", "./command": "./bin/bzzy-core.js" },
   "bin": { "bzzy-core": "./bin/bzzy-core.js" },
   "files": ["bin", "src", "assets", "docs", "scripts/prepare-package.mjs", "README.md", "NOTICE", "LICENSE"],
   "bundledDependencies": ["@bzzy/relay"],

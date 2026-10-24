@@ -32,7 +32,7 @@ export class CoreRelayService {
   snapshot() {
     const enabled = this.#config().enabled === true;
     return { status: { ...(this.#gateway?.status() || { transport: 'offline', gateway: 'stopped' }),
-      managed: true, enabled, ...(this.#error ? { errorCode: this.#error } : {}) },
+      managed: true, enabled, ...(this.#error && !this.#gateway?.status().connection?.online ? { errorCode: this.#error } : {}) },
       pendingPairings: this.#gateway?.pendingPairings() || [], grants: this.#gateway?.grants() || [] };
   }
   #record() { recordGatewayStatus(this.snapshot().status); }

@@ -61,29 +61,27 @@ final class BZZYUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--core-offline-testing", "--reset-ui-testing"]
         app.launch()
-        XCTAssertTrue(app.staticTexts["Core offline"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Relay connected · Core connection required"].exists)
-        XCTAssertTrue(app.staticTexts["Agents locked"].exists)
-        XCTAssertTrue(app.staticTexts["Terminal locked"].exists)
-        for identifier in ["tab-agents", "tab-terminal", "create-agent", "import-resource", "save-message"] {
+        XCTAssertTrue(app.staticTexts["BZZY"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["connection-status-label"].label, "Offline")
+        XCTAssertFalse(app.descendants(matching: .any)["core-offline-lock"].exists)
+        XCTAssertFalse(app.staticTexts["Connecting to Core"].exists)
+        XCTAssertTrue(app.buttons["tab-agents"].exists)
+        XCTAssertTrue(app.buttons["tab-terminal"].exists)
+        for identifier in ["tab-agents", "tab-terminal", "create-agent", "import-resource", "open-voice-chat"] {
             let action = app.buttons[identifier]
-            if action.exists {
-                XCTAssertFalse(action.isEnabled, "Cached navigation must be disabled while Core is offline")
-                XCTAssertFalse(action.isHittable, "The offline shield must cover every workspace action")
-            }
+            if action.exists { XCTAssertFalse(action.isEnabled, "Core-dependent actions remain disabled while offline") }
         }
+        XCTAssertTrue(app.buttons["refresh-connection"].isEnabled)
+        XCTAssertLessThanOrEqual(app.buttons["tab-agents"].frame.maxY, app.buttons["refresh-connection"].frame.minY)
+        app.buttons["refresh-connection"].tap()
+        XCTAssertTrue(app.staticTexts["BZZY"].exists)
+        XCTAssertEqual(app.staticTexts["connection-status-label"].label, "Offline")
         XCTAssertFalse(app.descendants(matching: .any)["host-metrics"].exists)
-        XCTAssertFalse(app.buttons["save-message"].exists)
-        app.buttons["Connection"].tap()
-        XCTAssertTrue(app.staticTexts["Core offline"].waitForExistence(timeout: 3))
-        XCTAssertFalse(app.secureTextFields["pairing-code"].exists, "A saved approved pairing must not ask for another code")
-        XCTAssertTrue(app.buttons["Forget host"].exists)
-        app.buttons["Close"].tap()
         XCUIDevice.shared.press(.home)
         app.activate()
-        XCTAssertTrue(app.staticTexts["Core offline"].waitForExistence(timeout: 5))
-        if app.buttons["tab-agents"].exists { XCTAssertFalse(app.buttons["tab-agents"].isEnabled); XCTAssertFalse(app.buttons["tab-agents"].isHittable) }
-        attach(app, name: "Paired Core offline locks workspaces")
+        XCTAssertTrue(app.staticTexts["BZZY"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["connection-status-label"].label, "Offline")
+        attach(app, name: "Offline main view with truthful connection footer")
     }
 
     func testFreshInstallRequiresApprovedCorePairBeforeNavigation() {

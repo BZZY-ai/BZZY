@@ -7,6 +7,7 @@ import { authorizedUpdateGrant as authorizedOwnPhone } from '../engine/update-ac
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { RelayConnectionHealth } from './connection-health.js';
 import { BzzyCore } from '../core.js';
 import { CoreAgents } from '../agents.js';
 import { CoreAgentImports } from '../agent-imports.js';
@@ -45,6 +46,7 @@ export class RelayGateway extends EventEmitter {
   #home;
   #identity;
   #relay;
+  #relayHealth;
   #core;
   #unlock;
   #started = false;
@@ -139,6 +141,7 @@ export class RelayGateway extends EventEmitter {
       const authentication = await this.#relay.connect();
       if (authentication?.role !== 'host') fail('HOST_ENROLLMENT_REQUIRED', 'Enroll this host public certificate with the Relay operator.');
       await this.#core.start(); this.#started = true;
+      this.#relayHealth = new RelayConnectionHealth(this.#relay).start();
       for (const command of this.#rows('core.relay.command')) if (command.state === 'dispatching') putRecord('core.relay.command', command.id, { ...command, state: 'uncertain' });
       this.#maintenanceTimer = setInterval(() => { void this.#maintenance(); }, 1000);
       this.emit('status', { transport: this.#relay.status, gateway: 'ready' });
@@ -150,7 +153,7 @@ export class RelayGateway extends EventEmitter {
   }
   status() {
     this.#check();
-    return { transport: this.#relay.status, gateway: this.#started ? this.#relay.status === 'online' ? 'ready' : 'reconnecting' : 'stopped', relayUrl: this.#relay.url,
+    return { transport: this.#relay.status, connection: this.#relayHealth?.snapshot() || { online: false, verifiedAt: null, maximumAgeMs: 6000 }, gateway: this.#started ? this.#relay.status === 'online' ? 'ready' : 'reconnecting' : 'stopped', relayUrl: this.#relay.url,
       hostId: this.#identity.certificate.id, protocol: PROTOCOL, version: VERSION,
       activeGrants: this.#rows('core.relay.grant').filter(alive).length, subscriptions: this.#subscriptions.size,
       operations: [...OPERATIONS], portableSharing: true, portableKinds: ['TERMINAL', 'AGENT'], projectSharing: true };
@@ -931,6 +934,7 @@ export class RelayGateway extends EventEmitter {
     finally { this.#maintenanceBusy = false; }
   }
   async close() {
+    this.#relayHealth?.close();
     this.#check(); this.#started = false; clearInterval(this.#maintenanceTimer); this.#stopSubscriptions();
     await this.#agentImports.close();
     await this.#transfers.close();

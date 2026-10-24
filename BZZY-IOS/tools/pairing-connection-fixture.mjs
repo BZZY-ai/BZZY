@@ -16,7 +16,7 @@ import { CoreWorkspaces } from '../../BZZY-CORE/src/workspaces.js';
 import { getRecord, listRecords, putRecord } from '../../BZZY-CORE/src/engine.js';
 import { prepareTask } from '../../BZZY-CORE/src/engine/task.js';
 import { newGoal } from '../../BZZY-CORE/src/engine/goals.js';
-import { runtimeInfo, runtimeRequest } from '../../BZZY-CORE/src/engine/runtime.js';
+import { runtimeInfo, runtimeRequest, clearOperatorStopIntent } from '../../BZZY-CORE/src/engine/runtime.js';
 import { identityAlive } from '../../BZZY-CORE/src/engine/process-identity.js';
 import { RelayClient } from '../../BZZY-RELAY/src/client.js';
 import { attachSession } from '../../BZZY-CLI/BZZY-CLI-TERMINAL/src/runtime-client.js';
@@ -149,6 +149,12 @@ async function handle(input) {
     case 'core-stop':
       await runtimeRequest(runtimeInfo(), 'POST', '/operator-stop', { shutdown: false });
       return { stopped: true };
+    case 'core-restart': {
+      const previous = runtimeInfo();
+      await runtimeRequest(previous, 'POST', '/shutdown', {});
+      for (let attempt = 0; attempt < 100 && identityAlive(previous.identity); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+      clearOperatorStopIntent(); await new BzzyCore().start(); return { restarted: true };
+    }
     case 'stop': await stop(); return { stopped: true };
     default: throw new Error('UNKNOWN_FIXTURE_OPERATION');
   }

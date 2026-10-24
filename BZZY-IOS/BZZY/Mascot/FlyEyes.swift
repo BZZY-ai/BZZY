@@ -64,7 +64,7 @@ struct FlyEyes: View {
             .onChange(of: timeline.date) { _, date in
                 guard frozenTime == nil, !reduceMotion, isVisible, scenePhase == .active else { return }
                 clock.advance(date.timeIntervalSinceReferenceDate)
-                gazeMotion.advance(toward: pose.target, time: date.timeIntervalSinceReferenceDate)
+                gazeMotion.advance(toward: pose.target, time: date.timeIntervalSinceReferenceDate, rapid: pose.scanning)
             }
         }
         .onAppear { isVisible = true }

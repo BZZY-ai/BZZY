@@ -20,6 +20,7 @@ struct AgentsView: View {
                     Button { showVoice = true } label: {
                         Label("Talk to BZZY", systemImage: "waveform").bzzyFont(13, weight: .medium)
                     }.buttonStyle(BZZYActionStyle()).accessibilityLabel("Open voice").accessibilityIdentifier("open-voice-chat")
+                        .disabled(!AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
                 }.frame(maxWidth: .infinity).padding(.top, 32).padding(.bottom, 30)
 
                 if relay.coreAgentsAvailable {
@@ -28,7 +29,7 @@ struct AgentsView: View {
                             Text("On demand").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                             Spacer()
                             Button { Task { await relay.refreshCoreAgents() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                                .bzzyFont(12).disabled(!relay.coreCatalogReady)
+                                .bzzyFont(12)
                         }
                         if !store.hostAgentsConfigured {
                             Text("Configure the default Agents workspace on your host to create agents.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
@@ -46,7 +47,7 @@ struct AgentsView: View {
                                     Spacer()
                                     Image(systemName: "arrow.up.right").bzzyFont(12)
                                 }.padding(.vertical, 15).contentShape(Rectangle())
-                            }.buttonStyle(.plain).disabled(!relay.coreCatalogReady || relay.coreBusy || relay.coreCommandUncertain)
+                            }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable || !relay.coreCatalogReady || relay.coreBusy)
                                 .accessibilityIdentifier("host-agent-\(agent.id)")
                                 .contextMenu {
                                     Button("Edit") { editingHostAgent = agent }
@@ -241,7 +242,7 @@ private struct HostAgentConversationView: View {
         ConversationCanvas(store: store, conversationID: agent.sessionID, title: agent.name,
             subtitle: "\(agent.provider) · \(agent.model)", assistantName: agent.name, remoteSession: true)
             .task(id: agent.id) {
-                if !relay.coreConnected || relay.coreSessionID != agent.sessionID {
+                if !relay.coreActionsAvailable || relay.coreSessionID != agent.sessionID {
                     openFailed = !(await relay.openCoreAgent(agent.id))
                 }
             }

@@ -1,7 +1,7 @@
 import SwiftUI
 import RelayKit
 
-private enum AppLaunchMode {
+enum AppLaunchMode {
     static var allowsPreviewNavigation: Bool {
         #if BZZY_PREVIEW
         return true
@@ -105,6 +105,7 @@ struct WorkspaceView: View {
             if !allowsDemoNavigation && !relay.corePairAuthorized {
                 ConnectView(required: true)
             } else {
+        VStack(spacing: 0) {
         NavigationStack {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
@@ -112,10 +113,10 @@ struct WorkspaceView: View {
                     Spacer()
                     RoundButton(symbol: "square.and.arrow.down", label: "Import \(store.selectedTab == .agents ? "agent" : "terminal")") {
                         importKind = store.selectedTab == .agents ? .agent : .terminal
-                    }.accessibilityIdentifier("import-resource")
+                    }.accessibilityIdentifier("import-resource").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
                     if store.selectedTab == .agents {
                         RoundButton(symbol: "plus", label: "Create an agent") { showCreate = true }
-                            .accessibilityIdentifier("create-agent")
+                            .accessibilityIdentifier("create-agent").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
                     }
                     RoundButton(symbol: "slider.horizontal.3", label: "Settings") { showSettings = true }
                 }.padding(.horizontal, 25).padding(.top, 10).padding(.bottom, 8)
@@ -149,9 +150,11 @@ struct WorkspaceView: View {
                 Button("OK") { storageNoticeDismissed = true }
             } message: { Text(store.storageError ?? "") }
         }
-        .coreAvailabilityGate(enabled: !allowsDemoNavigation)
+            CoreConnectionFooter()
+        }
             }
-        }.id(navigationID).environment(relay).environment(notifications).environment(transfers)
+        }
+            .id(navigationID).environment(relay).environment(notifications).environment(transfers)
             .tint(BZZYTheme.accent).preferredColorScheme(.dark)
             .task {
                 relay.onNotice = { kind in Task { await notifications.hostNotice(kind) } }
@@ -244,7 +247,7 @@ struct WorkspaceView: View {
                         .background(store.selectedTab == tab ? BZZYTheme.accent.opacity(0.09) : .clear,
                                     in: RoundedRectangle(cornerRadius: 19))
                 }.buttonStyle(.plain)
-                    .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
+                    .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
                     .accessibilityAddTraits(store.selectedTab == tab ? .isSelected : [])
             }
         }.padding(6)
@@ -264,42 +267,31 @@ extension View {
 private struct CoreAvailabilityGate: ViewModifier {
     let enabled: Bool
     @Environment(RelayConnection.self) private var relay
-    @State private var showConnection = false
-    @State private var showSettings = false
-    private var locked: Bool { enabled && !AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable }
-
     func body(content: Content) -> some View {
-        ZStack {
-            content.opacity(locked ? 0 : 1).disabled(locked)
-                .allowsHitTesting(!locked).accessibilityHidden(locked)
-            if locked {
-                VStack(spacing: 22) {
-                    Image(systemName: "desktopcomputer.trianglebadge.exclamationmark")
-                        .font(.system(size: 38, weight: .light)).foregroundStyle(BZZYTheme.accent)
-                    Text(relay.coreConnectionLabel).bzzyFont(28, weight: .medium)
-                        .accessibilityIdentifier("core-offline-status")
-                    Text("Start BZZY Core on your computer to continue.")
-                        .bzzyFont(14).foregroundStyle(BZZYTheme.secondary).multilineTextAlignment(.center)
-                    Text(relay.status == .connected ? "Relay connected · Core connection required" : "Relay disconnected · Core connection required")
-                        .bzzyFont(11).foregroundStyle(BZZYTheme.muted).multilineTextAlignment(.center)
-                    HStack(spacing: 24) {
-                        Label("Agents locked", systemImage: "lock").accessibilityIdentifier("offline-agents")
-                        Label("Terminal locked", systemImage: "lock").accessibilityIdentifier("offline-terminal")
-                    }.bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
-                    Text("Your pairing and saved history are kept.").bzzyFont(11).foregroundStyle(BZZYTheme.muted)
-                    Button("Reconnect") { Task { await relay.resume(); await relay.refresh() } }
-                        .bzzyFont(15).disabled(!relay.networkingEnabled || relay.status == .connecting)
-                        .accessibilityIdentifier("core-reconnect")
-                    HStack(spacing: 28) {
-                        Button("Connection") { showConnection = true }
-                        Button("Settings") { showSettings = true }
-                    }.bzzyFont(13)
-                }.buttonStyle(BZZYActionStyle()).padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(BZZYTheme.background).accessibilityIdentifier("core-offline-lock")
-            }
+        content.disabled(enabled && !AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
+    }
+}
+
+private struct CoreConnectionFooter: View {
+    @Environment(RelayConnection.self) private var relay
+    @State private var checking = false
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            HStack(spacing: 7) {
+                Circle().fill(relay.connectionOnline ? BZZYTheme.success : BZZYTheme.danger).frame(width: 6, height: 6)
+                Text(relay.connectionOnline ? "Online" : "Offline").bzzyFont(11, weight: .medium)
+                    .accessibilityIdentifier("connection-status-label")
+                Spacer()
+                Button {
+                    checking = true
+                    Task { await relay.checkConnection(); checking = false }
+                } label: {
+                    Label(checking ? "Checking…" : "Refresh", systemImage: "arrow.clockwise").bzzyFont(10)
+                }.disabled(checking).buttonStyle(.plain).foregroundStyle(BZZYTheme.secondary)
+                    .accessibilityIdentifier("refresh-connection")
+            }.padding(.horizontal, 25).frame(minHeight: 30).background(BZZYTheme.background)
+                .accessibilityElement(children: .contain).accessibilityIdentifier("connection-status")
         }
-        .sheet(isPresented: $showConnection) { ConnectView().disabled(false) }
-        .sheet(isPresented: $showSettings) { SettingsView().disabled(false) }
     }
 }
 

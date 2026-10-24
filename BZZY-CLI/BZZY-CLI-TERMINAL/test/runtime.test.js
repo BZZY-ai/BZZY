@@ -588,6 +588,15 @@ test('runtime restart preserves its address, observer tokens and the existing li
   assert.equal(logs.filter(item => item.started).length, 1);
 });
 
+test('connection status verifies the running Core, keeps a disabled Relay offline and rejects observer administration', async () => {
+  const session = makeSession(), info = await ensureRuntime(), client = new BzzyClient(info);
+  const state = await runtimeRequest(info, 'GET', '/v1/connections');
+  assert.equal(state.core.online, true); assert.equal(state.relay.online, false);
+  assert.deepEqual(state.identity, info.identity);
+  const observer = await client.observerToken(session.id);
+  await assert.rejects(runtimeRequest({ url: info.url, token: observer.token }, 'GET', '/v1/connections'), /local owner/);
+});
+
 test('cancelling a parallel group stops active work and prevents queued peers from launching', async () => {
   process.env.BZZY_TEST_ADVANCED = 'slow';
   const session = makeSession({ mode: 'parallel' }), launched = await start(session, { agents: 'codex,claude,deepseek', concurrency: 1, runtimeSeconds: 30 });
