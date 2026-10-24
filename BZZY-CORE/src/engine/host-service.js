@@ -25,6 +25,10 @@ const absolute = value => {
 };
 const xml = value => safe(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 const unit = (value, command = false) => '"' + safe(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%').replaceAll('$', () => command ? '$$' : '$') + '"';
+// WorkingDirectory is a literal single path, not an ExecStart/Environment word.
+// Quotes/backslash escapes are not removed by systemd's path parser. /.
+// preserves a final space or backslash through unit-file trimming/continuations.
+const unitDirectory = value => safe(value).replaceAll('%', '%%') + '/.';
 const exists = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 const real = canonicalPath;
 
@@ -46,7 +50,7 @@ export function servicePlan({ platform = process.platform, userHome = os.homedir
     return { version: 1, platform, manager: '/bin/launchctl', uid, label, id, coreHome, userHome, node, entry, file, logPath, environment, manifest, startup: 'At this user’s graphical login; the Mac must remain awake.' };
   }
   const name = `bzzy-core-${id}.service`, file = path.join(userHome, '.config', 'systemd', 'user', name);
-  const manifest = `# ${marker} ${id}\n[Unit]\nDescription=BZZY Core private host\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${unit(node, true)} ${unit(entry, true)} serve\nWorkingDirectory=${unit(coreHome)}\n${Object.entries(environment).map(([key, value]) => `Environment=${unit(`${key}=${value}`)}`).join('\n')}\nUMask=0077\nRestart=always\nRestartSec=5\nTimeoutStopSec=20\nKillMode=process\nStandardOutput=journal\nStandardError=inherit\n\n[Install]\nWantedBy=default.target\n`;
+  const manifest = `# ${marker} ${id}\n[Unit]\nDescription=BZZY Core private host\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${unit(node, true)} ${unit(entry, true)} serve\nWorkingDirectory=${unitDirectory(coreHome)}\n${Object.entries(environment).map(([key, value]) => `Environment=${unit(`${key}=${value}`)}`).join('\n')}\nUMask=0077\nRestart=always\nRestartSec=5\nTimeoutStopSec=20\nKillMode=process\nStandardOutput=journal\nStandardError=inherit\n\n[Install]\nWantedBy=default.target\n`;
   return { version: 1, platform, manager: fs.existsSync('/usr/bin/systemctl') ? '/usr/bin/systemctl' : '/bin/systemctl', uid, label: name, id,
     coreHome, userHome, node, entry, file, logPath, environment, manifest, startup: 'At this user’s login; boot without login requires administrator-enabled systemd lingering.' };
 }

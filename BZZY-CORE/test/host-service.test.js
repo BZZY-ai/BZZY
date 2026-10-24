@@ -73,6 +73,44 @@ test('owned install is private and idempotent, has no manager/model side effects
   } finally { setup.close(); }
 });
 
+test('Linux working directory stays an absolute literal path independently of command/environment quoting', () => {
+  const setup = fixture('linux');
+  try {
+    for (const name of ['private context', '100% $cash "quoted" \\folder', 'trailing space ', 'trailing slash\\']) {
+      const plan = servicePlan({ ...setup.plan, coreHome: path.join(setup.plan.userHome, name) });
+      const value = /^WorkingDirectory=(.*)$/m.exec(plan.manifest)?.[1];
+      assert.ok(value.startsWith('/'), 'systemd rejects a quoted value as non-absolute');
+      assert.equal(path.resolve(value.replaceAll('%%', '%')), plan.coreHome, 'literal spaces, quotes, dollars and backslashes must survive the single-path parser');
+      assert.ok(!/[\\\s]$/.test(value), 'line trimming and continuation must not change the directory');
+    }
+    installService(setup.plan);
+    const old = setup.plan.manifest.replace(/^WorkingDirectory=.*$/m, `WorkingDirectory="${setup.plan.coreHome}"`);
+    fs.writeFileSync(setup.plan.file, old);
+    const unavailable = { run: () => ({ status: 1, stderr: 'unit has bad-setting' }) };
+    assert.equal(installService(setup.plan, unavailable).changed, true, 'an inactive old invalid manifest is replaced through ordinary installation');
+    assert.equal(fs.readFileSync(setup.plan.file, 'utf8'), setup.plan.manifest);
+  } finally { setup.close(); }
+});
+
+test('native systemd accepts generated Linux units and rejects the old quoted working directory', { skip: process.platform !== 'linux' }, t => {
+  const analyzer = ['/usr/bin/systemd-analyze', '/bin/systemd-analyze'].find(file => fs.existsSync(file));
+  if (!analyzer) return t.skip('systemd-analyze is not installed');
+  const setup = fixture('linux');
+  try {
+    const env = { ...process.env, XDG_RUNTIME_DIR: setup.directory, SYSTEMD_LOG_LEVEL: 'warning', SYSTEMD_LOG_TARGET: 'console' };
+    for (const name of ['private context', '100% $cash "quoted" \\folder', 'trailing space ', 'trailing slash\\']) {
+      const plan = servicePlan({ ...setup.plan, coreHome: path.join(setup.plan.userHome, name) });
+      installService(plan);
+      const result = spawnSync(analyzer, ['--user', 'verify', plan.file], { env, encoding: 'utf8', timeout: 15000 });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    fs.writeFileSync(setup.plan.file, setup.plan.manifest.replace(/^WorkingDirectory=.*$/m, `WorkingDirectory="${setup.plan.coreHome}"`));
+    const rejected = spawnSync(analyzer, ['--user', 'verify', setup.plan.file], { env, encoding: 'utf8', timeout: 15000 });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /WorkingDirectory|working directory|bad.*setting/i);
+  } finally { setup.close(); }
+});
+
 test('user service lifecycle uses only exact manager arguments, blocks duplicate daemons and preserves private state', async () => {
   for (const platform of ['darwin', 'linux']) {
     const setup = fixture(platform), fake = manager(platform);

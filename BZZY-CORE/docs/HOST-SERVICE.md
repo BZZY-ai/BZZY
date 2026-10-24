@@ -63,6 +63,13 @@ Starting/stopping from another terminal keeps that installed PATH. To change
 it, review a new plan and reinstall; other executable/account-directory changes
 still require plan/install before starting.
 
+Linux `WorkingDirectory` uses systemd's literal path syntax, independently of
+the quoted command/environment fields. The generated path escapes `%` specifiers
+and ends with `/.` to retain literal trailing whitespace/backslashes. Earlier
+quoted working-directory fields could leave units in `bad-setting` even with a
+healthy user manager. Updating through the compatibility repair reinstalls the
+corrected manifest; then a fresh `bzzy` launch starts the same private context.
+
 If a programmatic/development Core owns this context, `start` refuses to create
 a second engine. `restart` safely pauses and stops that standalone daemon,
 then migrates the same private context to supervision.
