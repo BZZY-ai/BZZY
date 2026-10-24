@@ -93,6 +93,10 @@ Core rechecks the owner, exact pending question and expiry. Drafts remain intact
 Alongside YOLO, a blue **Pursuing goal...** badge animates with rotating dots;
 verified achievement turns green and stalled outcomes turn red. Paused/cancelled
 goals keep their own labels. Status comes from Core lifecycle state, never reply text.
+Sending another `/goal <objective>` while a goal is active, verifying or paused
+opens **Replace current goal?** with **No** selected initially. Yes stops the
+previous run before queueing the new goal; No or Escape keeps it. Core checks the
+confirmed goal ID again, so a goal changed by another client needs a fresh review.
 
 Settings keeps its four main entries in compact cards. Open **Settings > BZZY
 Core > Terminal agent setups**, or `/settings modes`, to save each mode’s models,

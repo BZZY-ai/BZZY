@@ -10,6 +10,19 @@ import { assignmentContextPage, compactAssignmentRound } from './assignment-view
 import { peerCollaborationState } from './peer-collaboration.js';
 
 export { processIdentity, identityAlive, signalProcess } from './process-identity.js';
+
+export function recoverOrphanedVerification(id) {
+  const session = loadSession(id);
+  if (session?.goal?.status !== 'verifying' || identityAlive(getRecord('run', id)?.runner) || identityAlive(session.backendProcess)
+      || listRecords('execution', { sessionId: id, states: ['queued', 'launching', 'running'], limit: 1 }).length) return false;
+  session.goal.status = 'awaiting_review'; session.goal.reason = 'verification_interrupted';
+  if (session.executionState === 'verifying') session.executionState = 'interrupted';
+  session.acceptance = null; session.summary = null;
+  delete session.deferTerminalNotification;
+  saveSession(session);
+  appendEvent(id, 'lifecycle', { status: 'awaiting_review', reason: 'verification_interrupted', automaticallyReplayed: false });
+  return true;
+}
 export function reconcileSession(id) {
   const session = loadSession(id);
   if (!session) throw new Error('Unknown session.');

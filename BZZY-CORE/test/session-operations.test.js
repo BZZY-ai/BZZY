@@ -12,6 +12,8 @@ import { prepareTask } from '../src/engine/task.js';
 import { newGoal } from '../src/engine/goals.js';
 import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider } from '../src/engine/session-operations.js';
 import { createTaskSession, activateTaskGoal, createChatSession, newConversation, startConversationGoal, prepareResume } from '../src/engine/host-commands.js';
+import { CodexEngine } from '../src/engine/engines/codex.js';
+import { recoverOrphanedVerification } from '../src/engine/recovery.js';
 
 let directory, workspace, saved;
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR'];
@@ -81,6 +83,66 @@ test('resuming through Core queues one execution for a repeated request', async 
   assert.equal(listRecords('execution', { sessionId: session.id }).length, 1);
   assert.equal(loadSession(session.id).goal.notificationEpoch, 1);
   assert.equal(getRecord('execution', first.executionId).resumeGoal, true);
+});
+
+test('new goals require exact replacement confirmation, reset evidence and deduplicate before stopping work', async () => {
+  const session = goalSession(), owner = randomUUID(), requestId = randomUUID(); claimInput(session.id, owner);
+  session.acceptance = { passed: true, criteria: ['old evidence'] }; saveSession(session);
+  let reads = 0;
+  const request = async () => { reads++; return { execution: null, capabilities: {} }; };
+  await assert.rejects(enqueueGoalTurn(session.id, owner, {}, { objective: 'New objective', request }), { code: 'CONFIRMATION_REQUIRED' });
+  assert.equal(reads, 0); assert.equal(loadSession(session.id).goal.id, session.goal.id);
+  await assert.rejects(enqueueGoalTurn(session.id, owner, {}, { objective: 'New objective', replaceGoalId: randomUUID(), request }), { code: 'CONFIRMATION_REQUIRED' });
+  const input = { objective: 'New objective', replaceGoalId: session.goal.id, requestId, request };
+  const first = await enqueueGoalTurn(session.id, owner, {}, input);
+  const repeated = await enqueueGoalTurn(session.id, owner, {}, input);
+  assert.equal(first.executionId, repeated.executionId); assert.equal(reads, 1);
+  const changed = loadSession(session.id);
+  assert.equal(changed.goal.objective, 'New objective'); assert.equal(changed.contract.objective, 'New objective');
+  assert.equal(changed.acceptance, null); assert.notEqual(changed.goal.id, session.goal.id);
+  assert.equal(getRecord('goal-history', session.goal.id).supersededBy, changed.goal.id);
+  assert.equal(getRecord('execution', first.executionId).goal, true);
+  await assert.rejects(enqueueGoalTurn(session.id, owner, {}, { ...input, objective: 'Different objective' }), /Idempotency conflict/);
+});
+
+test('replacement rechecks permission after reads and requires cancel permission before stopping a run', async () => {
+  const session = goalSession(), owner = randomUUID(); claimInput(session.id, owner);
+  let cancelled = false;
+  const input = { objective: 'Replacement', replaceGoalId: session.goal.id,
+    request: async method => { if (method === 'POST') cancelled = true; return { execution: { state: 'running' } }; },
+    authorize: permission => { if (permission === 'cancel') throw Object.assign(new Error('Cancel denied'), { status: 403 }); } };
+  await assert.rejects(enqueueGoalTurn(session.id, owner, {}, input), /Cancel denied/);
+  assert.equal(cancelled, false); assert.equal(loadSession(session.id).goal.id, session.goal.id);
+  let valid = true;
+  await assert.rejects(enqueueGoalTurn(session.id, owner, {}, { ...input,
+    authorize: () => { if (!valid) throw new Error('Grant revoked'); },
+    request: async () => { valid = false; return { execution: null, capabilities: {} }; },
+  }), /Grant revoked/);
+  assert.equal(listRecords('execution', { sessionId: session.id }).length, 0);
+});
+
+test('Codex ordinary and late native goal events cannot mutate a prior saved goal', () => {
+  const session = goalSession(); session.goal.status = 'complete'; saveSession(session);
+  const emitted = [], engine = new CodexEngine(BUILTINS.codex, session, {}, { event: (...event) => emitted.push(event) });
+  const previous = structuredClone(session.goal), native = { goalId: 'old-native', status: 'complete', tokensUsed: 42 };
+  engine.operation = { goal: false }; engine.goalArmed = true; engine.updateGoal(native);
+  engine.operation = null; engine.updateGoal(native);
+  assert.deepEqual(loadSession(session.id).goal, previous); assert.equal(emitted.length, 0);
+  engine.operation = { goal: true }; engine.goalArmed = true; engine.updateGoal(native);
+  assert.equal(loadSession(session.id).goal.status, 'verifying'); assert.equal(emitted.length, 1);
+});
+
+test('orphaned verification becomes reviewable without replay or reusing prior acceptance', () => {
+  const session = goalSession(); session.goal.status = 'verifying'; session.executionState = 'verifying'; session.acceptance = { passed: true }; saveSession(session);
+  putRecord('execution', 'queued', { id: 'queued', sessionId: session.id, state: 'queued' });
+  assert.equal(recoverOrphanedVerification(session.id), false);
+  putRecord('execution', 'queued', { id: 'queued', sessionId: session.id, state: 'finished' });
+  assert.equal(recoverOrphanedVerification(session.id), true);
+  assert.equal(loadSession(session.id).goal.status, 'awaiting_review'); assert.equal(loadSession(session.id).acceptance, null);
+  assert.equal(loadSession(session.id).executionState, 'interrupted');
+  assert.equal(recoverOrphanedVerification(session.id), false);
+  assert.equal(listRecords('outbox').filter(item => item.event.type === 'goal.completed').length, 0);
+  assert.equal(listRecords('outbox').filter(item => item.event.type === 'goal.stalled').length, 1);
 });
 
 test('task creation binds idempotency to the context and delays the goal until context finishes', () => {

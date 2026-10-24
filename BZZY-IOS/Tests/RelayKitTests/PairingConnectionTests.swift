@@ -2,6 +2,9 @@ import XCTest
 @testable import RelayKit
 
 final class PairingConnectionTests: XCTestCase {
+    @MainActor func testPhoneGoalDispatchRequiresReplacementAndUsesCoreGoalLifecycle() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, goals: true)
+    }
     @MainActor func testVoiceUsesCoreDefaultAndRecoversAfterBackgroundWithoutSendingAgain() async throws {
         try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, voiceChat: true)
     }
@@ -34,7 +37,7 @@ final class PairingConnectionTests: XCTestCase {
     }
 
     @MainActor private func checkPairing(ignoreDecisionEvent: Bool, backgroundBeforeApproval: Bool,
-                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false) async throws {
+                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false) async throws {
         let fixture = try PairingConnectionFixture()
         defer { fixture.shutdown() }
         let identity = try RelayIdentity.generate()
@@ -87,6 +90,24 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertFalse(connection.coreIsAssistant, "A terminal pair must not depend on coordinator setup")
         XCTAssertEqual(connection.corePermissions, Set(["observe", "claim", "takeover", "execute", "answer", "pause", "cancel", "steer"]))
         XCTAssertTrue(availabilityFailures.isEmpty, "Approval must not cancel its own initial Core read: \(availabilityFailures)")
+        if goals {
+            let seed = try fixture.request(["op": .string("goal-seed")])
+            await connection.refreshCore()
+            XCTAssertTrue(connection.coreGoalSubmission)
+            XCTAssertEqual(connection.coreGoalID, seed["goalID"].string)
+            let rejected = await connection.sendCoreMessage("/goal New mobile objective")
+            XCTAssertFalse(rejected)
+            XCTAssertEqual(try fixture.request(["op": .string("goal-state")])["executionCount"].integer, 0)
+            let accepted = await connection.sendCoreMessage("/goal New mobile objective", replaceGoalID: seed["goalID"].string)
+            XCTAssertTrue(accepted)
+            try await eventually { try fixture.request(["op": .string("goal-state")])["status"].string == "complete" }
+            let result = try fixture.request(["op": .string("goal-state")])
+            XCTAssertEqual(result["objective"].string, "New mobile objective")
+            XCTAssertEqual(result["goalExecution"].bool, true)
+            XCTAssertEqual(result["executionCount"].integer, 1)
+            XCTAssertEqual(result["notificationCount"].integer, 1)
+            XCTAssertNotEqual(result["goalID"].string, seed["goalID"].string)
+        }
         if voiceChat {
             await connection.prepareVoiceChat()
             XCTAssertFalse(connection.voiceConfigured)
@@ -164,7 +185,7 @@ final class PairingConnectionTests: XCTestCase {
         await connection.resume()
         try await eventually { connection.coreActionsAvailable }
         let state = try fixture.request(["op": .string("state")])
-        XCTAssertEqual(state["executionCount"].integer, voiceChat ? 1 : 0, "Pairing and reconnecting observe only")
+        XCTAssertEqual(state["executionCount"].integer, voiceChat || goals ? 1 : 0, "Pairing and reconnecting observe only")
         XCTAssertEqual(state["coordinatorConfigured"].bool, voiceChat)
         XCTAssertEqual(state["activeGrants"].integer, 1)
         if failMetrics {

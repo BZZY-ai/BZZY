@@ -42,6 +42,13 @@ Implemented:
   [Agent execution](docs/AGENT-EXECUTION.md).
 - Send compact goal alerts with aliased titles and bounded final-reply previews from the daemon's durable outbox through APNs after
   private Apple setup and encrypted device registration; see [push setup](docs/PUSH.md).
+- Mobile `/goal` submissions create a fresh goal and acceptance contract through
+  the same operation as CLI, including verified completion and durable alerts.
+  Replacing active, verifying or paused work requires confirmation of its exact
+  goal ID; stopping a live run also requires cancel permission. Duplicate requests
+  reuse their execution. Ordinary Codex chat events cannot mutate a saved goal.
+  Startup moves orphaned verification to awaiting review without replaying work
+  or claiming completion from an earlier answer.
 
 - Configure Core's independent coordinator provider/model/effort from the host
   API or `bzzy-core assistant`; create independent task contexts.

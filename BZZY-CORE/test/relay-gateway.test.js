@@ -17,6 +17,8 @@ import { CoreWorkspaces } from '../src/workspaces.js';
 import { getRecord, listRecords, putRecord, appendEvent, digest } from '../src/engine.js';
 import { runtimeInfo, runtimeRequest } from '../src/engine/runtime.js';
 import { identityAlive } from '../src/engine/process-identity.js';
+import { prepareTask } from '../src/engine/task.js';
+import { newGoal } from '../src/engine/goals.js';
 
 const sdk = pathToFileURL(createRequire(import.meta.url).resolve('@bzzy/relay'));
 const { RelayStore } = await import(new URL('./store.js', sdk));
@@ -430,6 +432,33 @@ test('remote turns use principal-bound ownership and durable idempotency on the 
   assert.equal(listRecords('execution', { sessionId: session.id }).length, 1);
   assert.doesNotMatch(f.wire.join('\n'), /PRIVATE_GATEWAY_TASK_FIXTURE/);
   assert.doesNotMatch(JSON.stringify(f.relayAudit), /PRIVATE_GATEWAY_TASK_FIXTURE/);
+});
+
+test('mobile slash goals require replacement confirmation and complete through the actual goal and notification lifecycle', async t => {
+  const f = await fixture(t), session = f.createSession(), paired = await f.pair(session.id, controls), owner = 'phone-goal';
+  prepareTask(session, {}, 'Old goal'); session.goal = newGoal('Old goal'); session.acceptance = { passed: true };
+  putRecord('session', session.id, session);
+  assert.equal((await f.rpc(paired, 'input.claim', { owner })).ok, true);
+  assert.equal((await f.rpc(paired, 'session.get')).result.capabilities.goalSubmission, true);
+  const input = { owner, prompt: '/goal Entirely new objective' };
+  const denied = await f.rpc(paired, 'execution.execute', input);
+  assert.equal(denied.error?.code, 'CONFIRMATION_REQUIRED');
+  assert.equal(listRecords('execution', { sessionId: session.id }).length, 0);
+  const id = randomUUID(), confirmed = { ...input, replaceGoalId: session.goal.id };
+  const first = await f.rpc(paired, 'execution.execute', confirmed, { id });
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const repeated = await f.rpc(paired, 'execution.execute', confirmed, { id });
+  assert.equal(repeated.result.executionId, first.result.executionId);
+  await waitFor(() => ['finished', 'stopped'].includes(getRecord('execution', first.result.executionId)?.state));
+  const changed = getRecord('session', session.id), job = getRecord('execution', first.result.executionId);
+  assert.equal(job.goal, true); assert.equal(job.prompt, 'Entirely new objective'); assert.equal(job.exitCode, 0);
+  assert.equal(changed.goal.objective, 'Entirely new objective'); assert.equal(changed.contract.objective, changed.goal.objective);
+  assert.equal(changed.goal.status, 'complete'); assert.equal(changed.acceptance.passed, true);
+  assert.notEqual(changed.goal.id, session.goal.id);
+  assert.equal(getRecord('goal-history', session.goal.id).supersededBy, changed.goal.id);
+  const notifications = listRecords('outbox').filter(item => item.event.sessionId === session.id && item.event.type === 'goal.completed');
+  assert.equal(notifications.length, 1); assert.equal(notifications[0].event.objective, changed.goal.objective);
+  assert.equal(listRecords('execution', { sessionId: session.id }).length, 1);
 });
 
 test('only the full own phone can change terminal YOLO and accept its exact pending approval idempotently', async t => {

@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { home, privateDir, readJson, writeJson, loadSession, saveSession, findSession, lockFile, lockOwner } from './store.js';
 import { database, getRecord, putRecord, listRecords, removeRecord, appendEvent, events, reserveRequest, transaction, now, digest } from './database.js';
-import { processIdentity, identityAlive, reconcileSession } from './recovery.js';
+import { processIdentity, identityAlive, reconcileSession, recoverOrphanedVerification } from './recovery.js';
 import { root, runtimeEnv } from './process.js';
 import { getProvider, providers } from './providers.js';
 import { delay } from './delegation.js';
@@ -92,6 +92,7 @@ export async function serveRuntime() {
   const token = listener.token || randomUUID() + randomUUID(), identity = processIdentity();
   const environment = environmentFingerprint();
   for (const run of listRecords('run')) if (['starting', 'running', 'waiting_for_input'].includes(run.state) && !identityAlive(run.runner)) reconcileSession(run.sessionId);
+  for (const session of listRecords('session')) if (session.goal?.status === 'verifying') recoverOrphanedVerification(session.id);
   superviseExecutions();
   const send = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(JSON.stringify(value)); };
   let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise; const streams = new Set();

@@ -7,6 +7,17 @@ import { home, readJson, writeJson, saveSession } from './store.js';
 const continuation = fs.readFileSync(path.join(root, 'assets', 'goal-continuation.md'), 'utf8');
 export const terminalGoal = goal => goal && goal.status !== 'active';
 
+// Paused work is still unfinished; stalled and verified terminal outcomes can
+// be followed by a new objective without a replacement confirmation.
+export const needsGoalReplacement = goal => Boolean(goal && ['active', 'verifying', 'paused'].includes(goal.status));
+
+export function parseGoalCommand(text) {
+  const match = /^\/goal(?:\s+(.*))?$/s.exec(text.trim());
+  if (!match) return null;
+  const value = (match[1] || 'status').trim();
+  return ['status', 'resume', 'pause', 'cancel', 'clear'].includes(value) ? { action: value } : { objective: value };
+}
+
 export function newGoal(objective, tokenBudget) {
   if (!objective?.trim()) throw new Error('A goal needs an objective.');
   return { id: randomUUID(), objective: objective.trim(), status: 'active', tokenBudget: tokenBudget ?? null,

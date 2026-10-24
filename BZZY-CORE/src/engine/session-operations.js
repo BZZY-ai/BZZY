@@ -3,10 +3,10 @@ import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
 import { delay } from './delegation.js';
 import { loadSession, sessionPath, writeJson } from './store.js';
 import { prepareTask } from './task.js';
-import { newGoal } from './goals.js';
+import { newGoal, needsGoalReplacement } from './goals.js';
 import { getProvider } from './providers.js';
 import { assertModelIdle, assertSessionIdle } from './models.js';
-import { transaction, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
+import { database, transaction, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
 import { conversationCursor } from './conversation.js';
 import { enqueueExecution } from './execution-queue.js';
 import { normalizeContract } from './contracts.js';
@@ -22,11 +22,27 @@ export function executionRecord(id) {
   return getRecord('execution', id);
 }
 
-export async function enqueueGoalTurn(sessionId, owner, options, { resume = false, objective, requestId = randomUUID(), info } = {}) {
+export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume = false, objective, requestId = randomUUID(), info, authorize, request, replaceGoalId } = {}) {
+  const permit = (permission = 'execute') => { requireOwner(sessionId, owner); authorize?.(permission); };
+  const confirmReplacement = fresh => {
+    if (!resume && needsGoalReplacement(fresh.goal) && replaceGoalId !== fresh.goal.id) {
+      throw Object.assign(new Error('Replace current goal? Confirm the current goal before starting another.'), { code: 'CONFIRMATION_REQUIRED', status: 409 });
+    }
+    if (!resume && replaceGoalId && fresh.goal?.id !== replaceGoalId) {
+      throw Object.assign(new Error('The current goal changed. Review it before replacing it.'), { code: 'CONFLICT', status: 409 });
+    }
+  };
+  permit();
+  const prompt = resume ? 'Continue the saved goal from its verified checkpoint and assignment history.' : objective;
+  // A duplicate request must reach the queue's digest check before cancellation
+  // or recovery: it may be the very execution currently being observed.
+  const accepted = database().prepare('SELECT response FROM requests WHERE scope=? AND id=?').get(`execute:${sessionId}`, requestId);
+  if (accepted?.response) return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId }, requestId, { authorize: permit });
+  confirmReplacement(loadSession(sessionId));
   if (!resume) {
     if (!objective?.trim()) throw new Error('Supply an objective to start persistent work.');
-    const runtime = info || await ensureRuntime();
-    const api = (method, action = '', body, id) => runtimeRequest(runtime, method, `/sessions/${sessionId}${action ? '/' + action : ''}`, body ? { ...body, owner } : body, id);
+    const runtime = request ? null : info || await ensureRuntime();
+    const api = request || ((method, action = '', body, id) => runtimeRequest(runtime, method, `/sessions/${sessionId}${action ? '/' + action : ''}`, body ? { ...body, owner } : body, id));
     const busy = snapshot => {
       if (executionActive(snapshot.execution)) return true;
       if (!snapshot.capabilities.chatTabs) return false;
@@ -34,25 +50,27 @@ export async function enqueueGoalTurn(sessionId, owner, options, { resume = fals
       return listRecords('execution').some(job => children.has(job.sessionId) && executionActive(job));
     };
     let snapshot = await api('GET');
+    permit(); confirmReplacement(loadSession(sessionId));
     if (busy(snapshot)) {
+      permit('cancel');
       await api('POST', 'control', { action: 'cancel' }, randomUUID());
       const deadline = Date.now() + 15000;
       do {
         if (Date.now() >= deadline) throw new Error('The previous run is still stopping. Retry once it stops.');
-        await delay(50); snapshot = await api('GET');
+        await delay(50); snapshot = await api('GET'); permit(); confirmReplacement(loadSession(sessionId));
       } while (busy(snapshot));
     }
   }
   if (resume) {
-    requireOwner(sessionId, owner);
+    permit();
     const recovery = reconcileSession(sessionId);
     if (recovery.state === 'cleanup_required') throw new Error(recovery.reason);
     if (recovery.live) throw new Error('This goal is already running. Watch its current execution instead of starting another.');
   }
-  const prompt = resume ? 'Continue the saved goal from its verified checkpoint and assignment history.' : objective;
-  return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume }, requestId, {
-    authorize: () => requireOwner(sessionId, owner),
+  return enqueueExecution(sessionId, { prompt, options, goal: true, resumeGoal: resume, replaceGoalId }, requestId, {
+    authorize: permit,
     prepare: (fresh, db) => {
+      confirmReplacement(fresh);
       if (resume) {
         if (!fresh.goal || fresh.goal.status === 'complete') throw new Error('There is no unfinished goal to resume.');
         if (options.tokenBudget) fresh.goal.tokenBudget = options.tokenBudget;

@@ -13,6 +13,7 @@ import { skillThat } from './skill-that.js';
 import { checkConnections } from './connection-check.js';
 import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider, executionRecord } from '@bzzy/core/engine/session-operations.js';
 import { initializeLaunchYolo } from './permission-controls.js';
+import { confirmGoalReplacement } from './goal-controls.js';
 
 const groupMode = session => ['parallel', 'besties'].includes(session.mode);
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
@@ -256,8 +257,15 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           }
           if (action === 'resume' && executionActive(selected.execution)) throw new Error('This goal is already running.');
           const targetId = action !== 'resume' && groupMode(initial.session) ? sessionId : activeId;
+          let replacement = {};
+          if (action !== 'resume') {
+            modalTask = true;
+            try { replacement = await confirmGoalReplacement(ui, loadSession(targetId).goal); }
+            finally { modalTask = false; }
+            if (!replacement.confirmed) continue;
+          }
           if (action !== 'resume' && (executionActive(selected.execution) || targetId === sessionId && children.length)) ui.event('info', { message: 'Replacing the current goal. Stopping its run before starting the new objective…' });
-          const execution = await enqueueGoalTurn(targetId, owner, ui.executionOptions?.(options, { id: targetId }) || options, action === 'resume' ? { resume: true, info } : { objective: action, info });
+          const execution = await enqueueGoalTurn(targetId, owner, ui.executionOptions?.(options, { id: targetId }) || options, action === 'resume' ? { resume: true, info } : { objective: action, info, replaceGoalId: replacement.replaceGoalId });
           if (!groupMode(initial.session)) options.executionId = execution.executionId;
           continue;
         }
@@ -481,7 +489,9 @@ export async function attachSession(session, options, ui) {
         }
         const resumeGoal = goalCommand && action === 'resume', newTask = goalCommand && !resumeGoal;
         if (resumeGoal || newTask) {
-          result = await enqueueGoalTurn(session.id, owner, options, resumeGoal ? { resume: true, info } : { objective: action, info });
+          const replacement = resumeGoal ? {} : await confirmGoalReplacement(ui, loadSession(session.id).goal);
+          if (!resumeGoal && !replacement.confirmed) continue;
+          result = await enqueueGoalTurn(session.id, owner, options, resumeGoal ? { resume: true, info } : { objective: action, info, replaceGoalId: replacement.replaceGoalId });
         } else if (input.startsWith('/')) { ui.event('info', { message: 'Attached chat: send text, /alias, /export, /share, /import, /skill_that, /providers, /models, /default, /goal <objective>, /goal status|pause|resume|clear, /debate or /detach.' }); continue; }
         else result = await api('POST', 'execute', { prompt: input, options, goal: false }, randomUUID());
       } catch (error) { ui.event('error', { message: error.message }); continue; }

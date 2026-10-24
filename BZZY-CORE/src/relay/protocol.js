@@ -24,7 +24,7 @@ const fields = Object.freeze({
   'events.list': ['after', 'limit'], 'events.subscribe': ['consumerId'],
   'events.ack': ['subscriptionId', 'seq'], 'events.unsubscribe': ['subscriptionId'],
   'input.claim': ['owner', 'takeover'], 'input.release': ['owner'],
-  'execution.execute': ['owner', 'prompt', 'goal', 'resumeGoal'],
+  'execution.execute': ['owner', 'prompt', 'goal', 'resumeGoal', 'replaceGoalId'],
   'question.answer': ['owner', 'questionId', 'answer'],
   'permissions.set': ['owner', 'enabled', 'questionId'],
   'control.request': ['owner', 'action', 'text'], 'command.status': ['requestId'],

@@ -1,6 +1,24 @@
 import XCTest
 
 final class BZZYUITests: XCTestCase {
+    func testGoalComposerSeparatesGreenCommandAndPreservesObjectiveWhenRemoved() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing"]
+        app.launch()
+        XCTAssertTrue(app.buttons["agent-COOL"].waitForExistence(timeout: 10))
+        app.buttons["agent-COOL"].tap()
+        let draft = app.descendants(matching: .any).matching(identifier: "message-draft").firstMatch
+        draft.tap(); draft.typeText("/goal")
+        let pill = app.buttons["goal-command-pill"]
+        XCTAssertTrue(pill.waitForExistence(timeout: 3))
+        draft.typeText(" tell me Messi age")
+        XCTAssertEqual((draft.value as? String)?.trimmingCharacters(in: .whitespaces), "tell me Messi age")
+        pill.tap()
+        XCTAssertFalse(pill.exists)
+        XCTAssertEqual(draft.value as? String, "tell me Messi age")
+        attach(app, name: "Goal command composer")
+    }
     #if !DEBUG
     func testReleaseIgnoresPreviewArgumentsAndRequiresApprovedCorePair() {
         continueAfterFailure = false

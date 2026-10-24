@@ -381,7 +381,8 @@ for (const provider of ['codex', 'claude']) test(`${provider}: /goal replaces ac
   const thread = loadSession(source.id).engineThreadId; assert.ok(thread);
   let prompts = 0; const seen = [];
   const ui = { interactive: true, cursors: new Map(), setSession() {}, updateSession() {}, event(type, data) { seen.push({ type, data }); },
-    async ask() {
+    async ask(question) {
+      if (question.startsWith('Replace current goal?')) return 'y';
       if (!prompts++) return '/goal Inspect the replacement objective';
       if (listRecords('execution').some(job => job.sessionId === source.id && ['queued', 'launching', 'running'].includes(job.state))) return new Promise(resolve => { ui.reader = { close: () => resolve(null) }; });
       return '/exit';
@@ -410,7 +411,8 @@ test('/goal from a parallel agent tab replaces the whole group objective and sto
     updateSession() {
       const goal = loadSession(source.id).goal;
       if (goal.objective === 'Replacement group task' && goal.status === 'complete') finishInput?.('/exit');
-    }, async ask() {
+    }, async ask(question) {
+      if (question.startsWith('Replace current goal?')) return 'y';
       if (!prompts++) return '/goal Replacement group task';
       return new Promise(resolve => { finishInput = resolve; ui.reader = { close: () => resolve(null), setPrompt() {}, prompt() {} }; });
     },
@@ -422,6 +424,24 @@ test('/goal from a parallel agent tab replaces the whole group objective and sto
   assert.equal(getRecord('execution', launched.executionId).exitCode, 130);
   assert.ok(oldPeers.every(id => loadSession(id).goal.status === 'cancelled'));
   assert.ok(group.peers.every(peer => !oldPeers.includes(peer.sessionId) && loadSession(peer.sessionId).goal.objective === saved.goal.objective));
+});
+
+test('declining a goal replacement preserves the active goal and starts no new execution', { timeout: 15000 }, async () => {
+  process.env.BZZY_TEST_ADVANCED = 'slow';
+  const source = makeSession(), original = source.goal.id, launched = await start(source);
+  let prompts = 0, confirmations = 0;
+  const ui = { interactive: true, cursors: new Map(), setSession() {}, updateSession() {}, event() {},
+    async ask(question) {
+      if (question.startsWith('Replace current goal?')) { confirmations++; return 'n'; }
+      return prompts++ ? '/exit' : '/goal Do not replace this goal';
+    },
+  };
+  await attachSession(source, { cwd: dir }, ui);
+  assert.equal(confirmations, 1); assert.equal(loadSession(source.id).goal.id, original);
+  assert.equal(listRecords('execution').filter(job => job.sessionId === source.id).length, 1);
+  assert.equal(getRecord('goal-history', original), null);
+  await finished(launched.executionId);
+  assert.equal(getRecord('execution', launched.executionId).exitCode, 0, 'No must leave the original execution able to finish');
 });
 test('debate preserves independent assessments, fixed snapshots and unresolved disagreement', async () => {
   const session = makeSession({ mode: 'debate' }), launched = await start(session, { artifact: 'source.txt', participants: ['codex', 'claude'], rounds: 3, runtimeSeconds: 30 });

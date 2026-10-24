@@ -182,6 +182,9 @@ public final class RelayConnection {
     public private(set) var coreSharingAllowed = false
     public private(set) var coreYoloEnabled = false
     public private(set) var coreYoloControl = false
+    public private(set) var coreGoalSubmission = false
+    public private(set) var coreGoalID: String?
+    public private(set) var coreGoalStatus: String?
     @ObservationIgnored private var recentCoreShares: [String: CoreShareReference] = [:]
     @ObservationIgnored private var pendingCoreShareRequests: [String: String] = [:]
     @ObservationIgnored private var pushRegistrationHash: String?
@@ -639,6 +642,9 @@ public final class RelayConnection {
         coreSharingAllowed = snapshot["capabilities"]["shareAccess"].bool == true && (!coreIsAgent || coreAgentsAvailable)
         coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
         coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
+        coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
+        coreGoalID = snapshot["session"]["goal"]["id"].string
+        coreGoalStatus = snapshot["session"]["goal"]["status"].string
         corePermissions = Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []).intersection(coreOfferedPermissions)
         if let claimedOwnerID, snapshot["inputOwner"]["owner"].string != claimedOwnerID {
             coreOwnsInput = false; self.claimedOwnerID = nil; inputRenewal?.cancel(); inputRenewal = nil
@@ -1269,6 +1275,7 @@ public final class RelayConnection {
         coreConnected = false; coreOwnsInput = false; claimedOwnerID = nil
         coreSubscriptionID = nil; corePermissions = []; coreIsAssistant = false; coreSharingAllowed = false; coreIsAgent = false
         coreYoloEnabled = false; coreYoloControl = false
+        coreGoalSubmission = false; coreGoalID = nil; coreGoalStatus = nil
         if purge {
             confirmedCorePair = false; state.corePairValidated = false
             do {
@@ -1392,6 +1399,9 @@ public final class RelayConnection {
             coreSharingAllowed = snapshot["capabilities"]["shareAccess"].bool == true && (!coreIsAgent || coreAgentsAvailable)
             coreYoloEnabled = snapshot["capabilities"]["yolo"].bool == true
             coreYoloControl = snapshot["capabilities"]["yoloControl"].bool == true && !coreIsAgent
+            coreGoalSubmission = snapshot["capabilities"]["goalSubmission"].bool == true
+            coreGoalID = snapshot["session"]["goal"]["id"].string
+            coreGoalStatus = snapshot["session"]["goal"]["status"].string
             corePermissions.formIntersection(Set(snapshot["capabilities"]["permissions"].array?.compactMap(\.string) ?? []))
             onCoreSnapshot?(try JSONEncoder().encode(snapshot))
             if let claimedOwnerID, snapshot["inputOwner"]["owner"].string != claimedOwnerID {
@@ -1456,10 +1466,25 @@ public final class RelayConnection {
         }
     }
 
-    @discardableResult public func sendCoreMessage(_ text: String, sessionID: String? = nil) async -> Bool {
+    @discardableResult public func sendCoreMessage(_ text: String, sessionID: String? = nil, replaceGoalID: String? = nil) async -> Bool {
         guard sessionID == nil || sessionID == coreSessionID else { return false }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.utf8.count <= 16 * 1024, corePermissions.contains("execute") else { return false }
+        if CoreGoalDraft.isGoal(text) {
+            guard coreGoalSubmission else { coreError = "Update BZZY Core from the CLI before sending goals."; return false }
+            let objective = CoreGoalDraft.body(text).trimmingCharacters(in: .whitespacesAndNewlines)
+            if objective.isEmpty || objective == "status" { await refreshCore(); return false }
+            if objective == "resume" { return await resumeCoreGoal(sessionID: sessionID) }
+            if ["pause", "cancel", "clear"].contains(objective) {
+                coreError = "Use the session goal controls to pause or cancel saved work."; return false
+            }
+            if CoreGoalDraft.needsReplacement(status: coreGoalStatus), replaceGoalID != coreGoalID || replaceGoalID == nil {
+                coreError = "Confirm Replace current goal before sending another objective."; return false
+            }
+            var params: [String: CoreJSONValue] = ["prompt": .string(objective), "goal": .bool(true)]
+            if let replaceGoalID { params["replaceGoalId"] = .string(replaceGoalID) }
+            return await mutateCore("execution.execute", params: params)
+        }
         return await mutateCore(coreIsAssistant ? "task.submit" : "execution.execute",
             params: [coreIsAssistant ? "instruction" : "prompt": .string(text)])
     }
@@ -1492,6 +1517,7 @@ public final class RelayConnection {
     @discardableResult public func resumeCoreGoal(sessionID: String? = nil) async -> Bool {
         guard sessionID == nil || sessionID == coreSessionID else { return false }
         guard corePermissions.contains("execute") else { return false }
+        guard coreGoalSubmission else { coreError = "Update BZZY Core from the CLI before resuming goals."; return false }
         return await mutateCore("execution.execute", params: ["prompt": .string("Continue the existing goal."), "goal": .bool(true), "resumeGoal": .bool(true)])
     }
 
@@ -1561,6 +1587,10 @@ public final class RelayConnection {
             case "rejected":
                 try clearSavedCoreCommand(expectedID: pending.id)
                 coreCommandUncertain = false; coreCommandStatus = "Rejected by Core"
+                if result["code"].string == "CONFIRMATION_REQUIRED" || result["code"].string == "CONFLICT" {
+                    coreError = "The current goal or input owner changed. Refresh, review it, then send again."
+                    await refreshCore()
+                }
             default:
                 coreCommandStatus = "Command \(result["state"].string ?? "uncertain"). No automatic retry."
             }

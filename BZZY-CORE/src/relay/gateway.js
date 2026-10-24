@@ -1,6 +1,8 @@
 import { coreUpdates } from '../engine/updates.js';
 import { CoreVoiceChat } from '../engine/voice-chat.js';
 import { setTerminalYolo } from '../engine/terminal-permissions.js';
+import { enqueueGoalTurn } from '../engine/session-operations.js';
+import { parseGoalCommand } from '../engine/goals.js';
 import { authorizedUpdateGrant as authorizedOwnPhone } from '../engine/update-access.js';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
@@ -641,7 +643,7 @@ export class RelayGateway extends EventEmitter {
           questions: snapshot.questions.filter(question => question.sessionId === row.sessionId).map(question => pick(question, ['id', 'sessionId', 'question', 'text', 'kind', 'options', 'createdAt', 'expiresAt'])),
           inputOwner: pick(snapshot.inputOwner, ['owner', 'sessionId', 'expiresAt']),
           capabilities: { activeSteering: Boolean(snapshot.capabilities.activeSteering && row.permissions.includes('steer')),
-            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row),
+            yolo: snapshot.permissions?.yolo === true, yoloControl: this.#yoloAllowed(row), goalSubmission: true,
             durableEvents: true, permissions: row.permissions, sessionAccess: row.sessionAccess === true, shareAccess: row.shareAccess === true, agentAccess: row.agentAccess === true,
             relay: true, portableSharing: row.shareAccess === true, shareKind: row.kind === 'agent' ? 'AGENT' : 'TERMINAL' } };
       }
@@ -712,6 +714,8 @@ export class RelayGateway extends EventEmitter {
     if (request.op === 'execution.execute') {
       if (typeof params.prompt !== 'string' || !params.prompt.trim() || Buffer.byteLength(params.prompt) > LIMITS.promptBytes) fail('INVALID_REQUEST', 'Execution needs bounded nonempty text.');
       for (const key of ['goal', 'resumeGoal']) if (params[key] !== undefined && typeof params[key] !== 'boolean') fail('INVALID_REQUEST', 'Goal flags must be boolean.');
+      if (params.replaceGoalId !== undefined) uuid(params.replaceGoalId);
+      if (params.resumeGoal === true && params.goal !== true) fail('INVALID_REQUEST', 'Resume requires a goal execution.');
     }
     if (request.op === 'question.answer') { uuid(params.questionId); if (typeof params.answer !== 'string' || Buffer.byteLength(params.answer) > LIMITS.promptBytes) fail('INVALID_REQUEST', 'Question answers must be bounded text.'); }
     if (request.op === 'permissions.set') {
@@ -740,7 +744,24 @@ export class RelayGateway extends EventEmitter {
       const requestId = `relay.${key}`;
       let result;
       if (request.op === 'task.submit') result = await client.execute(row.sessionId, { owner, prompt: params.instruction, goal: false, resumeGoal: false, requestId });
-      else if (request.op === 'execution.execute') result = await client.execute(row.sessionId, { owner, prompt: params.prompt, goal: params.goal ?? false, resumeGoal: params.resumeGoal ?? false, requestId });
+      else if (request.op === 'execution.execute') {
+        const command = parseGoalCommand(params.prompt);
+        if (command?.action && command.action !== 'resume') fail('INVALID_REQUEST', 'Use the goal status and pause/cancel controls; supply an objective or /goal resume.');
+        if (command || params.goal === true) {
+          const host = await runtime();
+          result = await enqueueGoalTurn(row.sessionId, owner, {}, {
+            objective: command?.objective ?? params.prompt, resume: command?.action === 'resume' || params.resumeGoal === true,
+            replaceGoalId: params.replaceGoalId, requestId,
+            authorize: permission => {
+              const current = this.#authorize(row.id, row.peerId, row.resource, permission);
+              // Scoped HTTP reads/controls retain their principal. Input owner
+              // and live grant authorization are rechecked inside queue commit.
+              host.requireOwner(row.sessionId, owner, `grant:${current.coreGrantId}`);
+            },
+            request: (method, action, body, id) => method === 'GET' ? client.session(row.sessionId) : client.control(row.sessionId, { owner, ...body, requestId: id }),
+          });
+        } else result = await client.execute(row.sessionId, { owner, prompt: params.prompt, goal: false, resumeGoal: false, requestId });
+      }
       else if (request.op === 'question.answer') result = await client.answer(row.sessionId, { owner, questionId: params.questionId, answer: params.answer, requestId });
       else if (request.op === 'permissions.set') {
         const host = await runtime();

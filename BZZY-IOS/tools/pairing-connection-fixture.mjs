@@ -14,6 +14,8 @@ import { BzzyCore } from '../../BZZY-CORE/src/core.js';
 import { CoreAssistant } from '../../BZZY-CORE/src/assistant.js';
 import { CoreWorkspaces } from '../../BZZY-CORE/src/workspaces.js';
 import { listRecords, putRecord } from '../../BZZY-CORE/src/engine.js';
+import { prepareTask } from '../../BZZY-CORE/src/engine/task.js';
+import { newGoal } from '../../BZZY-CORE/src/engine/goals.js';
 import { runtimeInfo, runtimeRequest } from '../../BZZY-CORE/src/engine/runtime.js';
 import { identityAlive } from '../../BZZY-CORE/src/engine/process-identity.js';
 import { RelayClient } from '../../BZZY-RELAY/src/client.js';
@@ -87,6 +89,17 @@ async function handle(input) {
         subscriptions: gateway.status().subscriptions, gateway: gateway.status().gateway,
         coordinatorConfigured: new CoreAssistant().settings().configured, executionCount: listRecords('execution').length,
         metricsFailures, cliReady };
+    case 'goal-seed': {
+      prepareTask(session, {}, 'Previous unfinished goal'); session.goal = newGoal('Previous unfinished goal');
+      session.acceptance = { passed: true }; putRecord('session', session.id, session);
+      return { goalID: session.goal.id };
+    }
+    case 'goal-state': {
+      const current = listRecords('session').find(row => row.id === session.id), jobs = listRecords('execution');
+      return { goalID: current.goal?.id, objective: current.goal?.objective, status: current.goal?.status,
+        goalExecution: jobs[0]?.goal, executionCount: jobs.length,
+        notificationCount: listRecords('outbox').filter(row => row.event.type === 'goal.completed').length };
+    }
     case 'cli-attach': {
       if (cliTask) throw new Error('CLI_ALREADY_ATTACHED');
       let signalReady;

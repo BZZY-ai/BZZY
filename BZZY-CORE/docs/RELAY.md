@@ -144,6 +144,16 @@ the same ID/input returns an already recorded acceptance. A conflict is rejected
 After a crash, `command.status` can reconcile the Core request reservation; an
 uncertain command without durable acceptance is never redispatched automatically.
 
+`session.get.capabilities.goalSubmission` advertises canonical goal handling.
+`execution.execute` with `goal: true` creates a fresh goal/contract from `prompt`;
+`resumeGoal: true` resumes its saved checkpoint instead. Legacy `/goal objective`
+prompts use the same path. Replacing active/verifying/paused work requires
+`replaceGoalId` matching the goal the user confirmed, otherwise Core returns
+`CONFIRMATION_REQUIRED`. A changed goal ID is rejected. Cancelling an existing
+execution also requires the grant's cancel permission. Grant validity and the
+scoped input lease are checked again before queue commit. Clients cannot supply
+host execution options, environment or a weaker policy through this operation.
+
 The local runtime's `/v1/capabilities` describes the loopback session API.
 Gateway `session.get` reports its actual remote capabilities and exact granted
 permissions. Explicit host flags independently authorize terminal catalogs,

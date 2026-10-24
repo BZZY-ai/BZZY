@@ -6,12 +6,13 @@ Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen
 
 Open [BZZY.xcodeproj](BZZY.xcodeproj), select **BZZY** and an iPhone simulator, then Run. Simulator runs use Xcode’s local signing; do not disable signing when testing Keychain. For a physical iPhone, select your Apple development team. Push notifications require a push-enabled App ID and a matching provisioning profile. Debug uses the development APNs environment; Release uses production.
 
-The current verified device installation is **Debug 0.1.0 (8)**, installed in place
-and launched on the connected iPhone 15 Pro Max. The device reports build 8;
+The current verified device installation is **Debug 0.1.0 (9)**, installed in place
+and launched on the connected iPhone 15 Pro Max. The device reports build 9;
 development APNs metadata, privacy declarations and the signed artifact passed
-validation. No uninstall or data reset was performed. Build 8 adds the chat
-permission controls below; the host must be updated separately through the CLI
-before YOLO is available. The actual phone approval interaction remains a manual
+validation. No uninstall or data reset was performed. Build 9 adds canonical goal dispatch,
+the green command chip and replacement confirmation alongside build 8’s chat
+permission controls. Update the host separately through CLI before goal
+submission or YOLO is available. The actual phone approval interaction remains a manual
 check. TestFlight is deferred. The CLI updater installs host CLI/Core updates;
 iPhone app changes require a separately built and installed iOS binary.
 
@@ -43,6 +44,19 @@ With explicit host `agentAccess`, Agents lists real persistent Core records. Cre
 Existing local drafts remain labelled inactive. Samples and demo sessions are limited to previews/UI tests. Opening a conversation, foregrounding, reconnecting or opening a notification never submits a draft or starts work. Agent management lives in iPhone; CLI stays terminal-oriented.
 
 ## Chat and response formatting
+
+Build 9 displays `/goal` as a separate green command chip while composing;
+the objective remains editable and removing the chip preserves its text.
+Sending `/goal <objective>` enters Core's goal lifecycle and notification path.
+If another goal is active, verifying or paused, **Replace current goal?** offers
+No/Yes before submission. Confirmation names the exact goal ID; a newer goal or
+changed input ownership cannot be silently overwritten. Resume uses Core's saved
+checkpoint operation. Update the host through CLI first; older Core versions
+reject goal submission locally with an update message instead of sending chat.
+Validation covers 54 passing native Swift tests and a passing simulator UI test
+for continued typing and chip removal. The signed development app and privacy/
+APNs metadata also passed artifact checks; no production push delivery is claimed
+by these isolated fixtures.
 
 Build 8 adds a gray **YOLO OFF** / pink **YOLO ON** control to live terminal chats,
 using the same Core-owned permission setting as CLI. Enabling it while a request

@@ -220,11 +220,13 @@ export class CodexEngine {
       this.settle();
       await promise;
       if (!this.interrupted) completeConversationHandoff(this.session);
-    } finally { this.operation = null; }
+    } finally { this.operation = null; this.goalArmed = false; }
   }
 
   updateGoal(goal) {
-    if (!this.session.goal || !goal) return;
+    // Native thread goals survive ordinary turns. Their notifications are not
+    // evidence that the current BZZY execution is pursuing a goal.
+    if (!this.operation?.goal || !this.goalArmed || !this.session.goal || !goal) return;
     this.goalUpdates++;
     const tokens = (this.session.goal.nativeTokenOffset || 0) + goal.tokensUsed;
     Object.assign(this.session.goal, { nativeStatus: goal.status, status: goal.status === 'complete' ? 'verifying' : goal.status, nativeGoalId: goal.id || goal.goalId,
