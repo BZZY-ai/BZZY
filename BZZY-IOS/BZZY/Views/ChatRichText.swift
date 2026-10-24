@@ -12,7 +12,7 @@ struct ChatRichText: View {
                 case .heading(let level, let spans): inline(spans, heading: level)
                 case .listItem(let marker, let spans):
                     HStack(alignment: .top, spacing: 9) {
-                        Text(marker).foregroundStyle(BZZYTheme.accent).font(.system(size: bodySize))
+                        Text(marker).foregroundStyle(BZZYTheme.accent).font(.system(size: bodySize, design: .monospaced))
                         inline(spans)
                     }
                 case .quote(let spans):
@@ -28,12 +28,12 @@ struct ChatRichText: View {
                             Text(verbatim: code).font(.system(size: bodySize * 0.86, design: .monospaced))
                                 .foregroundStyle(BZZYTheme.accent).textSelection(.enabled).fixedSize()
                         }.scrollIndicators(.hidden)
-                    }.padding(13).background(BZZYTheme.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
+                    }.padding(13).background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 4))
                         .accessibilityIdentifier("chat-code-block")
                 case .table(let table): tableView(table)
                 }
             }
-        }.font(.system(size: bodySize)).textSelection(.enabled)
+        }.font(.system(size: bodySize, design: .monospaced)).textSelection(.enabled)
     }
     private func inline(_ spans: [ChatSpan], heading: Int? = nil) -> some View {
         Text(attributed(spans, heading: heading)).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
@@ -48,7 +48,7 @@ struct ChatRichText: View {
                 let intent = run.inlinePresentationIntent ?? []
                 let bold = span.style.bold || heading != nil || header || intent.contains(.stronglyEmphasized)
                 let code = span.style.code || intent.contains(.code)
-                var font = Font.system(size: size, weight: bold ? .semibold : .regular, design: code ? .monospaced : .default)
+                var font = Font.system(size: size, weight: bold ? .semibold : .regular, design: .monospaced)
                 if span.style.italic || intent.contains(.emphasized) { font = font.italic() }
                 text[run.range].font = font
                 if let tint = span.style.color { text[run.range].foregroundColor = color(tint) }
@@ -89,9 +89,9 @@ struct ChatRichText: View {
                 }
             }.fixedSize(horizontal: true, vertical: false)
         }.scrollIndicators(.visible)
-            .background(BZZYTheme.background.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(BZZYTheme.line, lineWidth: 0.7))
+            .background(BZZYTheme.background.opacity(0.35), in: RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(BZZYTheme.line, lineWidth: 0.7))
             .accessibilityElement(children: .contain).accessibilityLabel("Table")
             .accessibilityIdentifier("chat-rich-table")
     }

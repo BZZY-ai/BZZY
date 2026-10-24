@@ -48,7 +48,7 @@ struct TerminalView: View {
                     VStack(spacing: 0) {
                         NavigationLink {
                             ConversationCanvas(store: store, conversationID: session.id, title: session.title,
-                                subtitle: "\(session.model) · \(store.liveAvailable ? session.execution : "Disconnected")", assistantName: session.model, remoteSession: true)
+                                subtitle: "\(session.model) · \(store.liveAvailable ? session.execution : "Disconnected")", assistantName: session.model, remoteSession: true).id(session.id)
                         } label: {
                             sessionRow(name: session.title, symbol: "terminal", activity: .init(goal: session.goalStatus, reason: nil, execution: session.execution))
                         }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable).accessibilityIdentifier("terminal-live")
@@ -60,7 +60,7 @@ struct TerminalView: View {
                             NavigationLink {
                                 ConversationCanvas(store: store, conversationID: draft.conversationID, title: draft.name,
                                                    subtitle: "Draft · Inactive", shareTarget: .init(id: draft.id.uuidString, kind: .terminal, name: draft.name, isDemo: false),
-                                                   instructions: draft.instructions)
+                                                   instructions: draft.instructions).id(draft.conversationID)
                             } label: {
                                 sessionRow(name: draft.name, symbol: draft.symbol)
                             }.buttonStyle(.plain).accessibilityIdentifier("terminal-draft-\(draft.id.uuidString)")
@@ -94,13 +94,13 @@ struct TerminalView: View {
             }
     }
     private func sessionRow(name: String, symbol: String, activity: TerminalGoalActivity? = nil) -> some View {
-        HStack(spacing: 17) {
-            Image(systemName: symbol).font(.system(size: 21, weight: .light))
-                .foregroundStyle(BZZYTheme.secondary).frame(width: 30)
+        HStack(spacing: 10) {
+            Image(systemName: "chevron.right").bzzyFont(12, weight: .medium)
+                .foregroundStyle(BZZYTheme.accent).frame(width: 20).accessibilityHidden(true)
             Text(name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.text)
             Spacer()
             if let activity { TerminalGoalIndicator(activity: activity, online: relay.coreActionsAvailable) }
-        }.padding(.vertical, 21).contentShape(Rectangle())
+        }.padding(.vertical, 17).contentShape(Rectangle())
     }
 }
 
@@ -136,7 +136,7 @@ struct TerminalConversationView: View {
     let session: TerminalPreview
     var body: some View {
         ConversationCanvas(store: store, conversationID: session.id, title: session.name,
-                           subtitle: "\(session.model) · Demo", assistantName: session.model, shareTarget: .terminal(session))
+                           subtitle: "\(session.model) · Demo", assistantName: session.model, shareTarget: .terminal(session)).id(session.id)
     }
 }
 
@@ -273,6 +273,7 @@ private struct RemoteTerminalConversationView: View {
     var body: some View {
         ConversationCanvas(store: store, conversationID: terminal.id, title: terminal.title,
             subtitle: terminal.directory, assistantName: terminal.model, remoteSession: true)
+            .id(terminal.id)
             .task(id: terminal.id) { await relay.observeCoreSession(terminal.id) }
     }
 }

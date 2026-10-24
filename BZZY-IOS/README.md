@@ -2,6 +2,26 @@
 
 Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a complete single-eye app icon and celeste controls. Local pixel distortion animates the pupils and antennae without blinking, pauses in the background and respects Reduce Motion.
 
+Build **Debug 0.1.0 (20)** keeps the existing palette with terminal typography,
+flatter controls and transcript rows. The compact chat header reads
+**‹ alias SOLO** with Chat settings at the far right. The uppercase mode label
+opens the same paused-mode picker. The home header, computer selector, tabs and
+connection footer belong to the home navigation screen, so they move together
+on entry/Back instead of appearing mid-transition. Chat sheets and Back release
+the editor and cancel dictation; host drafts retain their existing private
+persistence. Local preview/draft chats keep unsent text across navigation in
+memory. Their typed text is still sent/saved only by an explicit Send action.
+The compact header retains [UIKit's native edge-back
+gesture](https://developer.apple.com/documentation/uikit/uinavigationcontroller/interactivepopgesturerecognizer).
+Cancelled swipes keep the current chat and draft; the home screen cannot pop past
+the navigation root. No global navigation-controller delegate is replaced.
+All 86 native Swift tests and the latest results for all 21 Debug UI cases pass
+across broad and focused runs, including normal/large text, repeated Back,
+cancelled/completed swipes, root gestures, sheets, keyboard and draft isolation.
+The signed build was installed in place on the connected iPhone; CoreDevice
+confirms **0.1.0 (20)** with the existing app/Keychain identity. See the
+[validation record](../BZZY-CORE/docs/VALIDATION.md).
+
 Build **Debug 0.1.0 (17)** adds multiple saved Core computers. The celeste computer
 selector stays visible in chats and offline, with **Set default**, rename, add and
 remove actions. The default opens on a fresh app launch; explicit switches stay
@@ -146,7 +166,8 @@ Existing local drafts remain labelled inactive. Samples and demo sessions are li
 
 ## Chat and response formatting
 
-The top-left heading reads **BZZY** in the shared strong celeste accent.
+The home heading reads **BZZY** in the shared strong celeste accent; chats use
+the alias and mode on one line instead of a second global heading.
 The native composer highlights `/goal` inline in green while keeping one text
 editor, selection and keyboard. Sending `/goal <objective>` enters Core's goal
 lifecycle and durable notification path. If another goal is active, verifying or
@@ -311,7 +332,7 @@ Chat layout: opening a conversation hides the global BZZY/computer header and
 connection footer to leave room for messages. The top-right Chat settings menu
 contains Share, Import, Activity, Details, model/effort, defaults, YOLO and Set goal.
 Pause/Resume stays beside the compact goal status above the composer. The mode
-below the alias opens a dropdown for Solo, Delegate, Debate, Parallel and Besties.
+beside the alias opens a dropdown for Solo, Delegate, Debate, Parallel and Besties.
 Unpaused chats offer Pause first; Core independently requires a saved paused
 state and stopped workers. Selecting a mode consumes its existing preset, keeps
 the same chat/history/goal and starts no work. Missing presets point to Mode

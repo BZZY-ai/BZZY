@@ -1,6 +1,54 @@
 import XCTest
 
 final class BZZYUITests: XCTestCase {
+    func testRepeatedChatBackAndSheetTransitionsKeepChromeAndUnsentDraftsInTheRightScreen() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing"]
+        app.launch()
+        XCTAssertTrue(app.buttons["tab-terminal"].waitForExistence(timeout: 10))
+        app.buttons["tab-terminal"].tap()
+        for iteration in 0..<3 {
+            app.buttons["terminal-session-design"].tap()
+            assertCompactChatHeader(app)
+            let draft = app.textViews["message-draft"]
+            if iteration == 0 { draft.tap(); draft.typeText("Unsent transition draft") }
+            XCTAssertEqual(draft.value as? String, "Unsent transition draft")
+            app.buttons["chat-settings"].tap(); app.buttons["Details"].tap()
+            XCTAssertTrue(app.buttons["Close"].firstMatch.waitForExistence(timeout: 3))
+            app.buttons["Close"].firstMatch.tap()
+            assertCompactChatHeader(app)
+            XCTAssertEqual(draft.value as? String, "Unsent transition draft")
+            draft.tap()
+            if iteration == 1 {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.45))
+                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0.45)),
+                           withVelocity: .slow, thenHoldForDuration: 0.3)
+                assertCompactChatHeader(app)
+                XCTAssertEqual(draft.value as? String, "Unsent transition draft")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.45))
+                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.45)))
+            } else { app.buttons["Back"].tap() }
+            XCTAssertTrue(app.buttons["terminal-session-design"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.staticTexts["BZZY"].exists)
+            XCTAssertTrue(app.buttons["tab-terminal"].isHittable)
+            XCTAssertFalse(app.buttons["chat-settings"].exists)
+            XCTAssertFalse(app.keyboards.firstMatch.exists)
+        }
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.45))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.45)))
+        XCTAssertTrue(app.buttons["terminal-session-design"].isHittable)
+        XCTAssertTrue(app.buttons["tab-terminal"].isHittable)
+        app.buttons["terminal-session-research"].tap()
+        XCTAssertNotEqual(app.textViews["message-draft"].value as? String, "Unsent transition draft")
+        app.buttons["Back"].tap()
+        app.buttons["tab-agents"].tap(); app.buttons["agent-COOL"].tap()
+        assertCompactChatHeader(app)
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.buttons["create-agent"].waitForExistence(timeout: 3))
+        attach(app, name: "Repeated Back and sheets restore home controls without leaking chat drafts")
+    }
+
     func testComputerSelectionSurvivesForegroundAndColdLaunchUsesDefaultWithoutLeakingSessions() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -394,7 +442,7 @@ final class BZZYUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["agent-COOL"].waitForExistence(timeout: 10))
         app.buttons["agent-COOL"].tap()
-        XCTAssertTrue(app.staticTexts["Demo"].waitForExistence(timeout: 3))
+        assertCompactChatHeader(app)
         let firstUser = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-user-")).firstMatch
         let firstAgent = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-assistant-")).firstMatch
         XCTAssertTrue(firstUser.exists && firstAgent.exists)
@@ -408,7 +456,7 @@ final class BZZYUITests: XCTestCase {
         app.buttons["Back"].tap()
         app.buttons["tab-terminal"].tap()
         app.buttons["terminal-session-design"].tap()
-        XCTAssertTrue(app.staticTexts["Codex · Demo"].waitForExistence(timeout: 3))
+        assertCompactChatHeader(app)
         XCTAssertTrue(app.descendants(matching: .any)["chat-code-block"].exists)
         attach(app, name: "iOS Terminal Chat")
         app.buttons["Back"].tap()
@@ -444,6 +492,8 @@ final class BZZYUITests: XCTestCase {
         attach(app, name: "iOS Accessibility Text")
         app.buttons["tab-terminal"].tap()
         XCTAssertTrue(app.buttons["host-status"].exists)
+        app.buttons["terminal-session-design"].tap()
+        assertCompactChatHeader(app)
     }
 
     func testShareAndImportAgentDemo() {
@@ -584,6 +634,20 @@ final class BZZYUITests: XCTestCase {
         XCTAssertTrue(copyButton.isHittable)
         copyButton.tap()
         attach(app, name: "iOS Accessible Share")
+    }
+
+    private func assertCompactChatHeader(_ app: XCUIApplication) {
+        let title = app.staticTexts["conversation-title"], mode = app.descendants(matching: .any)["conversation-mode"]
+        let back = app.buttons["Back"], settings = app.buttons["chat-settings"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(back.isHittable && settings.isHittable)
+        XCTAssertEqual(mode.value as? String, "Solo")
+        XCTAssertLessThanOrEqual(back.frame.maxX, title.frame.minX)
+        XCTAssertLessThanOrEqual(title.frame.maxX, mode.frame.minX)
+        XCTAssertLessThanOrEqual(mode.frame.maxX, settings.frame.minX)
+        XCTAssertEqual(mode.frame.midY, settings.frame.midY, accuracy: 2)
+        XCTAssertFalse(app.buttons["tab-terminal"].exists)
+        XCTAssertFalse(app.staticTexts["BZZY"].exists)
     }
 
     private func attach(_ app: XCUIApplication, name: String) {

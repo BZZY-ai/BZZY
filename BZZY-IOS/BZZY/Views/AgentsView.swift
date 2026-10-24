@@ -240,6 +240,7 @@ private struct HostAgentConversationView: View {
     var body: some View {
         ConversationCanvas(store: store, conversationID: agent.sessionID, title: agent.name,
             subtitle: "\(agent.provider) · \(agent.model)", assistantName: agent.name, remoteSession: true)
+            .id(agent.sessionID)
             .task(id: agent.id) { await relay.observeCoreAgent(agent.id, sessionID: agent.sessionID) }
     }
 }

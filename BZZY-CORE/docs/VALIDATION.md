@@ -1,3 +1,28 @@
+# Terminal iOS appearance and navigation, build 20 (2026-10-24)
+
+All **86 native Swift tests**, model/chat checks and plist checks passed on
+Apple Silicon. All **21 Debug UI cases** have passing latest results across the
+broad run and focused rechecks. The final four-case chat/gesture/voice/large-text
+run and the separate root-gesture check completed normally with finalized
+xcresults. The first broad run's result finalization stalled after XCTest and
+was stopped; its per-case logs establish that run's narrower coverage.
+
+Native layouts were rendered and inspected at normal and compact sizes. The
+existing color constants remain intact. The alias, uppercase mode and settings
+share one header row, including at accessibility text sizes. Home controls move
+with their navigation screen rather than reacting to a child preference.
+The scoped UIKit adapter restores native edge-back with the custom header;
+completed and cancelled swipes, repeated Back, keyboard dismissal, sheet return,
+unsent draft isolation and root-level gesture rejection are exercised directly.
+The broader cases cover computer/default switching, offline/pairing gates,
+history paging, creation/relaunch, sharing/import, speech preferences and voice.
+
+Signed development build **0.1.0 (20)** passed artifact/privacy/signature/APNs
+entitlement checks and matches the prior app/Keychain identity. It was installed
+in place on the connected iPhone; CoreDevice independently confirms build **20**.
+The installation did not reset app data or pairing. This validates installation
+and UI behavior, not live locked-phone APNs delivery.
+
 # Codex skill sync across models (2026-10-24)
 
 Node 24 on Apple Silicon: Core **266 passed, 1 platform skip**; CLI **464

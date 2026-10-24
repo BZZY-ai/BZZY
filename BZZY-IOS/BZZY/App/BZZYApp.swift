@@ -88,7 +88,6 @@ struct WorkspaceView: View {
     @State private var hostProfilesReady = false
     @State private var pendingConnectionFromNotification = false
     @State private var navigationID = UUID()
-    @State private var conversationPresented = false
     @Environment(\.scenePhase) private var scenePhase
 
     init(store: WorkspaceStore, relay: RelayConnection? = nil, notifications: NotificationStore? = nil) {
@@ -113,32 +112,36 @@ struct WorkspaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !conversationPresented && (!relay.hosts.isEmpty || allowsDemoNavigation) { workspaceHeader }
             if !allowsDemoNavigation && !relay.corePairAuthorized {
-                ConnectView(required: true)
+                VStack(spacing: 0) {
+                    if !relay.hosts.isEmpty { workspaceHeader }
+                    ConnectView(required: true)
+                    if !relay.hosts.isEmpty { CoreConnectionFooter() }
+                }
             } else {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if relay.coreActionsAvailable {
-                    HostMetricsBar(metrics: relay.hostMetrics, status: relay.hostMetricsStatus)
-                        .padding(.horizontal, 25).padding(.bottom, 8)
+                NavigationStack {
+                    VStack(spacing: 0) {
+                        workspaceHeader
+                        if relay.coreActionsAvailable {
+                            HostMetricsBar(metrics: relay.hostMetrics, status: relay.hostMetricsStatus)
+                                .padding(.horizontal, 25).padding(.bottom, 8)
+                        }
+                        if store.selectedTab == .agents {
+                            AgentsView(store: store, showCreate: $showCreate)
+                        } else {
+                            TerminalView(store: store)
+                        }
+                    }
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        VStack(spacing: 0) { bottomBar; CoreConnectionFooter() }
+                    }
+                    .bzzyScreen()
+                    .toolbar(.hidden)
                 }
-
-                if store.selectedTab == .agents {
-                    AgentsView(store: store, showCreate: $showCreate)
-                } else {
-                    TerminalView(store: store)
-                }
+                .id(navigationID)
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
-            .bzzyScreen()
-            .toolbar(.hidden)
-        }.id(navigationID)
-            }
-            if !conversationPresented && (!relay.hosts.isEmpty || allowsDemoNavigation) { CoreConnectionFooter() }
         }
             .bzzyScreen()
-            .onPreferenceChange(ConversationPresentationPreference.self) { conversationPresented = $0 }
             .sheet(isPresented: $showSettings, onDismiss: {
                 if pendingConnectionFromNotification {
                     pendingConnectionFromNotification = false
@@ -335,14 +338,14 @@ struct WorkspaceView: View {
                         .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 8 : 0)
                         .foregroundStyle(store.selectedTab == tab ? BZZYTheme.accent : BZZYTheme.secondary)
                         .background(store.selectedTab == tab ? BZZYTheme.accent.opacity(0.09) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 19))
+                                    in: RoundedRectangle(cornerRadius: 6))
                 }.buttonStyle(.plain)
                     .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
                     .accessibilityAddTraits(store.selectedTab == tab ? .isSelected : [])
             }
         }.padding(6)
-            .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 25))
-            .overlay(RoundedRectangle(cornerRadius: 25).stroke(BZZYTheme.line, lineWidth: 0.7))
+            .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(BZZYTheme.line, lineWidth: 0.7))
             .padding(.horizontal, 25).padding(.top, 10).padding(.bottom, 9)
             .background(BZZYTheme.background)
     }

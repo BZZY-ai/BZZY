@@ -51,8 +51,8 @@ struct RoundButton: View {
             Image(systemName: symbol).font(.system(size: 17, weight: .regular))
                 .foregroundStyle(BZZYTheme.accent)
                 .frame(width: 44, height: 44)
-                .background(BZZYTheme.surface, in: Circle())
-                .overlay(Circle().stroke(BZZYTheme.line, lineWidth: 0.5))
+                .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(BZZYTheme.line, lineWidth: 0.5))
         }.buttonStyle(BZZYPressStyle()).accessibilityLabel(label)
     }
 }
@@ -69,7 +69,7 @@ struct AccentButton: View {
                 Image(systemName: symbol).bzzyFont(14, weight: .semibold)
             }.padding(.horizontal, 20).frame(minHeight: 54)
                 .foregroundStyle(BZZYTheme.background)
-                .background(BZZYTheme.accent, in: RoundedRectangle(cornerRadius: 18))
+                .background(BZZYTheme.accent, in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(BZZYPressStyle())
     }
 }
@@ -91,13 +91,13 @@ struct BZZYActionStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let tone = configuration.role == .destructive ? Color(hex: 0xF28B82) : BZZYTheme.accent
         configuration.label
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 13, weight: .medium, design: .monospaced))
             .multilineTextAlignment(.center)
             .padding(.horizontal, 15).padding(.vertical, 10)
             .frame(minWidth: 44, minHeight: 44)
             .foregroundStyle(tone)
-            .background(tone.opacity(configuration.isPressed ? 0.22 : 0.08), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(tone.opacity(configuration.isPressed ? 0.65 : 0.25), lineWidth: 0.8))
+            .background(tone.opacity(configuration.isPressed ? 0.22 : 0.08), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(tone.opacity(configuration.isPressed ? 0.65 : 0.25), lineWidth: 0.8))
             .opacity(enabled ? 1 : 0.35)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: configuration.isPressed)
@@ -105,13 +105,13 @@ struct BZZYActionStyle: ButtonStyle {
 }
 
 extension View {
-    func bzzyFont(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> some View {
+    func bzzyFont(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .monospaced) -> some View {
         modifier(ScaledBZZYFont(size: size, weight: weight, design: design))
     }
 
     func panel() -> some View {
-        self.padding(18).background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(BZZYTheme.line, lineWidth: 0.6))
+        self.padding(18).background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(BZZYTheme.line, lineWidth: 0.6))
     }
 
     func bzzyScreen() -> some View {

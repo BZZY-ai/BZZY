@@ -40,6 +40,10 @@ struct RenderPreview {
         try render("conversation", view: ConversationView(store: agents, agent: agents.agents[0]), folder: folder)
         try render("subscriptions-chat", view: ConversationView(store: agents, agent: agents.agents[2]), folder: folder)
         try render("terminal-chat", view: TerminalConversationView(store: terminal, session: TerminalPreview.samples[0]), folder: folder)
+        let chat = ConversationCanvas(store: terminal, conversationID: TerminalPreview.samples[0].id,
+            title: "starbucks-japan", subtitle: "Demo", assistantName: TerminalPreview.samples[0].model)
+        try render("terminal-header", view: chat, folder: folder)
+        try render("terminal-header-large", view: chat.environment(\.dynamicTypeSize, .accessibility2), folder: folder, width: 375)
         try render("research-chat", view: TerminalConversationView(store: terminal, session: TerminalPreview.samples[1]), folder: folder)
         let live = WorkspaceStore(includeSamples: false), sessionID = UUID().uuidString.lowercased()
         live.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: ["session": ["id": sessionID, "alias": "PersistenceTest", "provider": "codex"]]))

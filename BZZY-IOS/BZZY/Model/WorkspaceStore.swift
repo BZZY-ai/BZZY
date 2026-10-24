@@ -228,6 +228,9 @@ final class WorkspaceStore {
     // A session UUID is only unique within its computer. Keep unsent text in
     // that same scope when navigation is replaced during a computer switch.
     private(set) var hostComposerDrafts: [String: [String: String]] = [:]
+    // Local preview/draft chats keep unsent text across navigation, in memory.
+    // Live drafts remain separately bound to the paired host below.
+    var localComposerDrafts: [String: String] = [:]
     private let persistenceURL: URL?
     let showsDemoContent: Bool
 
