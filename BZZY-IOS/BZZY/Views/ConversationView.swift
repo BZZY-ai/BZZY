@@ -111,7 +111,7 @@ struct ConversationCanvas: View {
                         }
                         ForEach(messages) { message in
                             ChatBubble(message: message, showsDraft: !isDemo && !isLive && message.isUser,
-                                       speaker: message.isUser ? "You" : (assistantName ?? title))
+                                       speaker: message.isUser ? "You" : (message.speaker ?? assistantName ?? title))
                                 .id(message.id)
                         }
                         if isLive, relay.coreSessionID == conversationID {

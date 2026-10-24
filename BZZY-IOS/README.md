@@ -1,6 +1,14 @@
 # BZZY native iOS
 
-Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a cropped single-eye app icon and celeste controls. Local pixel distortion animates the pupils and antennae without blinking, pauses in the background and respects Reduce Motion.
+Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a complete single-eye app icon and celeste controls. Local pixel distortion animates the pupils and antennae without blinking, pauses in the background and respects Reduce Motion.
+
+Build **Debug 0.1.0 (13)** preserves the CLI's assistant-message boundaries in
+live and saved conversations. Different item/turn identities and tool/approval
+boundaries create separate bubbles; deltas belonging to one reply stay together.
+Interleaved peer replies retain their own bubbles. Reconnecting rebuilds the same
+stable messages from the existing raw events without replaying model work.
+The single-eye icon is now a complete, centered emblem with deliberate padding;
+see the [artwork and generation prompt](docs/app-icon-artwork.md).
 
 ## Run
 
@@ -20,11 +28,10 @@ the CLI updater does not replace iOS. Builds 9–10 introduced goal submission a
 replacement confirmation; build 11 replaces their client lease handling with
 Core-owned admission. TestFlight is deferred.
 
-The signed build 12 passed development APNs/privacy/signature artifact checks.
-The new goal shortcuts and stable editor passed targeted simulator UI tests.
-Physical installation is pending because CoreDevice currently reports the phone
-unavailable; the previously installed build 11 remains the last verified phone
-installation. No app data or pairing was removed.
+The signed build 13 passed development APNs/privacy/signature artifact checks
+and was installed in place on the connected iPhone. CoreDevice confirmed
+**0.1.0 (13)**. Automatic launch was blocked by the phone lock; opening the
+installed app remains a device check. App data and pairing were preserved.
 
 Build 7 previously added send-on-release, fluid 64-band audio, independent
 speech-language settings and alias-only terminal rows to build 6's animated
@@ -102,7 +109,7 @@ Hold the microphone beside Send to dictate using on-device Apple Speech. Partial
 
 [message_format.txt](message_format.txt) is the versioned body-format contract to pass to BZZY-Core. Responses remain strings, with a small XML-compatible HTML-like vocabulary inside `<message version="1">`. The app translates it into SwiftUI views. Plain text and basic inline Markdown also work. No WebView, CSS or remote asset loading is involved. Malformed/unsupported rich content falls back to bounded plain text. Tables scroll horizontally and text respects Dynamic Type. Formatting is presentation, separate from runtime permissions and verified outcomes.
 
-The mascot uses the supplied two-eye artwork directly, preserving its compound-eye texture. It is displayed 25% larger and a bounded Metal distortion moves existing pupil and antenna pixels with touch/idle motion; eyes never close. Reduce Motion shows the original still artwork and backgrounding pauses its clock. The app icon shows a cropped single eye. Buttons, borders and selection states share the artwork's sky-blue/celeste accent, rounded action surfaces and pressed feedback. See [brand assets and palette](docs/BRAND.md).
+The mascot uses the supplied two-eye artwork directly, preserving its compound-eye texture. It is displayed 25% larger and a bounded Metal distortion moves existing pupil and antenna pixels with touch/idle motion; eyes never close. Reduce Motion shows the original still artwork and backgrounding pauses its clock. The app icon shows a complete single-eye and antenna emblem, centered with deliberate padding. Buttons, borders and selection states share the artwork's sky-blue/celeste accent, rounded action surfaces and pressed feedback. See [brand assets and palette](docs/BRAND.md).
 
 ## Relay connection
 

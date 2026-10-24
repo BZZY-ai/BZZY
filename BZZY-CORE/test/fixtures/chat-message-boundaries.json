@@ -1,0 +1,68 @@
+[
+  {
+    "name": "distinct heartbeat messages in one goal turn",
+    "events": [
+      {"type":"message.user","data":{"text":"Run a heartbeat test"}},
+      {"type":"text","data":{"text":"Starting ","itemId":"start","turnId":"goal-turn"}},
+      {"type":"usage.updated","data":{"tokens":12}},
+      {"type":"text","data":{"text":"the heartbeat.","itemId":"start","turnId":"goal-turn"}},
+      {"type":"text","data":{"text":"Still running.","itemId":"progress","turnId":"goal-turn"}},
+      {"type":"text","data":{"text":"Now auditing.","itemId":"audit","turnId":"goal-turn"}},
+      {"type":"text","data":{"text":"Finished.","itemId":"final","turnId":"next-turn"}}
+    ],
+    "messages":["Run a heartbeat test","Starting the heartbeat.","Still running.","Now auditing.","Finished."]
+  },
+  {
+    "name": "legacy streams split at tool boundaries but not telemetry",
+    "events": [
+      {"type":"text","data":{"text":"Before ","itemId":"reused"}},
+      {"type":"activity","data":{"id":"activity","summary":"Working"}},
+      {"type":"backend","data":{"method":"item/started"}},
+      {"type":"text","data":{"text":"the tool.","itemId":"reused"}},
+      {"type":"tool","data":{"name":"shell","detail":"Fixture only"}},
+      {"type":"text","data":{"text":"After the tool.","itemId":"reused"}},
+      {"type":"tool","data":{"name":"read"}},
+      {"type":"text","data":{"text":"No native IDs "}},
+      {"type":"usage.updated","data":{"tokens":15}},
+      {"type":"text","data":{"text":"still stream."}}
+    ],
+    "messages":["Before the tool.","After the tool.","No native IDs still stream."]
+  },
+  {
+    "name": "turn identities and rich bodies remain independent",
+    "events": [
+      {"type":"text","data":{"text":"<message version=\"1\"><p>One ","itemId":"body","turnId":"turn-1"}},
+      {"type":"text","data":{"text":"<b>reply</b></p></message>","itemId":"body","turnId":"turn-1"}},
+      {"type":"text","data":{"text":"<message version=\"1\"><p>Another reply</p></message>","itemId":"body","turnId":"turn-2"}}
+    ],
+    "messages":["<message version=\"1\"><p>One <b>reply</b></p></message>","<message version=\"1\"><p>Another reply</p></message>"]
+  },
+  {
+    "name": "approval and outcome cards separate native-ID-free replies",
+    "events": [
+      {"type":"text","data":{"text":"I need approval."}},
+      {"type":"question","data":{"id":"approval","kind":"approval","question":"Fixture approval"}},
+      {"type":"question.answered","data":{"id":"approval","answer":"yes"}},
+      {"type":"text","data":{"text":"Approved work finished."}},
+      {"type":"summary","data":{"message":"Goal summary","status":"complete"}},
+      {"type":"text","data":{"text":"A later reply."}},
+      {"type":"info","data":{"message":"Provider notice"}},
+      {"type":"text","data":{"text":"After the notice."}},
+      {"type":"error","data":{"message":"Fixture failure"}},
+      {"type":"text","data":{"text":"After the error."}}
+    ],
+    "messages":["I need approval.","Approved work finished.","A later reply.","After the notice.","After the error."]
+  },
+  {
+    "name": "interleaved peer deltas keep each reply together",
+    "events": [
+      {"type":"peer.text","data":{"text":"First ","agent":"Codex","childSessionId":"peer-1","itemId":"same-item","turnId":"turn-1"}},
+      {"type":"peer.text","data":{"text":"Second ","agent":"Claude","childSessionId":"peer-2","itemId":"same-item","turnId":"turn-1"}},
+      {"type":"peer.text","data":{"text":"reply.","agent":"Codex","childSessionId":"peer-1","itemId":"same-item","turnId":"turn-1"}},
+      {"type":"peer.text","data":{"text":"reply.","agent":"Claude","childSessionId":"peer-2","itemId":"same-item","turnId":"turn-1"}},
+      {"type":"peer.text","data":{"text":"Another first-peer message.","agent":"Codex","childSessionId":"peer-1","itemId":"another-item","turnId":"turn-1"}},
+      {"type":"text","data":{"text":"Coordinator reply."}}
+    ],
+    "messages":["First reply.","Second reply.","Another first-peer message.","Coordinator reply."]
+  }
+]

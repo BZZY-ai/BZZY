@@ -13,6 +13,16 @@ import { commandSuggestions } from '../src/terminal-commands.js';
 import { palette, palettes, createTerminalTheme } from '../src/terminal-theme.js';
 
 const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+test('CLI and iOS share assistant message boundaries for native, legacy and interleaved streams', () => {
+  const fixtures = JSON.parse(fs.readFileSync(new URL('../../../BZZY-CORE/test/fixtures/chat-message-boundaries.json', import.meta.url), 'utf8'));
+  for (const fixture of fixtures) {
+    const { ui } = terminal();
+    try {
+      for (const event of fixture.events) ui.event(event.type, event.data);
+      assert.deepEqual(ui.tui.entries.filter(entry => ['assistant', 'user'].includes(entry.kind)).map(entry => entry.text), fixture.messages, fixture.name);
+    } finally { ui.close(); }
+  }
+});
 function terminal(options = {}) {
   const input = new PassThrough(); input.isTTY = true; input.isRaw = false; input.setRawMode = value => { input.isRaw = value; };
   const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 32, columns: 100 });

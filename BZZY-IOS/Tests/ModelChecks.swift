@@ -9,6 +9,7 @@ struct ModelChecks {
         let file = root.appendingPathComponent("workspace.json")
         let store = WorkspaceStore(persistenceURL: file)
         let production = WorkspaceStore(includeSamples: false)
+        try checkReplyBoundaries()
         require(production.agents.isEmpty && !production.showsDemoContent && production.demoConversation("session-design") == nil, "Production must not expose synthetic agent or terminal workspaces")
         require(!production.sendDemoMessage("Hello", conversationID: AgentProfile.samples[0].id.uuidString), "Production cannot fabricate sample assistant replies")
         require(store.createAgent(name: "  ", purpose: "Purpose", symbol: "leaf") == nil, "Empty agent names must be rejected")
@@ -159,6 +160,33 @@ struct ModelChecks {
         require(!capture.isBusy && capture.transcript == "Keep this edited transcript", "Repeated cancellation preserves the transcript")
         print("PASS: actual voice-capture unavailable/cancelled-start draft retention without microphone access")
         #endif
+    }
+
+    @MainActor private static func checkReplyBoundaries() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("BZZY-CORE/test/fixtures/chat-message-boundaries.json")
+        let fixtures = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [[String: Any]]
+        for fixture in fixtures {
+            let store = WorkspaceStore(includeSamples: false), sessionID = UUID().uuidString.lowercased()
+            try store.applyLiveSnapshot(JSONSerialization.data(withJSONObject: ["session": ["id": sessionID]]))
+            let events = try (fixture["events"] as! [[String: Any]]).enumerated().map { index, event in
+                try JSONSerialization.data(withJSONObject: ["version": 1, "id": "\(sessionID):\(index + 1)", "seq": index + 1,
+                    "sessionId": sessionID, "createdAt": "2026-10-23T12:00:00Z", "type": event["type"]!, "data": event["data"]!])
+            }
+            for count in 1...events.count {
+                store.applyLiveEvents(Array(events.prefix(count)))
+                let partial = store.liveMessages
+                store.applyLiveEvents(Array(events.prefix(count)) + Array(events.prefix(count)))
+                require(store.liveMessages == partial, "Replayed deltas must retain bubble IDs and content")
+            }
+            require(store.liveMessages.map(\.text) == fixture["messages"] as! [String], "CLI/iOS reply boundaries: \(fixture["name"]!)")
+            let before = store.liveMessages
+            store.setLiveAvailability(false, status: "Offline")
+            store.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: ["session": ["id": sessionID]]))
+            store.applyLiveEvents(events)
+            require(store.liveMessages == before, "Reconnect must preserve reply identities, content and separation")
+        }
+        print("PASS: shared CLI/iOS message boundaries, streamed chunks, tools, rich bodies, peer interleaving and replay")
     }
 
     @MainActor private static func checkSharing(root: URL) throws {

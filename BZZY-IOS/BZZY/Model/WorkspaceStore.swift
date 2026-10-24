@@ -66,7 +66,15 @@ struct LocalMessage: Identifiable, Codable, Equatable {
     let text: String
     let kind: Kind
     let createdAt: Date
+    var speaker: String? = nil
     var isUser: Bool { kind == .user }
+}
+
+private struct LiveReplyIdentity: Hashable {
+    let speaker: String
+    let peer: String?
+    let item: String?
+    let turn: String?
 }
 
 struct TerminalPreview: Identifiable {
@@ -251,6 +259,8 @@ final class WorkspaceStore {
     func applyLiveEvents(_ data: [Data]) {
         guard let session = liveSession else { return }
         var seen = Set<String>(), approvalIDs = Set<String>(), projected: [LocalMessage] = [], activity: [LiveActivity] = []
+        var activeReply: (identity: LiveReplyIdentity, index: Int)?
+        var peerReplies: [LiveReplyIdentity: Int] = [:]
         for bytes in data {
             guard let event = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                   event["sessionId"] as? String == session.id,
@@ -261,18 +271,41 @@ final class WorkspaceStore {
             // Sequence is durable and unique within this explicitly scoped conversation.
             let uuid = UUID(uuidString: String(format: "20000000-0000-4000-8000-%012llx", UInt64(seq) & 0xffffffffffff))!
             if type == "question", payload["kind"] as? String == "approval", let questionID = payload["id"] as? String { approvalIDs.insert(questionID) }
+            // Match terminal chat entries, including boundaries kept only in
+            // Activity on iOS. Telemetry/backend events do not split deltas.
+            if ["message.user", "question", "tool", "summary", "error", "control.failed", "debate.message", "debate.result"].contains(type)
+                || type == "info" && !(payload["message"] as? String ?? "").isEmpty
+                || type == "worker.progress" && payload["type"] as? String == "error" { activeReply = nil }
             if type == "message.user", let text = payload["text"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .user, createdAt: date))
-            } else if type == "text", let text = payload["text"] as? String {
-                if let previous = projected.last, !previous.isUser {
-                    projected[projected.count - 1] = .init(id: previous.id, text: previous.text + text, kind: .assistant, createdAt: previous.createdAt)
-                } else { projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date)) }
+            } else if ["text", "peer.text"].contains(type), let text = payload["text"] as? String {
+                let peer = type == "peer.text" ? ["childSessionId", "sessionId", "agent"].compactMap { payload[$0] as? String }.first(where: { !$0.isEmpty }) : nil
+                let speaker = type == "peer.text" ? (payload["agent"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? peer ?? "Agent" : "bzzy"
+                let identity = LiveReplyIdentity(speaker: speaker, peer: peer, item: payload["itemId"] as? String, turn: payload["turnId"] as? String)
+                // Explicit peer identities can interleave without creating
+                // duplicate bubbles; ordinary replies merge only adjacently.
+                let previous = peer != nil && identity.item?.isEmpty == false ? peerReplies[identity]
+                    : activeReply.flatMap { $0.identity == identity && $0.index == projected.count - 1 ? $0.index : nil }
+                let index: Int
+                if let previous {
+                    let message = projected[previous]; index = previous
+                    projected[index] = .init(id: message.id, text: message.text + text, kind: .assistant, createdAt: message.createdAt, speaker: message.speaker)
+                } else {
+                    index = projected.count
+                    projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date, speaker: type == "peer.text" ? speaker : nil))
+                }
+                if peer != nil && identity.item?.isEmpty == false { peerReplies[identity] = index }
+                // Updating an older peer bubble leaves the latest entry intact.
+                if index == projected.count - 1 { activeReply = (identity, index) }
             } else if type == "question", payload["kind"] as? String == "input", let text = payload["question"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))
             } else if type == "question.answered", !approvalIDs.contains(payload["id"] as? String ?? ""), let text = payload["answer"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .user, createdAt: date))
             } else if type == "debate.result", let text = payload["message"] as? String {
                 projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date))
+            } else if type == "debate.message", let text = payload["text"] as? String {
+                let speaker = [payload["participant"] as? String, payload["role"] as? String].compactMap { $0 }.joined(separator: " · ")
+                projected.append(.init(id: uuid, text: text, kind: .assistant, createdAt: date, speaker: speaker.isEmpty ? nil : speaker))
             }
             if !["text", "message.user", "input.accepted"].contains(type) {
                 let details = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))

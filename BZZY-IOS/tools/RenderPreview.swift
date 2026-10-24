@@ -30,6 +30,18 @@ struct RenderPreview {
         try render("subscriptions-chat", view: ConversationView(store: agents, agent: agents.agents[2]), folder: folder)
         try render("terminal-chat", view: TerminalConversationView(store: terminal, session: TerminalPreview.samples[0]), folder: folder)
         try render("research-chat", view: TerminalConversationView(store: terminal, session: TerminalPreview.samples[1]), folder: folder)
+        let live = WorkspaceStore(includeSamples: false), sessionID = UUID().uuidString.lowercased()
+        live.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: ["session": ["id": sessionID, "alias": "PersistenceTest", "provider": "codex"]]))
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("BZZY-CORE/test/fixtures/chat-message-boundaries.json")
+        let fixture = (try JSONSerialization.jsonObject(with: Data(contentsOf: fixtures)) as! [[String: Any]])[0]
+        let events = try (fixture["events"] as! [[String: Any]]).enumerated().map { index, event in
+            try JSONSerialization.data(withJSONObject: ["version": 1, "id": "\(sessionID):\(index + 1)", "seq": index + 1,
+                "sessionId": sessionID, "createdAt": "2026-10-23T12:00:00Z", "type": event["type"]!, "data": event["data"]!])
+        }
+        live.applyLiveEvents(events)
+        try render("live-reply-boundaries", view: ConversationCanvas(store: live, conversationID: sessionID,
+            title: "PersistenceTest", subtitle: "Codex · shared message boundaries", remoteSession: true), folder: folder)
         try render("chat-large-text", view: ConversationView(store: agents, agent: agents.agents[0]).environment(\.dynamicTypeSize, .accessibility2), folder: folder)
         try render("voice", view: VoiceView(store: agents, conversationID: agents.agents[0].id.uuidString, agentName: "COOL"), folder: folder)
         try render("voice-only", view: VoiceChatView(), folder: folder)
@@ -52,7 +64,7 @@ struct RenderPreview {
             if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
             try FileManager.default.copyItem(at: icon, to: destination)
         }
-        print("Rendered 15 native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
+        print("Rendered 16 native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
     }
 
     @MainActor private static func render<V: View>(_ name: String, view: V, folder: URL, width: CGFloat = 393, height: CGFloat = 852) throws {
