@@ -457,6 +457,7 @@ async function chat(provider, options, ui, existingSession) {
 
 async function debateConversation(source, focus, options, ui) {
   if (!source) throw new Error('No conversation selected.');
+  ui.event('info', { message: source.goal?.status === 'complete' ? 'Starting validation of the achieved goal…' : 'Preparing reply validation…' });
   const agents = source.goal?.status === 'complete'
     ? options.debateAgents || defaultChatDebateAgents(source)
     : (source.mode === 'debate' && source.debateAgents) || options.debateAgents || await chooseDebate({ ...options, provider: source.provider, model: source.model }, ui);

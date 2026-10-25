@@ -38,7 +38,7 @@ function sourceEvidence(source) {
     if (!item || !workers.has(item.sessionId)) throw new Error('The goal cites missing evidence or evidence outside this goal’s sessions.');
     return item;
   });
-  if (!missionEvidenceCurrent(evidence)) throw new Error('The goal evidence is missing, altered or stale. Recheck it before starting validation.');
+  if (!missionEvidenceCurrent(evidence)) throw Object.assign(new Error('Validation could not start: the original evidence files or saved copies are missing, changed or unavailable. Restore the original files or recheck the goal and record fresh evidence, then retry /validate. Saved artifact copies were kept.'), { code: 'VALIDATION_EVIDENCE_UNAVAILABLE' });
   return evidence;
 }
 

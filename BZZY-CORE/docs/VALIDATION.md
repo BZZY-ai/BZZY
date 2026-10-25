@@ -1,3 +1,23 @@
+# Validate startup errors and observer handoff (2026-10-25)
+
+Final Node.js 24/macOS suites: **527 Core tests passed, 1 skipped** (528 total)
+and **565 CLI tests passed, 21 skipped** (586 total), zero failures. Both syntax
+checks and `git diff --check` pass.
+
+Real default CLI PTY tests submit `/validate` from an achieved attached session.
+With intact evidence, the command creates a linked review and execution. With
+an intact captured copy but a deleted original file, the recovery error remains
+visible after long-history replay, watcher polling and notice dismissal. No
+review, execution, new session or validated badge is created by failed preflight;
+the original achieved goal and saved artifact bytes remain unchanged.
+
+A separate public managed-execution test delays the final HTTP event response,
+submits `/validate` during that wait and verifies the finishing parent observer
+cannot close a nested review's reader. The review handler completes exactly once.
+Existing pending-input, attach/model, pause, goal replacement and cancellation
+coverage also passes. Provider work uses isolated offline fixtures; actual user
+sessions, evidence and the running installation are not changed.
+
 # Adaptive Validate, skill scope moves and terminal layout (2026-10-25)
 
 Final Node.js 24/macOS suites: **526 Core tests passed, 1 skipped** (527 total)

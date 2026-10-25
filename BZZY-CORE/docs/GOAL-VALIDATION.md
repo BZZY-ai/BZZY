@@ -55,6 +55,15 @@ unavailable proof fails closed. Evidence checks are bounded and cache file
 identity/size/nanosecond timestamps to avoid hashing unchanged files on every
 frame. They never run commands, contact targets or start models.
 
+Workspace-file captures retain both an immutable saved copy and a binding to the
+original file. Keep that source available and unchanged, including after goal
+completion. A deleted temporary proof file can block review even when its saved
+copy is intact. `/validate` announces startup and displays an explicit recovery
+error if evidence preflight fails; restoring the original files or recording
+fresh evidence is required before retrying. Failure does not create a review or
+change the achieved goal. The terminal preserves this error beside the chat
+instead of replaying older replies over it.
+
 These gates establish review provenance, evidence integrity/inspection and
 compliance with the declared contract. Semantic vulnerability truth still
 requires sound assessment and appropriate controls. A free-text goal's model

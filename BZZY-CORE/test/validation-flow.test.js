@@ -56,6 +56,22 @@ test('achieved validation defaults repeat the current model independently and ca
   assert.equal(listRecords('execution').length, 0);
 });
 
+test('validation reports unavailable original proof before creating a review and retains the saved artifact', () => {
+  const saved = source(), proof = getRecord('artifact', saved.goal.evidence[0]);
+  const captured = fs.readFileSync(proof.path), count = listRecords('session').length;
+  fs.unlinkSync(path.join(workspace, 'observations.json'));
+  assert.throws(() => prepareChatDebate(saved, '', []), error => {
+    assert.equal(error.code, 'VALIDATION_EVIDENCE_UNAVAILABLE');
+    assert.match(error.message, /Validation could not start.*original evidence.*Restore.*retry \/validate.*copies were kept/);
+    return true;
+  });
+  assert.deepEqual(fs.readFileSync(proof.path), captured);
+  assert.equal(loadSession(saved.id).goal.status, 'complete');
+  assert.equal(listRecords('session').length, count);
+  assert.equal(listRecords('execution').length, 0);
+  assert.equal(events(saved.id).filter(event => event.type === 'debate.linked').length, 0);
+});
+
 test('stable validation events distinguish same-provider participants and mirror child reviews once into source history', async () => {
   const saved = source(), agents = [0, 1, 2].map(index => ({ provider: 'codex', model: `review-model-${index}`, effort: 'default' }));
   const prepared = prepareChatDebate(saved, '', [], { debateAgents: agents, rounds: 1 });

@@ -113,6 +113,12 @@ checks support the exact original goal. Unsuccessful reviews show **Not validate
 ✗** or an explicit inconclusive/stale/stopped state. An older review or a positive
 consensus paragraph cannot award the check. Changed goals or evidence invalidate
 it. See [validation gates](../../BZZY-CORE/docs/GOAL-VALIDATION.md).
+
+`/validate` announces startup. If original evidence files are missing or changed,
+it keeps a visible recovery error beside the chat and leaves the achieved goal
+unchanged. Preserve captured source files after recording them; an intact saved
+copy alone does not satisfy source freshness checks.
+
 Validate collects independent structured assessments while displaying short
 natural-language explanations. Any supported rejection prevents validation;
 an uncertain agent gets one focused follow-up within its limits. Only unanimous

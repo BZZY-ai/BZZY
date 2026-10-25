@@ -159,6 +159,13 @@ export async function submitManagedGoal(session, options, ui, objective) {
 async function watch(info, sessionId, owner, ui, options = {}) {
   const previousPermissions = ui.permissionConnection, previousApproval = ui.onAnswerApproval;
   const api = client(info, sessionId, owner); let detached = false, paused = false, ownershipLost = false, inputStopped = false, modalTask = false, processingInput = false, refreshInput = false;
+  let pendingInput = null;
+  const closeWatchInput = () => {
+    if (!pendingInput || processingInput || modalTask) return false;
+    const reader = pendingInput.reader || (ui.reader !== pendingInput.previousReader ? ui.reader : null);
+    if (!reader || ui.reader !== reader) return false;
+    reader.close(); return true;
+  };
   const loseControl = () => {
     if (ownershipLost) return;
     ownershipLost = true;
@@ -210,13 +217,22 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   if (ui.interactive) ui.input?.on('keypress', keypress);
   const interrupt = () => {
     if (modalTask) return;
-    if (!options.activeControl || ownershipLost || paused) { detached = true; ui.reader?.close(); return; }
+    if (!options.activeControl || ownershipLost || paused) { detached = true; closeWatchInput(); return; }
     paused = true; api('POST', 'control', { action: 'pause' }, randomUUID()).catch(error => ui.event('error', { message: error.message }));
   };
   process.on('SIGINT', interrupt);
   const inputLoop = ui.interactive ? (async () => {
     while (!inputStopped && !detached && !ui.nextSession && !ui.coreLifecycleInterrupted) {
-      const input = await ui.ask(`bzzy ${children.length ? '(' + (tabs.find(t => t.id === activeId)?.agent || 'Overview') + ')' : '(running)'} › `);
+      const reading = { previousReader: ui.reader, reader: null }; pendingInput = reading;
+      let input;
+      try {
+        const answer = ui.ask(`bzzy ${children.length ? '(' + (tabs.find(t => t.id === activeId)?.agent || 'Overview') + ')' : '(running)'} › `);
+        // UI.ask queues its reader creation. Capture this prompt's reader after
+        // that microtask, rather than closing a later command's nested reader.
+        await Promise.resolve();
+        if (ui.reader !== reading.previousReader) reading.reader = ui.reader;
+        input = await answer;
+      } finally { if (pendingInput === reading) pendingInput = null; }
       if (inputStopped) { if (input != null) (ui.pendingChatInputs ||= []).push(input); break; }
       if (input == null && refreshInput) { refreshInput = false; continue; }
       if (input == null) { if (!paused) detached = true; break; }
@@ -336,7 +352,13 @@ async function watch(info, sessionId, owner, ui, options = {}) {
             if (ui.detached) { detached = true; break; }
           } finally {
             modalTask = false;
-            if (!detached) { ui.setSession(sessionId, ownershipLost ? 'VIEW' : 'CONTROL'); ui.clearHistory(); ui.cursors?.set(activeId, 0); if (children.length) ui.setTabs(sessionId, children, activeId); }
+            if (!detached) {
+              // onDebate restores the selected source conversation itself. A
+              // preflight failure never left it; replaying its whole history
+              // here would bury the error that the outer handler displays.
+              if (children.length) { ui.setTabs(sessionId, children, activeId); ui.sessionMode = ownershipLost ? 'VIEW' : 'CONTROL'; }
+              else ui.setSession(sessionId, ownershipLost ? 'VIEW' : 'CONTROL');
+            }
           }
           continue;
         }
@@ -432,10 +454,15 @@ async function watch(info, sessionId, owner, ui, options = {}) {
       const execution = options.executionId ? snapshot.execution?.id === options.executionId ? snapshot.execution : executionRecord(options.executionId) : snapshot.execution;
       const active = execution && ['queued', 'launching', 'running'].includes(execution.state);
       if (options.executionId && execution && !active && !processingInput) {
-        await replay(api, sessionId, ui);
+        const completedExecutionId = options.executionId;
+        await replay(api, sessionId, ui, () => !processingInput && !modalTask && !detached && !ui.nextSession && options.executionId === completedExecutionId);
+        // Input may start a nested review or another execution while the final
+        // event page is in flight. The older observer must keep it alive.
+        if (processingInput || modalTask || detached || ui.nextSession || options.executionId !== completedExecutionId) continue;
         if (!options.follow) return execution.exitCode ?? 1;
         options.executionId = undefined;
-        if (ui.reader) { refreshInput = true; ui.reader.close(); }
+        refreshInput = true;
+        if (!closeWatchInput()) refreshInput = false;
       }
       if (ownershipLost && options.executionId && !active) return 0;
       if (!options.executionId && !active && !options.follow) return 0;
@@ -455,7 +482,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
     }
     if (detached) ui.detached = true;
     return 0;
-  } finally { inputStopped = true; if (inputLoop) ui.reader?.close(); await inputLoop; process.removeListener('SIGINT', interrupt); ui.input?.removeListener('keypress', keypress); ui.onSelectTab = previousSelectTab; ui.permissionConnection = previousPermissions; ui.onAnswerApproval = previousApproval; }
+  } finally { inputStopped = true; if (inputLoop) closeWatchInput(); await inputLoop; process.removeListener('SIGINT', interrupt); ui.input?.removeListener('keypress', keypress); ui.onSelectTab = previousSelectTab; ui.permissionConnection = previousPermissions; ui.onAnswerApproval = previousApproval; }
 }
 export async function viewSession(session, options, ui) {
   options = { ...options, cwd: session.cwd };

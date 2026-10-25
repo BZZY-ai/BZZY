@@ -40,7 +40,7 @@ export function taskTools(session, { goalMode } = {}) {
     spec('get_task_state', 'Read the durable objective, constraints, checkpoints, project notes, recovery findings and assignment history.'),
     spec('checkpoint', 'Save concise decisions and rationale, completed work, next actions, unresolved questions, constraints and recorded evidence IDs. Do this at meaningful progress and before compaction.',
       { decisions: { type: 'array', items: object }, completedWork: strings, pendingActions: strings, unresolvedQuestions: strings, constraints: strings, evidence: strings }),
-    spec('record_evidence', 'Copy a workspace file into immutable, hashed evidence. Return an artifact ID for claims and reviews.', { path: str, label: str }, ['path']),
+    spec('record_evidence', 'Copy a workspace file into immutable, hashed evidence. Return an artifact ID for claims and reviews. Later verification also checks the original source file: keep it unchanged and available. Use a durable evidence file, not a temporary file that you delete after capture.', { path: str, label: str }, ['path']),
     spec('read_artifact', 'Read a bounded slice of a recorded artifact. Opening worker evidence records supervisor inspection and imports it for parent assessments.',
       { id: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 32768 } }, ['id']),
     spec('remember', 'Save attributed project knowledge with explicit uncertainty, evidence and applicability. A model claim or agreement cannot confirm a fact. Confirmed truth requires a valid Core verification receipt; stale and conflicting records remain history. Store concise factual rationale, never hidden chain-of-thought.',
