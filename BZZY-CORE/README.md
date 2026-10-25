@@ -14,7 +14,9 @@ Implemented:
 
 - Durable session/goal usage metrics from model skill-load receipts and accepted
   specialist/worker assignments, with separate follow-up counts and explicit
-  coverage limits for older history. See [metrics](docs/METRICS.md).
+  coverage limits for older history. Actual worker skill receipts also reach
+  the root conversation; bounded read-only invocation snapshots let clients
+  restore current agent status. See [metrics](docs/METRICS.md).
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).

@@ -222,7 +222,7 @@ test('invocation views and chat notices retain specialist identity and scope res
       report: { status: 'partial', uncertainties: ['Rendering behavior remains untested.'] } });
     ui.event('assignment.created', job); ui.event('assignment.started', { id, round: 1 });
     ui.event('assignment.finished', { id, round: 1, state: 'awaiting_review', report: { summary: 'Candidate requires an independent check.' } });
-    assert.ok(ui.tui.entries.some(entry => /Subagent http-analyst/.test(entry.text)));
+    assert.ok(ui.tui.entries.some(entry => entry.kind === 'invocation' && entry.name === 'http-analyst' && entry.state === 'awaiting_review'));
     await subagentsCommand('/agents runs', ui);
     assert.match(text(ui), /http-analyst.*awaiting_review/); assert.match(text(ui), /claims until/);
     await subagentsCommand('/agents run:' + id, ui);

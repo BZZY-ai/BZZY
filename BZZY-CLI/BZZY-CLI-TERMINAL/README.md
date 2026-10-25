@@ -68,6 +68,15 @@ and Tab select a control; Space toggles the selected entry, and Enter activates
 the selected switch or opens the name. OFF entries remain visible in Library
 and are unavailable for new model invocations; changing a switch starts no work.
 
+Actual skill loads and named-agent calls appear directly in the chat as compact
+colored rows, including in minimal mode. Skills show **Loaded**; agents update
+the same row through starting, running, needs context, awaiting review and their
+final review or stop state. Different agents retain separate colors even when
+they use the same model. Reopening restores the rows and checks current Core
+state, while worker skill loads also appear in the main session. These rows show
+names and status, without copying task prompts or reports. Loading a skill or
+finishing a worker does not establish goal completion.
+
 Both libraries offer **Export skills & agents ZIP** and **Import skills & agents
 ZIP**. Export reviews the current project's and global portable definitions,
 including skill resources, then writes a dated archive in the terminal's original

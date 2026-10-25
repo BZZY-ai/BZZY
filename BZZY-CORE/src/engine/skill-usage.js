@@ -18,15 +18,21 @@ export function modelSkillUsageContext(session, context = {}) {
 export function recordModelSkillUse(session, skill, context) {
   if (!context || context.sessionId !== session.id || skill.file !== 'SKILL.md' || !skill.text) return null;
   const id = digest([session.id, context.runId, skill.id, skill.version]);
-  const scope = resolveSessionMetricsScope(session.id, { goalId: context.goalId, goalMode: context.goalMode });
   return transaction(db => {
     const previous = getRecord('core.usage', id);
     if (previous) return previous;
+    const scope = resolveSessionMetricsScope(session.id, { goalId: context.goalId, goalMode: context.goalMode });
     const record = { id, version: 1, kind: 'skill', sessionId: session.id, runId: context.runId, goalId: context.goalId,
       skillId: skill.id, name: skill.name, skillVersion: skill.version, scope: skill.scope, projectId: skill.projectId || null,
       ...scope, createdAt: now() };
     putRecord('core.usage', id, record, db);
     appendEvent(session.id, 'core.usage', record, db);
+    // The root chat observes actual worker loads without inventing a second
+    // invocation. Both streams carry the exact same authoritative receipt.
+    if (uuid(scope.rootSessionId) && scope.rootSessionId !== session.id && ['goal', 'chat'].includes(scope.attribution) &&
+        getRecord('session', scope.rootSessionId) && !getRecord('session-deletion', scope.rootSessionId)) {
+      appendEvent(scope.rootSessionId, 'core.usage', record, db);
+    }
     return record;
   });
 }

@@ -18,6 +18,7 @@ import { ConnectionStatusMonitor } from './connection-status.js';
 import { shareSavedSession, deleteSavedSession } from './session-browser.js';
 import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 import { cancelDefinitionBundle } from './definition-bundle-ui.js';
+import { recordInvocationEvent, reconcileInvocationEntries } from './invocation-ui.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
@@ -96,6 +97,7 @@ export class UI {
 
   setSession(id, mode = 'CONTROL') {
     if (this.sessionId !== id) {
+      this.invocationEntries = [];
       this.tabs = null; this.activeTab = null; this.tui?.clear();
       this.skillPreview = null; this.skillHistoryState = null; this.skillPromotionDraft = null; this.skillSyncDetails = false;
       cancelDefinitionBundle(this);
@@ -112,11 +114,13 @@ export class UI {
     this.sessionId = groupId; this.tabs = [{ id: groupId, agent: 'Overview' }, ...children]; this.activeTab = selectedId;
     this.renderFooter();
   }
-  clearHistory() { this.tui?.clear(); this.lineOpen = false; }
+  clearHistory() { this.tui?.clear(); this.invocationEntries = []; this.lineOpen = false; }
   redrawPrompt() { if (this.tui) this.tui.schedule(); else if (this.reader && !this.lineOpen) this.reader.prompt(true); }
   updateSession(snapshot) {
     if (snapshot.permissions) this.sessionPermissionStates.set(this.sessionId || snapshot.session?.id, snapshot.permissions.yolo === true);
     this.tui?.update(snapshot);
+    if (!this.tui && !this.json) for (const entry of reconcileInvocationEntries(this.invocationEntries || [], snapshot,
+      { sessionId: this.activeTab || this.sessionId })) this.writeInvocation(entry);
     if (this.accountStatusEnabled) {
       this.accountMonitor ||= new AccountStatusMonitor(status => { this.accountStatus = status; this.tui?.schedule(); });
       this.accountMonitor.update(snapshot.session || snapshot);
@@ -202,6 +206,12 @@ export class UI {
     if (type === 'account.quota') this.accountMonitor?.accept(data);
     if (this.tui) { this.tui.event(type, data); return; }
     if (this.json) { this.output.write(`${JSON.stringify({ type, ...data })}\n`); return; }
+    const invocation = recordInvocationEvent(this.invocationEntries ||= [], type, data, { sessionId: this.activeTab || this.sessionId });
+    if (this.invocationEntries.length > 5000) this.invocationEntries.splice(0, 500);
+    if (invocation.handled) {
+      if (invocation.changed && invocation.entry) this.writeInvocation(invocation.entry);
+      return;
+    }
     if (type === 'text' || type === 'peer.text') { this.assistantText(type, data); return; }
     if (type === 'message.user') { this.newline(); this.output.write(`\nYou${data.kind === 'goal' ? ' /goal' : ''} › ${clean(data.text)}\n\n`); return; }
     if (type === 'question') { this.newline(); this.output.write(`\nAgent asks › ${clean(data.question)}\n`); return; }
@@ -231,6 +241,12 @@ export class UI {
 
   writeAssistantText(text, stream) {
     this.emitAssistantText(clean(text), stream);
+  }
+
+  writeInvocation(entry) {
+    // Metadata must not flush an unfinished structured assistant body.
+    if (this.lineOpen) this.output.write('\n');
+    this.output.write('  · ' + entry.text + '\n'); this.lineOpen = false;
   }
 
   assistantPrefix(stream) {

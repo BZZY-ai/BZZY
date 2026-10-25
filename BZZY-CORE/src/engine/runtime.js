@@ -31,6 +31,7 @@ import { recoverSessionCompactions, processSessionCompactions, pauseSessionCompa
 import { CoreKnowledge } from '../knowledge.js';
 import { recordGoalValidationResult } from './goal-validation.js';
 import { assertGoalWorkflowAdmission } from './workflows.js';
+import { sessionInvocations } from './invocation-state.js';
 
 const runtimeBuild = digest(['src', 'assets', 'bin'].flatMap(directory => fs.readdirSync(path.join(root, directory), { recursive: true })
   .filter(file => !file.split(path.sep).some(part => part.startsWith('._')) && fs.statSync(path.join(root, directory, file)).isFile()).sort()
@@ -253,7 +254,7 @@ export async function serveRuntime() {
         if (peerOrder.length) children.sort((a, b) => peerOrder.findIndex(p => p.sessionId === a.id) - peerOrder.findIndex(p => p.sessionId === b.id));
         else if (['parallel', 'besties'].includes(session.mode)) children.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         const questionSessions = new Set([id, ...children.map(s => s.id)]);
-        send(response, 200, { session, permissions: { yolo: terminalYolo(id) ?? Boolean(['queued', 'launching', 'running'].includes(jobs[0]?.state) && jobs[0]?.options?.yolo) }, run: getRecord('run', id), execution: jobs[0] || null,
+        send(response, 200, { session, invocations: sessionInvocations(id), permissions: { yolo: terminalYolo(id) ?? Boolean(['queued', 'launching', 'running'].includes(jobs[0]?.state) && jobs[0]?.options?.yolo) }, run: getRecord('run', id), execution: jobs[0] || null,
           questions: listRecords('question', { sessionIds: [...questionSessions], state: 'pending' }), inputOwner: effectiveInputOwner(id),
           children: children.map(s => ({ id: s.id, provider: s.provider, model: s.model, agent: s.agentNamespace || s.provider, executionState: s.executionState, goalStatus: s.goal?.status || null })),
           capabilities: { activeSteering: session.backend === 'codex' && !['parallel', 'debate', 'besties'].includes(session.mode), durableEvents: true, chatTabs: ['parallel', 'besties'].includes(session.mode) } }); return;

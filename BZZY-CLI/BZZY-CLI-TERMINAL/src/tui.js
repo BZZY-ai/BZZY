@@ -22,6 +22,7 @@ import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
 import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
 import { SessionMetricsPanel, sessionMetricsLayout } from './session-metrics-ui.js';
 import { returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
+import { recordInvocationEvent, reconcileInvocationEntries, invocationEntryLayout } from './invocation-ui.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -159,6 +160,9 @@ export class TerminalChat {
       ? job?.stopAction ? 'stopping' : job?.state === 'queued' ? 'queued' : job?.state === 'launching' ? 'starting' : this.streaming ? 'responding' : 'working'
       : session.failure && session.executionState === 'failed' ? 'failed' : 'ready';
     if (!this.busy) { this.streaming = false; this.currentTool = ''; }
+    const invocations = reconcileInvocationEntries(this.entries, snapshot, { sessionId: this.ui.activeTab || this.ui.sessionId });
+    if (invocations.length) this.contentRevision = (this.contentRevision || 0) + 1;
+    for (const entry of invocations) this.entryLayouts.delete(entry);
     if (!this.pinned && session.goal?.objective) this.pinned = session.goal.objective;
     this.schedule();
   }
@@ -187,13 +191,16 @@ export class TerminalChat {
   }
   event(type, data) {
     this.contentRevision = (this.contentRevision || 0) + 1;
+    const invocation = recordInvocationEvent(this.entries, type, data, { sessionId: this.ui.activeTab || this.ui.sessionId });
+    if (invocation.changed && invocation.entry) this.entryLayouts.delete(invocation.entry);
+    if (this.entries.length > 5000) this.entries.splice(0, 500);
     if (type === 'text' || type === 'peer.text') {
       const peerSessionId = type === 'peer.text' ? data.childSessionId || data.sessionId || data.agent : null;
       const label = type === 'peer.text' ? data.agent || peerSessionId || 'Agent' : 'bzzy';
       // Peer chunks can interleave. Stable response IDs keep one complete entry
       // per reply so its copy button includes chunks received between peers.
       const previous = peerSessionId && data.itemId ? this.entries.findLast(entry => entry.kind === 'assistant' && entry.peerSessionId === peerSessionId && entry.itemId === data.itemId && entry.turnId === data.turnId)
-        : this.entries.at(-1);
+        : this.entries.findLast(entry => entry.kind !== 'invocation');
       if (previous?.kind === 'assistant' && previous.label === label && previous.peerSessionId === peerSessionId && previous.itemId === data.itemId && previous.turnId === data.turnId) previous.text += String(data.text ?? '');
       else this.add('assistant', data.text, { label, peerSessionId, itemId: data.itemId, turnId: data.turnId });
       this.streaming = true;
@@ -304,10 +311,6 @@ export class TerminalChat {
       : type === 'assignment.reviewed' ? data.outcome : type === 'assignment.needs_context' ? 'needs_context'
       : ['assignment.created', 'assignment.started', 'assignment.followup'].includes(type) ? 'running' : previous.state;
     this.assignments.set(id, { ...previous, specialist, objective, state, round: data.round || data.currentRound || previous.round || 1 });
-    if (type === 'assignment.created') this.add('notice', `Subagent ${specialist} · starting\n${objective}`);
-    else if (type === 'assignment.finished') this.add('notice', `Subagent ${specialist} · ${clean(data.state || 'stopped')}\n${clean(data.report?.summary || objective)}\nThe main assistant must review the supporting evidence.`);
-    else if (type === 'assignment.failed') this.add('error', `Subagent ${specialist} · failed\n${clean(data.error || 'Inspect partial evidence before retrying.')}`);
-    else if (type === 'assignment.needs_context') this.add('notice', `Subagent ${specialist} · needs context\nThe worker stopped for the main assistant to answer its questions.`);
   }
 
   assignmentEvent(type, data) {
@@ -1159,6 +1162,10 @@ export class TerminalChat {
     if (cached?.width === width && cached.text === entry.text) return cached;
     if (entry.kind === 'debate') {
       const layout = { ...debateEntryLayout(entry, width, this.theme), width, text: entry.text };
+      this.entryLayouts.set(entry, layout); return layout;
+    }
+    if (entry.kind === 'invocation') {
+      const layout = { ...invocationEntryLayout(entry, width, this.theme), width, text: entry.text };
       this.entryLayouts.set(entry, layout); return layout;
     }
     const { color } = this.theme;

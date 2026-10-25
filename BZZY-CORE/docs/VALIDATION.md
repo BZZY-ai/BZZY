@@ -1,3 +1,31 @@
+# In-chat skill and specialist invocation status (2026-10-25)
+
+Full Node.js 24/macOS suites: **671 Core tests passed, 2 skipped** (673 total)
+and **639 CLI tests passed, 21 skipped** (660 total), zero failures. The final
+UI liveness recovery adjustment was rechecked with all **15 invocation UI/chat
+tests**, including unknown-to-verified-running recovery and rejection of stale
+running snapshots after review. Both syntax checks and whitespace checks pass.
+All execution fixtures use isolated private homes; no live model request or
+running installation update is part of this validation.
+
+Actual main skill loads produce one receipt row, and validated worker ancestry
+mirrors the exact receipt to the root chat atomically. Metrics still counts once;
+failed root publication rolls back the receipt and child event together. Tests
+cover unrelated sessions and nested review workers. The current session API
+adds a read-only, bounded direct-assignment projection, tested through a real
+daemon and scoped observer credentials without inference. Process identities,
+paused/context/review/stop outcomes, missing records, legacy identities and page
+truncation have explicit presentation states; reads never reconcile records.
+
+CLI tests exercise one updating named-agent row, loaded skill rows, distinct
+same-model identities/colors, duplicate and old-round replay, silent stop/current
+snapshot reconciliation, session changes, hidden tool rows, Unicode and narrow/
+80-column/wide ordinary and minimal layouts. Actual response-copy and plaintext
+tests preserve complete structured replies across interleaved invocation events;
+JSON output retains its original event format. Rows contain names/status rather
+than task prompts, arguments or raw worker reports. Generic Delegate and Validate
+presentation remains separate, and worker completion never awards goal success.
+
 # Session workflows and pinned goal instructions (2026-10-25)
 
 Final Node.js 24/macOS suites: **661 Core tests passed, 2 skipped** (663 total)

@@ -76,6 +76,17 @@ opening previews and replaying history do not add uses. A load establishes that
 instructions were supplied to the model; it does not prove every workflow step
 or script executed. The rule is shared by all providers through Core's tool host.
 
+The CLI displays these receipts as compact **Skill · name · Loaded** rows in
+the conversation. A verified child-worker load also appends the identical receipt
+to its root conversation; the receipt ID still counts once in Metrics. Named
+specialist calls have one updating chat row per assignment, with explicit
+starting/running, needs-context, awaiting-review, reviewed and stop states.
+Replay deduplicates receipts and lifecycle transitions. The optional `invocations`
+field in a current session response is a bounded read-only state projection;
+it contains names/selections and status, excluding task instructions and reports.
+It never starts or reconciles model work. Unknown current state is not presented
+as successful completion or continuing execution.
+
 Specialist invocations count unique accepted named-agent assignments. Follow-ups
 count separately by assignment and round. Delegate and Validate assignments
 have their own task/role counts. Parallel/Besties peer skill loads roll up through

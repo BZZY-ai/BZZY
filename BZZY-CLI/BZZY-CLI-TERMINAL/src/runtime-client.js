@@ -44,7 +44,7 @@ async function replay(api, sessionId, ui, selected = () => true) {
     const batch = await api('GET', `events?after=${cursor}&limit=200`);
     if (!selected()) return;
     for (const event of batch.events) {
-      ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt });
+      ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt, eventSessionId: event.sessionId || sessionId });
       cursor = event.seq;
     }
     ui.cursors?.set(sessionId, cursor);
