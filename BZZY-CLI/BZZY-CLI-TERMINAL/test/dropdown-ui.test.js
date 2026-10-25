@@ -113,7 +113,7 @@ test('top Skills opens Core/project skills and Metrics is an empty escapable vie
   assert.match(tui.lastFrame.map(clean).join('\n'), /IMPORT.*LIBRARY.*THIS CHAT \/ PROJECT.*BZZY CORE \/ GLOBAL/s);
   await ui.settingsCommand('/skills tab:import'); tui.render();
   assert.match(tui.lastFrame.map(clean).join('\n'), /CODEX SKILLS DIRECTORY[\s\S]*Save directory[\s\S]*Refresh/);
-  tui.key('', { name: 'escape' }); assert.equal(tui.panel, 'chat');
+  tui.key('\x1b', { sequence: '\x1b', meta: true }); assert.equal(tui.panel, 'chat');
 
   const metrics = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
   const metric = tui.hitTargets.find(hit => hit.type === 'top-metrics'); assert.ok(metric);
@@ -121,7 +121,7 @@ test('top Skills opens Core/project skills and Metrics is an empty escapable vie
   assert.equal(tui.panel, 'metrics'); assert.equal(tui.value, 'keep this draft');
   tui.render(); assert.doesNotMatch(tui.lastFrame.map(clean).join('\n'), /No metrics records yet/);
   assert.equal(tui.hitTargets.some(hit => hit.type === 'confirm'), false);
-  tui.key('', { name: 'escape' }); assert.equal(tui.panel, 'chat');
+  tui.key('\x1b[27u', { sequence: '\x1b[27u' }); assert.equal(tui.panel, 'chat');
   ui.reader.close(); assert.equal(await metrics, null);
 });
 

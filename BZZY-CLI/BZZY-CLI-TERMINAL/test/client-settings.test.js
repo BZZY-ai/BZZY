@@ -117,7 +117,7 @@ test('Esc leaves any Settings page for the active chat and preserves the draft',
   ui.tui.value = 'Keep this draft'; ui.tui.cursor = 5;
   ui.openSettings(); await ui.settings.run('modes');
   assert.equal(ui.tui.panel, 'settings'); assert.equal(ui.settings.page, 'modes');
-  ui.tui.key('', { name: 'escape' });
+  ui.tui.key('\x1b', { sequence: '\x1b', meta: true });
   assert.equal(ui.tui.panel, 'chat');
   assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.cursor, 5);
   ui.reader.close(); assert.equal(await answer, null);

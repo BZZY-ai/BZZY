@@ -671,6 +671,7 @@ export class TerminalChat {
     }
   }
   key(text, key) {
+    if (isEscapeInput(text, key)) key = { ...key, name: 'escape', meta: false };
     if (key.meta && ['y', 'n'].includes(key.name) && this.pendingApproval && !this.hidden && !this.promptDraft && !this.selection) {
       key.bzzyHandled = true; this.approvalTask = this.ui.answerApproval(key.name === 'y' ? 'yes' : 'no'); return;
     }
@@ -1956,6 +1957,10 @@ function skillActionList(rows) {
   return rows.flatMap(row => row.segments
     ? row.segments.filter(segment => segment.action).map(segment => segment.action)
     : row.action ? [row.action] : []);
+}
+function isEscapeInput(text, key) {
+  return key?.name === 'escape' || text === '\x1b' || key?.sequence === '\x1b'
+    || /^\x1b\[(?:27(?:[;:]\d+)*u|27(?:;\d+)+;27~)$/.test(key?.sequence || '');
 }
 function screenPoint(x, y, region) { return { x: Math.max(region.left, Math.min(region.right, x)), y: Math.max(region.top, Math.min(region.bottom, y)) }; }
 function screenRange(anchor, focus) { return anchor.y < focus.y || anchor.y === focus.y && anchor.x <= focus.x ? [anchor, focus] : [focus, anchor]; }
