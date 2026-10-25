@@ -112,6 +112,17 @@ test('Settings takes over the full screen and keeps all four choices at normal t
   }
 });
 
+test('Esc leaves any Settings page for the active chat and preserves the draft', async () => {
+  const { ui } = terminal(), answer = ui.ask('bzzy › '); await Promise.resolve();
+  ui.tui.value = 'Keep this draft'; ui.tui.cursor = 5;
+  ui.openSettings(); await ui.settings.run('modes');
+  assert.equal(ui.tui.panel, 'settings'); assert.equal(ui.settings.page, 'modes');
+  ui.tui.key('', { name: 'escape' });
+  assert.equal(ui.tui.panel, 'chat');
+  assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.cursor, 5);
+  ui.reader.close(); assert.equal(await answer, null);
+});
+
 test('terminal mode settings have separate clickable model/effort fields and preserve unsaved edits through Back', async () => {
   const { ui, output } = terminal(); ui.openSettings();
   await ui.settingsCommand('/settings modes'); assert.equal(ui.settings.page, 'modes');
@@ -233,9 +244,11 @@ test('Pair iPhone uses maximum access without pickers and its secondary screen r
     sessionAccess: true, shareAccess: true, agentAccess: true, ttlSeconds: 600, grantTtlSeconds: 86400 });
   assert.ok(ui.settings.rows().some(row => row.action === 'back')); assert.ok(ui.settings.rows().some(row => row.action === 'copy-code'));
   assert.ok(ui.settings.rows().some(row => /^BZZY-PAIR-/.test(row.text)));
-  // Escape first dismisses an optional QR, then returns from Pair to Settings.
+  // Escape first dismisses an optional QR, then returns to chat.
   if (ui.settings.qrView) ui.tui.key('', { name: 'escape' });
   ui.tui.key('', { name: 'escape' });
+  assert.equal(ui.settings.page, 'pair'); assert.equal(ui.tui.panel, 'chat');
+  ui.tui.setPanel('settings'); await ui.settings.run('back');
   assert.equal(ui.settings.page, 'main'); assert.equal(ui.tui.panel, 'settings');
   assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
   assert.equal(ui.settings.rows().some(row => /^BZZY-PAIR-/.test(row.text)), false);

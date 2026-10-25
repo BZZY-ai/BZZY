@@ -305,6 +305,11 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-sessions'));
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'session-new'));
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-settings'));
+      const send = ui.tui.hitTargets.find(hit => hit.type === 'confirm');
+      const model = ui.tui.hitTargets.find(hit => hit.command === '/providers');
+      const yolo = ui.tui.hitTargets.find(hit => hit.type === 'yolo');
+      assert.equal(model.row - send.row, 2, 'the model row has breathing room below input');
+      assert.equal(yolo.row - model.row, 2, 'goal status has breathing room below model usage');
 
       ui.tui.setPanel('settings'); ui.tui.render();
       const settings = ui.tui.lastFrame.map(clean);

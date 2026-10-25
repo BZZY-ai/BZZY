@@ -731,7 +731,11 @@ export class TerminalChat {
     if (key.name === 'escape' && this.promptDraft) { this.finish(null); return; }
     if (this.panel === 'settings' && !this.promptDraft) {
       key.bzzyHandled = true;
-      if (key.name === 'escape') { if (this.ui.settings.back()) return; if (this.ui.settingsOnly) this.finish(null); else this.setPanel('chat'); return; }
+      if (key.name === 'escape') {
+        if (this.ui.settingsOnly) this.finish(null);
+        else this.setPanel('chat');
+        return;
+      }
       if (key.name === 'home' || key.name === 'end') { this.settingsOffset = key.name === 'home' ? 0 : this.settingsMaximum || 0; this.settingsEnsureFocus = false; this.schedule(); return; }
       const actions = this.ui.settings.rows().filter(row => row.action);
       if (['up', 'down', 'left', 'right', 'tab'].includes(key.name)) {
@@ -1129,6 +1133,8 @@ export class TerminalChat {
     }
 
     const composerTop = lines.length;
+    const breathingRoom = height >= 18;
+    if (breathingRoom) lines.push('');
     const hasSubmit = Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
     const prompt = this.panel === 'room' ? 'Message all agents'
       : this.ui.sessionMode === 'VIEW' ? 'Read-only session'
@@ -1149,22 +1155,25 @@ export class TerminalChat {
       this.value && !this.renderingPicker ? palette.background : palette.accent, true, surface) : ''));
     const inputIndex = lines.length - 1;
     if (hasSubmit) hits.push({ type: 'confirm', row: inputIndex, left: prefixWidth + inputWidth + 2, right: width });
+    if (breathingRoom) lines.push('');
 
     const effort = (this.effort || 'default').replace(/^effort /, '').replace(/^provider default$/, 'default');
     const usage = `${this.tokenLabel()} · ${this.elapsedClock()}`;
     const effortText = ` effort ${effort} ▾ `, modelBudget = Math.max(8, width - cellWidth(effortText) - cellWidth(usage) - 7);
     const modelText = ` ${clip(this.model, modelBudget)} ▾ `;
+    const metaRow = lines.length;
     let modelColumn = 3;
     hits.push({ type: 'model-control', command: '/providers', disabled: this.busy || this.ui.sessionMode === 'VIEW',
-      row: inputIndex + 1, left: modelColumn, right: modelColumn + cellWidth(modelText) - 1 });
+      row: metaRow, left: modelColumn, right: modelColumn + cellWidth(modelText) - 1 });
     const modelPart = color('  ', palette.text) + fillSurface(modelText, cellWidth(modelText), this.theme, palette.elevated,
       this.modelSelectionRequired ? palette.muted : palette.accent, true, surface);
     modelColumn += cellWidth(modelText);
     const effortPart = ' ' + fillSurface(effortText, cellWidth(effortText), this.theme, palette.selection,
       palette.accent, true, surface);
     hits.push({ type: 'model-control', command: '/models @effort', disabled: this.busy || this.ui.sessionMode === 'VIEW' || this.modelSelectionRequired,
-      row: inputIndex + 1, left: modelColumn + 2, right: modelColumn + 1 + cellWidth(effortText) });
+      row: metaRow, left: modelColumn + 2, right: modelColumn + 1 + cellWidth(effortText) });
     lines.push(align(modelPart + effortPart, color(usage, palette.muted)));
+    if (breathingRoom) lines.push('');
 
     const indicator = goalIndicator(this.goal, this.frame);
     const goalLabel = indicator?.label || 'Goal · none';
@@ -1177,13 +1186,14 @@ export class TerminalChat {
     const goalWidth = cellWidth(goalPart);
     const middle = goalWidth + cellWidth(help) + cellWidth(yoloLabel) + 5 <= width ? '  ' + color(help, palette.muted) : '';
     const yoloLeft = width - cellWidth(yoloLabel) + 1;
-    hits.push({ type: this.promptDraft ? 'cancel' : 'yolo', row: inputIndex + 2, left: yoloLeft, right: width });
+    const goalRow = lines.length;
+    hits.push({ type: this.promptDraft ? 'cancel' : 'yolo', row: goalRow, left: yoloLeft, right: width });
     if (middle) {
       const helpStart = goalWidth + 2;
-      hits.push({ type: 'model-control', command: '/help', row: inputIndex + 2,
+      hits.push({ type: 'model-control', command: '/help', row: goalRow,
         left: helpStart + 1, right: Math.min(yoloLeft - 2, helpStart + 6) });
       const commandsOffset = helpStart + help.indexOf('/ commands');
-      hits.push({ type: 'commands', row: inputIndex + 2, left: commandsOffset + 1,
+      hits.push({ type: 'commands', row: goalRow, left: commandsOffset + 1,
         right: Math.min(yoloLeft - 2, commandsOffset + 10) });
     }
     lines.push(align(goalPart + middle, fillSurface(yoloLabel, cellWidth(yoloLabel), this.theme,

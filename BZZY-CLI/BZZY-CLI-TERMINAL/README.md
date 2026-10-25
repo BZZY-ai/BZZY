@@ -55,7 +55,8 @@ separate labeled rails, and the latest user request stays pinned directly below
 the top bar while a long reply streams. Open Sessions deploys an anchored
 dropdown of aliased terminals. A green or red Relay dot is always available in
 the status treatment. The gear opens a full-screen Settings view in place of the
-transcript and composer, while preserving the chat draft.
+transcript and composer, while preserving the chat draft. Esc returns from any
+Settings page to chat.
 
 `bzzy --canvas` retains the character workspace: insert model/effort characters,
 set goals, and connect them for Delegate, Debate, Besties or Parallel.
