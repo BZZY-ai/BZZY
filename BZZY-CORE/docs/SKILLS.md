@@ -78,6 +78,22 @@ Trusted local host code can use `previewSkillGlobalMove` and
 review and `reviewed:true`; its source removal and destination publication share
 one SQLite transaction. These administration APIs are not model tools.
 
+## Skills and agents ZIP
+
+The CLI Skills and Agents libraries can also export/import one combined,
+versioned definition ZIP. The archive contains the current project's and global
+portable skill packages and reusable specialist definitions, with an exact
+file/hash manifest for review. It contains no sessions, accounts, runtime state
+or execution history. Private case/evidence packages and unsafe files are
+blocked. Export writes a new file in the selected terminal's original directory
+without overwriting files. Import maps project scope to the receiving directory,
+keeps global scope explicit, preserves existing names and leaves skills disabled.
+Reviewed specialist definitions become discoverable without starting work.
+ZIP publication does not require hard links or filesystem configuration changes.
+It uses exclusive publication without replacing existing files. On filesystems
+without exclusive rename support, an interrupted export can leave its own new,
+incomplete ZIP; it cannot overwrite an existing file.
+
 ## Sync from Codex
 
 On Debian/Linux and macOS, sync discovers `SKILL.md` folders in these locations,

@@ -59,3 +59,45 @@ actual recipient delivery acknowledgments share at most 4,096 RPC/minute per
 participant/grant. Invitations, claims, enumeration, foreign/revoked grants and
 authentication retain their original limits. Deploying these Relay source
 changes is required for sustained live streaming plus metrics.
+
+## Session and goal usage
+
+CLI **Metrics** and `/metrics` read `sessionMetrics(sessionId)` from Core's
+`engine/session-metrics.js`. This is a local read-only projection of saved
+records, separate from the transient host telemetry above. It remains readable
+while Core is stopped, never starts a model or service, and refreshes only while
+the panel is visible. Current goal, earlier recorded goals, whole-chat totals and
+work explicitly performed outside goals have separate views.
+
+A skill use is a successful main `SKILL.md` load at offset zero from a live model
+tool host. Core records one receipt per run, skill identity and immutable version.
+Repeating that load, reading later pages or supporting files, discovering skills,
+opening previews and replaying history do not add uses. A load establishes that
+instructions were supplied to the model; it does not prove every workflow step
+or script executed. The rule is shared by all providers through Core's tool host.
+
+Specialist invocations count unique accepted named-agent assignments. Follow-ups
+count separately by assignment and round. Delegate and Validate assignments
+have their own task/role counts. Parallel/Besties peer skill loads roll up through
+their explicit group membership; peer creation is not an assignment invocation.
+Reading an
+agent definition or putting an invocation draft into chat starts no assignment
+and adds no invocation. Sessions in the same directory never share totals unless
+they are explicitly linked as workers or reviews.
+
+Ordinary chat remains outside goals even if the session retains an older achieved
+goal. Worker and linked Validate usage is attributed to the original parent goal
+using stored assignment/review bindings. New skill receipts retain immutable
+root attribution so a later goal replacement cannot move older counts. Current
+and archived goal status/reason come from Core's existing saved goal records.
+
+Older `skill.loaded` events without exact invocation receipts are reported as
+coverage gaps and excluded from exact counts. Imported historical events are
+also excluded from local invocation counts. Unknown goal attribution contributes
+only to chat totals, with a visible partial-history note. Bounded backfill,
+ancestry, invocation and row limits are reported through `coverage`; they never
+silently present partial data as complete. Aggregation is cached by private host
+and session and advances through indexed, scoped events without reading chat,
+skill bodies, private bindings or tool arguments. Rebuilding the cache does not
+invoke tools or change counts. Metrics are descriptive, never acceptance evidence
+or a permission grant.

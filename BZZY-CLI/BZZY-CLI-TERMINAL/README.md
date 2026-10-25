@@ -56,6 +56,15 @@ terminal model and effort. Describe the behavior, review the generated draft and
 choose Save; skills remain inactive until enabled. Escape cancels generation or
 returns from a preview without saving.
 
+Both libraries offer **Export skills & agents ZIP** and **Import skills & agents
+ZIP**. Export reviews the current project's and global portable definitions,
+including skill resources, then writes a dated archive in the terminal's original
+working directory. Import reviews the same ZIP, preserves global/project scopes
+in the receiving project, and never overwrites existing names. Skills import
+disabled; reviewed agent definitions are added without starting agents or models.
+Private bindings, history and case/evidence packages are excluded from this
+portable format. Unsafe packages are blocked rather than silently stripped.
+
 Core also maintains a bounded [session history index](../../BZZY-CORE/docs/SESSION-MEMORY.md)
 across alias, model and mode changes. Its compactor uses the shared **Consensus &
 Compactor** default, which inherits BZZY Core unless explicitly changed. Inspect
@@ -81,7 +90,14 @@ picker or skill preview is open, it cancels that view first and preserves the
 unsent chat draft.
 
 **Skills** opens the existing project/global skills library, including **Sync
-skills from Codex into BZZY**. **Metrics** is a reserved empty view for now.
+skills from Codex into BZZY**. **Metrics**, also available with `/metrics`, shows
+the current goal's objective/status and recorded skill and agent use. Switch to
+**Chat totals**, **Outside goals**, or choose an earlier goal. Skill loads,
+specialist invocations, worker tasks and their follow-ups have separate counts;
+same-named skill scopes and versions remain distinguishable. Counts survive
+reopening and replay. Missing historical attribution is marked partial instead
+of guessed. Back or Esc returns to chat with its unsent draft intact. See
+[counting rules](../../BZZY-CORE/docs/METRICS.md).
 When the active terminal model uses the DeepSeek API key, the top bar also shows
 the current USD balance; click it for freshness/source details. Subscription
 providers do not show an account balance control.
@@ -105,8 +121,11 @@ or creates independent reviewers using the current model. `/validate <focus>`
 also supports focused reply review. `/debate` and `--debate` remain compatibility
 aliases for existing workflows; saved setups stay intact.
 Validate appears in a compact block: click its header or press Ctrl+B to expand
-the latest discussion, and Esc to collapse it. Each participant keeps a distinct
-color even when providers and models match. The consensus and any unresolved
+the latest discussion, and Esc to collapse it. The expanded block groups each
+agent's checks and follow-ups together under one identity/model heading. Each
+participant keeps a distinct color even when providers and models match; the
+fresh final reviewer has a separate section. The bottom status says
+**Validating…** during review. The consensus and any unresolved
 objections remain visible below the collapsed discussion.
 The original chat then shows **Goal achieved ✓ · Validated ✓** only when Core's
 checks support the exact original goal. Unsuccessful reviews show **Not validated

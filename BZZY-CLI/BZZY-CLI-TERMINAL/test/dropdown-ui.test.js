@@ -103,7 +103,7 @@ test('top New Session dispatches a local new-chat command instead of model input
   assert.equal(tui.inputQueue.length, 0);
 });
 
-test('top Skills opens Core/project skills and Metrics is an empty escapable view', async t => {
+test('top Skills opens Core/project skills and Metrics is a local escapable view', async t => {
   const { ui, tui, input } = terminal(t), skills = ui.ask('bzzy › '); await Promise.resolve();
   tui.value = 'keep this draft'; tui.cursor = 5; tui.render();
   const skill = tui.hitTargets.find(hit => hit.type === 'top-skills'); assert.ok(skill);

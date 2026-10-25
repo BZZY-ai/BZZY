@@ -105,11 +105,17 @@ function messageParticipant(entry, data) {
   }
   participant ||= registerParticipant(entry, { ...object, id: id || (Number.isSafeInteger(index) ? `slot:${index}` : data.assignmentId || undefined),
     index: Number.isSafeInteger(index) ? index : entry.participants.length, provider, model: data.model || object.model }, entry.participants.length);
+  participant.provider ||= clean(provider);
+  participant.model ||= clean(data.model || object.model || '');
   if (data.assignmentId) { participant.assignments ||= []; if (!participant.assignments.includes(data.assignmentId)) participant.assignments.push(data.assignmentId); }
   return participant;
 }
 
 const participantLabel = participant => `Agent ${participant.index + 1}${participant.label && participant.label !== `Agent ${participant.index + 1}` ? ' · ' + participant.label : ''}${participant.provider ? ' · ' + participant.provider : ''}${participant.model ? ' · ' + participant.model : ''}`;
+function participantGroupLabel(participant, messages) {
+  const finalReviewer = messages.length && messages.every(message => ['final_review', 'final_reviewer', 'fresh_reviewer'].includes(message.phase));
+  return finalReviewer ? `Final reviewer${participant.provider ? ' · ' + participant.provider : ''}${participant.model ? ' · ' + participant.model : ''}` : participantLabel(participant);
+}
 const resolvedResult = result => result?.status === 'complete' && !result.unresolvedDisagreement?.length && !result.decision?.remainingObjections?.length
   && !result.decision?.nextVerificationSteps?.length && !['unsupported', 'inconclusive'].includes(result.goalSatisfaction)
   && !['unsupported', 'inconclusive'].includes(result.decision?.goalSatisfaction);
@@ -143,32 +149,38 @@ export function debateEntryLayout(entry, width, theme) {
   hits.push({ type: 'debate-toggle', entry, row: lines.length, left: 3, right: width - 1 });
   put('  ╭─ ' + caption, palette.accent, true);
   if (entry.title) put('  │ ' + entry.title, palette.muted);
-  const legendWidth = Math.max(8, Math.floor((width - 6) / Math.max(1, entry.participants.length)) - 2);
-  if (width < entry.participants.length * 10 + 6) {
-    for (const participant of entry.participants) put('  │ ● ' + participantLabel(participant), debateParticipantTone(participant.index), true);
-  } else {
-    let legend = color('  │ ', palette.border);
-    for (const participant of entry.participants)
-      legend += color(clip('● ' + participantLabel(participant), legendWidth), debateParticipantTone(participant.index), true) + '  ';
-    if (entry.participants.length) lines.push(legend);
-  }
   if (entry.expanded) {
-    for (const message of entry.messages) {
-      const participant = entry.participants.find(item => item.id === message.participantId);
-      const tone = debateParticipantTone(participant?.index || 0);
-      const legacyRound = !['independent_check', 'missing_evidence', 'final_review', 'consensus'].includes(message.phase) && message.round;
-      const label = `${message.label || (participant ? participantLabel(participant) : 'Agent')} · ${validationPhaseLabel(message.phase || message.role)}${legacyRound ? ` · round ${message.round}${message.maxRounds ? '/' + message.maxRounds : ''}` : ''}`;
-      put('  │ ' + label, tone, true);
-      const projection = parseMessageBody(message.displayText || validationSummary(message.text));
-      const body = projection.isFormatted ? renderMessageContent(projection, { width: Math.max(1, width - 9), theme, background: palette.agentSurface }).lines
-        : wrapProse(clean(projection.plainText), Math.max(1, width - 9));
-      for (const line of body) {
-        hits.push({ type: 'response', entry: message.copyEntry, row: lines.length, left: 5, right: width - 2 });
-        lines.push(color('  │ ▎ ', tone) + fillSurface(line, Math.max(1, width - 8), theme, palette.agentSurface, palette.text));
+    for (const participant of entry.participants) {
+      const messages = entry.messages.filter(message => message.participantId === participant.id), tone = debateParticipantTone(participant.index);
+      const label = wrapProse(participantGroupLabel(participant, messages), Math.max(1, width - 7));
+      for (const [index, line] of label.entries()) put((index ? '  │ │  ' : '  │ ╭─ ') + line, tone, true);
+      for (const message of messages) {
+        const legacyRound = !['independent_check', 'missing_evidence', 'final_review', 'consensus'].includes(message.phase) && message.round;
+        const phase = validationPhaseLabel(message.phase || message.role) + (legacyRound ? ` · round ${message.round}${message.maxRounds ? '/' + message.maxRounds : ''}` : '');
+        for (const line of wrapProse(phase, Math.max(1, width - 6))) put('  │ │ ' + line, tone, true);
+        const projection = parseMessageBody(message.displayText || validationSummary(message.text));
+        const body = projection.isFormatted ? renderMessageContent(projection, { width: Math.max(1, width - 9), theme, background: palette.agentSurface }).lines
+          : wrapProse(clean(projection.plainText), Math.max(1, width - 9));
+        for (const line of body) {
+          hits.push({ type: 'response', entry: message.copyEntry, row: lines.length, left: 5, right: width - 2 });
+          lines.push(color('  │ ▎ ', tone) + fillSurface(line, Math.max(1, width - 8), theme, palette.agentSurface, palette.text));
+        }
       }
+      if (!messages.length) put('  │ │ Waiting for a response…', palette.muted);
+      put('  │ ╰─', tone);
       put('  │', palette.border);
     }
-    if (!entry.messages.length) put('  │ Waiting for participant responses…', palette.muted);
+    if (!entry.participants.length) put('  │ Waiting for participant responses…', palette.muted);
+  } else {
+    const legendWidth = Math.max(8, Math.floor((width - 6) / Math.max(1, entry.participants.length)) - 2);
+    if (width < entry.participants.length * 10 + 6) {
+      for (const participant of entry.participants) put('  │ ● ' + participantLabel(participant), debateParticipantTone(participant.index), true);
+    } else {
+      let legend = color('  │ ', palette.border);
+      for (const participant of entry.participants)
+        legend += color(clip('● ' + participantLabel(participant), legendWidth), debateParticipantTone(participant.index), true) + '  ';
+      if (entry.participants.length) lines.push(legend);
+    }
   }
   put('  ╰─ ' + (entry.expanded ? 'Click to collapse · Esc closes' : 'Click to expand') + ' · Ctrl+B latest validation', palette.muted);
   if (entry.result) {

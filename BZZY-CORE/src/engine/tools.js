@@ -25,6 +25,7 @@ import { subagentsAvailable, discoverSubagents, spawnSubagent, followupSubagent,
 import { getSubagentDefinition } from './subagent-definitions.js';
 import { sanitizeMissionValue } from './mission-context.js';
 import { sessionMemoryEligible, readSessionMemory, expandSessionMemory } from './session-memory.js';
+import { modelSkillUsageContext, recordModelSkillUse } from './skill-usage.js';
 
 const str = { type: 'string' }, strings = { type: 'array', items: str }, object = { type: 'object' };
 const spec = (name, description, properties = {}, required = []) => ({ name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false } });
@@ -205,7 +206,12 @@ export class ToolHost {
         next: waited.terminal ? 'Inspect decisive evidence with read_artifact, then review_assignment.' : 'wait_assignment' };
     }
     if (name === 'list_skills') return listSkills({ ...input, enabledOnly: true, session });
-    if (name === 'read_skill') return readSkill(input.name, { ...input, enabledOnly: true, sessionId: session.id, session });
+    if (name === 'read_skill') {
+      const modelUsage = modelSkillUsageContext(session, this.context);
+      const skill = readSkill(input.name, { ...input, enabledOnly: true, sessionId: session.id, session, modelUsage });
+      if ((input.offset || 0) === 0) recordModelSkillUse(session, skill, modelUsage);
+      return skill;
+    }
     if (name === 'activity') { const record = recordActivity(session, input, this.ui); this.activityReporter?.explicit(record); return record; }
     if (name === 'http_request') { this.activityReporter?.tool(null, name, input); return observedRequest(session, input, this.ui); }
     if (name === 'get_task_state') return JSON.parse(contextFor(session));

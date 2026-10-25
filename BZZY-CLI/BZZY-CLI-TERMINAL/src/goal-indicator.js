@@ -12,14 +12,14 @@ const validationReasons = {
   agent_dissent: 'A reviewer found a conflicting result. The goal has not been validated.',
   missing_evidence: 'The available evidence did not settle the question.',
 };
-export function goalIndicator(goal, frame = 0) {
+export function goalIndicator(goal, frame = 0, { validating = false } = {}) {
   if (!goal) return null;
   if (goal.status === 'complete') return { label: 'Goal achieved ✓', tone: palette.goalSuccess };
   if (['blocked', 'usage_limited', 'budget_limited', 'awaiting_review'].includes(goal.status) || goal.status === 'paused' && goal.reason === 'turn_limit')
     return { label: '✕ Goal stalled', tone: palette.danger };
   if (goal.status === 'paused') return { label: 'Ⅱ Goal paused', tone: palette.warning };
   if (goal.status === 'cancelled') return { label: '✕ Goal cancelled', tone: palette.muted };
-  if (['active', 'verifying'].includes(goal.status)) return { label: dots[frame % dots.length] + (goal.status === 'verifying' ? ' Verifying goal...' : ' Pursuing goal...'), tone: palette.goalActive, animated: true };
+  if (['active', 'verifying'].includes(goal.status)) return { label: dots[frame % dots.length] + (validating ? ' Validating…' : goal.status === 'verifying' ? ' Verifying goal...' : ' Pursuing goal...'), tone: palette.goalActive, animated: true };
   return null;
 }
 
@@ -36,7 +36,7 @@ export function goalValidationIndicator(goal, validation, frame = 0) {
   }
   if (state === 'not_validated') return { label: 'Not validated ✗', tone: palette.danger, reason };
   if (state === 'inconclusive') return { label: 'Validation inconclusive', tone: palette.warning, reason };
-  if (state === 'pending') return { label: dots[frame % dots.length] + ' Validating', tone: palette.goalActive, animated: true };
+  if (state === 'pending') return { label: dots[frame % dots.length] + ' Validating…', tone: palette.goalActive, animated: true };
   if (state === 'paused') return { label: 'Ⅱ Validation paused', tone: palette.muted, reason };
   if (state === 'cancelled') return { label: 'Validation cancelled', tone: palette.muted, reason };
   if (state === 'stale') return { label: 'Validation stale', tone: palette.warning, reason };

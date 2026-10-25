@@ -19,6 +19,8 @@ import { goalIndicator, goalValidationIndicator } from './goal-indicator.js';
 import { escapeInputKind, TerminalKeyInput } from './terminal-keys.js';
 import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
 import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
+import { SessionMetricsPanel, sessionMetricsLayout } from './session-metrics-ui.js';
+import { returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -50,7 +52,7 @@ export class TerminalChat {
     this.keyInput = new TerminalKeyInput(publish, (text, key) => { this.key(text, key); publish(text, key); });
     this.onRawData = chunk => this.keyInput.write(chunk);
     this.input.on('data', this.onRawData); this.input.resume();
-    this.onResize = () => { this.textSelection = null; if (this.copyMode) this.setCopyMode(false); this.lastFrame = []; this.paintedFrame = null; this.render(); };
+    this.onResize = () => { this.textSelection = null; if (this.copyMode) this.setCopyMode(false); if (this.panel === 'metrics') this.metricsTopRequested = true; this.lastFrame = []; this.paintedFrame = null; this.render(); };
     this.output.on?.('resize', this.onResize);
     this.onDrain = () => { this.outputBlocked = false; this.lastFrame = []; this.schedule(); };
     this.output.on?.('drain', this.onDrain);
@@ -451,11 +453,12 @@ export class TerminalChat {
   completeCommand(choice) { this.value = choice.command + ' '; this.cursor = [...this.value].length; this.schedule(); }
   panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'agents', 'metrics', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'agents', 'metrics', 'settings']; }
   setPanel(panel) {
-    if (this.ui.coreLifecycleInterrupted && panel !== 'settings') return;
+    if (this.ui.coreLifecycleInterrupted && !['settings', 'metrics', 'chat'].includes(panel)) return;
     if (this.promptDraft || this.selection) return;
     if (panel === 'room' && !this.panels().includes('room')) { this.ui.event('info', { message: 'The shared room is available in a besties conversation. Start with bzzy --besties.' }); return; }
     if (panel === 'settings' && !this.ui.settings) { this.ui.openSettings(); return; }
     if (panel === 'sessions' && this.ui.onSessions?.() === false) return;
+    if (panel !== this.panel) cancelDefinitionBundle(this.ui, this.panel);
     if (this.skillPanelDraft && panel !== 'skills') {
       if (this.panel === 'skills' && this.ui.skillView === 'import') this.ui.skillImportDraft = this.value;
       Object.assign(this, this.skillPanelDraft);
@@ -473,6 +476,11 @@ export class TerminalChat {
     this.settingsEnsureFocus = panel === 'settings';
     if (panel === 'skills') this.skillTopRequested = true;
     if (panel === 'agents') this.agentTopRequested = true;
+    if (panel === 'metrics') {
+      this.ui.sessionMetrics ||= new SessionMetricsPanel(this.ui, { load: this.ui.sessionMetricsLoader });
+      this.ui.sessionMetrics.open(this.ui.activeTab || this.ui.sessionId);
+      this.metricsTopRequested = true;
+    } else this.ui.sessionMetrics?.stop();
     this.textSelection = null; this.panel = panel; this.scroll = 0; this.schedule();
   }
   leaveSettings() {
@@ -634,6 +642,7 @@ export class TerminalChat {
     if (hit?.type === 'top-skills') { this.localCommand('/skills'); return; }
     if (hit?.type === 'top-agents') { this.localCommand('/agents'); return; }
     if (hit?.type === 'top-metrics') { this.setPanel('metrics'); return; }
+    if (hit?.type === 'metrics-action') { if (!hit.disabled) this.metricsAction(hit.action); return; }
     if (hit?.type === 'usage-balance') { this.balanceTask = this.ui.showProviderBalance?.(); return; }
     if (hit?.type === 'top-settings') { this.localCommand('/settings'); return; }
     if (hit?.type === 'settings-exit') { this.leaveSettings(); return; }
@@ -717,6 +726,7 @@ export class TerminalChat {
       this.lastFrame = []; this.schedule(); return;
     }
     if (this.panel === 'skills' && returnToSkillLibrary(this.ui)) return;
+    if (this.panel === 'agents' && returnFromDefinitionBundle(this.ui, 'agents')) return;
     if (this.panel === 'agents') {
       if (this.ui.subagentView === 'run') { this.ui.subagentView = 'runs'; this.ui.subagentRunId = null; }
       else if (this.ui.subagentCreatorDraft || this.ui.subagentPreview || this.ui.subagentView && this.ui.subagentView !== 'library') {
@@ -725,6 +735,12 @@ export class TerminalChat {
       this.bodyCache = null; this.scroll = 0; this.agentTopRequested = true; this.schedule(); return;
     }
     if (this.panel !== 'chat') this.setPanel('chat');
+  }
+  metricsAction(action) {
+    if (!this.ui.sessionMetrics) return;
+    this.metricsFocus = Math.max(0, this.ui.sessionMetrics.actions().findIndex(item => item.action === action));
+    this.metricsTask = this.ui.sessionMetrics.activate(action);
+    this.metricsTopRequested = true; this.bodyCache = null; this.schedule();
   }
   escapeMenu() {
     if (this.ui.cancelDefinitionAuthoring) { this.ui.cancelDefinitionAuthoring(); this.schedule(); return true; }
@@ -738,6 +754,7 @@ export class TerminalChat {
     if (this.panel === 'chat' && this.debateFocus?.expanded) { this.toggleDebate(this.debateFocus); return true; }
     if (this.panel === 'settings') { this.leaveSettings(); return true; }
     if (this.panel === 'skills' && returnToSkillLibrary(this.ui)) return true;
+    if (this.panel === 'agents' && returnFromDefinitionBundle(this.ui, 'agents')) return true;
     if (this.panel === 'agents' && this.ui.subagentCreatorDraft) {
       this.ui.subagentCreatorDraft = null; this.ui.subagentPreview = null; this.ui.subagentView = 'library';
       this.bodyCache = null; this.scroll = 0; this.agentTopRequested = true; this.schedule(); return true;
@@ -868,7 +885,19 @@ export class TerminalChat {
       return;
     }
     if (this.panel === 'metrics' && !this.promptDraft) {
-      if (key.name === 'escape') { this.setPanel('chat'); return; }
+      key.bzzyHandled = true;
+      const actions = this.ui.sessionMetrics?.actions() || [];
+      if (['left', 'right', 'tab'].includes(key.name) && actions.length) {
+        const backwards = key.name === 'left' || key.name === 'tab' && key.shift;
+        this.metricsFocus = ((this.metricsFocus || 0) + (backwards ? actions.length - 1 : 1)) % actions.length;
+        this.metricsTopRequested = true; this.bodyCache = null;
+      } else if (key.name === 'return' && !actions[this.metricsFocus || 0]?.disabled) this.metricsAction(actions[this.metricsFocus || 0]?.action);
+      else if (key.name === 'r' && !key.ctrl && !key.meta) this.metricsAction('refresh');
+      else if (key.name === 'g' && !key.ctrl && !key.meta) this.metricsAction('history');
+      else if (key.name === 'up' || key.name === 'down') this.scroll = Math.max(0, this.scroll + (key.name === 'up' ? 1 : -1));
+      else if (key.name === 'home') this.scroll = this.scrollbar?.maximum || 0;
+      else if (key.name === 'end') this.scroll = 0;
+      this.schedule(); return;
     }
     if (this.panel === 'agents' && !this.promptDraft) {
       key.bzzyHandled = true;
@@ -924,7 +953,7 @@ export class TerminalChat {
       }
       if (!this.hidden && /^bzzy\b/.test(this.question || '') && this.value.trim() === '/usage') { this.value = ''; this.cursor = 0; this.ui.showAccountStatus(); return; }
       if (!this.hidden && /^bzzy\b/.test(this.question || '') && this.value.trim() === '/copy') { this.value = ''; this.cursor = 0; this.setCopyMode(true); return; }
-      const panel = /^bzzy\b/.test(this.question || '') && !this.hidden && /^\/(chat|room|activity|http|sessions|settings)$/.exec(this.value.trim())?.[1];
+      const panel = /^bzzy\b/.test(this.question || '') && !this.hidden && /^\/(chat|room|activity|http|sessions|settings|metrics)$/.exec(this.value.trim())?.[1];
       if (panel) { this.value = ''; this.cursor = 0; this.setPanel(panel); return; }
       this.submitMessage(); return;
     }
@@ -1024,7 +1053,9 @@ export class TerminalChat {
         for (const line of wrapped) put('  ' + line, palette[row.tone] || palette.text, Boolean(selected));
       }
     } else if (this.panel === 'metrics') {
-      // Reserved empty surface for the upcoming metrics view.
+      const layout = sessionMetricsLayout(this.ui.sessionMetrics, width, { currentGoal: this.goal, alias: this.alias, focus: this.metricsFocus || 0 });
+      for (const row of layout.lines) put(row.text, palette[row.tone] || palette.text, row.bold);
+      this.contentHits.push(...layout.hits);
     } else if (this.panel === 'room') {
       for (const item of this.sharedRoom) {
         const review = item.kind === 'review';
@@ -1165,7 +1196,7 @@ export class TerminalChat {
     lines.push(line); return lines;
   }
   goalBadgeLayout(width, { reserved = 0, surface = palette.background, showEmpty = false } = {}) {
-    const primary = goalIndicator(this.goal, this.frame), validation = goalValidationIndicator(this.goal, this.goalValidation, this.frame);
+    const primary = goalIndicator(this.goal, this.frame, { validating: this.mode === 'debate' && this.busy }), validation = goalValidationIndicator(this.goal, this.goalValidation, this.frame);
     if (!primary && !showEmpty) return { line: '', extra: [] };
     const badge = (indicator, maximum) => {
       const text = ' ' + clip(indicator.label, Math.max(1, maximum - 2)) + ' ';
@@ -1397,12 +1428,13 @@ export class TerminalChat {
     if (breathingRoom) lines.push('');
     const skillDirectoryInput = this.panel === 'skills' && this.ui.skillView === 'import';
     const skillDetail = this.panel === 'skills' && Boolean(this.ui.skillPreview || this.ui.skillHistoryState
-      || this.ui.skillSyncDetails || this.ui.skillPromotionDraft || this.ui.skillCreatorDraft || this.ui.skillMoveDraft);
+      || this.ui.skillSyncDetails || this.ui.skillPromotionDraft || this.ui.skillCreatorDraft || this.ui.skillMoveDraft || this.ui.definitionBundleDraft?.panel === 'skills');
     const hasSubmit = (this.promptDraft || skillDirectoryInput || !['skills', 'agents', 'metrics'].includes(this.panel))
       && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
     const prompt = this.promptDraft && this.question ? this.question
-      : this.panel === 'agents' ? this.ui.subagentCreatorDraft ? 'Agent preview · Esc returns to library' : 'Agents · Esc returns to chat'
-      : this.panel === 'metrics' ? 'Metrics · no data yet'
+      : this.panel === 'agents' ? this.ui.definitionBundleDraft?.panel === 'agents' ? 'ZIP review · Esc goes back' : this.ui.subagentCreatorDraft ? 'Agent preview · Esc returns to library' : 'Agents · Esc returns to chat'
+      : this.panel === 'metrics' ? '←/→ scope · Enter opens · G goals · R refresh · PgUp/PgDn scroll'
+      : this.ui.definitionBundleDraft?.panel === 'skills' && this.panel === 'skills' ? 'ZIP review · Esc goes back'
       : skillDirectoryInput ? 'Codex skills directory'
       : skillDetail ? 'Skill · Esc goes back'
       : this.panel === 'skills' ? 'Library · Esc returns to chat'
@@ -1411,14 +1443,15 @@ export class TerminalChat {
         : this.promptDraft && this.question ? this.question
           : this.mode === 'delegate' && !this.goal ? 'Ask BZZY, or type /goal to delegate work'
             : 'Ask BZZY to do anything';
-    const visibleValue = this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
-    const before = this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
+    const metrics = this.panel === 'metrics' && !this.promptDraft;
+    const visibleValue = metrics ? '' : this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
+    const before = metrics ? '' : this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
     const sendLabel = this.promptDraft ? ' Confirm ↵ ' : skillDirectoryInput ? ' Save & refresh ' : ' Send ↵ ';
     const prefixWidth = 4, sendWidth = hasSubmit ? cellWidth(sendLabel) : 0;
     const inputWidth = Math.max(1, width - prefixWidth - (hasSubmit ? sendWidth + 1 : 0));
     const offset = Math.max(0, cellWidth(before) - inputWidth + 1);
-    const inputText = this.value ? clip(cropLeft(visibleValue, offset), inputWidth, '') : clip(prompt, inputWidth);
-    const inputLine = color('  › ', palette.accent, true) + color(inputText, this.value ? palette.text : palette.muted)
+    const inputText = visibleValue ? clip(cropLeft(visibleValue, offset), inputWidth, '') : clip(prompt, inputWidth);
+    const inputLine = color('  › ', palette.accent, true) + color(inputText, visibleValue ? palette.text : palette.muted)
       + ' '.repeat(Math.max(0, inputWidth - cellWidth(inputText)));
     lines.push(inputLine + (hasSubmit ? ' ' + fillSurface(sendLabel, sendWidth, this.theme,
       this.value && !this.renderingPicker ? palette.accent : palette.selection,
@@ -1706,6 +1739,12 @@ export class TerminalChat {
   render({ force = false } = {}) {
     if (this.closed || this.outputBlocked || this.copyMode && !force) return;
     if (this.textSelection && !this.selection) { this.renderTextSelection(); return; }
+    if (this.panel === 'metrics') {
+      this.ui.sessionMetrics ||= new SessionMetricsPanel(this.ui, { load: this.ui.sessionMetricsLoader });
+      const id = this.ui.activeTab || this.ui.sessionId;
+      if (this.ui.sessionMetrics.sessionId !== id) this.metricsTopRequested = true;
+      this.ui.sessionMetrics.open(id);
+    }
     const picker = this.selection, writer = this.writeFrame;
     this.selection = null; this.renderingPicker = picker;
     this.writeFrame = () => {};
@@ -1776,7 +1815,7 @@ export class TerminalChat {
     const selected = this.ui.tabs?.find(tab => tab.id === this.ui.activeTab);
     const completions = this.completions();
     const maximumPinned = height < 22 ? 1 : 2;
-    const pinned = this.pinned && this.panel !== 'settings' ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
+    const pinned = this.pinned && !['settings', 'metrics'].includes(this.panel) ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
     const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
     const simpleChat = this.simpleChatLayout();
     if (this.ui.minimal) this.eyeRegion = null;
@@ -1898,10 +1937,11 @@ export class TerminalChat {
     const overflow = Math.max(0, header.length + bottom.length - height);
     if (overflow) bottom.splice(Math.max(0, bottom.length - overflow), overflow);
     let bodyHeight = Math.max(0, height - header.length - bottom.length);
+    const metricsAtTop = this.panel === 'metrics' && this.scroll >= (this.scrollbar?.maximum || 0);
     this.selectionHeight = bodyHeight;
     const contentWidth = width - 2;
     const roomLabels = this.panel === 'room' ? JSON.stringify([this.peers.map(peer => [peer.sessionId || peer.id, peer.namespace || peer.agent]), this.ui.tabs?.map(tab => [tab.id, tab.agent])]) : '';
-    const contentKey = `${['skills', 'agents'].includes(this.panel) ? Date.now() : ''}:${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
+    const contentKey = `${['skills', 'agents'].includes(this.panel) ? Date.now() : this.panel === 'metrics' ? this.ui.sessionMetrics?.revision : ''}:${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
     let body;
     if (!this.selection && this.panel !== 'settings' && this.bodyCache?.key === contentKey) {
       body = this.bodyCache.lines; this.contentHits = this.bodyCache.hits;
@@ -1939,6 +1979,9 @@ export class TerminalChat {
         this.agentEnsureFocus = false;
       }
     }
+    if (this.panel === 'metrics' && !this.selection && (this.metricsTopRequested || metricsAtTop)) {
+      this.scroll = Math.max(0, body.length - bodyHeight); this.metricsTopRequested = false;
+    }
     this.scroll = Math.min(this.scroll, Math.max(0, body.length - bodyHeight));
     const end = this.selection ? Math.min(body.length, bodyHeight) : Math.max(0, body.length - this.scroll), start = Math.max(0, end - bodyHeight);
     const visibleBody = body.slice(start, end);
@@ -1951,7 +1994,7 @@ export class TerminalChat {
       if (cellWidth(line) > contentWidth) line = color(clip(line, contentWidth), palette.text);
       visibleBody[index] = line + ' '.repeat(Math.max(0, width - 1 - cellWidth(line))) + (this.selection || !maximum ? ' ' : index >= thumbOffset && index < thumbOffset + thumbHeight ? color('┃', palette.accent) : edge('│'));
     }
-    if (['chat', 'room', 'skills', 'agents', 'settings'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
+    if (['chat', 'room', 'skills', 'agents', 'settings', 'metrics'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
     for (const hit of bottomHits) this.hitTargets.push({ ...hit, row: header.length + bodyHeight + hit.row + 1 });
     this.composerRow = header.length + bodyHeight + inputIndex + 1;
     this.composerOffset = composerOffset;
@@ -1984,6 +2027,7 @@ export class TerminalChat {
   restore(preserveScreen = false) { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l' + (preserveScreen ? '' : '\x1b[?1049l')); }
   close({ preserveScreen = false } = {}) {
     if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer); clearTimeout(this.feedbackTimer); clearTimeout(this.noticeTimer); this.keyInput.close();
+    this.ui.sessionMetrics?.close();
     this.finish(null); this.finishSelection(null, true); this.input.removeListener('keypress', this.onKey); this.input.removeListener('data', this.onRawData); this.output.removeListener?.('resize', this.onResize); this.output.removeListener?.('drain', this.onDrain); process.removeListener('exit', this.onExit); this.restore(preserveScreen); this.input.pause();
   }
 }

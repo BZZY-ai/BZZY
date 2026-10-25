@@ -12,6 +12,9 @@ the same engine and private state.
 
 Implemented:
 
+- Durable session/goal usage metrics from model skill-load receipts and accepted
+  specialist/worker assignments, with separate follow-up counts and explicit
+  coverage limits for older history. See [metrics](docs/METRICS.md).
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).
@@ -20,6 +23,8 @@ Implemented:
   Changing it starts no inference and preserves selections pinned to existing jobs.
 - Model-assisted Skill and specialist Agent creators using the current terminal
   model, restricted document generation, reviewed drafts and checked saving.
+- Reviewed combined ZIP export/import for portable skills and specialist agents,
+  preserving package resources and scopes without account bindings or execution.
 
 - Reusable named specialist subagents, invoked from ordinary chat or goals across
   Core's supported providers. The CLI Agents library manages project/global

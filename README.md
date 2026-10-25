@@ -39,6 +39,11 @@ Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALID
 after `/validate` checks the original requirements and recorded evidence. The
 consensus explanation cannot change the host-checked outcome.
 
+CLI **Metrics** shows recorded skill and specialist-agent use for the current
+goal, earlier goals and the whole chat, including its workers and linked reviews.
+Counts persist in Core; reopening a chat does not count as another invocation.
+See [usage metrics](BZZY-CORE/docs/METRICS.md).
+
 ## Install Core and CLI
 
 On macOS or Linux, run the bundled installer from the terminal package:

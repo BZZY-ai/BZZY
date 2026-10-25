@@ -62,7 +62,8 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   const unlock = lockSession(session), started = Date.now(), indicator = ui.executionIndicator?.(options.pet !== false && !ui.persistsEvents) || { start() {}, stop() {} }, abort = new AbortController();
   let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, controls, processing = false, failedThisTurn = false;
   options = { ...options, goalMode: goal, policy, strictPolicy: Boolean(options.strictPolicy || options.readOnly || session.strictPolicy) }; session.policy = policy; session.captureNetwork = Boolean(options.captureNetwork);
-  const run = { id: randomUUID(), sessionId: session.id, state: 'running', runner: processIdentity(), startedAt: now(), heartbeatAt: now() };
+  const run = { id: randomUUID(), sessionId: session.id, state: 'running', goalMode: goal, goalId: goal ? session.goal?.id || null : null,
+    runner: processIdentity(), startedAt: now(), heartbeatAt: now() };
   const stop = (reason = 'interrupted') => {
     if (stopping) { engine?.close().catch(() => {}); return; }
     stopping = reason; abort.abort(); ui.cancelled = true; indicator.stop();

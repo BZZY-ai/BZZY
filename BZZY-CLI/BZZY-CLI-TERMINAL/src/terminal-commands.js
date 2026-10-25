@@ -23,6 +23,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /import [CODE]     Import a terminal copy here; omit CODE for hidden entry.
 /skills            Browse shared workflows; /skills sync copies Codex skills for all models.
 /agents            Create and view reusable specialist subagents for any supported model.
+/metrics           Inspect recorded skill, specialist and worker usage for this goal or chat.
 /memory [query]    Search this engagement's findings, memory and past conversations.
 /learn             Review learning jobs, candidate skills and private user/host preferences.
 --import FILE.zip|CODE Restore a project ZIP or Relay terminal copy here; keeps work paused.
@@ -42,6 +43,7 @@ export const chatCommands = [
   { command: '/update', description: 'Check GitHub and update CLI and Core together' },
   { command: '/skills', description: 'View, sync Codex skills, import and enable shared Core skills' },
   { command: '/agents', description: 'Create, view and use reusable specialist subagents across models' },
+  { command: '/metrics', description: 'Inspect recorded goal and chat skill, specialist and worker usage' },
   { command: '/goal', description: 'Work until an objective is resolved', argument: true },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/validate', description: 'Check the original goal and evidence; add a focus to review a reply' },

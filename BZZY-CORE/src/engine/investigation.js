@@ -60,8 +60,11 @@ function checkedValidationParticipant(entry, index, parent, { objective, criteri
     if (value.achieved !== null && (stored.status !== 'complete' || originalEvidence.some(item => item.size < 1))) {
       value.achieved = null; value.reason = 'The independent assessment is incomplete.';
     }
-    if (value.achieved === true && (actual.objections.length || actual.uncertainties.length)) {
-      value.achieved = null; value.reason = 'The agent retained unresolved concerns.';
+    // Structured criterion claims govern adaptive routing. Informational
+    // limitations remain in the final review's objection ledger; their mere
+    // presence does not contradict a supported original criterion.
+    if (value.achieved === true && actual.objections.length) {
+      value.achieved = null; value.reason = 'The agent retained unresolved objections.';
     }
     return value;
   } catch { return invalid('The assessment does not match the exact original goal, criteria or canonical evidence IDs.'); }
@@ -144,7 +147,7 @@ export async function investigate(session, choices, snapshot, options, ui, coord
       const job = startAssignment(session, { requestId: `investigate-${session.id}-${index}`, objective: session.goal.objective,
         context: `INDEPENDENT GOAL CHECK
 Assess whether the ORIGINAL user goal was achieved, using the exact original objective and EVERY original acceptance criterion in the immutable mission brief and BZZY_SELECTED_MATERIAL.txt. Return finish_assignment with validationAssessment:{objective:<exact original goal>,achieved:true|false|null,criteria:[{id:<each exact original criterion ID>,achieved:true|false|null,rationale,evidence:[artifact UUIDs]}]}. These fields are internal model claims, never permission or verified completion. For each known criterion outcome cite actual evidence; missing proof stays null. Overall true requires every original criterion supported; false needs a grounded failed original criterion. A failed request or missing control alone does not prove the goal false. For vulnerability goals distinguish actual required impact/severity from merely finding a real lower-impact issue. For ordinary fact goals state the actual corrected answer when known.
-Write report.summary as a concise natural-language explanation, usually 2–4 sentences. Explain the actual answer, evidence limits and any remaining uncertainty; do not print booleans, JSON, voting counts or protocol fields in the summary. Set status complete when the assessment is finished (including a supported negative conclusion), inconclusive/partial when evidence is missing, and preserve objections/uncertainties explicitly. An uncertain assessment is never forced into a yes/no answer.
+Write report.summary as a concise natural-language explanation, usually 2–4 sentences. Explain the actual answer, evidence limits and any remaining uncertainty; do not print booleans, JSON, voting counts or protocol fields in the summary. Assess only the original requirements: if missing evidence prevents an original criterion from being assessed, mark that criterion and the overall assessment null; a grounded failed criterion supports false. Preserve informational limitations in uncertainties without changing a supported criterion solely because a limitation exists. Record actual unresolved challenges in objections. Set status complete when the assessment is finished (including a supported negative conclusion), inconclusive/partial when required evidence is missing. An uncertain assessment is never forced into a yes/no answer.
 Read all original source evidence through read_artifact, paging until complete. Save decisive files/observations with record_evidence. In evidence arrays use only canonical artifact UUIDs returned by record_evidence or the importedEvidenceId returned by read_artifact, never filenames, criterion IDs, ledger IDs, labels or invented IDs. Nested criterion evidence must also appear in the report's top-level evidence array.
 Do not inspect other agents' reports during this independent check. Useful bounded tests are allowed only by the inherited task policy and original declared scope; never contact unlisted targets or use unspecified accounts. If selected material contains only the goal, the scoped workspace is supplied material. Source edits remain isolated. Return your assessment to the supervisor without starting more agents or claiming parent completion.`,
         acceptanceCriteria: ['Report actual analysis and permitted tests, cite recorded evidence, and identify what remains unverified.'],

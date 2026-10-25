@@ -5,6 +5,7 @@ import { loadSession } from '@bzzy/core/engine/store.js';
 import { projectIdentityForSession, resolveProjectIdentity } from '@bzzy/core/engine/project-identity.js';
 import { knowledgeAction, knowledgeRows } from './knowledge-ui.js';
 import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
+import { bundleLibraryRows, definitionBundleRows, definitionBundleAction, returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,7 +33,7 @@ const preview = (ui, id, options = {}) => {
   ui.skillPreview = { ...inspectSkill(id, selected), ...readSkill(id, { ...selected, enabledOnly: false }), historical: Boolean(options.historical) };
   ui.skillPreviewContext = contextKey(ui);
 };
-const resetViews = ui => { ui.skillCreatorDraft = null; ui.skillMoveDraft = null; ui.skillPreview = null; ui.skillHistoryState = null; ui.skillPromotionDraft = null; ui.skillSyncDetails = false; ui.knowledgeView = null; };
+const resetViews = ui => { cancelDefinitionBundle(ui, 'skills'); ui.skillCreatorDraft = null; ui.skillMoveDraft = null; ui.skillPreview = null; ui.skillHistoryState = null; ui.skillPromotionDraft = null; ui.skillSyncDetails = false; ui.knowledgeView = null; };
 const preferencesFile = () => path.join(home(), 'cli-preferences.json');
 const savedImportDirectory = () => {
   try {
@@ -62,6 +63,7 @@ const setSkillView = (ui, view) => {
   }
 };
 export function returnToSkillLibrary(ui) {
+  if (returnFromDefinitionBundle(ui, 'skills')) return true;
   const fromDetail = Boolean(ui.skillCreatorDraft || ui.skillMoveDraft || ui.skillPreview || ui.skillHistoryState || ui.skillSyncDetails || ui.skillPromotionDraft);
   if (ui.skillMoveDraft?.filePreview) ui.skillMoveDraft.filePreview = null;
   else if (ui.skillPreview && ui.skillHistoryState) ui.skillPreview = null;
@@ -284,6 +286,8 @@ export function skillRows(ui) {
   ensureSkillView(ui);
   if (ui.knowledgeView) return knowledgeRows(ui);
   if (ui.skillAdminContext && ui.skillAdminContext !== contextKey(ui)) resetViews(ui);
+  const bundle = definitionBundleRows(ui, 'skills');
+  if (bundle) return bundle;
   const creator = creatorRows(ui, 'skill');
   if (creator) return creator;
   if (ui.skillMoveDraft) {
@@ -375,7 +379,7 @@ export function skillRows(ui) {
   }
   const page = listSkills({ ...currentContext(ui), offset: ui.skillOffset || 0, limit: 30 });
   const rows = [tabs, { text: '' }, { text: 'Skill Creator · use current model', action: 'creator', tone: 'accent' },
-    { text: 'Create skill manually', action: 'create' }, { text: '' }];
+    { text: 'Create skill manually', action: 'create' }, ...bundleLibraryRows(), { text: '' }];
   const projectSkills = page.skills.filter(skill => skill.scope === 'project');
   const globalSkills = page.skills.filter(skill => skill.scope !== 'project');
   const appendSkill = skill => {
@@ -398,7 +402,7 @@ export function skillRows(ui) {
   return rows;
 }
 
-export async function skillsCommand(text, ui, { sync, discover = codexSkillDirectories, importer = importSkill, generateDefinition } = {}) {
+export async function skillsCommand(text, ui, { sync, discover = codexSkillDirectories, importer = importSkill, generateDefinition, bundleApi } = {}) {
   if (!/^\/skills(?:\s|$)/.test(text)) return false;
   ui.openTerminal();
   if (!ui.tui) { ui.event('error', { message: 'Open the interactive terminal to manage skills.' }); return true; }
@@ -409,7 +413,11 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
   if (!action.startsWith('promote:') && action !== 'promote-confirm') ui.skillPromotionDraft = null;
   if (!action.startsWith('move-') && !action.startsWith('move-global:') && action !== 'library') ui.skillMoveDraft = null;
   try {
-    if (action.startsWith('knowledge:')) await knowledgeAction(action.slice(10), ui);
+    if (action.startsWith('bundle-')) {
+      if (['bundle-export', 'bundle-import'].includes(action)) { resetViews(ui); setSkillView(ui, 'library'); }
+      await definitionBundleAction(action, ui, 'skills', { api: bundleApi });
+    }
+    else if (action.startsWith('knowledge:')) await knowledgeAction(action.slice(10), ui);
     else if (!action) resetViews(ui);
     else if (action === 'library') returnToSkillLibrary(ui);
     else if (action === 'creator') { resetViews(ui); setSkillView(ui, 'library'); await startCreator(ui, 'skill', { generate: generateDefinition }); }

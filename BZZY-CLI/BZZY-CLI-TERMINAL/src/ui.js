@@ -16,10 +16,11 @@ import { HostMetricsMonitor } from './host-metrics.js';
 import { ConnectionStatusMonitor } from './connection-status.js';
 import { shareSavedSession, deleteSavedSession } from './session-browser.js';
 import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
+import { cancelDefinitionBundle } from './definition-bundle-ui.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, minimal = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
+  constructor({ json = false, pet = true, minimal = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
     this.json = json;
     this.pet = pet;
     this.minimal = minimal;
@@ -30,6 +31,7 @@ export class UI {
     this.interactive = Boolean(input.isTTY && output.isTTY && !json);
     this.hostMetricsEnabled = hostMetrics && this.interactive && !minimal;
     this.metricsLoader = metricsLoader;
+    this.sessionMetricsLoader = sessionMetricsLoader;
     this.connectionStatusEnabled = hostMetrics && this.interactive;
     this.lineOpen = false;
     this.reader = null;
@@ -95,6 +97,7 @@ export class UI {
     if (this.sessionId !== id) {
       this.tabs = null; this.activeTab = null; this.tui?.clear();
       this.skillPreview = null; this.skillHistoryState = null; this.skillPromotionDraft = null; this.skillSyncDetails = false;
+      cancelDefinitionBundle(this);
       this.subagentPreview = null; this.subagentOffset = 0; this.subagentAdminContext = null;
       this.subagentView = 'library'; this.subagentRunId = null; this.subagentRunOffset = 0;
       this.knowledgeView = null; this.knowledgeState = null; this.knowledgeHits = null; this.knowledgeContextKey = null;
@@ -143,6 +146,7 @@ export class UI {
       return true;
     }
     if (input.trim() === '/yolo') { await this.toggleYolo(); return true; }
+    if (input.trim() === '/metrics') { this.openTerminal(); this.tui?.setPanel('metrics'); return true; }
     if (/^\/session-action(?:\s|$)/.test(input)) {
       const match = /^\/session-action (share|delete) ([a-f0-9-]{36})$/.exec(input.trim());
       try {
@@ -349,6 +353,7 @@ export class UI {
   close({ preserveScreen = false } = {}) {
     this.connectionMonitor?.close();
     if (this.closed) return;
+    cancelDefinitionBundle(this);
     this.hostMetricsMonitor?.close();
     void this.settings?.close();
     this.accountMonitor?.close();

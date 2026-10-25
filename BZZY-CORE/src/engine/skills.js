@@ -11,6 +11,7 @@ import { resolveProjectIdentity, projectIdentityForSession } from './project-ide
 // Trusted host administration lives here; models receive only list/read tools.
 // One immutable, content-addressed copy per version, independent of providers.
 const kind = 'core.skill';
+const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
 const candidateKind = 'core.skill.candidate';
 const versionKind = 'core.skill.version';
 const historyKind = 'core.skill.history';
@@ -255,7 +256,7 @@ export function importSkill(source, options = {}) {
     const target = location(prepared);
     if (expectedVersion !== undefined && version !== expectedVersion) fail('Skill source changed. Run sync again.');
     if (preview) return publicRecord({ ...prepared, revision: 0, updatedAt: null });
-    return transaction(db => {
+    return atomic(db => {
       const previous = getRecord(kind, id);
       if ((previous?.revision || 0) !== expectedRevision) fail('Skill already exists or changed. Reload and explicitly replace its shown revision.');
       if (candidate && options.requestId) {
@@ -319,7 +320,7 @@ export function setSkillEnabled(name, enabled, expectedRevision, options = {}) {
   });
 }
 
-function readRecord(record, { file = 'SKILL.md', offset = 0, limit = 16384, sessionId } = {}) {
+function readRecord(record, { file = 'SKILL.md', offset = 0, limit = 16384, sessionId, modelUsage } = {}) {
   if (!safePath(file) || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 32768) fail('Invalid skill file slice.');
   const item = record.files.find(item => item.path === file);
   if (!item) fail('File is not part of this skill version.');
@@ -337,7 +338,9 @@ function readRecord(record, { file = 'SKILL.md', offset = 0, limit = 16384, sess
   const consumed = Buffer.byteLength(text);
   if (!consumed && offset < data.length) fail('Increase the byte limit to include the next complete UTF-8 character.');
   if (sessionId) appendEvent(sessionId, 'skill.loaded', { skillId: idOf(record), name: record.name, scope: scopeOf(record), projectId: record.projectId || null,
-    version: record.version, file, offset, bytes: consumed, sha256: item.sha256 });
+    version: record.version, file, offset, bytes: consumed, sha256: item.sha256,
+    ...(modelUsage ? { usageId: digest([sessionId, modelUsage.runId, idOf(record), record.version]), runId: modelUsage.runId,
+      goalId: modelUsage.goalId, goalMode: modelUsage.goalMode, usageProtocol: 1 } : {}) });
   return { id: idOf(record), name: record.name, scope: scopeOf(record), ...(record.projectId ? { projectId: record.projectId } : {}),
     version: record.version, file, text, sha256: item.sha256, nextOffset: offset + consumed < data.length ? offset + consumed : null, files: publicRecord(record).files };
 }

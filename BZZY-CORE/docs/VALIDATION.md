@@ -1,3 +1,37 @@
+# Session Metrics, grouped Validate and definition ZIPs (2026-10-25)
+
+Final Node.js 24/macOS suites: **563 Core tests passed, 2 skipped** (565 total)
+and **579 CLI tests passed, 21 skipped** (600 total), zero failures. Both syntax
+checks and `git diff --check` pass. No running installation was updated.
+
+Usage tests exercise actual provider-independent ToolHost loads, once-per-run
+receipts, references/pagination/previews, failed or stale calls and ordinary chat
+with an older achieved goal. Real worker shapes without their own goal bind to
+Delegate/Validate source goals; named chat workers remain outside goals. Tests
+cover follow-up deduplication, replacement goals, linked reviews, same-directory
+isolation, rebuilding, imported/legacy gaps, detached snapshots and bounded
+backfill/rows. Read-only projections never write counters or start Core/models.
+
+UI checks cover current/earlier goals, chat/outside-goal totals, status reasons,
+same-name skill scopes/versions, keyboard/click controls and draft-preserving
+Back/Esc. Real terminal checks exercise saved metrics with Core stopped and
+80×24/42-column layouts. Validate groups interleaved events into one colored
+section per agent while retaining original copy bodies and replay deduplication;
+active review phases show Validating. Informational caveats reach a fresh final
+review without inventing criteria or triggering unnecessary follow-ups. Required
+uncertainty, unresolved objections and missing caveat dispositions still block
+acceptance; no existing saved result is rewritten.
+
+Definition ZIP tests round-trip project/global skills, scripts, text and binary
+resources plus fixed agent selections between isolated homes/projects. They
+check exact manifests, scopes, disabled skills, no automatic model execution,
+conflicts/CAS/rollback, historical versions, source corruption, credentials and
+private packages, traversal/links, filename collisions, review cleanup and final
+output identity/hash races. Publisher tests force hard links unavailable, then
+force exclusive rename and directory sync unavailable, while verifying existing
+files remain unchanged. All archives and fixture homes stay in temporary
+storage. No user drive, partition or filesystem settings are changed.
+
 # Validate startup errors and observer handoff (2026-10-25)
 
 Final Node.js 24/macOS suites: **527 Core tests passed, 1 skipped** (528 total)

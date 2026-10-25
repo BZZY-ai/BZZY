@@ -74,12 +74,49 @@ test('participant slots retain distinct colors across same-provider models, phas
   for (const name of ['blue', 'black', 'white']) for (const force of ['3', '1', '0']) {
     const theme = createTerminalTheme({ isTTY: true }, { FORCE_COLOR: force }, name), rows = debateEntryLayout(block, 119, theme).lines;
     for (const index of [0, 1, 2]) {
-      const row = rows.find(line => clean(line).includes(`Agent ${index + 1} · same-provider · same-model · Independent check`)); assert.ok(row);
+      const row = rows.find(line => clean(line).includes(`Agent ${index + 1} · same-provider · same-model`)); assert.ok(row);
       if (force !== '0') assert.ok(row.includes(theme.foreground(debateParticipantTone(index))));
     }
     if (force !== '0') assert.equal(new Set([0, 1, 2].map(index => theme.foreground(debateParticipantTone(index)))).size, 3);
-    assert.match(rows.map(clean).join('\n'), /Agent 2 · different-provider · different-model · Challenge · round 2/);
+    const body = rows.map(clean).join('\n');
+    for (const index of [0, 1, 2]) assert.equal(body.match(new RegExp(`Agent ${index + 1}`, 'g')).length, 1);
+    assert.match(body, /Challenge · round 2/);
+    assert.ok(block.messages.some(item => item.copyEntry.label.includes('Agent 2 · different-provider · different-model')),
+      'Original per-message identity remains available for copying without repeating headers.');
   }
+});
+
+test('expanded Validate groups interleaved phases under one identity per participant and gives the fresh reviewer a separate color', () => {
+  const entries = [], theme = createTerminalTheme({ isTTY: true }, { FORCE_COLOR: '3' });
+  recordDebateEvent(entries, 'debate.started', started());
+  const bodies = ['First agent initial check.', 'Second agent initial check.', 'Third agent initial check.',
+    'First agent focused followup.', 'Second agent focused followup.', 'Fresh final evidence review.'];
+  for (const [index, text] of [[1, bodies[1]], [0, bodies[0]], [2, bodies[2]]])
+    recordDebateEvent(entries, 'debate.message', message(index, { phase: 'independent_check', role: 'independent assessment', round: 0, text }));
+  for (const [index, text] of [[0, bodies[3]], [1, bodies[4]]])
+    recordDebateEvent(entries, 'debate.message', message(index, { phase: 'missing_evidence', role: 'focused check', round: 1, text }));
+  const final = message(3, { participantId: 'review-one:final-review', assignmentId: 'fresh-final-review', phase: 'final_review', role: 'final evidence reviewer', round: 0, text: bodies[5] });
+  recordDebateEvent(entries, 'debate.message', final); recordDebateEvent(entries, 'debate.message', final);
+  recordDebateEvent(entries, 'debate.result', result());
+  const block = entries[0]; block.expanded = true;
+  const layout = debateEntryLayout(block, 119, theme), plain = layout.lines.map(clean), body = plain.join('\n');
+  for (const index of [0, 1, 2]) assert.equal((body.match(new RegExp(`Agent ${index + 1}`, 'g')) || []).length, 1);
+  assert.equal((body.match(/Final reviewer/g) || []).length, 1);
+  assert.equal((body.match(/same-provider · same-model/g) || []).length, 4, 'Selection appears once in each group, without a duplicate roster.');
+  const heading = index => body.indexOf(index === 3 ? 'Final reviewer' : `Agent ${index + 1}`);
+  assert.ok(heading(0) < body.indexOf(bodies[0]) && body.indexOf(bodies[3]) < heading(1));
+  assert.ok(heading(1) < body.indexOf(bodies[1]) && body.indexOf(bodies[4]) < heading(2));
+  assert.ok(heading(2) < body.indexOf(bodies[2]) && body.indexOf(bodies[2]) < heading(3));
+  assert.ok(heading(3) < body.indexOf(bodies[5]) && body.indexOf(bodies[5]) < body.indexOf('Click to collapse'));
+  assert.ok(body.indexOf('CONSENSUS') > body.indexOf('Click to collapse'));
+  assert.equal(block.messages.length, 6, 'Repeated events preserve one original response.');
+  for (const text of bodies) assert.ok(layout.hits.some(hit => hit.type === 'response' && hit.entry.text === text));
+  const headings = plain.flatMap((line, index) => /╭─ (?:Agent \d|Final reviewer)/.test(line) ? [layout.lines[index]] : []);
+  assert.equal(headings.length, 4);
+  for (const [index, line] of headings.entries()) assert.ok(line.includes(theme.foreground(debateParticipantTone(index))));
+  assert.equal(new Set(headings.map((_, index) => theme.foreground(debateParticipantTone(index)))).size, 4);
+  assert.deepEqual(block.messages.map(item => item.text), [bodies[1], bodies[0], bodies[2], bodies[3], bodies[4], bodies[5]],
+    'Visual grouping does not reorder durable message bodies.');
 });
 
 test('linked/replayed reviews deduplicate by debate ID and preserve separate review blocks', t => {

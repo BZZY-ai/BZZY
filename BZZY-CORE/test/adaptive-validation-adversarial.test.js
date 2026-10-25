@@ -28,7 +28,7 @@ test.afterEach(() => {
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-async function evaluate(scenario = 'complete', { count = 2, retries = 1, contextWindows = [], budget, mutateInvestigation, objective } = {}) {
+async function evaluate(scenario = 'complete', { count = 2, retries = 1, contextWindows = [], budget, mutateInvestigation, mutateFinalReport, objective } = {}) {
   const source = createSession(getProvider('codex'), workspace, 'offline-source');
   prepareTask(source, { mode: 'solo' }, objective || 'Assess the supplied synthetic controls.'); source.goal = newGoal(source.contract.objective);
   source.contract.limits.maxRetries = retries; saveSession(source);
@@ -48,9 +48,73 @@ async function evaluate(scenario = 'complete', { count = 2, retries = 1, context
       putRecord('debate-investigation', prepared.session.id, investigation); return usage;
     };
   }
+  if (mutateFinalReport) {
+    const original = actors.dependencies.waitAssignment;
+    actors.dependencies.waitAssignment = async (...args) => {
+      const result = await original(...args), job = getRecord('assignment', args[1]);
+      if (job.contract.context.startsWith('FINAL GOAL REVIEW')) {
+        const round = getRecord('round', `${job.id}:${job.currentRound}`);
+        mutateFinalReport(round.report); putRecord('round', `${job.id}:${job.currentRound}`, round);
+        job.latestReport.report = structuredClone(round.report); putRecord('assignment', job.id, job);
+      }
+      return result;
+    };
+  }
   await runDebate(prepared.session, prepared.options, { event() {} }, actors.dependencies);
   return { source, review: loadSession(prepared.session.id), result: getRecord('debate', prepared.session.id), activity: actors.activity };
 }
+
+function amendReport(entry, edit) {
+  edit(entry.report);
+  const job = getRecord('assignment', entry.assignmentId), round = getRecord('round', `${job.id}:${job.currentRound}`);
+  round.report = structuredClone(entry.report); putRecord('round', `${job.id}:${job.currentRound}`, round);
+  job.latestReport.report = structuredClone(entry.report); putRecord('assignment', job.id, job);
+}
+
+const sourceLimitation = 'The supplied observations were not compared with an external source; the original criteria concern only the supplied controls.';
+
+test('supported criteria with informational caveats go directly to a fresh reviewer who must disposition those caveats', async () => {
+  const run = await evaluate('complete', { mutateInvestigation(investigation) {
+    for (const entry of investigation.reports) amendReport(entry, report => { report.uncertainties = [sourceLimitation]; });
+  } });
+  assert.equal(run.result.agreement.agreeTrue, true); assert.equal(run.activity.followups.length, 0);
+  assert.equal(run.activity.starts.length, 1); assert.ok(run.result.protocol.finalReviewer);
+  assert.equal(run.result.objectionLedger.length, 2); assert.ok(run.result.objectionLedger.every(item => item.kind === 'uncertainty' && item.claim === sourceLimitation));
+  assert.equal(run.result.objectionReview.complete, true); assert.equal(run.result.decision.objectionDispositions.length, 2);
+  assert.equal(run.review.acceptance.passed, true); assert.equal(goalValidationFor(run.source.id).state, 'validated');
+});
+
+test('informational caveats cannot turn an explicitly missing original criterion into a supported assessment', async () => {
+  const run = await evaluate('complete', { retries: 0, mutateInvestigation(investigation) {
+    amendReport(investigation.reports[1], report => {
+      report.validationAssessment.achieved = null; report.validationAssessment.criteria[0].achieved = null;
+      report.validationAssessment.criteria[0].rationale = 'The original required negative control remains unavailable.';
+      report.uncertainties = [sourceLimitation];
+    });
+  } });
+  assert.equal(run.result.agreement.counts.true, 1); assert.equal(run.result.agreement.counts.null, 1); assert.equal(run.result.agreement.counts.invalid, 0);
+  assert.equal(run.activity.starts.length, 0); assert.equal(run.activity.followups.length, 0);
+  assert.notEqual(goalValidationFor(run.source.id).state, 'validated');
+});
+
+test('actual unresolved objections still block acceptance even when every structured criterion claims support', async () => {
+  const run = await evaluate('complete', { retries: 0, mutateInvestigation(investigation) {
+    amendReport(investigation.reports[1], report => { report.objections = [{ id: 'missing-required-control', claim: 'The required negative control has not been reconciled with the original conclusion.', evidence: report.evidence }]; });
+  } });
+  assert.equal(run.result.agreement.agreeTrue, false); assert.equal(run.result.agreement.participants[1].reportedAchieved, true);
+  assert.equal(run.result.agreement.participants[1].achieved, null); assert.equal(run.activity.starts.length, 0);
+  assert.ok(run.result.objectionLedger.some(item => item.originalId === 'missing-required-control'));
+  assert.notEqual(goalValidationFor(run.source.id).state, 'validated');
+});
+
+test('a final reviewer cannot silently omit informational caveats from the persistent evidence review', async () => {
+  const run = await evaluate('complete', { mutateInvestigation(investigation) {
+    for (const entry of investigation.reports) amendReport(entry, report => { report.uncertainties = [sourceLimitation]; });
+  }, mutateFinalReport(report) { report.decision.objectionDispositions = []; } });
+  assert.equal(run.result.agreement.agreeTrue, true); assert.equal(run.activity.starts.length, 1);
+  assert.equal(run.result.objectionReview.complete, false); assert.equal(run.result.objectionReview.missing.length, 2);
+  assert.equal(run.result.assessment.passed, false); assert.notEqual(goalValidationFor(run.source.id).state, 'validated');
+});
 
 test('small final-review context or remaining token budget stops before any final provider dispatch', async () => {
   for (const limits of [{ contextWindows: [1024] }, { budget: 1000 }]) {

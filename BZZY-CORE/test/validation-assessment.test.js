@@ -103,12 +103,22 @@ test('one grounded false defeats two true claims while a missing or malformed re
   const unknown = agreement(malformed); assert.equal(unknown.hasFalse, false); assert.equal(unknown.hasNull, true); assert.equal(unknown.participants[2].achieved, null);
 });
 
-test('legacy vulnerability votes never become original-goal truth and unresolved concerns keep a true claim uncertain', () => {
-  const first = publish(newWorker(0), true), second = publish(newWorker(1), true, { uncertainties: ['The observation date is not independently corroborated.'] });
-  const result = agreement([first, second]); assert.equal(result.agreeTrue, false); assert.equal(result.hasNull, true);
-  assert.equal(result.participants[1].reportedAchieved, true); assert.equal(result.participants[1].achieved, null);
+test('informational limitations do not override supported original criteria, while legacy votes remain unknown', () => {
+  const first = publish(newWorker(0), true), second = publish(newWorker(1), true, { uncertainties: ['The supplied observation date was not checked against an external source; both original criteria concern the supplied record.'] });
+  const result = agreement([first, second]); assert.equal(result.agreeTrue, true); assert.equal(result.hasNull, false);
+  assert.equal(result.participants[1].reportedAchieved, true); assert.equal(result.participants[1].achieved, true);
+  assert.ok(second.report.uncertainties.length, 'The limitation stays in the bound report for final evidence review.');
   const legacy = structuredClone(first); delete legacy.report.validationAssessment;
   assert.equal(agreement([legacy, second]).participants[0].achieved, null); assert.equal(agreement([legacy, second]).hasFalse, false);
+});
+
+test('an unresolved original-criterion objection still prevents a true claim from advancing to final review', () => {
+  const first = publish(newWorker(0), true), second = publish(newWorker(1), true, {
+    objections: [{ id: 'unverified-source-record', claim: 'The required supplied source record has not been reconciled with the answer.' }],
+  });
+  const result = agreement([first, second]); assert.equal(result.agreeTrue, false); assert.equal(result.hasNull, true);
+  assert.equal(result.participants[1].reportedAchieved, true); assert.equal(result.participants[1].achieved, null);
+  assert.match(result.participants[1].reason, /unresolved objections/);
 });
 
 test('duplicated workers, foreign evidence, changed bytes and source instructions cannot count as agreement', () => {

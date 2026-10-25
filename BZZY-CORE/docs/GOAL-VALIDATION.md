@@ -33,6 +33,14 @@ normal validation. Only uncertain agents receive one private targeted follow-up,
 and unresolved uncertainty remains not validated. Unanimous supported reports
 proceed to a separate final evidence reviewer; agreement itself awards no badge.
 
+Structured assessments follow the original acceptance criteria. A nonblocking
+limitation in `uncertainties` does not automatically turn supported criteria
+into `null` or add a citation requirement the user did not specify. Missing
+evidence for a required criterion still stays uncertain, and unresolved
+objections still block support. Every caveat remains in the persistent ledger
+for explicit final-review disposition; neither the criteria rule nor the UI
+grants broader scope or network permissions.
+
 The review must support every original acceptance condition, including requested
 severity or impact. A real lower-impact vulnerability does not satisfy a HIGH
 severity objective. The declared review protocol, evidence inspection, objection

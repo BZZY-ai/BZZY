@@ -66,6 +66,17 @@ credentials and private account addresses; scanning is supplementary and cannot
 prove arbitrary instructions contain no private information. Store behavior in
 definitions and project evidence/account bindings separately.
 
+## Portable definition ZIP
+
+CLI Skills and Agents both provide combined ZIP export/import. The reviewed
+archive contains current-project and global portable skills and specialist
+definitions, including optional provider/model/effort and narrower runtime
+limits. It excludes private bindings, sessions, run history and case/evidence
+packages. Project scope maps to the receiving current directory; existing names
+are never overwritten. Imported skills stay disabled. Explicitly reviewed agent
+definitions become discoverable, with no invocation, model call or schedule
+started by import. See [skills ZIP](SKILLS.md#skills-and-agents-zip).
+
 ## Execution and review
 
 Models discover definitions with `list_subagents`/`read_subagent` and invoke a

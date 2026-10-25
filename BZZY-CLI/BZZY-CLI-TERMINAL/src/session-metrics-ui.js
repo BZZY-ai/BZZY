@@ -1,0 +1,164 @@
+import { clean, cellWidth, clip, wrap } from './terminal-format.js';
+
+const loadRecordedMetrics = async id => (await import('@bzzy/core/engine/session-metrics.js')).sessionMetrics(id);
+const recordedCount = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
+const pad = (value, width) => value + ' '.repeat(Math.max(0, width - cellWidth(value)));
+const stalled = goal => ['stalled', 'blocked', 'usage_limited', 'budget_limited', 'budget_exhausted', 'awaiting_review'].includes(goal?.status) || goal?.status === 'paused' && goal.reason === 'turn_limit';
+const statusLabel = (value, reason) => value === 'paused' && reason === 'turn_limit' ? 'Stalled · turn limit' : ({ complete: 'Achieved ✓', running: 'Working', active: 'Working', paused: 'Paused',
+  stalled: 'Stalled', cancelled: 'Cancelled', failed: 'Failed', awaiting_review: 'Stalled · awaiting review',
+  verifying: 'Verifying', blocked: 'Stalled', budget_limited: 'Stalled · budget limit', usage_limited: 'Stalled · usage limit',
+  budget_exhausted: 'Stalled · budget limit' })[value] || clean(value || 'Unknown status').replaceAll('_', ' ');
+const goalLabel = goal => `${statusLabel(goal.status, goal.reason)} · ${goal.createdAt ? String(goal.createdAt).slice(0, 10) + ' · ' : ''}${String(goal.id).slice(0, 8)}`;
+
+// Reads durable Core counters only. Opening this panel never starts Core,
+// launches a model, acquires an input lease or changes the selected session.
+export class SessionMetricsPanel {
+  constructor(ui, { load = loadRecordedMetrics, intervalMs = 1000 } = {}) {
+    this.ui = ui; this.load = load; this.intervalMs = intervalMs;
+    this.scope = 'goal'; this.revision = 0; this.epoch = 0;
+  }
+  changed() { this.revision++; this.ui.tui?.schedule(); }
+  open(id) {
+    if (this.closed) return;
+    if (this.active && this.sessionId === id) return;
+    this.stop(); this.active = true;
+    if (this.sessionId !== id) {
+      this.sessionId = id; this.data = null; this.error = null; this.scope = 'goal'; this.selectedGoalId = null;
+    }
+    this.changed(); void this.refresh();
+  }
+  stop() { this.active = false; this.epoch++; clearTimeout(this.timer); this.timer = null; this.loading = false; }
+  close() { this.stop(); this.closed = true; this.data = null; this.error = null; this.sessionId = null; }
+  async refresh() {
+    if (!this.active || this.loading || this.closed) return;
+    const epoch = this.epoch, id = this.sessionId;
+    clearTimeout(this.timer); this.loading = true; this.changed();
+    try {
+      if (!id) throw new Error('No selected session.');
+      const data = await this.load(id);
+      if (!this.active || this.closed || epoch !== this.epoch || id !== this.sessionId) return;
+      if (!data || data.sessionId !== id) throw new Error('Metrics do not belong to this session.');
+      this.data = data; this.error = null;
+      if (this.selectedGoalId && !data.goals?.some(goal => goal.id === this.selectedGoalId)) this.selectedGoalId = null;
+    } catch {
+      if (this.active && !this.closed && epoch === this.epoch) this.error = 'Metrics are unavailable for this saved chat. Retry to read its recorded history.';
+    } finally {
+      if (this.active && !this.closed && epoch === this.epoch) {
+        this.loading = false; this.changed();
+        this.timer = setTimeout(() => { void this.refresh(); }, this.intervalMs); this.timer.unref?.();
+      }
+    }
+  }
+  actions() {
+    return [
+      { action: 'goal', text: this.selectedGoalId ? 'Selected goal' : 'Current goal', selected: this.scope === 'goal' },
+      { action: 'session', text: 'Chat totals', selected: this.scope === 'session' },
+      { action: 'chat', text: 'Outside goals', selected: this.scope === 'chat' },
+      { action: 'history', text: 'Choose goal ▾', disabled: !this.data?.goals?.length },
+      { action: 'refresh', text: this.loading ? 'Reading…' : 'Refresh' },
+    ];
+  }
+  async activate(action) {
+    if (!this.active || this.closed) return;
+    if (['goal', 'session', 'chat'].includes(action)) {
+      this.scope = action;
+      if (action === 'goal') this.selectedGoalId = null;
+      this.changed(); return;
+    }
+    if (action === 'refresh') { await this.refresh(); return; }
+    if (action !== 'history' || !this.data?.goals?.length) return;
+    const id = this.sessionId, epoch = this.epoch, reader = this.ui.reader, input = this.ui.tui?.resolveInput;
+    let selected;
+    try {
+      selected = await this.ui.chooseOne('Recorded goals', this.data.goals.map(goal => ({ value: goal.id,
+        label: `${goal.id === this.data.currentGoalId ? 'Current · ' : ''}${goalLabel(goal)}`,
+        description: goal.id === this.data.currentGoalId ? 'The current goal in this chat.' : 'Recorded usage for this earlier goal.',
+        selected: goal.id === (this.selectedGoalId || this.data.currentGoalId),
+      })));
+    } finally {
+      if (!this.closed && !this.ui.reader && input && input === this.ui.tui?.resolveInput) this.ui.reader = reader;
+    }
+    if (!selected || !this.active || this.closed || epoch !== this.epoch || id !== this.sessionId || !this.data?.goals?.some(goal => goal.id === selected)) return;
+    this.selectedGoalId = selected === this.data.currentGoalId ? null : selected; this.scope = 'goal'; this.changed();
+  }
+}
+
+export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus = 0 } = {}) {
+  const lines = [], hits = [], actions = panel.actions();
+  const put = (text = '', tone = 'text', bold = false) => lines.push({ text, tone, bold });
+  const prose = (text, tone = 'text', maximum) => {
+    for (const line of wrap(clean(text), Math.max(8, width - 4), maximum)) put('  ' + line, tone);
+  };
+  let buttons = '  ';
+  for (const [index, action] of actions.entries()) {
+    const label = ` ${index === focus ? '›' : action.selected ? '●' : ' '} ${action.text} `;
+    if (cellWidth(buttons) + cellWidth(label) > width - 1 && buttons.trim()) { put(buttons, 'accent', true); buttons = '  '; }
+    const left = cellWidth(buttons) + 1;
+    hits.push({ type: 'metrics-action', action: action.action, disabled: action.disabled, row: lines.length, left, right: left + cellWidth(label) - 1 });
+    buttons += label;
+  }
+  put(buttons, 'accent', true); put();
+  const data = panel.data;
+  if (!data) {
+    prose(panel.error || (panel.sessionId ? 'Reading this chat’s recorded usage…' : 'Open a saved chat to view its recorded usage.'), panel.error ? 'warning' : 'muted');
+    return { lines, hits, actions };
+  }
+  if (data.available === false) {
+    prose('Recorded metrics are unavailable for this chat. Open an existing saved chat, then refresh.', 'warning');
+    return { lines, hits, actions };
+  }
+  const goalId = panel.selectedGoalId || data.currentGoalId;
+  const goal = data.goals?.find(item => item.id === goalId);
+  const usage = panel.scope === 'session' ? data.session : panel.scope === 'chat' ? data.chat : goal;
+  if (panel.scope === 'goal') {
+    put('  ' + (panel.selectedGoalId ? 'Earlier goal' : 'Current goal') + (goal ? ' · ' + statusLabel(goal.status, goal.reason) : ''), goal?.status === 'complete' ? 'goalSuccess' : stalled(goal) ? 'danger' : goal?.status === 'paused' ? 'warning' : 'accent', true);
+    if (goal && (goal.objective || currentGoal?.id === goal.id && currentGoal.objective)) prose(goal.objective || currentGoal.objective, 'text', 3);
+    else if (goal) prose(goalLabel(goal), 'muted');
+    else prose('No current goal is recorded. Chat totals include work outside goals.', 'muted');
+    if (stalled(goal) && goal.reason) prose('Reason: ' + clean(goal.reason).replaceAll('_', ' '), 'warning', 2);
+  } else {
+    put('  ' + (panel.scope === 'session' ? 'Whole chat' : 'Outside goals') + (alias ? ' · ' + clip(clean(alias), Math.max(8, width - 24)) : ''), 'accent', true);
+    prose(panel.scope === 'session' ? 'All recorded work in this chat, including its workers and linked validation.' : 'Only work explicitly recorded without a goal. Earlier ambiguous history is not assigned here.', 'muted', 2);
+  }
+  if (panel.error) prose(panel.error + ' Showing the last recorded snapshot.', 'warning');
+  if (data.coverage?.complete === false) prose('Partial history · some older usage cannot be attributed reliably.', 'warning');
+  if (data.coverage?.reasons?.includes('imported_history')) prose('Imported historical use is excluded from these counts.', 'muted');
+  if (data.coverage?.reasons?.includes('unknown_goal_attribution')) prose('Uses without reliable goal attribution appear only in chat totals.', 'muted');
+  if (data.coverage?.reasons?.includes('followup_attribution_unavailable')) prose('Some older follow-ups lack their assignment record and are excluded.', 'muted');
+  if (data.coverage?.reasons?.some(reason => ['session_limit', 'goal_limit', 'event_backfill_pending', 'invocation_limit', 'row_limit'].includes(reason)))
+    prose('This snapshot reached a recorded-history limit; totals are partial.', 'warning');
+  const legacy = data.coverage?.legacySkillReads;
+  if (Number.isSafeInteger(legacy) && legacy > 0) prose(`${legacy.toLocaleString()} older skill reads lack a confirmed model-use record; they are excluded.`, 'muted', 2);
+  if (!usage) return { lines, hits, actions };
+  put();
+  const wide = width >= 76, countColumn = Math.min(width - 18, 42);
+  if (wide) put('  ' + 'Recorded usage'.padEnd(countColumn) + 'Count', 'muted', true);
+  const metric = (name, value) => put('  ' + (wide ? name.padEnd(countColumn) + recordedCount(value) : `${name}: ${recordedCount(value)}`));
+  metric('Skill model loads', usage.skillInvocations);
+  metric('Specialist agents invoked', usage.subagentInvocations);
+  if (Object.hasOwn(usage, 'subagentFollowups')) metric('Specialist follow-ups', usage.subagentFollowups);
+  metric('Worker assignments', usage.workerAssignments);
+  if (Object.hasOwn(usage, 'workerFollowups')) metric('Worker follow-ups', usage.workerFollowups);
+  const breakdown = (title, rows, empty, label, detail) => {
+    put(); put('  ' + title, 'accent', true);
+    if (!rows?.length) { prose(empty, 'muted'); return; }
+    for (const item of rows) {
+      const name = clean(label(item));
+      const followups = Number.isSafeInteger(item.followups) && item.followups > 0 ? ` · ${recordedCount(item.followups)} follow-up${item.followups === 1 ? '' : 's'}` : '';
+      if (wide) put('  ' + pad(clip(name, countColumn - 2), countColumn) + recordedCount(item.count) + followups);
+      else prose(`${name} · ${recordedCount(item.count)} use${item.count === 1 ? '' : 's'}${followups}`);
+      if (detail) prose(detail(item), 'muted');
+    }
+  };
+  breakdown('Skills', usage.skillRows, 'No recorded skill use.', item => item.name || item.id || 'Unnamed skill', item => {
+    const scope = item.scope === 'global' ? 'BZZY Core / global' : item.scope === 'project' ? 'This project' : 'Scope unknown';
+    const version = item.version ? `version ${String(item.version).slice(0, 8)}` : 'Version unknown';
+    return `${scope} · ${version}`;
+  });
+  breakdown('Specialist agents', usage.agentRows, 'No recorded specialist invocation.', item => item.name || item.id || 'Unnamed specialist');
+  if (usage.workerRows?.length) breakdown('Worker roles · Delegate / Validate', usage.workerRows, '', item => ({ investigation: 'Independent validation check', final_review: 'Final evidence review',
+    executor: 'Executor', supervisor: 'Supervisor', reviewer: 'Reviewer', peer: 'Collaborating worker' })[item.role] || clean(item.role || 'Worker').replaceAll('_', ' '));
+  put(); prose('Counts come from saved Core records. Skills count confirmed model loads; agents count specialist assignments. Browsing definitions does not count as use.', 'muted');
+  if (data.updatedAt) prose('Last recorded use · ' + String(data.updatedAt).replace('T', ' ').replace(/\.\d+Z$/, ' UTC'), 'muted');
+  return { lines, hits, actions };
+}
