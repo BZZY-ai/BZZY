@@ -58,6 +58,17 @@ const setSkillView = (ui, view) => {
     ui.tui.skillTopRequested = true; ui.tui.bodyCache = null; ui.tui.schedule();
   }
 };
+export function returnToSkillLibrary(ui) {
+  const fromDetail = Boolean(ui.skillPreview || ui.skillHistoryState || ui.skillSyncDetails || ui.skillPromotionDraft);
+  if (ui.skillPreview && ui.skillHistoryState) ui.skillPreview = null;
+  else resetViews(ui);
+  setSkillView(ui, 'library');
+  if (ui.tui) {
+    ui.tui.skillFocus = 0; ui.tui.skillEnsureFocus = true;
+    ui.tui.skillTopRequested = true; ui.tui.bodyCache = null; ui.tui.schedule();
+  }
+  return fromDetail;
+}
 
 export function codexSkillDirectories(directory) {
   const root = fs.realpathSync(directory), stat = fs.lstatSync(root);
@@ -301,10 +312,11 @@ export function skillRows(ui) {
   }
   if (ui.skillPreview) {
     const page = ui.skillPreview;
-    return [{ text: `${page.name}/${page.file} · ${page.scope} · ${page.version.slice(0, 8)}${page.historical ? ' · historical' : ''}`, tone: 'accent' }, { text: page.text },
+    return [{ text: ui.skillHistoryState ? '← Back to history' : '← Back to library', action: ui.skillHistoryState ? 'history-back' : 'library' },
+      { text: `${page.name}/${page.file} · ${page.scope} · ${page.version.slice(0, 8)}${page.historical ? ' · historical' : ''}`, tone: 'accent' }, { text: page.text },
       ...(page.nextOffset != null ? [{ text: 'Read next page', action: 'read-next' }] : []), { text: 'Supporting files', action: 'files' },
       { text: page.enabled ? 'Disable for all models' : 'Enable for all models', action: `toggle:${page.id}` },
-      ...(ui.skillHistoryState ? [{ text: 'Back to version history', action: 'history-back' }] : []), { text: 'Back to library', action: 'library' }];
+      ...(ui.skillHistoryState ? [{ text: 'Back to library', action: 'library' }] : [])];
   }
   const tabs = {
     text: '  IMPORT       LIBRARY',
@@ -370,7 +382,7 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
   try {
     if (action.startsWith('knowledge:')) await knowledgeAction(action.slice(10), ui);
     else if (!action) resetViews(ui);
-    else if (action === 'library') { resetViews(ui); setSkillView(ui, 'library'); }
+    else if (action === 'library') returnToSkillLibrary(ui);
     else if (action === 'tab:import') setSkillView(ui, 'import');
     else if (action === 'tab:library') setSkillView(ui, 'library');
     else if (action === 'save-directory') {

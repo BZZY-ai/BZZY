@@ -150,7 +150,12 @@ test('the shared skills view reads instructions and explicitly enables a disable
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /IMPORT.*LIBRARY/);
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /THIS CHAT \/ PROJECT.*BZZY CORE \/ GLOBAL/s);
   await ui.settingsCommand('/skills view:' + skill.name); ui.tui.render();
-  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Inspect the layout/);
+  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Back to library[\s\S]*Inspect the layout[\s\S]*Skill · Esc goes back/);
+  assert.equal(skillRows(ui)[0].action, 'library');
+  ui.tui.key('', { name: 'escape' });
+  assert.equal(ui.skillPreview, null); assert.equal(ui.tui.panel, 'skills');
+  ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /ui-check/);
+  ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.panel, 'chat');
   await ui.settingsCommand('/skills library'); ui.chooseOne = async () => 'enable';
   await ui.settingsCommand('/skills toggle:' + skill.name); assert.equal(inspectSkill(skill.name).enabled, true);
   assert.equal(listRecords('execution').length, 0);

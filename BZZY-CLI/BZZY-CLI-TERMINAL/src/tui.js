@@ -1,4 +1,4 @@
-import { skillRows } from './skills-ui.js';
+import { skillRows, returnToSkillLibrary } from './skills-ui.js';
 import { namedTerminalSessions } from './session-browser.js';
 import readline from 'node:readline';
 import { renderCanvasShell } from './canvas-panels.js';
@@ -767,7 +767,10 @@ export class TerminalChat {
       if (key.name === 'escape') { this.setPanel('chat'); return; }
     }
     if (this.panel === 'skills' && !this.promptDraft) {
-      if (key.name === 'escape') { this.setPanel('chat'); return; }
+      if (key.name === 'escape') {
+        if (returnToSkillLibrary(this.ui)) return;
+        this.setPanel('chat'); return;
+      }
       const actions = skillActionList(skillRows(this.ui));
       if ((key.name === 'up' || key.name === 'down') && actions.length) {
         this.skillFocus = ((this.skillFocus || 0) + (key.name === 'up' ? actions.length - 1 : 1)) % actions.length;
@@ -1231,10 +1234,13 @@ export class TerminalChat {
     const breathingRoom = height >= 18;
     if (breathingRoom) lines.push('');
     const skillDirectoryInput = this.panel === 'skills' && this.ui.skillView === 'import';
+    const skillDetail = this.panel === 'skills' && Boolean(this.ui.skillPreview || this.ui.skillHistoryState
+      || this.ui.skillSyncDetails || this.ui.skillPromotionDraft);
     const hasSubmit = (skillDirectoryInput || !['skills', 'metrics'].includes(this.panel))
       && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
     const prompt = this.panel === 'metrics' ? 'Metrics · no data yet'
       : skillDirectoryInput ? 'Codex skills directory'
+      : skillDetail ? 'Skill · Esc goes back'
       : this.panel === 'skills' ? 'Library · Esc returns to chat'
       : this.panel === 'room' ? 'Message all agents'
       : this.ui.sessionMode === 'VIEW' ? 'Read-only session'
