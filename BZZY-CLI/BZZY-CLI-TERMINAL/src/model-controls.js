@@ -2,7 +2,7 @@ import { providers, getProvider } from './providers.js';
 import { availableModels, normalizeModel } from './models.js';
 
 // Catalogs belong to Core. No model/provider list is hardcoded into the TUI.
-export async function chooseUnifiedModel(current, ui, { title = 'Choose model', scope = 'chat' } = {}) {
+export async function chooseUnifiedModel(current, ui, { title = 'Choose model', scope = 'chat', anchor } = {}) {
   const abort = new AbortController();
   const selections = new Map();
   try {
@@ -21,7 +21,7 @@ export async function chooseUnifiedModel(current, ui, { title = 'Choose model', 
       });
     })).then(results => ({ choices: [...results.flatMap(result => result.status === 'fulfilled' ? result.value : []), { value: '@custom', label: 'Enter provider and model…' }],
       description: 'Choose a model. Its supported reasoning levels appear in the adjacent Effort dropdown.' }));
-    const chosen = await ui.chooseOne(title, choices, { presentation: 'dropdown', kind: 'model', scope });
+    const chosen = await ui.chooseOne(title, choices, { presentation: 'dropdown', kind: 'model', scope, anchor });
     if (!chosen) return null;
     const value = typeof chosen === 'object' ? chosen.value : chosen;
     if (value === '@custom') {
@@ -40,7 +40,7 @@ export async function chooseUnifiedModel(current, ui, { title = 'Choose model', 
   } finally { abort.abort(); }
 }
 
-export async function chooseEffort(session, ui, { scope = 'chat' } = {}) {
+export async function chooseEffort(session, ui, { scope = 'chat', anchor } = {}) {
   if (session.modelSelectionRequired) throw new Error('Select a model before choosing its effort.');
   const abort = new AbortController(); let capabilities = session.modelCapabilities;
   try {
@@ -53,7 +53,7 @@ export async function chooseEffort(session, ui, { scope = 'chat' } = {}) {
       return { description: capabilities?.supportsEffort === false ? 'This model does not support adjustable reasoning effort.' : 'Only reasoning levels supported by the selected model are listed.',
         choices: [...new Set(['default', ...efforts])].map(value => ({ value, label: value === 'default' ? 'Default · model decides' : value[0].toUpperCase() + value.slice(1), selected: value === (session.selectedEffort || 'default') })) };
     })();
-    const effort = await ui.chooseOne('Reasoning effort', choices, { presentation: 'dropdown', kind: 'effort', scope });
+    const effort = await ui.chooseOne('Reasoning effort', choices, { presentation: 'dropdown', kind: 'effort', scope, anchor });
     return effort ? { model: session.model, effort, capabilities: capabilities || null } : null;
   } finally { abort.abort(); }
 }

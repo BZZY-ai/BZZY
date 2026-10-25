@@ -9,19 +9,34 @@ Right-click the workspace, or press **F10**, for New chat, Open chat and Setting
 A new chat is empty. Insert BZZY opens Core's model catalog with its supported
 efforts. Saved solo defaults and explicit launch selections populate the initial
 cast; workflow flags continue to use their existing setup and defaults.
-Click the centered title to rename the chat. Only named chats appear in the saved
-terminal catalog, and they reopen in their original directory without inference.
+Click the centered title to rename the chat. **Open session ▾** beside it lists
+the other aliased terminals, newest saved activity first. Only named chats appear
+in this catalog, and they reopen in their original directory without inference.
 
-Each character is a saved model slot with its own provider/model/effort and an
-original, randomly assigned silhouette. Appearance stays stable when reopening
-or changing the model. Warp, Kitty, Ghostty and iTerm2 3.6+ use smooth PNG
-illustrations with clear eyes; other terminals use a denser eight-sample Unicode
-renderer. Detection uses the terminal's environment metadata, so SSH sessions
-that do not forward that information use the Unicode fallback. Monochrome and
-small terminals remain supported. `--no-pet` disables character motion.
+Each character is a saved model slot with its own provider/model/effort. All use
+the same square pixel design and eyes, with a randomly assigned coat color that
+stays stable when reopening or changing the model. Warp, Kitty, Ghostty and
+iTerm2 3.6+ use PNGs; other terminals use filled Unicode half-block pixels from
+the same design. Detection uses the terminal's environment metadata, so SSH
+sessions that do not forward that information use the Unicode fallback.
+Monochrome and small terminals remain supported. `--no-pet` disables motion.
 
-The canvas remains mounted throughout interaction. Goal entry, renaming, private
-key entry and Settings open as canvas dialogs. Conversations open in a drawer,
+The **model · effort ▾** line below each character has separate clickable model
+and effort controls. Their dropdowns use Core's discovered catalog and supported
+reasoning levels. Applying a change pauses work and leaves it paused; cancelling
+does not change the selection. Linked groups must be paused and unlinked first.
+Subscription models retain their existing login rather than requesting API keys.
+
+The **Goal** row below the alias shows the selected character's objective, or
+the group's control goal for a linked character. Double-click that row to edit
+it in place, then press **Enter / Start goal** to submit through Core. Escape
+cancels and preserves the conversation draft. An active or paused goal still
+requires the existing replacement confirmation. An achieved Debate source stays
+immutable: use its review action, or pause and unlink to set a different goal.
+
+The canvas remains mounted throughout interaction. Context-menu goal entry,
+renaming, private key entry and Settings open as canvas dialogs; double-clicked
+goals edit in the header. Conversations open in a drawer,
 beside the character on wide terminals or in a larger window on compact screens.
 The close button and Esc return to the same canvas and preserve the draft.
 Only explicitly opening a conversation enters its drawer; repeated ordinary

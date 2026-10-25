@@ -5,7 +5,7 @@ import { createChatSession, selectedProvider } from '@bzzy/core/engine/host-comm
 import { loadSession, setSessionAlias } from './store.js';
 import { getProvider, ensureApiKey } from './providers.js';
 import { ensureRuntime, runtimeRequest } from './runtime.js';
-import { chooseUnifiedModel } from './model-controls.js';
+import { chooseUnifiedModel, chooseEffort } from './model-controls.js';
 import { chooseSavedSession } from './session-browser.js';
 import { confirmGoalReplacement } from './goal-controls.js';
 import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
@@ -47,7 +47,7 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
   const group = () => view.canvas?.groups.find(item => item.members.includes(view.focus));
   function replaceCanvas(canvas) { view.canvas = canvas; view.bindings = canvasBindings(canvas); view.alias = loadSession(canvas.id).alias || ''; }
   async function open(session) {
-    generation++; view.drawer = false; view.historyThread = null; view.linkFrom = null; view.moveNode = null; view.bubbles.clear(); view.exchanges.clear(); view.snapshots.clear();
+    generation++; view.drawer = false; view.historyThread = null; view.linkFrom = null; view.moveNode = null; view.goalClick = null; view.bubbles.clear(); view.exchanges.clear(); view.snapshots.clear();
     replaceCanvas(openCanvas(session.id)); view.focus = view.canvas.nodes[0]?.id || null;
     ui.canvasRootId = view.canvas.id;
     tui.selectTab(ui.activeTab || ui.sessionId, session.id); ui.setSession(session.id); ui.updateSession(session); tui.panel = 'chat'; currentChat = null;
@@ -168,12 +168,16 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
     }
     throw new Error('Work is still stopping. Keep it paused and try again after the workers stop.');
   }
-  async function model(insert = false) {
+  async function model(insert = false, effortOnly = false) {
     const node = focused(), current = node?.sessionId ? loadSession(node.sessionId) : { ...node?.selection, cwd: view.canvas?.cwd || options.cwd };
     if (!insert && group()) throw new Error('Pause and unlink this group before changing its models.');
-    const selection = await chooseUnifiedModel(current || { cwd: options.cwd }, ui, { title: insert ? 'Insert BZZY · model and effort' : 'Character · model and effort' });
+    const picker = { anchor: insert ? undefined : view.anchor, scope: 'canvas' };
+    const selection = effortOnly ? { provider: current.provider, ...await chooseEffort(current, ui, picker) }
+      : await chooseUnifiedModel(current || { cwd: options.cwd }, ui, { ...picker, title: insert ? 'Insert BZZY · model and effort' : 'Character · model and effort' });
+    if (effortOnly && !selection.effort) return;
     if (!selection) return;
-    await ensureApiKey(getProvider(selection.provider), ui);
+    const provider = getProvider(selection.provider);
+    if (provider.auth === 'api-key') await ensureApiKey(provider, ui);
     if (!view.canvas) await create();
     if (insert) { replaceCanvas(insertCanvasModel(view.canvas.id, view.canvas.revision, selection, id())); view.focus = view.canvas.nodes.at(-1).id; }
     else {
@@ -197,7 +201,7 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
     if (command === 'quit') { stopped = true; return; }
     if (command === 'home') { await menu(null, true); return; }
     if (command === 'new') { await create(); return; }
-    if (command === 'open') { const saved = await chooseSavedSession(ui); if (saved) await open(saved.session); return; }
+    if (command === 'open') { const saved = await chooseSavedSession(ui, { excludeId: view.canvas?.id }); if (saved) await open(saved.session); return; }
     if (command === 'settings') { ui.openSettings(); return; }
     if (view.offline && !['chat', 'back'].includes(command)) throw new Error('Core is offline. Controls will unlock after Core confirms reconnection.');
     if (command === 'insert') { await model(true); return; }
@@ -208,6 +212,7 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
     }
     if (command === 'back') { view.drawer = false; view.historyThread = null; view.linkFrom = null; view.moveNode = null; ui.sessionMode = 'CONTROL'; tui.panel = 'chat'; return; }
     if (command === 'menu') { await menu(argument || null); return; }
+    if (['model', 'effort', 'edit-goal'].includes(command) && argument && view.canvas.nodes.some(node => node.id === argument)) view.focus = argument;
     const node = focused(); if (!node) return;
     const bound = binding(), target = bound?.controlId || node.sessionId;
     if (bound?.stale && !['unlink', 'chat'].includes(command)) throw new Error('The mode changed outside this canvas. Pause and unlink this group before configuring it again.');
@@ -228,13 +233,22 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
       if (!goal || goal.status === 'complete') throw new Error('Set a new goal, or choose Debate to review an achieved goal.');
       await input(target, { operation: 'goal', resumeGoal: true, ...(goal.status === 'paused' || isStalledGoal(goal) ? { resumeGoalId: goal.id } : {}), ...(goal.status === 'paused' ? { resumeGoalStatus: 'paused' } : {}), options: ui.executionOptions(options, snapshot.session) }); return;
     }
-    if (command === 'goal') {
-      if (group()?.mode === 'debate' && loadSession(target).goal?.status === 'complete') { await action('review'); return; }
-      const objective = (await ui.ask('Goal · what should this BZZY achieve?'))?.trim(); if (!objective) return;
+    if (command === 'goal' || command === 'edit-goal') {
+      if (group()?.mode === 'debate' && loadSession(target).goal?.status === 'complete') {
+        if (command === 'edit-goal') throw new Error('This Debate reviews an achieved goal. Pause and unlink to set a different goal, or choose Review achieved goal + evidence.');
+        await action('review'); return;
+      }
+      let objective;
+      if (command === 'edit-goal') {
+        view.editingGoal = node.id; view.linkFrom = null; view.moveNode = null;
+        try { objective = (await ui.ask('Goal · what should this BZZY achieve?', { initialValue: loadSession(target).goal?.objective || '' }))?.trim(); }
+        finally { view.editingGoal = null; }
+      } else objective = (await ui.ask('Goal · what should this BZZY achieve?'))?.trim();
+      if (!objective) return;
       const session = loadSession(target), replacement = await confirmGoalReplacement(ui, session.goal); if (!replacement.confirmed) return;
       await input(target, { operation: 'goal', objective, replaceGoalId: replacement.replaceGoalId, options: ui.executionOptions(options, session) }); return;
     }
-    if (command === 'model') { await model(); return; }
+    if (command === 'model' || command === 'effort') { await model(false, command === 'effort'); return; }
     if (command === 'place') { view.drawer = false; view.moveNode = node.id; return; }
     if (command === 'move') {
       const [nodeId, ...coordinates] = argument.split(' ');
@@ -274,16 +288,29 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
     if (release || button & 32 || button & 64) return true;
     const hit = tui.hitTargets.findLast(hit => hit.row === y && x >= hit.left && x <= hit.right);
     view.anchor = { left: x, row: y };
-    if ((button & 3) === 2) { if (hit?.type === 'canvas-node') { view.focus = hit.id; tui.localCommand('/canvas menu ' + hit.id); } else tui.localCommand('/canvas home'); }
+    if ((button & 3) === 2) {
+      view.goalClick = null;
+      if (['canvas-node', 'canvas-model', 'canvas-effort'].includes(hit?.type)) { view.focus = hit.id; tui.localCommand('/canvas menu ' + hit.id); } else tui.localCommand('/canvas home');
+    }
     else if ((button & 3) === 0) {
-      if (view.moveNode) {
+      if (hit?.type === 'canvas-goal') {
+        const previous = view.goalClick, now = Date.now();
+        view.goalClick = { id: hit.id, at: now, x, y };
+        if (previous?.id === hit.id && previous.y === y && Math.abs(previous.x - x) <= 3 && now - previous.at < 450) {
+          view.goalClick = null; tui.localCommand('/canvas edit-goal ' + hit.id);
+        }
+      } else if (hit?.type === 'canvas-open') { view.goalClick = null; tui.localCommand('/canvas open'); }
+      else if (hit?.type === 'canvas-title' && view.canvas) { view.goalClick = null; tui.localCommand('/canvas rename'); }
+      else if (view.moveNode) {
         const { width, top, available, cardWidth, cardHeight } = tui.canvasGeometry;
         const px = Math.max(0, Math.min(1, (x - cardWidth / 2) / Math.max(1, width - cardWidth))), py = Math.max(0, Math.min(1, (y - top - 3) / Math.max(1, available - cardHeight)));
         tui.localCommand(`/canvas move ${view.moveNode} ${px} ${py}`);
-      } else if (hit?.type === 'canvas-node') {
+      } else if (['canvas-node', 'canvas-model', 'canvas-effort'].includes(hit?.type)) {
+        view.goalClick = null;
         view.focus = hit.id;
         if (view.linkFrom) tui.localCommand('/canvas connect ' + hit.id);
-      } else if (hit?.type === 'canvas-title' && view.canvas) tui.localCommand('/canvas rename');
+        else if (hit.type !== 'canvas-node') tui.localCommand('/canvas ' + (hit.type === 'canvas-effort' ? 'effort ' : 'model ') + hit.id);
+      } else view.goalClick = null;
     }
     tui.schedule(); return true;
   };

@@ -66,6 +66,26 @@ test('settings and Core controls stay in canvas windows; clicking all card rows 
   } finally { ui.close(); }
 });
 
+test('inline goal edits prefill the objective, scroll long text, and keep chat drafts on Enter or Escape', async () => {
+  const { ui, tui, output } = fixture();
+  try {
+    tui.value = 'Keep my chat draft'; tui.cursor = 4;
+    for (const [columns, rows] of [[120, 40], [80, 24], [48, 20], [24, 12]]) {
+      Object.assign(output, { columns, rows }); ui.canvasView.editingGoal = 'b';
+      const pending = ui.ask('Goal · what should this BZZY achieve?', { initialValue: 'The existing objective ' + 'long text '.repeat(20) });
+      await next(); tui.render();
+      assert.equal(tui.composerRow, tui.canvasGoalRow); assert.ok(tui.composerOffset > 0);
+      assert.match(tui.value, /^The existing objective/); assert.doesNotMatch(frame(tui), /Set goal|Confirm ↵/);
+      assert.ok(tui.lastFrame.every(line => cellWidth(line) < columns));
+      tui.key('', { name: 'escape' }); assert.equal(await pending, null);
+      assert.equal(tui.value, 'Keep my chat draft'); assert.equal(tui.cursor, 4);
+    }
+    const pending = ui.ask('Goal · what should this BZZY achieve?', { initialValue: 'Verify the supplied evidence' });
+    await next(); tui.render(); tui.key('', { name: 'return' });
+    assert.equal(await pending, 'Verify the supplied evidence'); assert.equal(tui.value, 'Keep my chat draft');
+  } finally { ui.close(); }
+});
+
 test('conversation is a drawer with canonical content, bounded copy/scroll and close; Escape dismisses completion first', async () => {
   const { ui, tui, output } = fixture();
   try {

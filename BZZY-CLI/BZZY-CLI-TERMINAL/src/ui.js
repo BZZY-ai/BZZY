@@ -257,13 +257,13 @@ export class UI {
     if (this.lineOpen) { this.output.write('\n'); this.lineOpen = false; }
   }
 
-  ask(question) {
+  ask(question, options = {}) {
     this.beforeOutput?.();
     if (!this.interactive) return Promise.resolve('');
     if (this.canvas && !this.tui) this.openTerminal();
     const operation = this.promptQueue.then(() => {
       if (this.closed) return null;
-      if (this.tui) return this.tui.ask(question);
+      if (this.tui) return this.tui.ask(question, options);
       return new Promise(resolve => {
       this.newline();
       this.reader = readline.createInterface({ input: this.input, output: this.output, escapeCodeTimeout: 50 });

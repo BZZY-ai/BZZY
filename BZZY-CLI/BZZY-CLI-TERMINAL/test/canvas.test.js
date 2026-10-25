@@ -6,6 +6,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { UI } from '../src/ui.js';
 import { characterSprite, canvasStatus } from '../src/canvas-view.js';
+import { characterRaster } from '../src/canvas-characters.js';
 import { canvasWorkspace } from '../src/canvas-workspace.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { createTerminalTheme } from '../src/terminal-theme.js';
@@ -39,7 +40,11 @@ test('canvas fits normal and compact terminals, keeps identity, exact model-effo
     for (const [columns, rows] of [[160, 50], [120, 40], [80, 24], [48, 20], [24, 12]]) {
       Object.assign(output, { columns, rows }); tui.render();
       assert.equal(tui.lastFrame.length, rows); assert.ok(tui.lastFrame.every(line => cellWidth(line) < columns), `${columns}x${rows}`);
-      const text = tui.lastFrame.map(clean).join('\n'); assert.match(text, /starbucks-japan/);
+      const text = tui.lastFrame.map(clean).join('\n'); assert.match(text, columns >= 48 ? /starbucks-japan/ : /starbucks-jap/);
+      assert.ok(tui.hitTargets.some(hit => hit.type === 'canvas-open'));
+      assert.ok(tui.hitTargets.some(hit => hit.type === 'canvas-goal'));
+      assert.ok(tui.hitTargets.some(hit => hit.type === 'canvas-model'));
+      assert.ok(tui.hitTargets.some(hit => hit.type === 'canvas-effort'));
       assert.match(text, /BRAIN/); assert.ok(tui.hitTargets.some(hit => hit.type === 'canvas-node'));
       if (columns >= 80) { assert.match(text, /HANDS/); assert.match(text, /same-model · high/); assert.match(text, /Goal achieved/); assert.match(text, /Paused/); }
       if (rows >= 46) assert.match(text, /BRAIN ↓ HANDS/, 'the hierarchy label must remain above character surfaces');
@@ -52,7 +57,8 @@ test('canvas fits normal and compact terminals, keeps identity, exact model-effo
 test('live canvas pauses and links real Core sessions, runs delegate work, opens evidence, and unlinks without replay', { timeout: 30000 }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-canvas-live-'));
   const values = { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_HOME: path.join(directory, 'codex'),
-    BZZY_CODEX_BIN: path.resolve('test/fixtures/advanced-agent.mjs'), BZZY_TEST_LOG: path.join(directory, 'backend.jsonl'), BZZY_TEST_ADVANCED: 'canvas' };
+    BZZY_CODEX_BIN: path.resolve('test/fixtures/advanced-agent.mjs'), BZZY_CLAUDE_BIN: path.resolve('test/fixtures/advanced-agent.mjs'),
+    BZZY_TEST_LOG: path.join(directory, 'backend.jsonl'), BZZY_TEST_ADVANCED: 'canvas' };
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   const { ui, tui } = terminal({ pet: false }); let running;
   async function ready(predicate) { for (let i = 0; i < 1000; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } throw new Error('Live canvas timed out: ' + tui.actionNotice?.message); }
@@ -63,6 +69,25 @@ test('live canvas pauses and links real Core sessions, runs delegate work, opens
     let canvas = openCanvas(session.id); canvas = insertCanvasModel(session.id, canvas.revision, { provider: 'codex', model: 'fixture-hands', effort: 'default' }, randomUUID());
     const [brain, hands] = canvas.nodes;
     running = canvasWorkspace({ cwd: directory }, ui, session);
+    await ready(() => tui.resolveInput && ui.canvasView.canvas);
+    const clickControl = type => { tui.render(); const hit = tui.hitTargets.find(hit => hit.type === type && hit.id === brain.id); assert.ok(hit); tui.mouse(0, hit.left, hit.row); return hit; };
+    const clickChoice = value => { tui.render(); const index = tui.selection.choices.findIndex(choice => choice.value === value); assert.ok(index >= 0); const hit = tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === index); assert.ok(hit); tui.mouse(0, hit.left + 1, hit.row); };
+    const anchor = clickControl('canvas-effort');
+    await ready(() => tui.selection && !tui.selection.loading);
+    assert.equal(tui.selection.anchor.row, anchor.row); clickChoice('high');
+    await ready(() => tui.resolveInput && loadSession(session.id).selectedEffort === 'high');
+    assert.equal(loadSession(session.id).executionState, 'paused');
+    clickControl('canvas-model'); await ready(() => tui.selection && !tui.selection.loading);
+    clickChoice(JSON.stringify(['codex', 'fixture-light']));
+    await ready(() => tui.resolveInput && loadSession(session.id).model === 'fixture-light');
+    clickControl('canvas-effort'); await ready(() => tui.selection && !tui.selection.loading);
+    assert.deepEqual(tui.selection.choices.map(choice => choice.value), ['default', 'low']);
+    tui.key('', { name: 'escape' }); await ready(() => tui.resolveInput && !tui.selection);
+    assert.equal(loadSession(session.id).selectedEffort, 'default', 'cancelling a direct effort change keeps its selection');
+    clickControl('canvas-model'); await ready(() => tui.selection && !tui.selection.loading);
+    clickChoice(JSON.stringify(['codex', 'fixture-brain']));
+    await ready(() => tui.resolveInput && loadSession(session.id).model === 'fixture-brain');
+    assert.equal(listRecords('execution').length, 0, 'model/effort controls cannot start work');
     await command('/canvas link'); await ready(() => ui.canvasView.linkFrom === brain.id);
     await command('/canvas connect ' + hands.id); await ready(() => tui.selection?.title?.startsWith('Link'));
     tui.finishSelection('delegate');
@@ -76,8 +101,15 @@ test('live canvas pauses and links real Core sessions, runs delegate work, opens
     const goalIndex = tui.selection.choices.findIndex(choice => choice.value === 'goal'), goalChoice = tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === goalIndex);
     assert.ok(goalChoice); tui.mouse(0, goalChoice.left + 2, goalChoice.row);
     await ready(() => tui.promptDraft && /Goal/.test(tui.question)); tui.render(); assert.equal(tui.canvasOverlay.kind, 'prompt');
+    tui.key('', { name: 'escape' }); await ready(() => tui.resolveInput && !tui.promptDraft);
+    tui.render(); const inlineGoal = tui.hitTargets.find(hit => hit.type === 'canvas-goal');
+    tui.mouse(0, inlineGoal.left + 8, inlineGoal.row);
+    assert.equal(ui.canvasView.editingGoal, undefined, 'a single goal click cannot start or edit work');
+    tui.mouse(0, inlineGoal.left + 8, inlineGoal.row);
+    await ready(() => ui.canvasView.editingGoal && tui.promptDraft); tui.render();
+    assert.equal(tui.composerRow, tui.canvasGoalRow, 'editing happens in the visible goal row');
     tui.value = 'Assess supplied evidence'; tui.cursor = [...tui.value].length; tui.render();
-    const confirm = tui.hitTargets.find(hit => hit.type === 'confirm'); tui.mouse(0, confirm.left + 1, confirm.row);
+    tui.key('', { name: 'return' });
     await ready(() => loadSession(session.id).goal?.status === 'complete');
     await ready(() => ui.canvasView.bindings.get(hands.id).sessionId && ui.canvasView.bindings.get(hands.id).sessionId !== hands.sessionId);
     const executions = listRecords('execution').length;
@@ -100,8 +132,11 @@ test('live canvas pauses and links real Core sessions, runs delegate work, opens
     finishCanvasReviews(session.id); finishCanvasReviews(session.id);
     assert.equal(events(session.id).filter(event => event.type === 'debate.result').length, 1, 'review finalization is idempotent across observers');
     await command('/quit'); assert.equal(await running, 0); running = null;
+  } catch (error) {
+    console.error('Canvas interaction failed:', error.message, 'picker:', tui.selection?.title, 'prompt:', tui.question);
+    throw error;
   } finally {
-    if (running) { tui.finish('/quit'); await running.catch(() => {}); }
+    if (running) { tui.finishSelection(null); if (tui.promptDraft) tui.finish(null); tui.localCommand('/canvas quit'); await running.catch(() => {}); }
     ui.close(); const info = runtimeInfo();
     if (info && identityAlive(info.identity)) await runtimeRequest(info, 'POST', '/shutdown', {}).catch(() => {});
     for (let i = 0; i < 100 && info && identityAlive(info.identity); i++) await new Promise(resolve => setTimeout(resolve, 20));
@@ -110,19 +145,28 @@ test('live canvas pauses and links real Core sessions, runs delegate work, opens
   }
 });
 
-test('all original silhouettes render in each terminal color mode, respect reduced motion, and never print control text', () => {
+test('matching square pixel characters render in every color mode and respect reduced motion', () => {
   for (const level of ['0', '1', '2', '3']) {
     const theme = createTerminalTheme({ isTTY: true }, { FORCE_COLOR: level }, 'blue');
     for (let i = 0; i < 12; i++) {
       const a = characterSprite(i, 'working', 0, theme, { animate: false }), b = characterSprite(i, 'working', 4, theme, { animate: false });
       assert.deepEqual(a, b); assert.equal(a.length, 12); assert.ok(a.every(line => cellWidth(line) === 28));
       assert.doesNotMatch(a.map(clean).join(''), /\x1b/);
-      if (level === '1') { assert.match(a.map(clean).join(''), /[\u2801-\u28ff]/); assert.doesNotMatch(a.join(''), /▀/); }
+      assert.doesNotMatch(a.map(clean).join(''), /[\u2800-\u28ff]/, 'characters use filled pixels, not Braille dots');
+      if (level === '0') assert.match(a.map(clean).join(''), /[█▀▄]/);
     }
   }
   const theme = createTerminalTheme({ isTTY: true }, { FORCE_COLOR: '3' });
   assert.notDeepEqual(characterSprite(0, 'working', 0, theme), characterSprite(0, 'working', 2, theme));
   assert.notDeepEqual(characterSprite(0, 'working', 0, theme), characterSprite(1, 'working', 0, theme));
+  const mask = appearance => {
+    const { pixels } = characterRaster(appearance, 'idle', theme);
+    return Array.from({ length: pixels.length / 3 }, (_, i) => {
+      const [r, g, b] = pixels.subarray(i * 3, i * 3 + 3);
+      return r === 3 && g === 9 && b === 15 ? 0 : r === 237 && g === 245 && b === 242 ? 2 : 1;
+    });
+  };
+  for (let i = 1; i < 12; i++) assert.deepEqual(mask(i), mask(0), 'all coats share exactly the same outline and eyes');
 });
 
 test('state expressions use authoritative lifecycle and pending questions, with achieved distinct from stalled', () => {
@@ -161,6 +205,9 @@ test('workspace restores without claiming input, executing, replaying animations
   process.env.BZZY_HOME = path.join(directory, 'private'); const { ui, tui } = terminal();
   try {
     const session = createChatSession(getProvider('codex'), { cwd: directory, model: 'fixture', alias: 'saved-chat' });
+    const otherCwd = path.join(directory, 'other-project'); fs.mkdirSync(otherCwd);
+    const other = createChatSession(getProvider('codex'), { cwd: otherCwd, model: 'other-model', alias: 'other-chat' });
+    const unnamed = createChatSession(getProvider('codex'), { cwd: otherCwd, model: 'unnamed-model' });
     const calls = [];
     const request = async (_, method, endpoint, body) => {
       calls.push({ method, endpoint, body });
@@ -169,7 +216,7 @@ test('workspace restores without claiming input, executing, replaying animations
         return { events: endpoint.includes('after=0&') ? [{ seq: 1, type: 'text', data: { text: 'Recorded answer' }, createdAt: new Date().toISOString() }] : [], hasMore: false };
       }
       assert.equal(method, 'GET', 'restoration and view changes cannot take ownership or execute');
-      return { session: loadSession(session.id), execution: null, questions: [], children: [], capabilities: { activeSteering: false } };
+      return { session: loadSession(endpoint.split('/')[2]), execution: null, questions: [], children: [], capabilities: { activeSteering: false } };
     };
     const running = canvasWorkspace({ cwd: directory }, ui, session, null, { connect: async () => ({}), request });
     async function ready(predicate) { for (let i = 0; i < 300; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); } throw new Error('UI did not become ready.'); }
@@ -181,6 +228,22 @@ test('workspace restores without claiming input, executing, replaying animations
     tui.key('', { name: 'escape' }); await ready(() => !ui.canvasView.drawer && tui.resolveInput);
     tui.localCommand('/canvas chat'); await ready(() => ui.canvasView.drawer && tui.resolveInput);
     assert.equal(tui.value, 'Unsent'); assert.equal(tui.cursor, 3);
+    tui.key('', { name: 'escape' }); await ready(() => !ui.canvasView.drawer && tui.resolveInput);
+    const openSessions = async () => {
+      tui.render(); const open = tui.hitTargets.find(hit => hit.type === 'canvas-open'); assert.ok(open);
+      tui.mouse(0, open.left, open.row); await ready(() => tui.selection && !tui.selection.loading);
+    };
+    await openSessions();
+    assert.ok(tui.selection.choices.some(choice => choice.value === other.id));
+    assert.ok(!tui.selection.choices.some(choice => [session.id, unnamed.id].includes(choice.value)), 'the top picker lists only other aliased terminals');
+    tui.key('', { name: 'escape' }); await ready(() => !tui.selection && tui.resolveInput);
+    assert.equal(ui.canvasView.canvas.id, session.id); assert.equal(tui.value, 'Unsent');
+    await openSessions(); tui.finishSelection(other.id);
+    await ready(() => ui.canvasView.canvas.id === other.id && tui.resolveInput);
+    assert.equal(tui.cwd, otherCwd); assert.equal(ui.canvasView.alias, 'other-chat');
+    await openSessions(); tui.finishSelection(session.id);
+    await ready(() => ui.canvasView.canvas.id === session.id && tui.resolveInput);
+    assert.equal(tui.cwd, directory); assert.equal(tui.value, 'Unsent'); assert.equal(tui.cursor, 3);
     tui.finish('/quit'); assert.equal(await running, 0);
     assert.ok(calls.every(call => call.method === 'GET'));
     assert.equal(openCanvas(session.id).nodes.length, 1);

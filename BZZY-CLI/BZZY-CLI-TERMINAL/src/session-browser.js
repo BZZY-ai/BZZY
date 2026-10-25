@@ -32,11 +32,14 @@ export function queueSessionBrowser(ui) {
   return true;
 }
 
-export async function chooseSavedSession(ui) {
+export async function chooseSavedSession(ui, { excludeId } = {}) {
   try {
     while (true) {
-      const saved = namedTerminalSessions();
-      if (!saved.length) { ui.event('info', { message: 'No named terminal sessions yet. Use /alias NAME to name a chat.' }); return null; }
+      const saved = namedTerminalSessions().filter(session => session.id !== excludeId);
+      if (!saved.length) {
+        const message = excludeId ? 'No other named terminal sessions. Name another chat with /alias NAME.' : 'No named terminal sessions yet. Use /alias NAME to name a chat.';
+        ui.tui?.notice(message); ui.event('info', { message }); return null;
+      }
       ui.openTerminal?.();
       const aliases = new Map();
       for (const session of saved) aliases.set(sessionLabel(session), (aliases.get(sessionLabel(session)) || 0) + 1);

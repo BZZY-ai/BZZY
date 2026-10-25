@@ -292,12 +292,12 @@ export class TerminalChat {
     const draft = this.drafts.get(next) || { value: '', cursor: 0 };
     Object.assign(this, draft); this.schedule();
   }
-  ask(question, { hidden = false } = {}) {
+  ask(question, { hidden = false, initialValue = '' } = {}) {
     const queued = !hidden && /^bzzy\b/.test(question) ? this.inputQueue.findIndex(item => item.sessionId === (this.ui.activeTab || this.ui.sessionId)) : -1;
     if (queued >= 0) return Promise.resolve(this.inputQueue.splice(queued, 1)[0].text);
     return new Promise(resolve => {
       this.question = clean(question); this.hidden = hidden; this.resolveInput = resolve;
-      if (hidden || !/^bzzy\b/.test(this.question)) { this.promptDraft = { value: this.value, cursor: this.cursor }; this.value = ''; this.cursor = 0; }
+      if (hidden || !/^bzzy\b/.test(this.question)) { this.promptDraft = { value: this.value, cursor: this.cursor }; this.value = hidden ? '' : clean(initialValue); this.cursor = [...this.value].length; }
       this.ui.reader = { close: () => this.finish(null), setPrompt: text => { this.question = clean(text); }, prompt: () => this.schedule() };
       this.schedule();
     });

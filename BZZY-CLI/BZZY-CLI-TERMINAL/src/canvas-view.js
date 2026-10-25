@@ -42,8 +42,18 @@ export function renderCanvas(tui, width, height, { stageWidth = width } = {}) {
   tui.hitTargets = []; tui.textRegion = null; tui.scrollbar = null;
   const header = tui.persistentHeader(width, height, { compact: true });
   const title = view.alias || (view.canvas ? 'New chat' : 'BZZY workspace'), titleRow = header.length;
-  header.push(color(' '.repeat(Math.max(0, Math.floor((width - cellWidth(title)) / 2))) + clip(title, width - 4), palette.text, true));
-  tui.hitTargets.push({ type: 'canvas-title', row: titleRow + 1, left: 1, right: width });
+  const openLabel = width >= 40 ? 'Open session ▾' : 'Open ▾', openLeft = width - cellWidth(openLabel) - 1;
+  const titleText = clip(title, Math.max(1, width >= 48 ? width - 2 * cellWidth(openLabel) - 6 : openLeft - 2));
+  const titleLeft = Math.max(1, Math.min(openLeft - cellWidth(titleText) - 2, Math.floor((width - cellWidth(titleText)) / 2)));
+  let titleLine = replaceCells('', titleLeft, color(titleText, palette.text, true), width, theme, palette.background);
+  titleLine = replaceCells(titleLine, openLeft, color(openLabel, palette.accent), width, theme, palette.background);
+  header.push(titleLine);
+  tui.hitTargets.push({ type: 'canvas-title', row: titleRow + 1, left: titleLeft + 1, right: titleLeft + cellWidth(titleText) },
+    { type: 'canvas-open', row: titleRow + 1, left: openLeft + 1, right: openLeft + cellWidth(openLabel) });
+  const selected = view.bindings?.get(view.focus), selectedGoal = view.snapshots?.get(selected?.controlId || selected?.sessionId)?.session?.goal;
+  tui.canvasGoalRow = header.length + 1;
+  header.push(color(' Goal  ', palette.accent, true) + color(clip(clean(selectedGoal?.objective || (view.focus ? 'Double-click to set a goal' : 'Insert a character to set a goal')).replace(/\s+/g, ' '), width - 8), palette.muted));
+  if (view.focus) tui.hitTargets.push({ type: 'canvas-goal', id: view.focus, row: tui.canvasGoalRow, left: 1, right: width });
   header.push(color('─'.repeat(width), palette.border));
   const lines = [...header, ...Array.from({ length: Math.max(0, height - header.length) }, () => '')];
   const put = (x, y, text) => { if (y >= header.length && y < height - 2) lines[y] = replaceCells(lines[y] || '', Math.max(0, x), text, width, theme, palette.background); };
@@ -87,12 +97,21 @@ export function renderCanvas(tui, width, height, { stageWidth = width } = {}) {
     const status = canvasStatus(snapshot, binding), speech = view.bubbles?.get(node.id), speaking = speech && Date.now() - speech.at < 6500;
     const selection = binding?.selection || (snapshot?.session && !binding?.groupId ? { model: snapshot.session.resolvedModel || snapshot.session.model || node.selection.model, effort: snapshot.session.selectedEffort || node.selection.effort } : node.selection);
     const center = text => ' '.repeat(Math.max(0, Math.floor((cardWidth - cellWidth(text)) / 2))) + text;
+    const modelControl = row => {
+      const effort = clip(selection?.effort || 'default', Math.max(3, cardWidth - 10)), suffix = ' · ' + effort + ' ▾';
+      const model = clip(selection?.model || 'provider default', Math.max(1, cardWidth - cellWidth(suffix) - 2));
+      const left = x + Math.max(0, Math.floor((cardWidth - cellWidth(model + suffix)) / 2));
+      put(left, row, color(model, palette.accent, true) + color(' · ', palette.muted) + color(effort + ' ▾', palette.accent));
+      if (row < height - 2) tui.hitTargets.push(
+        { type: 'canvas-model', id: node.id, row: row + 1, left: left + 1, right: left + cellWidth(model) },
+        { type: 'canvas-effort', id: node.id, row: row + 1, left: left + cellWidth(model) + 4, right: left + cellWidth(model + suffix) });
+    };
     const focused = view.focus === node.id;
     put(x, y, color(center(clip((focused ? '› ' : '') + (binding?.role || 'SOLO') + (focused ? ' ‹' : ''), cardWidth)), focused ? palette.accent : palette.muted, focused));
     if (available < 13 || stageWidth < 30) {
-      put(x, y + 1, color(center(clip((selection?.model || 'default') + ' · ' + (selection?.effort || 'default'), cardWidth)), palette.text, true));
       put(x, y + 2, color(center(clip(status.label, cardWidth)), status.tone));
       for (let row = y; row <= y + 2; row++) tui.hitTargets.push({ type: 'canvas-node', id: node.id, row: row + 1, left: x + 1, right: Math.min(width, x + cardWidth) });
+      modelControl(y + 1);
       continue;
     }
     if (speaking) wrap(clean(speech.text).replace(/\s+/g, ' '), cardWidth - 4, 2, true).slice(0, 2).forEach((line, i) => put(x + 1, y + 1 + i, fillSurface(' ' + clip(line, cardWidth - 4) + ' ', cardWidth - 2, theme, palette.surface, palette.text)));
@@ -103,11 +122,9 @@ export function renderCanvas(tui, width, height, { stageWidth = width } = {}) {
     tui.canvasSprites.push({ id: node.id, appearance: node.appearance, state: speaking && status.state === 'working' ? 'speaking' : status.state,
       left: x + Math.floor((cardWidth - Math.min(28, cardWidth - 2)) / 2), top: y + 3, columns: Math.min(28, cardWidth - 2), rows: showHeight,
       theme, seconds: tui.canvasFrozenAt ?? tui.animationTime, animate: tui.ui.pet !== false });
-    put(x, y + 3 + showHeight, color(center(clip((selection?.model || 'provider default') + ' · ' + (selection?.effort || 'default'), cardWidth)), palette.text, true));
     put(x, y + 4 + showHeight, color(center(clip(status.label, cardWidth)), status.tone));
-    const goal = snapshot?.session?.goal?.objective;
-    if (goal && available >= 17) put(x, y + 5 + showHeight, color(center(clip(goal, cardWidth - 2)), palette.muted));
     for (let row = y; row <= Math.min(height - 4, y + 4 + showHeight); row++) tui.hitTargets.push({ type: 'canvas-node', id: node.id, row: row + 1, left: x + 1, right: Math.min(width, x + cardWidth) });
+    modelControl(y + 3 + showHeight);
   }
   if (!nodes.length) {
     const text = view.canvas ? 'Insert a BZZY to begin' : 'A place for your next goal';

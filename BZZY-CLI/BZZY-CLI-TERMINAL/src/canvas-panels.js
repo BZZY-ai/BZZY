@@ -40,6 +40,21 @@ function prompt(tui, lines, width, height, minimumTop) {
   tui.textRegion = null; tui.scrollbar = null;
 }
 
+function goalInput(tui, lines, width) {
+  const theme = tui.theme, row = tui.canvasGoalRow - 1, start = width < 40 ? 1 : 7;
+  const button = width < 40 ? ' Go ↵ ' : ' Start goal ↵ ', buttonLeft = width - button.length - 1;
+  const inputWidth = Math.max(1, buttonLeft - start - 3);
+  const before = [...tui.value].slice(0, tui.cursor).join('').replaceAll('\n', ' ↵ '), value = clean(tui.value).replaceAll('\n', ' ↵ ');
+  const offset = Math.max(0, cellWidth(before) - inputWidth + 1);
+  let line = theme.color(width < 40 ? ' ' : ' Goal  ', palette.accent, true);
+  line = replaceCells(line, start, fillSurface('› ' + sliceCells(value || 'What should this BZZY achieve?', offset, offset + inputWidth), inputWidth + 2, theme, palette.elevated, value ? palette.text : palette.muted), width, theme, palette.background);
+  lines[row] = replaceCells(line, buttonLeft, fillSurface(button, button.length, theme, palette.selection, palette.accent, true), width, theme, palette.background);
+  tui.hitTargets = [{ type: 'confirm', row: row + 1, left: buttonLeft + 1, right: buttonLeft + button.length }];
+  tui.canvasOverlay = { left: 0, top: row, width, height: 1, right: width, bottom: row + 1 };
+  tui.composerLeft = start; tui.composerRow = row + 1; tui.composerOffset = offset;
+  tui.textRegion = null; tui.scrollbar = null;
+}
+
 function settings(tui, lines, width, height, minimumTop) {
   const settings = tui.ui.settings, theme = tui.theme, size = Math.max(14, Math.min(78, width - 4));
   const layout = settingsLayout(settings, size - 2, theme);
@@ -163,13 +178,14 @@ export function renderCanvasShell(tui, width, height) {
     return;
   }
   const lines = tui.lastFrame.slice(), minimumTop = Math.min(tui.sceneHeaderLength + 1, Math.max(1, height - 8));
-  if (overlay === 'prompt') prompt(tui, lines, width, height, minimumTop);
+  if (overlay === 'prompt' && tui.ui.canvasView.editingGoal) goalInput(tui, lines, width);
+  else if (overlay === 'prompt') prompt(tui, lines, width, height, minimumTop);
   else if (overlay === 'settings') settings(tui, lines, width, height, minimumTop);
   else {
     const size = sideWidth || Math.max(14, width - 4);
     conversation(tui, lines, { left: sideWidth ? width - size : Math.max(0, Math.floor((width - size) / 2)), top: Math.min(minimumTop, height - 6), width: size, height: Math.max(6, height - minimumTop - 1) });
   }
   tui.canvasOverlay.kind = overlay;
-  lines[height - 1] = tui.theme.color(' ' + clip(overlay === 'prompt' ? 'Esc cancel · Enter confirm' : overlay === 'settings' ? 'Esc back · ↑/↓ choose · Enter open' : 'Esc close conversation · Work continues in Core', width - 2), palette.muted);
+  lines[height - 1] = tui.theme.color(' ' + clip(overlay === 'prompt' ? tui.ui.canvasView.editingGoal ? 'Esc cancel · Enter starts goal' : 'Esc cancel · Enter confirm' : overlay === 'settings' ? 'Esc back · ↑/↓ choose · Enter open' : 'Esc close conversation · Work continues in Core', width - 2), palette.muted);
   tui.lastFrame = lines;
 }
