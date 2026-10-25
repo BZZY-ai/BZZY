@@ -10,7 +10,7 @@ import { createChatSession } from '@bzzy/core/engine/host-commands.js';
 import { getProvider } from '../src/providers.js';
 import { createSkill, inspectSkill } from '@bzzy/core/engine/skills.js';
 import { listRecords } from '../src/database.js';
-import { codexSkillDirectories, importCodexSkillDirectory, skillsCommand, skillRows } from '../src/skills-ui.js';
+import { codexSkillDirectories, skillsCommand, skillRows } from '../src/skills-ui.js';
 import { syncCodexSkills } from '@bzzy/core/engine/skill-sync.js';
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-workspace-ui-')), previous = process.env.BZZY_HOME;
 process.env.BZZY_HOME = path.join(directory, 'private');
@@ -31,15 +31,16 @@ test('Skills sync imports from Codex into the shared library and stays idle unti
  try {
   ui.tui.cwd = directory;
   const before = listRecords('execution').length;
-  assert.ok(skillRows(ui).some(row => row.action === 'sync'));
-  assert.ok(skillRows(ui).some(row => row.text.includes('Each skill folder has SKILL.md')));
-  assert.ok(skillRows(ui).some(row => /project \.agents\/skills.*\$CODEX_HOME\/skills.*~\/\.codex\/skills/.test(row.text)));
+  assert.ok(skillRows(ui).some(row => row.segments?.some(segment => segment.action === 'tab:import')));
+  assert.ok(skillRows(ui).some(row => row.text.includes('THIS CHAT / PROJECT')));
   await skillsCommand('/skills sync', ui, { sync: input => syncCodexSkills({ ...input, userHome: path.join(directory, 'empty-home'), codexHome: null, bzzyCodexHome: null, adminRoot: path.join(directory, 'empty-admin') }) });
   assert.equal(ui.skillSyncResult.imported, 1); assert.equal(inspectSkill('synced-ui-skill').enabled, false);
   assert.equal(listRecords('execution').length, before); assert.equal(ui.sessionId, session.id);
   ui.chooseOne = async () => 'enable'; await skillsCommand('/skills toggle:synced-ui-skill', ui);
   assert.equal(inspectSkill('synced-ui-skill').enabled, true);
   assert.ok(skillRows(ui).some(row => row.text.includes('Codex → BZZY')));
+  await skillsCommand('/skills tab:library', ui);
+  assert.ok(skillRows(ui).some(row => row.text.includes('synced-ui-skill')));
  } finally { ui.close(); }
 });
 
@@ -82,22 +83,31 @@ test('Codex directory import lists every skill, shows checkboxes, and imports on
 
     const { ui } = terminal();
     try {
-      const importing = importCodexSkillDirectory(ui, { directory: skillsRoot });
-      await Promise.resolve(); ui.tui.render();
+      ui.tui.value = 'Keep my chat draft'; ui.tui.cursor = 4;
+      await skillsCommand('/skills tab:import', ui);
+      ui.tui.value = skillsRoot; ui.tui.cursor = skillsRoot.length;
+      await skillsCommand('/skills save-directory', ui); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /Import from Codex · 3 available · Core \/ global/);
-      assert.match(frame, /picker-alpha.*\[ \]/); assert.match(frame, /picker-beta.*\[ \]/);
-      assert.match(frame, /picker_under_score · imports as picker-under-score.*\[ \]/);
+      assert.match(frame, /3 skills found/); assert.match(frame, /Save directory.*Refresh/);
+      assert.match(frame, /\[ \] picker-alpha/); assert.match(frame, /\[ \] picker-beta/);
+      assert.match(frame, /\[ \] picker_under_score .*picker-under-score/);
       assert.match(frame, /Import selected/);
-      ui.tui.key(' ', { name: 'space' }); ui.tui.key('', { name: 'down' });
-      ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' }); ui.tui.key('', { name: 'return' });
-      const result = await importing;
-      assert.equal(result.imported, 2); assert.equal(result.unchanged, 0);
+      await skillsCommand('/skills codex-toggle:0', ui);
+      await skillsCommand('/skills codex-toggle:2', ui);
+      ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Import selected · 2/);
+      await skillsCommand('/skills codex-import', ui);
+      assert.equal(ui.skillSyncResult.imported, 2); assert.equal(ui.skillSyncResult.unchanged, 0);
       assert.equal(inspectSkill('picker-alpha').enabled, false);
       assert.throws(() => inspectSkill('picker-beta'), /not found/i);
       assert.equal(inspectSkill('picker-under-score').enabled, false);
       assert.deepEqual(inspectSkill('picker-under-score').files.map(file => file.path),
         ['SKILL.md', 'agents/openai.yaml', 'references/guide.md', 'scripts/tool.sh']);
+      await skillsCommand('/skills tab:library', ui);
+      const library = skillRows(ui).map(row => row.text).join('\n');
+      assert.match(library, /THIS CHAT \/ PROJECT/); assert.match(library, /BZZY CORE \/ GLOBAL/);
+      assert.match(library, /picker-alpha[\s\S]*picker-under-score/);
+      ui.tui.key('', { name: 'escape' });
+      assert.equal(ui.tui.value, 'Keep my chat draft');
       assert.equal(listRecords('execution').length, 0);
     } finally { ui.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -135,8 +145,8 @@ test('the shared skills view reads instructions and explicitly enables a disable
  const { ui } = terminal();
  try {
   await ui.settingsCommand('/skills'); ui.tui.render();
-  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Import one skill folder or ZIP/);
-  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Sync skills from Codex into BZZY/);
+  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /IMPORT.*LIBRARY/);
+  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /THIS CHAT \/ PROJECT.*BZZY CORE \/ GLOBAL/s);
   await ui.settingsCommand('/skills view:' + skill.name); ui.tui.render();
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Inspect the layout/);
   await ui.settingsCommand('/skills library'); ui.chooseOne = async () => 'enable';

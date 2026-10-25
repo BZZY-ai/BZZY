@@ -110,7 +110,9 @@ test('top Skills opens Core/project skills and Metrics is an empty escapable vie
   input.write(`\x1b[<0;${skill.left + 1};${skill.row}M`);
   assert.equal(await skills, '/skills'); assert.equal(tui.value, 'keep this draft');
   await ui.settingsCommand('/skills'); tui.render();
-  assert.match(tui.lastFrame.map(clean).join('\n'), /Sync skills from Codex into BZZY/);
+  assert.match(tui.lastFrame.map(clean).join('\n'), /IMPORT.*LIBRARY.*THIS CHAT \/ PROJECT.*BZZY CORE \/ GLOBAL/s);
+  await ui.settingsCommand('/skills tab:import'); tui.render();
+  assert.match(tui.lastFrame.map(clean).join('\n'), /CODEX SKILLS DIRECTORY[\s\S]*Save directory[\s\S]*Refresh/);
   tui.key('', { name: 'escape' }); assert.equal(tui.panel, 'chat');
 
   const metrics = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
