@@ -157,7 +157,7 @@ Options:
   -v, --version         Show version
 
 Chat commands: /goal (saved goals), /goal <objective>, /goal status|pause|resume|clear, /delegate, /validate, /solo,
-/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /workflows, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /effort, /default, /usage, /settings, /help, /exit
+/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /create-skill <requirements>, /create-agent <requirements>, /workflows, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /effort, /default, /usage, /settings, /help, /exit
 /providers chooses a provider; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.

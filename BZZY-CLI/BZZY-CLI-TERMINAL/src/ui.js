@@ -1,5 +1,6 @@
 import { updateCommand } from './update-checker.js';
 import { skillsCommand } from './skills-ui.js';
+import { createDefinitionCommand } from './definition-creator-ui.js';
 import { subagentsCommand } from './subagents-ui.js';
 import { openWorkflows, workflowAction } from './workflow-ui.js';
 import { libraryCommand } from './library-ui.js';
@@ -142,6 +143,7 @@ export class UI {
   }
   openSettings() { this.openTerminal(); this.settings ||= new ClientSettings(this); this.tui?.setPanel('settings'); }
   async settingsCommand(input) {
+    if (await createDefinitionCommand(input, this)) return true;
     if (/^\/color(?:\s|$)/.test(input.trim())) {
       const name = input.trim().slice(6).trim().toLowerCase();
       if (!Object.hasOwn(palettes, name)) this.event('error', { message: 'Choose /color blue, /color black or /color white.' });

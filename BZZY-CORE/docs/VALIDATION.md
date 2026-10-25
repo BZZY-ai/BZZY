@@ -1,3 +1,49 @@
+# Native Core creators and portable skill repairs (2026-10-25)
+
+Final Node.js 24/macOS suites: **732 Core tests passed, 2 skipped** (734 total)
+and **695 CLI tests passed, 21 skipped** (716 total), zero failures. Both product
+syntax checks and whitespace checks pass. Tests use private temporary homes on
+the internal disk and synthetic model/catalog/Relay fixtures; no live model,
+email, security target or production share invitation was used.
+
+Native `/create-skill` and `/create-agent` commands ask for a name, preserve the
+selected chat provider/model/effort and follow Core's shipped internal Markdown
+creator guides. Tests cover immediate global availability, atomic skill enable,
+Core tool discovery/reads, complete Library archive/import round trips and no
+execution during publication. Existing names cannot be replaced; project
+overrides cannot be silently bypassed. The menu creators retain reviewed drafts
+and their existing Save behavior.
+
+Source contexts now pin the private Core home and project directory identity in
+addition to session/project/model settings. Real terminal tests cover name-entry
+rendering, cancellation, command discovery with hyphens, navigation/close while
+a result is pending, unsent-draft preservation, rejected private requirements,
+duplicate names and model changes. Requirements and generated bodies do not enter
+ordinary command history or creation status rows. The document runner retains
+its no-tools profile, isolated working directory, budget and cancellation checks.
+
+One shared portability checker now serves definition bundles, specialist text
+and creator input/output validation. Ordinary authorization prose and Python
+runtime references no longer become literal-credential blockers. Regressions keep
+quoted credentials, inline/configuration values, multi-line values, real account
+addresses, host paths, recognizable keys and malicious f-string literals blocked.
+Python resources survive sender/recipient checks byte-for-byte without execution.
+This remains supplementary scanning, not proof that arbitrary code is safe.
+
+Four owner-requested private Library packages were repaired through revision-pinned
+Core imports, preserving original immutable versions/history and availability
+switches. Fixed account examples/defaults and a host-specific source reference
+were parameterized, a public citation title retained its link without an address,
+and placeholder header examples replaced literal bindings. The affected helper
+now requires a supplied test inbox and does not expand it into help text. All four
+packages passed the skill validator and the complete skills/agents sharing
+preflight passed without exclusions. Python syntax and three offline email-input
+cases passed with a network-client constructor that fails if called. Private
+package contents and bindings are not part of the repository changes.
+
+Running product installations and Relay were not updated automatically. Live
+provider generation and native Linux execution remain outside this validation.
+
 # Selective Library sharing and Experiential Labs (2026-10-25)
 
 Final Node.js 24/macOS suites: **725 Core tests passed, 2 skipped** (727 total)

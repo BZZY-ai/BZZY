@@ -56,6 +56,22 @@ terminal model and effort. Describe the behavior, review the generated draft and
 choose Save; skills remain inactive until enabled. Escape cancels generation or
 returns from a preview without saving.
 
+From chat, `/create-skill <requirements>` and `/create-agent <requirements>` ask
+for a lowercase hyphenated name and use that chat's current provider, model and
+effort. These explicit creation commands publish validated definitions globally
+in **BZZY Core**, enabled for immediate discovery and later authorized use:
+
+```text
+/create-skill quiero una skill que valida los headers http
+/create-agent quiero un agente especializado en pruebas Android autorizadas
+```
+
+Core uses its internal [skill](../../BZZY-CORE/assets/bzzy-skill-creator.md) and
+[specialist](../../BZZY-CORE/assets/bzzy-agent-creator.md) creator guides, validates
+portability before saving, and never overwrites existing names. New entries are
+available in Library sharing. Creation starts no workflow or specialist task.
+Esc cancels; changing chats, projects or the selected model invalidates the result.
+
 Background learning saves reusable project skills directly into Core's Library,
 enabled and marked **learned**, with their source and version history. Open an
 entry to inspect, disable or delete it. An old learning job cannot recreate a

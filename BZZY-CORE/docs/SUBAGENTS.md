@@ -3,7 +3,7 @@
 Specialist definitions belong to Core. CLI **Agents** in the top bar (or
 `/agents`) opens the library, definition editor and this conversation's invocation
 history. These are reusable worker definitions, separate from persistent iPhone
-Agents. Creating, editing, inspecting or choosing **Use in chat** starts no model
+Agents. Manual editing, inspecting or choosing **Use in chat** starts no model
 work; Use in chat fills an editable draft.
 
 Each definition has an owner-controlled ON/OFF state in Library. Existing and
@@ -25,6 +25,15 @@ support its requested model and enforced execution policy; unsupported isolation
 fails rather than falling back to unrestricted execution.
 
 ## Define and invoke
+
+`/create-agent <requirements>` asks for a name and generates a global specialist
+using the current chat provider/model/effort. Core follows its internal
+[agent creator guide](../assets/bzzy-agent-creator.md), checks the definition with
+the same portability policy used by sharing, and publishes it ON without starting
+an assignment. It inherits the invoking model and can immediately be discovered
+and shared through Library. Creation cannot replace an existing name or override
+a local definition; cancellation or changed host/chat/project/model prevents saving.
+The model-assisted menu creator also uses this guide and retains its draft preview.
 
 In **Agents**, create `http-response-analyzer`, give it a description and
 instructions such as:

@@ -15,6 +15,8 @@ import { authorDefinition } from '@bzzy/core/engine/definition-authoring.js';
 import { listSkills } from '@bzzy/core/engine/skills.js';
 import { listSubagentDefinitions } from '@bzzy/core/engine/subagent-definitions.js';
 import { listRecords } from '@bzzy/core/engine/database.js';
+import { createDefinitionCommand } from '../src/definition-creator-ui.js';
+import { commandSuggestions, privateChatCommand } from '../src/terminal-commands.js';
 
 let root, previousHome;
 test.beforeEach(() => {
@@ -129,5 +131,85 @@ test('Skills creator prompts render their question and Escape restores the libra
     assert.match(frame, /Skill Creator.*name/); assert.match(frame, /Confirm/);
     ui.tui.key('', { name: 'escape' }); await pending;
     assert.equal(ui.tui.panel, 'skills'); assert.ok(skillRows(ui).some(row => row.action === 'creator'));
+  } finally { ui.close(); }
+});
+
+for (const kind of ['skill', 'agent']) test(`/create-${kind} asks only for a name and publishes an immediately available global definition`, async () => {
+  const { ui, session, events } = terminal();
+  try {
+    ui.tui.value = 'keep unsent text'; ui.tui.cursor = 4;
+    let prompts = 0;
+    ui.ask = async question => { prompts++; assert.match(question, /name/); return definition.name; };
+    assert.equal(await createDefinitionCommand(`/create-${kind} quiero revisar respuestas HTTP con evidencia`, ui, { generate }), true);
+    assert.equal(prompts, 1);
+    const saved = kind === 'skill' ? listSkills({ scope: 'global', enabledOnly: true }).skills[0]
+      : listSubagentDefinitions({ scope: 'global', enabledOnly: true }).subagents[0];
+    assert.equal(saved.name, definition.name); assert.equal(saved.enabled, true); assert.equal(saved.scope, 'global');
+    assert.equal(saved.provider, undefined); assert.equal(saved.model, undefined);
+    assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('assignment').length, 0);
+    assert.equal(ui.tui.value, 'keep unsent text'); assert.equal(ui.tui.cursor, 4);
+    assert.ok(events.some(event => event.message?.includes('BZZY Core · ON')));
+    assert.equal(events.filter(event => event.type === 'error').length, 0);
+    assert.equal(ui.definitionAuthoring, null); assert.equal(ui.cancelDefinitionAuthoring, undefined);
+    assert.equal(listSkills({ session }).total, kind === 'skill' ? 1 : 0);
+  } finally { ui.close(); }
+});
+
+test('native creation commands are private, discoverable with hyphens, and routed by the real chat UI without starting inference on cancel', async () => {
+  assert.deepEqual(commandSuggestions('/create-').map(item => item.command), ['/create-skill', '/create-agent']);
+  for (const command of ['/create-skill', '/create-agent']) {
+    assert.equal(privateChatCommand(command + ' private requirements'), true);
+    const { ui } = terminal();
+    try {
+      const sessionsBefore = listRecords('session').length;
+      const pending = ui.settingsCommand(command + ' revisar headers');
+      await until(() => ui.tui.promptDraft && /Creator.*name/.test(ui.tui.question));
+      ui.tui.render(); assert.match(clean(ui.tui.lastFrame.join('\n')), /Creator.*name/);
+      ui.tui.key('', { name: 'escape' }); assert.equal(await pending, true);
+      assert.equal(listRecords('session').length, sessionsBefore); assert.equal(listRecords('execution').length, 0);
+      assert.equal(ui.tui.history.some(value => value.includes('private requirements')), false);
+    } finally { ui.close(); }
+  }
+});
+
+test('native creator cancellation and terminal navigation discard a completed model document before publication', async () => {
+  for (const mode of ['cancel', 'navigation', 'closed']) {
+    const { ui, session } = terminal();
+    try {
+      ui.ask = async () => definition.name;
+      let complete;
+      const pending = createDefinitionCommand('/create-skill revisar headers HTTP', ui, { generate: async input => {
+        const draft = await generate(input);
+        await new Promise(resolve => { complete = resolve; }); return draft;
+      } });
+      await until(() => complete);
+      if (mode === 'cancel') ui.tui.key('', { name: 'escape' });
+      else if (mode === 'navigation') ui.nextSession = { id: 'different-chat' };
+      else ui.closed = true;
+      complete(); await pending;
+      assert.equal(listSkills({ session }).total, 0); assert.equal(listSubagentDefinitions({ scope: 'global' }).total, 0);
+      assert.equal(ui.cancelDefinitionAuthoring, undefined);
+      ui.closed = false;
+    } finally { ui.close(); }
+  }
+});
+
+test('native creator rejects unsafe requirements before inference, never overwrites names, and rejects stale model selections', async () => {
+  const { ui, session, events } = terminal();
+  try {
+    ui.ask = async () => definition.name;
+    let calls = 0;
+    const checkedGenerate = input => authorDefinition({ ...input, runModel: async () => { calls++; return { text: JSON.stringify(definition) }; } });
+    await createDefinitionCommand('/create-skill password=fixture-private-value', ui, { generate: checkedGenerate });
+    assert.equal(calls, 0); assert.equal(listSkills({ session }).total, 0);
+    await createDefinitionCommand('/create-skill revisar headers', ui, { generate: checkedGenerate });
+    assert.equal(calls, 1); const before = listSkills({ scope: 'global' }).skills[0];
+    await createDefinitionCommand('/create-skill revisar otros headers', ui, { generate: checkedGenerate });
+    assert.equal(calls, 1); assert.deepEqual(listSkills({ scope: 'global' }).skills[0], before);
+    ui.ask = async () => { session.model = 'changed-model'; saveSession(session); return 'different-name'; };
+    await createDefinitionCommand('/create-agent revisar Android', ui, { generate: checkedGenerate });
+    assert.equal(calls, 1); assert.equal(listSubagentDefinitions({ scope: 'global' }).total, 0);
+    assert.ok(events.some(event => event.type === 'error' && /selected model changed/.test(event.message)));
+    assert.equal(JSON.stringify(events).includes('fixture-private-value'), false);
   } finally { ui.close(); }
 });

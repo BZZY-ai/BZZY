@@ -71,6 +71,11 @@ values. The sender can explicitly omit those whole entries and review the rest.
 Their exact identities, revisions and versions are pinned through archive creation.
 Unsafe goals retain the separate explicit omission flow using safe IDs. Nothing
 is silently stripped; unselected types are never scanned or copied.
+Credential checks distinguish ordinary authorization prose and runtime references
+inside Python resources from literal bindings. Fixed account addresses, quoted
+credentials, private host paths and private resource packages still block both
+export and import. Scanner results supplement review; they do not prove arbitrary
+code or text contains no private information.
 Use the full-session flow for the selected project's private history.
 
 ## Integrity, retry and limits

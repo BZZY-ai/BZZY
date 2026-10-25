@@ -53,6 +53,12 @@ session, with original source references and integrity checks. They grant no
 permissions or completion evidence. Compaction and definition creators use the
 restricted document backend with no tools and an empty private working directory;
 model output passes host validation before publication or reviewed saving.
+Explicit terminal `/create-skill` and `/create-agent` commands authorize global
+publication with immediate availability after validation. Core uses its internal
+creator guides and the same portability checks as Library sharing, with atomic
+registration/activation, source/model/host pins and no name replacement. A model
+only returns a bounded document; it cannot administer the registry or execute
+the resulting behavior during creation.
 Compaction and consensus share a Core-owned model selection, inheriting the Core
 assistant by default. Changing defaults starts no work and grants no permissions.
 Compaction retains durable usage reservations and explicit recovery after uncertain requests. See

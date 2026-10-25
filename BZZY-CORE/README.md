@@ -43,6 +43,9 @@ Implemented:
   Changing it starts no inference and preserves selections pinned to existing jobs.
 - Model-assisted Skill and specialist Agent creators using the current terminal
   model, restricted document generation, reviewed drafts and checked saving.
+  Native `/create-skill` and `/create-agent` commands ask for a name and publish
+  portable global definitions enabled for use, through Core's internal creator
+  guides and validated atomic registration. Creation does not start a task.
 - Reviewed combined ZIP export/import for portable skills and specialist agents,
   preserving package resources and scopes without account bindings or execution.
 - Background learning publishes reusable project skills directly to Library,

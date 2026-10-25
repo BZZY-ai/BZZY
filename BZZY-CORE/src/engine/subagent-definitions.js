@@ -3,6 +3,7 @@ import path from 'node:path';
 import { database, transaction, getRecord, putRecord, digest, now } from './database.js';
 import { getProvider } from './providers.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
+import { assertPortableDefinitionText } from './definition-portability.js';
 import { recordLibraryCreation } from './library-notifications.js';
 
 // Local-owner administration only. Models discover definitions but cannot edit
@@ -101,8 +102,8 @@ export function normalizeSubagentDefinition(input) {
   // Known credentials, recognizable key formats, literal credential assignments
   // and private account addresses do not belong in reusable definitions.
   assertShareText(serialized, sharedSecrets());
-  if (/(?:["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)["']?)\s*[=:]\s*["']?(?!<|\$\{|\[redacted\])[^\s"']+/i.test([result.description, result.instructions].join('\n')) ||
-      /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test([result.description, result.instructions].join('\n'))) fail('Reusable subagents cannot contain credentials or private account addresses. Use private host bindings at execution time.');
+  try { assertPortableDefinitionText([result.description, result.instructions].join('\n')); }
+  catch { fail('Reusable subagents cannot contain credentials, private account addresses or host paths. Use private host bindings at execution time.'); }
   return result;
 }
 

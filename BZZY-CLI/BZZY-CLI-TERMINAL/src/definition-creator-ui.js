@@ -76,3 +76,58 @@ export function saveCreator(ui, kind) {
     : `Saved ${saved.name}. Use it from the Agents library or ask the chat to invoke it.` });
   return saved;
 }
+
+// Explicit owner commands authorize creation and immediate availability. Model
+// output remains a document; only Core validates and publishes the definition.
+export async function createDefinitionCommand(input, ui, { generate = authorDefinition, publish = saveAuthoredDefinition } = {}) {
+  const match = /^\/create-(skill|agent)(?:\s+([\s\S]*))?$/.exec(input.trim());
+  if (!match) return false;
+  let controller, state, monitor, cancel;
+  try {
+    if (!ui.interactive || ui.json) throw new Error('Use a private interactive BZZY chat for creation.');
+    if (ui.definitionAuthoring) throw new Error('A creator is already generating. Wait or press Esc.');
+    const kind = match[1] === 'skill' ? 'skill' : 'subagent';
+    const context = captureDefinitionContext(ui.activeTab || ui.sessionId), selectedSession = ui.sessionId,
+      selectedTab = ui.activeTab, initialCwd = ui.tui?.cwd;
+    const check = () => {
+      if (ui.closed || ui.coreLifecycleInterrupted || ui.sessionId !== selectedSession || ui.activeTab !== selectedTab || ui.nextSession || ui.tui?.cwd !== initialCwd) {
+        throw new Error('The terminal changed. Reopen the creator in the intended chat.');
+      }
+      return assertDefinitionContext(context, ui.activeTab || ui.sessionId);
+    };
+    check();
+    const name = (await ui.ask(`${titleFor(kind)} · name · lowercase-with-hyphens · Esc cancels`))?.trim();
+    check(); if (!name) return true;
+    let requirements = match[2]?.trim();
+    if (!requirements) { requirements = (await ui.ask('What should it do? · requirements only; never paste secrets'))?.trim(); check(); }
+    if (!requirements) return true;
+    controller = new AbortController(); state = { kind, context };
+    cancel = () => {
+      if (ui.definitionAuthoring !== state) return false;
+      controller.abort(Object.assign(new Error('Creation cancelled.'), { code: 'DOCUMENT_CANCELLED' })); return true;
+    };
+    ui.definitionAuthoring = state; ui.cancelDefinitionAuthoring = cancel;
+    monitor = setInterval(() => { try { check(); } catch (error) { controller.abort(error); } }, 100);
+    ui.event('info', { message: `Creating ${match[1]} with ${label(context.selection)} · Esc cancels.` }); refresh(ui);
+    const draft = await generate({ kind, context, scope: 'global', signal: controller.signal,
+      input: { name, purpose: [...requirements.split(/\r?\n/)[0]].slice(0, 160).join(''), details: requirements } });
+    if (controller.signal.aborted) return true;
+    check();
+    if (draft.kind !== kind || draft.scope !== 'global' || draft.definition?.name !== name) throw new Error('The generated definition did not match the request.');
+    const saved = publish(draft, { sourceId: context.sessionId, activate: true, signal: controller.signal });
+    refresh(ui);
+    ui.event('info', { message: `Created ${match[1]} “${saved.name}” · BZZY Core · ON. ${kind === 'skill'
+      ? `Use $${saved.name} in chat or let the model discover it.`
+      : 'Ask the model to invoke it, or select Use in chat from Agents.'} Available for Library sharing. No task started.` });
+    return true;
+  } catch (error) {
+    if (!controller?.signal.aborted) ui.event('error', { message: ['DEFINITION_AUTHORING', 'INVALID_REQUEST', 'DEFINITION_BUNDLE'].includes(error.code)
+      ? error.message : 'Creation did not complete. Check the name, portable requirements and selected provider, then retry. Existing entries were kept.' });
+    return true;
+  } finally {
+    clearInterval(monitor);
+    if (state && ui.definitionAuthoring === state) ui.definitionAuthoring = null;
+    if (cancel && ui.cancelDefinitionAuthoring === cancel) delete ui.cancelDefinitionAuthoring;
+    refresh(ui);
+  }
+}

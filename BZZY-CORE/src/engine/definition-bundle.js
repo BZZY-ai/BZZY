@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +8,7 @@ import { database, getRecord, putRecord, transaction, digest, now } from './data
 import { resolveProjectIdentity } from './project-identity.js';
 import { listSkills, inspectSkill, importSkill, skillStorageId, setSkillEnabled } from './skills.js';
 import { listSubagentDefinitions, getSubagentDefinition, normalizeSubagentDefinition, saveSubagentDefinition, setSubagentEnabled } from './subagent-definitions.js';
-import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
+import { assertPortableDefinitionText as portable } from './definition-portability.js';
 import { listWorkflows, getWorkflow, normalizeWorkflow, saveWorkflow } from './workflows.js';
 import { listSavedGoals, getSavedGoal, hasSavedGoalObjective } from './saved-goals.js';
 import { normalizeGoalTemplate, saveGoalTemplate } from './goal-templates.js';
@@ -38,47 +37,6 @@ const privateResource = value => value.split('/').some(part => /^(?:auth|credent
   /^(?:project-scope\.json|run-records\.jsonl|source-goal\.json|evidence(?:\.json)?|id_rsa|id_ed25519)$/i.test(part) ||
   /(?:^|[-_.])(?:credentials?|private[-_]bindings?|bindings?|auth[-_]tokens?|oauth[-_]tokens?|secrets?)\.(?:json|ya?ml|env|ini|toml|conf|txt)$/i.test(part) ||
   /\.(?:pem|key|p12|pfx|keychain|sqlite|db)$/i.test(part));
-const placeholder = value => !value || /^(?:\$[A-Z_][A-Z0-9_]*|\$\{[^}]+\}|<[^>]+>|\[redacted\])$/i.test(value);
-const credentialField = /^(?:api[_-]?key|(?:access|refresh|auth|oauth)[_-]?token|token|password|passwd|secret|cookie|authorization|account[_-]?id|email)$/i;
-const lineAt = (text, offset) => text.slice(0, offset).split('\n').length;
-function credentialSchema(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  if (Object.keys(value).length === 1 && typeof value.$ref === 'string' && /^#\/[a-zA-Z0-9_/-]+$/.test(value.$ref)) return true;
-  return value.type === 'string' && Object.keys(value).every(key => ['type', 'title', 'description', 'format', 'minLength', 'maxLength'].includes(key)) &&
-    ['title', 'description', 'format'].every(key => value[key] === undefined || typeof value[key] === 'string') &&
-    ['minLength', 'maxLength'].every(key => value[key] === undefined || Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 1048576);
-}
-function portable(data, context) {
-  const text = data.toString('utf8');
-  try { assertShareText(text, sharedSecrets()); }
-  catch (error) { throw Object.assign(error, { reasonCode: 'CREDENTIAL' }); }
-  const account = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.exec(text);
-  if (account) portabilityFailure('Reusable definitions contain private account or host-path data. Parameterize it before exporting.', 'PRIVATE_ACCOUNT', lineAt(text, account.index));
-  const hostPath = /(?:\/Users\/|\/home\/|\/Volumes\/|\/~?\.bzzy\/|~\/(?:\.codex|\.claude|\.ssh)\/)/i.exec(text);
-  const privateOffsets = [context.cwd, context.hostHome, os.homedir(), ...(context.privateRoots || [])]
-    .filter(root => typeof root === 'string' && root.length > 3).map(root => text.indexOf(root)).filter(offset => offset >= 0);
-  if (hostPath) privateOffsets.push(hostPath.index);
-  if (privateOffsets.length) portabilityFailure('Reusable definitions contain private account or host-path data. Parameterize it before exporting.', 'PRIVATE_HOST_PATH', lineAt(text, Math.min(...privateOffsets)));
-  let json = false;
-  try {
-    const parsed = JSON.parse(text); json = true;
-    const visit = value => {
-      if (!value || typeof value !== 'object') return;
-      for (const [key, item] of Object.entries(value)) {
-        if (credentialField.test(key) && item !== null && !(typeof item === 'string' && placeholder(item)) && !credentialSchema(item)) portabilityFailure('Reusable definitions contain a literal credential or account binding.', 'CREDENTIAL_LITERAL');
-        visit(item);
-      }
-    };
-    visit(parsed);
-  } catch (error) { if (error.code === 'DEFINITION_BUNDLE') throw error; }
-  const assignments = /(?:^|[\s{,(.\[])["']?(?:api[_-]?key|(?:access|refresh|auth|oauth)[_-]?token|token|password|passwd|secret|cookie|authorization|account[_-]?id|email)["']?(?:\s*\])?\s*[:=]\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|(\$\{[^}\r\n]+\}|<[^>\r\n]+>|\[redacted\]|[^\s,\r\n}]+))/gim;
-  for (const match of text.matchAll(assignments)) {
-    const literal = match[1] ?? match[2], value = literal ?? match[3];
-    const expression = literal === undefined && (/^(?:null|None|undefined|str|string|number|integer|boolean|object|array|true|false)$/.test(value) ||
-      json && /^[{[]/.test(value) || /^(?:process\.env|os\.environ|config[.[]|bindings?[.[]|credentials?[.[])/.test(value));
-    if (!placeholder(value) && !expression) portabilityFailure('Reusable definitions contain a literal credential or account binding.', 'CREDENTIAL_LITERAL', lineAt(text, match.index + (match[0].match(/^\s*/u)?.[0].length || 0)));
-  }
-}
 function regular(file, maximum = DEFINITION_BUNDLE_LIMITS.fileBytes, identity = false) {
   const descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
@@ -243,7 +201,7 @@ function collect(context, { allowEmpty = false, inheritSelection = false, maximu
           resourceFile = file.path; phase = 'RESOURCE_TYPE';
           const data = regular(path.join(skillDirectory(record), file.path));
           if (data.length !== file.bytes || digest(data) !== file.sha256) portabilityFailure('Immutable skill content changed.', 'CONTENT_CHANGED');
-          portable(data, context); candidateFiles.push({ path: `skills/${selected}/${record.name}/${file.path}`, data }); return { ...file };
+          portable(data, { ...context, resourcePath: file.path }); candidateFiles.push({ path: `skills/${selected}/${record.name}/${file.path}`, data }); return { ...file };
         });
         resourceFile = 'SKILL.md'; phase = 'METADATA';
         if (checked.name !== record.name || checked.description !== record.description) portabilityFailure('Skill metadata changed.', 'METADATA');
@@ -335,7 +293,7 @@ function validateManifest(manifest, extracted, directory, context, { allowEmpty 
     object(file, ['path', 'bytes', 'sha256']);
     if (!safePath(file.path, 360) || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > DEFINITION_BUNDLE_LIMITS.fileBytes || !hash(file.sha256) || paths.has(file.path.toLowerCase())) fail('Invalid or duplicate definition resource.');
     portable(Buffer.from(file.path), context);
-    const data = regular(path.join(directory, file.path)); portable(data, context);
+    const data = regular(path.join(directory, file.path)); portable(data, { ...context, resourcePath: file.path });
     if (data.length !== file.bytes || digest(data) !== file.sha256) fail('A definition resource failed its exact manifest hash check.');
     paths.set(file.path.toLowerCase(), file); return data;
   };

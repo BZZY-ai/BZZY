@@ -15,6 +15,16 @@ does not implement a new provider protocol.
 
 ## Use and manage
 
+`/create-skill <requirements>` in a terminal chat asks for a name and uses that
+chat's current model to generate a reusable definition. Core's internal
+[creator guide](../assets/bzzy-skill-creator.md) defines the native package,
+discovery and credential-separation contract. The explicit command publishes
+the checked skill globally and enables it atomically; it is immediately available
+through `list_skills`/`read_skill` and Library sharing. It does not execute the
+skill. Existing names are never replaced. Escape, changed host/project/session
+or model selection, invalid output and portability failures prevent publication.
+The menu creator below retains its draft/review/Save flow.
+
 In CLI, open **Skills** or type `/skills`. Import one skill directory or a ZIP
 containing one skill directory, or create a skill by entering its name,
 description and instructions. To copy existing Codex workflows, choose **Sync

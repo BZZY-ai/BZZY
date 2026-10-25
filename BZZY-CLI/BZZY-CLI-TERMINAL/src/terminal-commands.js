@@ -28,6 +28,8 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /import [CODE]     Import a Library or full terminal copy; omit CODE for hidden entry.
 /skills            Browse shared workflows; /skills sync copies Codex skills for all models.
 /agents            Create and view reusable specialist subagents for any supported model.
+/create-skill <description> Ask for a name, then create and enable a global Core skill with the current model.
+/create-agent <description> Ask for a name, then create a global Core specialist with the current model.
 /workflows         Create, load and select complete instructions for future goals; /workflow is an alias.
 /metrics           Inspect recorded skill, specialist and worker usage for this goal or chat.
 /memory [query]    Search this engagement's findings, memory and past conversations.
@@ -49,6 +51,8 @@ export const chatCommands = [
   { command: '/update', description: 'Check GitHub and update CLI and Core together' },
   { command: '/skills', description: 'View, sync Codex skills, import and enable shared Core skills' },
   { command: '/agents', description: 'Create, view and use reusable specialist subagents across models' },
+  { command: '/create-skill', description: 'Create an enabled global skill with the current model', argument: true },
+  { command: '/create-agent', description: 'Create a global specialist with the current model', argument: true },
   { command: '/workflows', description: 'Create, load and select complete workflows for future goals' },
   { command: '/workflow', description: 'Open saved workflows and pre-prompts (alias of /workflows)' },
   { command: '/metrics', description: 'Inspect recorded goal and chat skill, specialist and worker usage' },
@@ -90,8 +94,8 @@ export const chatCommands = [
 ];
 
 export function commandSuggestions(value) {
-  if (!/^\/[a-z_]*$/.test(value)) return [];
+  if (!/^\/[a-z_-]*$/.test(value)) return [];
   return chatCommands.filter(item => item.command.startsWith(value));
 }
 
-export function privateChatCommand(value) { return /^\/(?:import|library|session-action|yolo|workflows?)(?:\s|$)/.test(String(value).trim()); }
+export function privateChatCommand(value) { return /^\/(?:import|library|session-action|yolo|workflows?|create-skill|create-agent)(?:\s|$)/.test(String(value).trim()); }

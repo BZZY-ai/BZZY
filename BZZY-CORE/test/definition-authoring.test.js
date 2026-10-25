@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createSession, saveSession, loadSession } from '../src/engine/store.js';
 import { getProvider, saveKey } from '../src/engine/providers.js';
@@ -11,6 +12,10 @@ import { captureDefinitionContext, authorDefinition, saveAuthoredDefinition, val
 import { runRestrictedDocumentModel } from '../src/engine/document-model.js';
 import { listSkills, readSkill } from '../src/engine/skills.js';
 import { listSubagentDefinitions } from '../src/engine/subagent-definitions.js';
+import { saveSubagentDefinition } from '../src/engine/subagent-definitions.js';
+import { createSkill } from '../src/engine/skills.js';
+import { ToolHost } from '../src/engine/tools.js';
+import { previewLibraryExport, buildLibraryArchive, previewLibraryImport, importLibraryBundle, discardDefinitionBundleReview } from '../src/engine/definition-bundle.js';
 
 let root, previousHome, session;
 test.beforeEach(() => {
@@ -29,6 +34,70 @@ const definition = (name = 'response-reviewer') => ({ name, description: 'Analyz
   instructions: 'Inspect the user-supplied HTTP responses and compare controlled baselines. Preserve exact evidence references, identify uncertainty and missing inputs, and return a concise review without treating model assertions as verified results.' });
 const args = kind => ({ kind, context: captureDefinitionContext(session), input: { name: 'response-reviewer', purpose: 'Review HTTP responses.', details: 'Input: response text. Output: evidence and uncertainty.' } });
 const generated = async () => ({ text: JSON.stringify(definition()), tokens: 30, usageAvailable: true });
+
+test('explicit native publication enables global skills and specialists for Core tools and portable Library imports', async () => {
+  for (const kind of ['skill', 'subagent']) {
+    const draft = await authorDefinition({ ...args(kind), scope: 'global', runModel: generated });
+    const saved = saveAuthoredDefinition(draft, { activate: true });
+    assert.equal(saved.scope, 'global'); assert.equal(saved.enabled, true);
+  }
+  const host = new ToolHost(session, { event() {} });
+  assert.equal((await host.call('list_skills', {})).skills[0].name, 'response-reviewer');
+  assert.ok((await host.call('read_skill', { name: 'response-reviewer' })).text.includes('controlled baselines'));
+  assert.equal((await host.call('list_subagents', {})).subagents[0].name, 'response-reviewer');
+  assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('assignment').length, 0);
+  const exported = previewLibraryExport({ cwd: session.cwd, kinds: ['skill', 'agent'] });
+  let imported;
+  try {
+    const folder = path.join(process.env.BZZY_HOME, 'relay', 'shares', randomUUID()); fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const archive = path.join(folder, 'project.zip');
+    buildLibraryArchive(archive, { cwd: session.cwd, expectedDigest: exported.sourceDigest, kinds: exported.kinds });
+    process.env.BZZY_HOME = path.join(root, 'recipient-core');
+    imported = previewLibraryImport(archive, { cwd: session.cwd });
+    const result = importLibraryBundle(imported, { cwd: session.cwd, enable: true });
+    assert.equal(result.skills.length, 1); assert.equal(result.agents.length, 1);
+    assert.equal(listSkills({ scope: 'global', enabledOnly: true }).total, 1);
+    assert.equal(listSubagentDefinitions({ cwd: session.cwd, enabledOnly: true }).total, 1);
+    assert.equal(listRecords('execution').length, 0);
+  } finally { discardDefinitionBundleReview(exported); if (imported) discardDefinitionBundleReview(imported); }
+});
+
+test('creator inputs and outputs share portability checks, and duplicate names fail before inference', async () => {
+  let calls = 0;
+  const runModel = async () => { calls++; return generated(); };
+  await assert.rejects(authorDefinition({ ...args('skill'), input: { ...args('skill').input, details: 'Read /Users/fixture-owner/private-project.' }, runModel }), /host paths|host-path/);
+  assert.equal(calls, 0);
+  await assert.rejects(authorDefinition({ ...args('skill'), runModel: async () => ({ text: JSON.stringify({ ...definition(), instructions: definition().instructions + ' Read /home/fixture/private.' }) }) }), /host paths|host-path/);
+  const draft = await authorDefinition({ ...args('skill'), runModel }); saveAuthoredDefinition(draft);
+  const before = calls;
+  await assert.rejects(authorDefinition({ ...args('skill'), runModel }), /already exists/);
+  assert.equal(calls, before); assert.equal(listSkills({ session }).total, 1);
+});
+
+test('native activation cannot publish a global name shadowed by a project entry, and cancellation leaves no entry', async () => {
+  for (const kind of ['skill', 'subagent']) {
+    const draft = await authorDefinition({ ...args(kind), scope: 'global', runModel: generated });
+    if (kind === 'skill') createSkill(definition(), { projectRoot: session.cwd, scope: 'project' });
+    else saveSubagentDefinition(definition(), { cwd: session.cwd, scope: 'project' });
+    assert.throws(() => saveAuthoredDefinition(draft, { activate: true }), /shadows/);
+    const entries = kind === 'skill' ? listSkills({ scope: 'global' }).total : listSubagentDefinitions({ scope: 'global' }).total;
+    assert.equal(entries, 0);
+  }
+  const draft = await authorDefinition({ ...args('skill'), scope: 'global', runModel: generated });
+  const controller = new AbortController(); controller.abort(new Error('Owner cancelled.'));
+  assert.throws(() => saveAuthoredDefinition(draft, { activate: true, signal: controller.signal }), /cancelled/);
+  assert.equal(listSkills({ scope: 'global' }).total, 0);
+});
+
+test('creator drafts are pinned to private Core home and directory identity as well as chat/model', async () => {
+  const draft = await authorDefinition({ ...args('skill'), runModel: generated });
+  fs.renameSync(session.cwd, session.cwd + '-old'); fs.mkdirSync(session.cwd);
+  assert.throws(() => saveAuthoredDefinition(draft, { activate: true }), /project or selected model changed/);
+  assert.equal(listSkills({ scope: 'global' }).total, 0);
+  process.env.BZZY_HOME = path.join(root, 'other-core');
+  assert.throws(() => saveAuthoredDefinition(draft, { activate: true }), /project or selected model changed/);
+  assert.equal(listSkills({ scope: 'global' }).total, 0);
+});
 
 test('authoring uses the selected chat provider, resolved model and effort, without changing source state', async () => {
   session.provider = 'claude'; session.backend = 'claude'; session.model = null; session.resolvedModel = 'resolved-current-model';
