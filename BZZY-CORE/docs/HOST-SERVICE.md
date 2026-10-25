@@ -45,6 +45,14 @@ goals stay paused. A short maintenance gate prevents another client from startin
 a competing daemon during this handoff. Restart after an explicit Stop finishes
 the durable pause barrier before reactivating the service.
 
+Loaded-but-unhealthy and supervisor-waiting jobs still participate in this
+handoff. Core retains the outgoing control process identity and waits for both
+that process and its native job to stop; deleting a listener file is insufficient.
+Readiness requires a matching authenticated health/supervisor PID and does not
+hide outdated-manifest errors. Its bounded wait accommodates supervisor restart
+throttling. Automatic start failures carry an attempt-specific gate, separate
+from explicit user Stop; updater recovery cannot clear a newer explicit Stop.
+
 Advanced `bzzy-core service plan` and `service install --dry-run` print the
 manifest without writing or loading anything. `service install` prepares it;
 service subcommands also accept start/status/stop/restart. An active manifest

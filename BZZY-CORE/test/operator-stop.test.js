@@ -21,10 +21,11 @@ import { identityAlive } from '../src/engine/process-identity.js';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_TEST_SCENARIO', 'BZZY_TEST_LOG'];
 let directory, workspace, core, saved;
-async function waitFor(check) {
+async function waitFor(check, diagnose) {
   const deadline = Date.now() + 12000;
   while (Date.now() < deadline) { if (await check()) return; await delay(25); }
-  assert.fail('The private operator-stop fixture did not reach its expected state.');
+  const detail = diagnose ? JSON.stringify(await diagnose()).slice(0, 3500) : '';
+  assert.fail('The private operator-stop fixture did not reach its expected state.' + (detail ? `\nReadiness diagnostics: ${detail}` : ''));
 }
 test.beforeEach(() => {
   directory = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'bos-'));
@@ -138,6 +139,18 @@ test('operator stop also halts a detached real assignment runner and retains its
   await waitFor(() => {
     const current = getRecord('assignment', assignment.id), worker = current?.workerSessionId && loadSession(current.workerSessionId);
     return worker && identityAlive(worker.backendProcess);
+  }, () => {
+    // Keep strict readiness unchanged, but retain the actual failure boundary
+    // before afterEach removes this isolated home. No prompts, tokens, account
+    // paths or raw backend traffic are included in this bounded diagnostic.
+    const current = getRecord('assignment', assignment.id), round = getRecord('round', `${assignment.id}:1`);
+    const worker = current?.workerSessionId && loadSession(current.workerSessionId), run = worker && getRecord('run', worker.id);
+    return { operatorStopped: operatorStopRequested(), runtimeAlive: identityAlive(runtimeInfo()?.identity),
+      assignment: { currentRound: current?.currentRound, closure: current?.closure, workerCreated: Boolean(worker) },
+      round: { state: round?.state, error: round?.error, reason: round?.reason, runner: round?.runner, launcher: round?.launcher },
+      worker: worker ? { state: worker.executionState, stopReason: worker.stopReason, failure: worker.failure,
+        backend: worker.backendProcess, backendAlive: identityAlive(worker.backendProcess), runState: run?.state } : null,
+      fixtureBackendStarted: fs.existsSync(process.env.BZZY_TEST_LOG) };
   });
   const current = getRecord('assignment', assignment.id), round = getRecord('round', `${assignment.id}:1`), worker = loadSession(current.workerSessionId);
   const identities = [round.runner, round.launcher, worker.backendProcess];

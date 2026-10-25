@@ -1,3 +1,29 @@
+# Verified updater handoff and recovery (2026-10-25)
+
+Final Node.js 24/macOS suites: **580 Core tests passed, 2 skipped** (582 total)
+and **591 CLI tests passed, 21 skipped** (612 total), zero failures. Both syntax
+checks and `git diff --check` pass.
+
+Handoff checks cover healthy and unhealthy engines, loaded waiting jobs without
+a PID, missing manifests, supervisor failures and listener removal before the
+captured control process exits. Standalone source daemons still require verified
+process exit; configured or observed supervisors also require native shutdown.
+A real runtime restart preserves its address, observer grants and live runner.
+
+Activation and readiness failures restore retained launchers and exact manifest
+bytes, modes and execution paths behind maintenance. Recovery uses the new
+stop-aware controller with the old manifest, including a different Node/account
+configuration and restrictive umask. Per-attempt automatic failure gates cannot
+clear explicit or legacy user Stop. Incomplete pause barriers retain their
+supervisor and prevent file replacement. Success follows verified readiness.
+
+Isolated macOS/Linux supervisor fixtures exercise public updater/lifecycle APIs
+against durable provider/default settings, synthetic credentials, active/paused/
+achieved goals, paired and revoked grants, terminal permissions, execution
+identities, history and events. Success and failed-start rollback preserve those
+records without replaying work. These are temporary fixtures, not live Linux
+service-manager validation; existing platform skips remain explicit.
+
 # Session Metrics, grouped Validate and definition ZIPs (2026-10-25)
 
 Final Node.js 24/macOS suites: **563 Core tests passed, 2 skipped** (565 total)

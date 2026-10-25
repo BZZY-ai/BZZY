@@ -9,6 +9,7 @@ import { home } from './files.js';
 import { canonicalPath } from '../paths.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { beginCoreMaintenance, assertCoreAvailable } from './maintenance.js';
+import { processIdentity, identityAlive } from './process-identity.js';
 export { beginCoreMaintenance } from './maintenance.js';
 
 const marker = 'BZZY managed host service v1';
@@ -31,6 +32,7 @@ const unit = (value, command = false) => '"' + safe(value).replaceAll('\\', '\\\
 const unitDirectory = value => safe(value).replaceAll('%', '%%') + '/.';
 const exists = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 const real = canonicalPath;
+const manifestSnapshots = new Map();
 
 export function servicePlan({ platform = process.platform, userHome = os.homedir(), coreHome = home(), node = process.execPath,
   entry = fileURLToPath(new URL('../../bin/bzzy-core.js', import.meta.url)), env = process.env, uid = process.getuid?.() } = {}) {
@@ -107,7 +109,9 @@ const invoke = (run, plan, args, optional = false) => {
 export function installService(plan, { run = defaultRun } = {}) {
   if (installed(plan)) {
     if (fs.readFileSync(plan.file, 'utf8') === plan.manifest) return { installed: true, changed: false, file: plan.file };
-    if (serviceStatus(plan, { run }).running) throw failure('SERVICE_RUNNING', 'Stop Core before replacing its active service manifest.');
+    const manager = serviceStatus(plan, { run });
+    if (!manager.available) throw failure('SERVICE_MANAGER_UNAVAILABLE', 'Core could not verify that its user service is unloaded. Check service status and user login.');
+    if (manager.running || plan.platform === 'darwin' && manager.loaded) throw failure('SERVICE_RUNNING', 'Suspend Core control before replacing its loaded service manifest. Existing runners can continue.');
   }
   ownerOnly(plan.node, { uid: fs.statSync(plan.node).uid });
   ownerOnly(plan.entry, { uid: fs.statSync(plan.entry).uid });
@@ -123,32 +127,100 @@ export function installService(plan, { run = defaultRun } = {}) {
   return { installed: true, changed: true, file: plan.file };
 }
 
-export function serviceStatus(plan, { run = defaultRun } = {}) {
+// These opaque receipts stay in the updater's trusted module instance. They
+// restore exact reviewed bytes, rather than rebuilding an old plan from the
+// updater's possibly different Node executable or terminal environment.
+export function snapshotCoreServiceManifest({ plan = servicePlan() } = {}) {
+  const present = installed(plan); let manifest = null, mode = 0o600;
+  if (present) {
+    const descriptor = fs.openSync(plan.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const stat = fs.fstatSync(descriptor);
+      if (!stat.isFile() || stat.uid !== plan.uid || stat.mode & 0o022 || stat.size > 65536) throw failure('SERVICE_PRIVATE_PATH_REQUIRED', 'The service manifest is not a bounded owned managed file.');
+      manifest = fs.readFileSync(descriptor, 'utf8'); mode = stat.mode & 0o777;
+      if (!manifest.includes(`${marker} ${plan.id}`)) throw failure('SERVICE_FILE_CONFLICT', 'An unrelated service file already exists.');
+    } finally { fs.closeSync(descriptor); }
+  }
+  const receipt = { version: 1, id: randomUUID(), file: plan.file, present, sha256: manifest == null ? null : createHash('sha256').update(manifest).digest('hex') };
+  if (manifestSnapshots.size >= 16) manifestSnapshots.delete(manifestSnapshots.keys().next().value);
+  manifestSnapshots.set(receipt.id, { receipt: { ...receipt }, plan: { ...plan, environment: { ...plan.environment } }, manifest, mode, restored: false }); return receipt;
+}
+export function restoreCoreServiceManifest(receipt, { plan = servicePlan(), run = defaultRun } = {}) {
+  const saved = receipt?.id && manifestSnapshots.get(receipt.id);
+  if (!saved || JSON.stringify(saved.receipt) !== JSON.stringify(receipt) || saved.plan.id !== plan.id || saved.plan.file !== plan.file ||
+      saved.plan.coreHome !== plan.coreHome || saved.plan.uid !== plan.uid) throw failure('SERVICE_SNAPSHOT_STALE', 'The service rollback receipt changed or belongs to another private context.');
+  const current = installed(plan), manager = serviceStatus(plan, { run, inspectMissing: true });
+  if (!manager.available) throw failure('SERVICE_MANAGER_UNAVAILABLE', 'Core could not verify its unloaded service before restoring the previous manifest.');
+  if (!nativeStopped(plan, manager)) throw failure('SERVICE_RUNNING', 'Suspend Core control before restoring its service manifest.');
+  if (!receipt.present) {
+    if (current) fs.unlinkSync(plan.file);
+  } else {
+    if (createHash('sha256').update(saved.manifest).digest('hex') !== receipt.sha256) throw failure('SERVICE_SNAPSHOT_STALE', 'The service rollback snapshot failed its integrity check.');
+    const parent = path.dirname(plan.file); ownerOnly(parent, { directory: true, uid: plan.uid });
+    const temporary = `${plan.file}.${randomUUID()}.rollback`;
+    try {
+      const descriptor = fs.openSync(temporary, 'wx', saved.mode);
+      try { fs.writeFileSync(descriptor, saved.manifest); fs.fchmodSync(descriptor, saved.mode); fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+      fs.renameSync(temporary, plan.file);
+    } finally { fs.rmSync(temporary, { force: true }); }
+  }
+  saved.restored = true;
+  return { restored: true, installed: receipt.present, file: plan.file };
+}
+export async function startRestoredCoreService(receipt, { attemptId, respectStop = true, runtime, run = defaultRun,
+  doctor = installationDoctor, readinessWaitMs = 15000, plan = servicePlan() } = {}) {
+  const saved = receipt?.id && manifestSnapshots.get(receipt.id), current = plan;
+  if (!saved || !saved.restored || JSON.stringify(saved.receipt) !== JSON.stringify(receipt) || saved.plan.id !== current.id ||
+      saved.plan.file !== current.file || saved.plan.coreHome !== current.coreHome || saved.plan.uid !== current.uid) throw failure('SERVICE_SNAPSHOT_STALE', 'Restore this private context’s service snapshot before starting it.');
+  if (!saved.receipt.present) throw failure('SERVICE_NOT_INSTALLED', 'The previous installation had no managed service manifest. Start Core explicitly after inspecting its restored installation.');
+  installed(saved.plan);
+  if (createHash('sha256').update(fs.readFileSync(saved.plan.file)).digest('hex') !== saved.receipt.sha256) throw failure('SERVICE_SNAPSHOT_STALE', 'The restored service manifest changed before recovery.');
+  runtime ||= await lifecycleRuntime();
+  const result = await startCoreHost({ plan: { ...saved.plan, manifest: saved.manifest }, runtime, run, doctor,
+    readinessWaitMs, respectStop, ...(attemptId ? { attemptId } : {}), prepare: false });
+  if (!result.managed) throw failure('SERVICE_START_FAILED', 'The restored managed service did not become ready.');
+  manifestSnapshots.delete(receipt.id); return result;
+}
+export const captureCoreService = snapshotCoreServiceManifest;
+export const restoreCoreService = restoreCoreServiceManifest;
+
+export function serviceStatus(plan, { run = defaultRun, inspectMissing = false } = {}) {
   const present = installed(plan);
-  if (!present) return { installed: false, running: false, state: 'not-installed', file: plan.file };
+  if (!present && !inspectMissing) return { installed: false, running: false, loaded: false, available: true, state: 'not-installed', file: plan.file };
   const args = plan.platform === 'darwin' ? ['print', `gui/${plan.uid}/${plan.label}`]
     : ['--user', 'show', plan.label, '--property=LoadState,ActiveState,SubState,MainPID,UnitFileState', '--no-pager'];
   const result = invoke(run, plan, args, true), output = result?.stdout || '';
-  if (result?.error || result?.status !== 0) return { installed: true, running: false, state: 'not-loaded-or-manager-unavailable', file: plan.file };
+  if (result?.error || result?.status !== 0) {
+    // A missing job and an inaccessible manager are different states. A
+    // successful domain query proves that this owned label is not loaded.
+    const domain = plan.platform === 'darwin' && !result?.error ? invoke(run, plan, ['print', `gui/${plan.uid}`], true) : null;
+    const available = Boolean(domain && !domain.error && domain.status === 0);
+    return { installed: present, running: false, loaded: available ? false : null, available,
+      state: available ? 'not-loaded' : 'manager-unavailable', file: plan.file };
+  }
   if (plan.platform === 'darwin') {
     const pid = Number(/^\s*pid = (\d+)$/m.exec(output)?.[1]) || null;
-    return { installed: true, running: Boolean(pid), state: /^\s*state = ([a-z-]+)$/m.exec(output)?.[1] || 'loaded', pid, file: plan.file };
+    return { installed: present, running: Boolean(pid), loaded: true, available: true,
+      state: /^\s*state = ([a-z-]+)$/m.exec(output)?.[1] || 'loaded', pid, file: plan.file };
   }
   const values = Object.fromEntries(output.split('\n').filter(line => line.includes('=')).map(line => line.split('=')));
   const pid = Number(values.MainPID) || null;
-  return { installed: true, running: values.ActiveState === 'active' && Boolean(pid), state: /^[a-z-]+$/.test(values.ActiveState) ? values.ActiveState : 'unknown',
-    enabled: values.UnitFileState === 'enabled', pid, file: plan.file };
+  if (!values.LoadState || !values.ActiveState) return { installed: present, running: false, loaded: null, available: false, state: 'manager-unavailable', file: plan.file };
+  return { installed: present, running: values.ActiveState === 'active' && Boolean(pid), loaded: values.LoadState === 'loaded', available: true,
+    state: /^[a-z-]+$/.test(values.ActiveState) ? values.ActiveState : 'unknown',
+    enabled: ['enabled', 'enabled-runtime'].includes(values.UnitFileState), pid, file: plan.file };
 }
 
 export async function startService(plan, { run = defaultRun, runtimeRunning = async () => false } = {}) {
   if (!installed(plan, { exact: true })) throw failure('SERVICE_NOT_INSTALLED', 'Run service install first.');
   context(plan, false);
   const status = serviceStatus(plan, { run });
+  if (!status.available) throw failure('SERVICE_MANAGER_UNAVAILABLE', 'The user service manager is unavailable. Check service status and user login.');
   if (status.running) return status;
   if (await runtimeRunning()) throw failure('CORE_ALREADY_RUNNING', 'An unsupervised Core is already running. Stop it before starting the managed service.');
   if (plan.platform === 'darwin') {
     invoke(run, plan, ['enable', `gui/${plan.uid}/${plan.label}`]);
-    if (status.state === 'not-loaded-or-manager-unavailable') invoke(run, plan, ['bootstrap', `gui/${plan.uid}`, plan.file]);
+    if (status.loaded === false) invoke(run, plan, ['bootstrap', `gui/${plan.uid}`, plan.file]);
     invoke(run, plan, ['kickstart', `gui/${plan.uid}/${plan.label}`]);
   } else {
     invoke(run, plan, ['--user', 'daemon-reload']);
@@ -156,15 +228,27 @@ export async function startService(plan, { run = defaultRun, runtimeRunning = as
   }
   return { ...serviceStatus(plan, { run }), requested: 'start' };
 }
-export function stopService(plan, { run = defaultRun } = {}) {
-  if (!installed(plan)) return { installed: false, running: false, state: 'not-installed' };
+export function stopService(plan, { run = defaultRun, inspectMissing = false } = {}) {
+  if (!installed(plan)) {
+    if (!inspectMissing) return { installed: false, running: false, state: 'not-installed' };
+    const manager = serviceStatus(plan, { run, inspectMissing: true });
+    if (!manager.available) throw failure('SERVICE_MANAGER_UNAVAILABLE', 'Core could not inspect its user service. Check service status and user login.');
+    if (!manager.loaded) return { ...manager, state: 'stopped' };
+    context(plan, false);
+  }
   if (plan.platform === 'darwin') {
     invoke(run, plan, ['disable', `gui/${plan.uid}/${plan.label}`]);
-    const status = serviceStatus(plan, { run });
-    if (status.state !== 'not-loaded-or-manager-unavailable') invoke(run, plan, ['bootout', `gui/${plan.uid}/${plan.label}`]);
+    const removed = invoke(run, plan, ['bootout', `gui/${plan.uid}/${plan.label}`], true);
+    if (removed?.error || removed?.status !== 0) {
+      const status = serviceStatus(plan, { run, inspectMissing });
+      if (!status.available || status.loaded !== false) throw failure('SERVICE_MANAGER_UNAVAILABLE', 'Core could not verify that its user service was unloaded. Check service status and user login.');
+    }
   } else invoke(run, plan, ['--user', 'disable', '--now', plan.label]);
-  return { installed: true, running: false, state: 'stopped', file: plan.file };
+  const status = serviceStatus(plan, { run, inspectMissing });
+  return { ...status, ...(nativeStopped(plan, status) ? { state: 'stopped' } : {}), requested: 'stop' };
 }
+const nativeStopped = (plan, status) => status.available === true &&
+  (plan.platform === 'darwin' ? status.loaded === false : !status.running && ['inactive', 'failed'].includes(status.state));
 export function uninstallService(plan, options = {}) {
   if (!installed(plan)) return { installed: false, removed: false };
   stopService(plan, options); fs.unlinkSync(plan.file);
@@ -192,20 +276,26 @@ export function installationDoctor({ env = process.env, platform = process.platf
 
 async function lifecycleRuntime() {
   const runtime = await import('./runtime.js');
-  const { identityAlive } = await import('./process-identity.js');
   const current = () => {
     const info = runtime.runtimeInfo(); return info && identityAlive(info.identity) ? info : null;
   };
   return {
-    controlAlive: () => Boolean(current()),
+    controlIdentity: () => current()?.identity || null,
+    controlAlive: identity => identity ? identityAlive(identity) : Boolean(current()),
     clearStop: runtime.clearOperatorStopIntent,
     persistStop: runtime.persistOperatorStopIntent,
     stopped: runtime.operatorStopRequested,
-    async status() {
+    stopIntent: runtime.operatorStopIntent,
+    async status({ timeoutMs = 1000 } = {}) {
       const info = current();
       if (!info) return { running: false };
       try {
-        const health = await runtime.runtimeRequest(info, 'GET', '/health');
+        const target = new URL(info.url);
+        if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || target.username || target.password) return { running: false };
+        const response = await fetch(info.url + '/health', { headers: { authorization: `Bearer ${info.token}` }, redirect: 'error',
+          signal: AbortSignal.timeout(Math.max(1, Math.min(1000, timeoutMs))) });
+        if (!response.ok) return { running: false };
+        const health = await response.json();
         const identity = health.identity;
         if (!identity || identity.pid !== info.identity.pid || identity.start !== info.identity.start ||
           identity.boot !== info.identity.boot || !identityAlive(identity)) return { running: false };
@@ -227,16 +317,19 @@ async function lifecycleRuntime() {
 
 export async function coreHostStatus({ plan = servicePlan(), runtime, run = defaultRun } = {}) {
   runtime ||= await lifecycleRuntime();
-  const engine = await runtime.status(), service = serviceStatus(plan, { run });
-  return { ...engine, engine, service, managed: sameManagedProcess(engine, service), operatorStopped: runtime.stopped() };
+  const engine = await runtime.status(), service = serviceStatus(plan, { run, inspectMissing: true });
+  return { ...engine, engine, service, managed: sameManagedProcess(engine, service), operatorStopped: runtime.stopped(),
+    operatorStopIntent: runtime.stopIntent?.() || null };
 }
 const sameManagedProcess = (engine, manager) => engine.running === true && manager.running === true &&
   Number.isSafeInteger(engine.pid) && engine.pid > 0 && engine.pid === manager.pid;
 
 export async function startCoreHost({ plan = servicePlan(), runtime, run = defaultRun, doctor = installationDoctor,
-  prepare = true, readinessWaitMs = 8000 } = {}) {
+  prepare = true, readinessWaitMs = 15000, attemptId = process.env.BZZY_CORE_START_ATTEMPT_ID || randomUUID(),
+  respectStop = process.env.BZZY_CORE_RESPECT_STOP === '1' } = {}) {
   assertCoreAvailable(plan.coreHome);
   if (!Number.isSafeInteger(readinessWaitMs) || readinessWaitMs < 50 || readinessWaitMs > 15000) throw failure('SERVICE_USAGE', 'Service readiness wait must be 50–15000 milliseconds.');
+  if (typeof respectStop !== 'boolean' || typeof attemptId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(attemptId)) throw failure('SERVICE_USAGE', 'Supply a valid Core start attempt and stop policy.');
   if (!runtime) (await import('../relay/service.js')).prepareRelayService();
   runtime ||= await lifecycleRuntime();
   const ready = doctor();
@@ -245,66 +338,96 @@ export async function startCoreHost({ plan = servicePlan(), runtime, run = defau
     if (!prepare) return { managed: false };
     installService(plan, { run });
   }
+  // A configuration mismatch is never a concurrent-launch success. Validate
+  // it before changing the operator gate or invoking the service manager.
+  installed(plan, { exact: true });
   const manager = serviceStatus(plan, { run }), engine = await runtime.status();
+  if (respectStop && runtime.stopped()) throw failure('CORE_STOPPED', 'Core was stopped by the local operator. The update did not reactivate it.');
   if (runtime.stopped() && (manager.running || engine.running)) {
     throw failure('CORE_STOPPED', 'Core is still quiescing. Run bzzy-core restart to finish the stop before reactivating it.');
   }
   if (engine.running && !sameManagedProcess(engine, manager)) throw failure('CORE_ALREADY_RUNNING', 'Core is running outside the user service. Run bzzy-core restart to migrate it safely.');
-  runtime.clearStop();
+  if (!respectStop) runtime.clearStop();
   try { await startService(plan, { run, runtimeRunning: async () => (await runtime.status()).running }); }
   catch (error) {
     // A concurrent explicit launcher may have loaded the same service first.
     // Otherwise preserve the operator gate: routine clients must not turn a
     // failed supervised start into an unsupervised fallback.
-    if (!serviceStatus(plan, { run }).running) { runtime.persistStop(); throw error; }
+    installed(plan, { exact: true });
+    const current = serviceStatus(plan, { run });
+    if (error.code !== 'SERVICE_MANAGER_UNAVAILABLE' || !current.available || !current.loaded) {
+      runtime.persistStop({ source: 'service_start_failure', attemptId }); throw error;
+    }
   }
   const deadline = Date.now() + readinessWaitMs;
   let current, supervisor;
   do {
-    current = await runtime.status(); supervisor = serviceStatus(plan, { run });
+    if (respectStop && runtime.stopped()) throw failure('CORE_STOPPED', 'Core was stopped by the local operator. The update did not reactivate it.');
+    current = await runtime.status({ timeoutMs: Math.max(1, deadline - Date.now()) }); supervisor = serviceStatus(plan, { run });
+    if (respectStop && runtime.stopped()) throw failure('CORE_STOPPED', 'Core was stopped by the local operator. The update did not reactivate it.');
     if (sameManagedProcess(current, supervisor)) break;
     await delay(Math.min(100, Math.max(1, deadline - Date.now())));
   } while (Date.now() < deadline);
   if (!sameManagedProcess(current, supervisor)) {
-    runtime.persistStop();
+    runtime.persistStop({ source: 'service_start_failure', attemptId });
     throw failure('SERVICE_START_FAILED', 'The user service did not become ready. Check bzzy-core status and private supervisor logs.');
   }
   return { ...current, engine: current, service: supervisor, managed: true };
 }
 
-export async function stopCoreHost({ plan = servicePlan(), runtime, run = defaultRun } = {}) {
+export async function clearCoreStartFailure(attemptId, { runtime } = {}) {
+  if (typeof attemptId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(attemptId)) throw failure('SERVICE_USAGE', 'Supply the exact Core start attempt.');
+  runtime ||= await lifecycleRuntime();
+  return runtime.clearStop({ expectedSource: 'service_start_failure', expectedAttemptId: attemptId }) === true;
+}
+
+async function waitForStoppedControl(plan, runtime, run, identities, processes, code, supervisorExpected) {
+  const deadline = Date.now() + 15000;
+  do {
+    const manager = serviceStatus(plan, { run, inspectMissing: true });
+    supervisorExpected ||= manager.installed || manager.loaded === true;
+    const alive = identities.some(identity => processes.alive(identity)) ||
+      (runtime.controlAlive ? await runtime.controlAlive() : (await runtime.status()).running);
+    // Source/programmatic contexts may never have prepared a user service.
+    // Their authenticated daemon still must exit, but an unavailable manager
+    // cannot prove a configured supervisor exists. Once one was configured or
+    // observed, keep the strict native-unload barrier for the entire handoff.
+    const nativeVerified = nativeStopped(plan, manager) || !supervisorExpected && !manager.installed && manager.loaded !== true;
+    if (nativeVerified && !alive) return manager;
+    if (Date.now() >= deadline) throw failure(code, 'Core control or its user service has not finished shutting down; existing runners were retained.');
+    await delay(50);
+  } while (true);
+}
+
+export async function stopCoreHost({ plan = servicePlan(), runtime, run = defaultRun,
+  processes = { identity: processIdentity, alive: identityAlive } } = {}) {
   runtime ||= await lifecycleRuntime();
   runtime.persistStop();
-  const manager = serviceStatus(plan, { run });
+  const manager = serviceStatus(plan, { run, inspectMissing: true });
+  const identities = [runtime.controlIdentity?.(), manager.pid && processes.identity(manager.pid)].filter(Boolean);
   // The operator barrier rejects new work while every existing execution is
   // paused. Keep the supervisor loaded if verification fails.
   const result = await runtime.quiesce(manager.running);
   if (result.quiesced !== true && result.stopped !== true) throw failure('STOP_INCOMPLETE', 'Core could not verify that all work stopped.');
-  if (manager.installed) stopService(plan, { run });
-  const deadline = Date.now() + 8000;
-  while (runtime.controlAlive ? await runtime.controlAlive() : (await runtime.status()).running) {
-    if (Date.now() >= deadline) throw failure('STOP_INCOMPLETE', 'Core has not finished stopping; its stop intent remains active.');
-    await delay(100);
-  }
+  if (manager.installed || manager.loaded) stopService(plan, { run, inspectMissing: true });
+  await waitForStoppedControl(plan, runtime, run, identities, processes, 'STOP_INCOMPLETE', manager.installed || manager.loaded === true);
   return { running: false, stopped: true, pausedExecutions: result.pausedExecutions || 0, runningAgentsContinue: false,
     service: serviceStatus(plan, { run }) };
 }
 
-export async function suspendCoreHost({ plan = servicePlan(), runtime, run = defaultRun } = {}) {
+export async function suspendCoreHost({ plan = servicePlan(), runtime, run = defaultRun,
+  processes = { identity: processIdentity, alive: identityAlive } } = {}) {
   runtime ||= await lifecycleRuntime();
-  const manager = serviceStatus(plan, { run });
+  const manager = serviceStatus(plan, { run, inspectMissing: true });
+  const identities = [runtime.controlIdentity?.(), manager.pid && processes.identity(manager.pid)].filter(Boolean);
   // Service manifests explicitly abandon descendants / use KillMode=process.
   // Unload only the control daemon; execution runners keep their identities.
-  if (manager.installed) stopService(plan, { run });
+  if (manager.installed || manager.loaded) stopService(plan, { run, inspectMissing: true });
   if ((await runtime.status()).running) {
     const result = await runtime.shutdown();
     if (result.runningAgentsContinue !== true) throw failure('RESTART_INCOMPLETE', 'Core could not confirm execution-preserving shutdown.');
   }
-  const deadline = Date.now() + 8000;
-  while (runtime.controlAlive ? await runtime.controlAlive() : (await runtime.status()).running) {
-    if (Date.now() >= deadline) throw failure('RESTART_INCOMPLETE', 'Core control has not finished shutting down; active runners were not paused.');
-    await delay(50);
-  }
+  await waitForStoppedControl(plan, runtime, run, identities, processes, 'RESTART_INCOMPLETE', manager.installed || manager.loaded === true);
   return { running: false, runningAgentsContinue: true };
 }
 

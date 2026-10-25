@@ -44,9 +44,47 @@ function environmentFingerprint() {
 export const runtimeFile = () => path.join(home(), 'runtime', 'service.json');
 export const runtimeInfo = () => readJson(runtimeFile(), null);
 const operatorStopFile = () => path.join(home(), 'runtime', 'operator-stop.json');
-export const operatorStopRequested = () => readJson(operatorStopFile(), null)?.stopped === true;
-export function persistOperatorStopIntent() { writeJson(operatorStopFile(), { version: 1, stopped: true, stoppedAt: now() }); return { stopped: true }; }
-export function clearOperatorStopIntent() { fs.rmSync(operatorStopFile(), { force: true }); }
+const stopAttempt = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value);
+export function operatorStopIntent() {
+  const value = readJson(operatorStopFile(), null);
+  if (value?.stopped !== true) return null;
+  return { version: 1, stopped: true, source: value.source === 'service_start_failure' ? value.source : 'operator',
+    id: typeof value.id === 'string' ? value.id : null, stoppedAt: value.stoppedAt || null,
+    ...(stopAttempt(value.attemptId) ? { attemptId: value.attemptId } : {}) };
+}
+export const operatorStopRequested = () => operatorStopIntent() !== null;
+function changeOperatorStop(operation) {
+  const deadline = Date.now() + 1000;
+  let unlock;
+  while (!unlock) {
+    try { unlock = lockFile(path.join(home(), 'runtime', 'operator-stop-transition.lock'), 'Core stop state is changing.'); }
+    catch (error) {
+      if (error.code !== 'BZZY_LOCKED' || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  try { return operation(); } finally { unlock(); }
+}
+export function persistOperatorStopIntent({ source = 'operator', attemptId } = {}) {
+  if (!['operator', 'service_start_failure'].includes(source) || source === 'service_start_failure' && !stopAttempt(attemptId))
+    throw new Error('Invalid Core stop provenance.');
+  return changeOperatorStop(() => {
+    const previous = operatorStopIntent();
+    // A failed supervised start must never overwrite an explicit user's Stop.
+    if (source === 'service_start_failure' && previous) return previous;
+    const value = { version: 1, stopped: true, id: randomUUID(), source, stoppedAt: now(),
+      ...(source === 'service_start_failure' ? { attemptId } : {}) };
+    writeJson(operatorStopFile(), value); return value;
+  });
+}
+export function clearOperatorStopIntent({ expectedId, expectedSource, expectedAttemptId } = {}) {
+  return changeOperatorStop(() => {
+    const value = operatorStopIntent(), conditional = expectedId !== undefined || expectedSource !== undefined || expectedAttemptId !== undefined;
+    if (conditional && (!value || expectedId !== undefined && value.id !== expectedId || expectedSource !== undefined && value.source !== expectedSource ||
+        expectedAttemptId !== undefined && value.attemptId !== expectedAttemptId)) return false;
+    fs.rmSync(operatorStopFile(), { force: true }); return true;
+  });
+}
 export { pauseRuntimeExecutions };
 function groupChildren(session) {
   if (!['parallel', 'besties'].includes(session?.mode)) return [];

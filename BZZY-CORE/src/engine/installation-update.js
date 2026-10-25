@@ -92,32 +92,76 @@ function command(run, executable, args, options = {}) {
 
 // Compatibility name for older callers. This now preserves runners; callers
 // must stage dependencies separately and never mutate the retained installation.
-export async function withPausedCore(directory, install, { run = spawnSync, lifecycle } = {}) {
+export async function withPausedCore(directory, install, { run = spawnSync, lifecycle, rollback } = {}) {
   const require = createRequire(path.join(directory, 'package.json'));
   const host = lifecycle || await import(pathToFileURL(require.resolve('@bzzy/core/engine/host-service.js')).href);
   if (!host.suspendCoreHost || !host.beginCoreMaintenance) throw new Error('Stage a release with execution-preserving lifecycle support before updating.');
-  const release = host.beginCoreMaintenance();
-  let before, installed, failure;
+  let release = host.beginCoreMaintenance();
+  const unlock = () => { const held = release; release = null; held?.(); };
+  const protect = () => { release ||= host.beginCoreMaintenance(); };
+  const wanted = status => Boolean(status.running || status.service?.running || status.service?.enabled === true ||
+    status.service?.loaded === true && status.service?.enabled !== false);
+  const explicitStop = status => status.operatorStopped && status.operatorStopIntent?.source !== 'service_start_failure';
+  const start = async (location, snapshot) => {
+    const attemptId = randomUUID();
+    try {
+      if (snapshot !== undefined && host.startRestoredCoreService) {
+        await host.startRestoredCoreService(snapshot, { attemptId, respectStop: true });
+        return;
+      }
+      command(run, process.execPath, [path.join(location, 'bin', 'bzzy-core.js'), 'start'], {
+        stdio: 'inherit', env: { ...commandEnvironment(), BZZY_CORE_START_ATTEMPT_ID: attemptId, BZZY_CORE_RESPECT_STOP: '1' },
+      });
+    } catch (error) { error.startAttemptId = attemptId; throw error; }
+  };
+  let before, installed, failure, previousManifest, activationAttempted = false;
   try {
     before = await host.coreHostStatus();
-    if (before.operatorStopped && before.running) await host.stopCoreHost();
-    else if (before.running) await host.suspendCoreHost();
+    if (host.snapshotCoreServiceManifest) previousManifest = await host.snapshotCoreServiceManifest();
+    // Explicit and legacy Stop gates own a pause barrier even if authenticated
+    // health is unavailable. An automatic failed-start gate only blocks new
+    // starts; it must not turn this update into a request to pause executions.
+    if (explicitStop(before)) await host.stopCoreHost();
+    else if (before.running || before.service?.installed || before.service?.running || before.service?.loaded === true) await host.suspendCoreHost();
+    activationAttempted = true;
     installed = await install();
+    // The complete manifest is consistent before the barrier opens. Managed
+    // startup verifies native-manager/engine readiness before success returns.
+    const current = await host.coreHostStatus();
+    unlock();
+    if (!before.operatorStopped && wanted(before) && !current.operatorStopped) await start(installed.directory);
+    return installed.code;
   } catch (error) { failure = error; }
-  finally { release(); }
-  if (failure) {
+  try {
+    // A failed initial barrier has not changed the installation. In particular,
+    // an incomplete explicit Stop must retain its control supervisor so it can
+    // finish pausing work; recovery must not unload it or replace its manifest.
+    if (!activationAttempted) throw failure;
     if (before) {
       try {
-        command(run, process.execPath, [path.join(directory, 'bin', 'bzzy-core.js'), 'service', 'install'], { stdio: 'inherit' });
-        if (before.running && !before.operatorStopped && !(await host.coreHostStatus()).operatorStopped)
-          command(run, process.execPath, [path.join(directory, 'bin', 'bzzy-core.js'), 'start'], { stdio: 'inherit' });
+        protect();
+        // A failed readiness check can leave a loaded/throttled native job.
+        // An observed user Stop must finish its pause barrier before unloading;
+        // otherwise preserve detached executions while restoring the files.
+        if (explicitStop(await host.coreHostStatus())) await host.stopCoreHost();
+        else await host.suspendCoreHost();
+        if (activationAttempted) await rollback?.();
+        if (previousManifest !== undefined && host.restoreCoreServiceManifest) await host.restoreCoreServiceManifest(previousManifest);
+        else command(run, process.execPath, [path.join(directory, 'bin', 'bzzy-core.js'), 'service', 'install'], { stdio: 'inherit' });
+        let current = await host.coreHostStatus();
+        const intent = current.operatorStopIntent;
+        if (!before.operatorStopped && failure.startAttemptId && intent?.source === 'service_start_failure' && intent.attemptId === failure.startAttemptId && host.clearCoreStartFailure) {
+          await host.clearCoreStartFailure(failure.startAttemptId);
+          current = await host.coreHostStatus();
+        }
+        // Release only after the retained manifest and launchers agree. A new
+        // explicit Stop always wins over this automatic recovery start.
+        unlock();
+        if (!before.operatorStopped && wanted(before) && !current.operatorStopped) await start(directory, previousManifest);
       } catch { throw new Error('Update failed and Core control recovery needs attention. Existing runners were retained. Run bzzy-core status.'); }
     }
     throw failure;
-  }
-  if (before.running && !before.operatorStopped && !(await host.coreHostStatus()).operatorStopped)
-    command(run, process.execPath, [path.join(installed.directory, 'bin', 'bzzy-core.js'), 'start'], { stdio: 'inherit' });
-  return installed.code;
+  } finally { unlock(); }
 }
 
 export async function updatePackagedInstallation(directory, options = {}) {
@@ -199,17 +243,17 @@ export async function updateRepositoryInstallation(directory, { expectedCommit =
       fs.writeFileSync(prepared, JSON.stringify({ revision: target }), { mode: 0o600, flag: 'wx' });
     }
     const host = lifecycle || await import(pathToFileURL(path.join(checkout, 'BZZY-CORE/src/engine/host-service.js')).href);
-    return await withPausedCore(cwd, () => {
-      try { install(); }
-      catch (error) {
+    const rollback = () => {
         for (const [file, backup] of backups) {
           if (backup) fs.writeFileSync(file, backup.body, { mode: backup.mode });
           else fs.rmSync(file, { force: true });
         }
-        throw error;
-      }
-      process.stdout.write('BZZY CLI and Core updated. Reattaching to existing work…\n');
+    };
+    const code = await withPausedCore(cwd, () => {
+      install();
       return { directory: next, code: 0 };
-    }, { run, lifecycle: host });
+    }, { run, lifecycle: host, rollback });
+    process.stdout.write('BZZY CLI and Core updated. Reattaching to existing work…\n');
+    return code;
   } finally { release(); }
 }

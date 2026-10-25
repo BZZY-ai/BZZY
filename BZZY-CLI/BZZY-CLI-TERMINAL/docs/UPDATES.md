@@ -69,6 +69,16 @@ manual source installation is required. New packages carry their source revision
 in `assets/release.json` for update comparisons. The updater does not claim an atomic rollback of
 external package/service-manager operations.
 
+The handoff checks both authenticated Core health and the native supervisor.
+A loaded or restarting native job is suspended even when its health endpoint is
+unavailable, and control shutdown must finish before its manifest is replaced.
+Success is reported only after the installed Core's health identity matches the
+supervisor's PID. A readiness failure restores the retained launchers and exact
+old manifest, including its Node path, before attempting verified recovery.
+Rollback uses the new stop-aware lifecycle code even when the retained Core is
+older. A concurrent explicit Stop is preserved; only an automatic failure gate
+belonging to that exact update-start attempt may be cleared for recovery.
+
 ## Core watcher and paired iPhone updates
 
 Discovery and installation now live in `BZZY-CORE/src/engine/`; CLI modules are
