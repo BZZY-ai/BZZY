@@ -156,6 +156,8 @@ test('terminal mode settings have separate clickable model/effort fields and pre
     Object.assign(output, { columns, rows }); ui.settings.focusAction('preset-model:0'); ui.tui.settingsEnsureFocus = true; ui.tui.render();
     const model = ui.tui.hitTargets.find(hit => hit.action === 'preset-model:0'), effort = ui.tui.hitTargets.find(hit => hit.action === 'preset-effort:0');
     assert.ok(model && effort); assert.equal(model.row, effort.row); assert.ok(model.right < effort.left);
+    const lines = ui.tui.lastFrame.map(clean), modelLine = lines.findIndex(line => line.includes('Model · codex · fixture'));
+    assert.match(lines[modelLine], /Effort · default/); assert.equal(lines[modelLine + 1].trim(), '');
     assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
   }
   ui.settings.back(); assert.equal(ui.settings.page, 'modes');

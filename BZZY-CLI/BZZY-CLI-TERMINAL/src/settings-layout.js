@@ -2,11 +2,12 @@ import { cellWidth, clip, wrapProse as wrap } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
 import { fillSurface } from './terminal-surface.js';
 
-export function settingsLayout(settings, width, theme) {
+export function settingsLayout(settings, width, theme, { spaced = true } = {}) {
   const rows = settings.rows(), actions = rows.filter(row => row.action), lines = [], hits = [];
   settings.focus = Math.max(0, Math.min(settings.focus, actions.length - 1));
   let actionIndex = 0, focusRow = 0;
   const size = Math.max(12, width - 4), margin = '  ';
+  const addGap = () => { if (spaced && lines.length && lines.at(-1) !== '') lines.push(''); };
   const addHit = (row, left, right, index) => {
     if (!row.action) return;
     if (index === settings.focus) focusRow = lines.length;
@@ -26,12 +27,12 @@ export function settingsLayout(settings, width, theme) {
         const focused = actionIndex === settings.focus, span = sizes[at];
         addHit(item, left, left + span - 1, actionIndex++);
         const value = item.value || item.text;
-        line += fillSurface(clip(' ' + (modelPair && at === 1 ? '⚙ ' : '') + value + ' ', span), span, theme,
+        line += fillSurface(clip(' ' + (modelPair ? `${at === 0 ? 'Model' : 'Effort'} · ${value}` : value) + ' ', span), span, theme,
           focused ? palette.selection : palette.elevated, settings.busy ? palette.muted : focused ? palette.accent : palette.text, focused);
         if (at < group.length - 1) line += ' ';
         left += span + gap;
       }
-      lines.push(line); continue;
+      lines.push(line); addGap(); continue;
     }
     const focused = row.action && actionIndex === settings.focus;
     if (row.card) {
@@ -47,7 +48,7 @@ export function settingsLayout(settings, width, theme) {
         addHit(row, 3, size + 2, actionIndex);
         lines.push(margin + fillSurface(text, size, theme, background, at === 0 ? focused ? palette.accent : palette.text : at === 1 ? palette.muted : tone, at === 0));
       }
-      actionIndex++; continue;
+      actionIndex++; addGap(); continue;
     }
     if (row.action || row.control) {
       const primary = row.primary || row.action === 'core-save';
@@ -59,11 +60,14 @@ export function settingsLayout(settings, width, theme) {
         primary ? palette.accent : focused ? palette.selection : palette.surface,
         primary ? palette.background : settings.busy ? palette.muted : focused ? palette.accent : palette.text, primary || focused));
       if (row.detail) for (const line of wrap(row.detail, size - 2)) lines.push(margin + theme.color(' ' + line, palette.muted));
+      addGap();
     } else if (row.section) {
-      lines.push(''); lines.push(margin + theme.color(clip(row.text.toUpperCase(), size), palette.muted, true));
+      addGap(); lines.push(margin + theme.color(clip(row.text.toUpperCase(), size), palette.muted, true));
     } else if (row.text) {
       for (const line of wrap(row.text, size)) lines.push(margin + theme.color(line, palette[row.tone] || palette.muted));
+      addGap();
     } else if (lines.length && lines.at(-1) !== '') lines.push('');
   }
+  while (lines.at(-1) === '') lines.pop();
   return { lines, hits, focusRow };
 }

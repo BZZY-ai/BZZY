@@ -40,7 +40,7 @@ export class ModeSettings {
       rows.push({ text: info.roles[index], tone: 'muted', section: true });
       rows.push({ text: 'Model', value: agent ? `${agent.provider} · ${agent.model || 'Provider default'} ▾` : 'Choose a model ▾',
         action: `preset-model:${index}`, inline: `agent-${index}`, tone: 'accent', control: true });
-      rows.push({ text: 'Effort', value: (agent?.effort || 'default') + ' ▾', action: `preset-effort:${index}`,
+      rows.push({ text: 'Effort', value: agent ? (agent.effort || 'default') + ' ▾' : 'Model first', action: `preset-effort:${index}`,
         inline: `agent-${index}`, tone: 'accent', control: true });
     }
     rows.push({ text: 'Save ' + info.title + ' default', action: 'preset-save', primary: true, tone: 'accent' });

@@ -35,7 +35,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 bzzy settings      Open Settings directly without starting a conversation.
 bzzy doctor        Check both installed backends; add --live to test actual replies.
 
-/models · /providers · /usage · /pause · /cancel · /exit
+/models · /effort · /providers · /usage · /pause · /cancel · /exit
 Tab / Shift+Tab switch agent chats. bzzy --help lists options; bzzy --whoami explains the full system.`;
 
 export const chatCommands = [
@@ -46,6 +46,7 @@ export const chatCommands = [
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/debate', description: 'Switch this paused chat to Debate; add a focus to challenge a reply' },
   { command: '/models', description: 'Choose a model and reasoning effort' },
+  { command: '/effort', description: 'Choose the current model’s reasoning effort' },
   { command: '/memory', description: 'Search project knowledge and past conversations', argument: true },
   { command: '/learn', description: 'Review learning jobs, fixtures, candidates and preferences' },
   { command: '/color', description: 'Switch the full palette: blue, black or white', argument: true },

@@ -41,14 +41,18 @@ export class TerminalChat {
     readline.emitKeypressEvents(this.input, { escapeCodeTimeout: 50 }); this.input.setRawMode?.(true); this.input.resume();
     this.onKey = (text, key) => this.key(text, key || {});
     this.input.on('keypress', this.onKey);
-    this.rawEscapeTimer = null;
+    this.rawEscapeTimer = null; this.rawEscapeBuffer = '';
     this.onRawData = chunk => {
       const sequence = chunk?.toString?.('utf8') ?? String(chunk ?? '');
+      if (this.rawEscapeBuffer || sequence.startsWith('\x1b')) this.rawEscapeBuffer += sequence;
+      else return;
       clearTimeout(this.rawEscapeTimer); this.rawEscapeTimer = null;
-      if (!isEscapeInput(sequence, { sequence })) return;
       this.rawEscapeTimer = setTimeout(() => {
+        const buffered = this.rawEscapeBuffer;
+        this.rawEscapeBuffer = '';
         this.rawEscapeTimer = null;
-        this.key('\x1b', { name: 'escape', sequence: '\x1b', meta: true });
+        if (buffered.length <= 64 && isEscapeInput(buffered, { sequence: buffered }))
+          this.key('\x1b', { name: 'escape', sequence: '\x1b', meta: true });
       }, 80);
       this.rawEscapeTimer.unref?.();
     };
@@ -684,7 +688,7 @@ export class TerminalChat {
   }
   key(text, key) {
     if (isEscapeInput(text, key)) {
-      clearTimeout(this.rawEscapeTimer); this.rawEscapeTimer = null;
+      clearTimeout(this.rawEscapeTimer); this.rawEscapeTimer = null; this.rawEscapeBuffer = '';
       key = { ...key, name: 'escape', meta: false };
     }
     if (key.meta && ['y', 'n'].includes(key.name) && this.pendingApproval && !this.hidden && !this.promptDraft && !this.selection) {
@@ -917,7 +921,7 @@ export class TerminalChat {
         put('  [ Confirm ]   [ Cancel ]', palette.accent);
       }
     } else if (this.panel === 'settings') {
-      const layout = settingsLayout(this.ui.settings, width, this.theme);
+      const layout = settingsLayout(this.ui.settings, width, this.theme, { spaced: (this.output.rows || 24) >= 18 });
       this.settingsFocusRow = layout.focusRow; this.contentHits.push(...layout.hits); lines.push(...layout.lines);
     } else if (this.panel === 'skills') {
       let actionIndex = 0;
@@ -1081,7 +1085,7 @@ export class TerminalChat {
     const effort = ' Effort: ' + (this.effort || 'default').replace(/^effort /, '') + ' ▾ ';
     const model = ' ' + clip(this.model, Math.max(1, width - cellWidth(effort) - 17)) + ' ▾ ';
     let column = 3;
-    const controls = [[model, '/providers'], [effort, '/models @effort'], [' Save ', '/default']];
+    const controls = [[model, '/providers'], [effort, '/effort'], [' Save ', '/default']];
     let line = '  ';
     for (const [label, command] of controls) {
       if (column + cellWidth(label) > width) break;
@@ -1348,7 +1352,7 @@ export class TerminalChat {
     modelColumn += cellWidth(modelText);
     const effortPart = ' ' + fillSurface(effortText, cellWidth(effortText), this.theme, palette.selection,
       palette.accent, true, surface);
-    hits.push({ type: 'model-control', command: '/models @effort', disabled: this.busy || this.ui.sessionMode === 'VIEW' || this.modelSelectionRequired,
+    hits.push({ type: 'model-control', command: '/effort', disabled: this.busy || this.ui.sessionMode === 'VIEW' || this.modelSelectionRequired,
       row: metaRow, left: modelColumn + 2, right: modelColumn + 1 + cellWidth(effortText) });
     lines.push(align(modelPart + effortPart, color(usage, palette.muted)));
     if (breathingRoom) lines.push('');
@@ -1692,7 +1696,7 @@ export class TerminalChat {
     const lines = (picker?.backgroundFrame || this.lastFrame).slice();
     this.popupRegion = null;
     if (picker) {
-      const action = picker.kind === 'effort' ? 'core-effort' : 'core-model', command = picker.kind === 'effort' ? '/models @effort' : '/providers';
+      const action = picker.kind === 'effort' ? 'core-effort' : 'core-model', command = picker.kind === 'effort' ? '/effort' : '/providers';
       const presetAction = picker.scope === 'preset-count' ? 'preset-count' : picker.scope?.startsWith('preset:') ? `preset-${picker.kind === 'effort' ? 'effort' : 'model'}:${picker.scope.slice(7)}` : null;
       const anchor = picker.anchor || this.hitTargets.find(hit => presetAction ? hit.type === 'settings' && hit.action === presetAction : picker.scope === 'core' ? hit.type === 'settings' && hit.action === action : hit.type === 'model-control' && hit.command === command);
       const popup = choicePopup(picker, { width, height, anchor, minimumTop: this.sceneHeaderLength, theme: this.theme });
@@ -1974,8 +1978,9 @@ function skillActionList(rows) {
     : row.action ? [row.action] : []);
 }
 function isEscapeInput(text, key) {
-  return key?.name === 'escape' || text === '\x1b' || key?.sequence === '\x1b'
-    || /^\x1b\[(?:27(?:[;:]\d+)*u|27(?:;\d+)+;27~)$/.test(key?.sequence || '');
+  return ['escape', 'esc'].includes(key?.name) || key?.code === 'Escape' || text === '\x1b'
+    || key?.ctrl && (key.name === '[' || text === '[') || key?.sequence === '\x1b'
+    || /^\x1b\[27(?:[;:]\d+)*(?:u|~)$/.test(key?.sequence || '');
 }
 function screenPoint(x, y, region) { return { x: Math.max(region.left, Math.min(region.right, x)), y: Math.max(region.top, Math.min(region.bottom, y)) }; }
 function screenRange(anchor, focus) { return anchor.y < focus.y || anchor.y === focus.y && anchor.x <= focus.x ? [anchor, focus] : [focus, anchor]; }

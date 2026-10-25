@@ -146,7 +146,7 @@ Options:
   -v, --version         Show version
 
 Chat commands: /goal <objective>, /goal status|pause|resume|clear, /delegate, /debate, /solo,
-/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /default, /usage, /settings, /help, /exit
+/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /effort, /default, /usage, /settings, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
@@ -155,6 +155,7 @@ Mode flags automatically use their saved defaults; --default also requires a sav
 /delegate and /debate switch this paused chat to their saved combo; /solo (or /singular) restores its previous single agent.
 Use /pause or /goal pause first. Switching preserves history and goals and never resumes work.
 /models: ↑/↓ chooses a model; ←/→ sets supported effort; Enter confirms.
+/effort: choose a supported reasoning effort for the current model.
 /provider and /model are aliases. /quit also exits.
 Delegation: choose a strong brain and a less expensive executor; describe one overall goal.
 Example after --delegate setup: Solve this CTF using the supplied challenge files.
@@ -425,6 +426,10 @@ async function chat(provider, options, ui, existingSession) {
         continue;
       }
       if (/^\/models?(?:\s|$)/.test(input)) { Object.assign(session, await changeSessionModel(session.id, input.replace(/^\/models?\s*/, ''), ui)); continue; }
+      if (/^\/effort(?:\s|$)/.test(input)) {
+        if (input.trim() !== '/effort') throw new Error('Use /effort without arguments.');
+        Object.assign(session, await changeSessionModel(session.id, '@effort', ui)); continue;
+      }
       if (session.modelSelectionRequired) throw new Error(`Select a model with /models${ui.minimal ? '' : ' or the model dropdown'} before sending a message.`);
       if (input === '/goal' || input.startsWith('/goal ')) {
         const objective = input.slice(5).trim();

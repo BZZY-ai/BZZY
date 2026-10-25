@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import { availableModels, chooseModel, normalizeModel } from '../src/models.js';
+import { chooseEffort } from '../src/model-controls.js';
 import { BUILTINS, addProvider, chooseProvider, ensureApiKey, apiKey, defaultSelection, saveDefaultSelection, setDefault } from '../src/providers.js';
 import { root } from '../src/process.js';
 import { reasoningEffort } from '../src/instructions.js';
@@ -181,6 +182,15 @@ test('model effort choices retain the current setting, reject unsupported levels
   ui.chooseOne = async (_title, choices) => { await choices; return { value: 'fixture-light', effort: 'xhigh' }; };
   await assert.rejects(chooseModel(current, '', ui), /supported by this model/);
   const manual = await chooseModel(next, 'new-model-id', ui); assert.equal(manual.effort, null); assert.equal(manual.capabilities, null);
+});
+
+test('effort picker uses provider defaults when an API catalog omits model effort metadata', async () => {
+  let picker;
+  const ui = { async chooseOne(_title, choices) { picker = await choices; return picker.choices.find(choice => choice.value === 'high').value; } };
+  const chosen = await chooseEffort({ provider: 'deepseek', model: 'deepseek-v4.1-flash', modelCapabilities: {}, cwd: directory }, ui);
+  assert.equal(chosen.effort, 'high');
+  assert.deepEqual(picker.choices.map(choice => choice.value), ['default', 'low', 'high', 'max']);
+  assert.deepEqual(chosen.capabilities.supportedEfforts, ['low', 'high', 'max']);
 });
 test('choosing another provider opens its model and effort picker and retains the conversation', async () => {
   const source = createSession(BUILTINS.codex, directory); source.engineThreadId = 'preserved-thread';

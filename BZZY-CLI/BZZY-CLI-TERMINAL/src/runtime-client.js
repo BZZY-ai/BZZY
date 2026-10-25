@@ -303,6 +303,14 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           finally { modalTask = false; }
           continue;
         }
+        if (/^\/effort(?:\s|$)/.test(text)) {
+          if (text !== '/effort') throw new Error('Use /effort without arguments.');
+          if (children.length && activeId === sessionId) throw new Error('Select an agent chat tab before changing its effort.');
+          modalTask = true;
+          try { await changeSessionModel(activeId, '@effort', ui, { info, owner }); }
+          finally { modalTask = false; }
+          continue;
+        }
         if (/^\/providers?(?:\s|$)/.test(text)) {
           if (!ui.onProvider) throw new Error('Provider selection is unavailable in this client.');
           if (children.length && activeId === sessionId) throw new Error('Select an agent chat tab before changing its provider.');

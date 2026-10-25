@@ -350,7 +350,7 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
         else if (text === '/pause' || text === '/goal pause') await action('pause');
         else if (text === '/goal resume') await action('resume');
         else if (text === '/goal') await action('goal');
-        else if (text === '/providers' || text === '/models' || text === '/models @effort') await action('model');
+        else if (text === '/providers' || text === '/models' || text === '/models @effort' || text === '/effort') await action('model');
         else if (text === '/default') await action('default');
         else if (text === '/solo' || text === '/singular') await action('unlink');
         else if (text === '/delegate' || text === '/parallel' || text === '/besties') await action('link');

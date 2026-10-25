@@ -1,4 +1,4 @@
-import { providers, getProvider } from './providers.js';
+import { providers, getProvider, providerModelCapabilities } from './providers.js';
 import { availableModels, normalizeModel } from './models.js';
 
 // Catalogs belong to Core. No model/provider list is hardcoded into the TUI.
@@ -44,8 +44,13 @@ export async function chooseEffort(session, ui, { scope = 'chat', anchor } = {})
   if (session.modelSelectionRequired) throw new Error('Select a model before choosing its effort.');
   const abort = new AbortController(); let capabilities = session.modelCapabilities;
   try {
+    if (!capabilities?.supportedEfforts?.length && capabilities?.supportsEffort !== false) {
+      try {
+        capabilities = providerModelCapabilities(getProvider(session.provider), session.model || session.resolvedModel, capabilities || {});
+      } catch {}
+    }
     const choices = (async () => {
-      if (!capabilities) {
+      if (!capabilities || !capabilities.supportedEfforts?.length && capabilities.supportsEffort !== false) {
         const catalog = await availableModels(session, { signal: abort.signal });
         capabilities = catalog.models.find(model => model.id === (session.model || session.resolvedModel))?.capabilities;
       }

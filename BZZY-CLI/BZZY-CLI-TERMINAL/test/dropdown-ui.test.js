@@ -133,12 +133,16 @@ test('raw Escape fallback exits Skills when the terminal keypress parser omits i
   input.write('\x1b');
   await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(tui.panel, 'chat');
+  await ui.settingsCommand('/skills'); assert.equal(tui.panel, 'skills');
+  input.write('\x1b['); await new Promise(resolve => setTimeout(resolve, 10));
+  input.write('27;1:1u'); await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(tui.panel, 'chat');
 });
 
 test('disabled model controls give feedback without dispatching a command', async t => {
   const { ui, tui } = terminal(t);
   const answer = ui.ask('bzzy › '); await Promise.resolve(); tui.modelSelectionRequired = true; tui.render();
-  const effort = tui.hitTargets.find(hit => hit.command === '/models @effort' && hit.disabled);
+  const effort = tui.hitTargets.find(hit => hit.command === '/effort' && hit.disabled);
   assert.ok(effort); tui.mouse(0, effort.left + 1, effort.row);
   assert.match(tui.actionNotice.message, /Select a model first/); assert.ok(tui.resolveInput);
   assert.equal(tui.hitTargets.some(hit => hit.command === '/default'), false, 'normal chat defaults live in full-screen Settings');

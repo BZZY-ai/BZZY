@@ -156,6 +156,16 @@ test('attached chats process the plural models shortcut before exiting without i
   assert.equal(loadSession(session.id).model, 'attached-model');
   assert.equal(fs.existsSync(path.join(dir, 'backend.jsonl')), false);
 });
+test('attached chats can select the current model effort with /effort without inference', async () => {
+  const session = makeSession(); Object.assign(session, { model: 'fixture-brain', modelCapabilities: { supportedEfforts: ['low', 'medium', 'high'] } }); saveSession(session);
+  const inputs = ['/effort', '/exit']; let choices;
+  const ui = { interactive: true, cursors: new Map(), setSession() {}, event() {}, updateSession() {}, async ask() { return inputs.shift(); },
+    async chooseOne(_title, offered) { choices = await offered; return 'high'; } };
+  assert.equal(await attachSession(session, {}, ui), 0);
+  assert.deepEqual(choices.choices.map(choice => choice.value), ['default', 'low', 'medium', 'high']);
+  assert.equal(loadSession(session.id).selectedEffort, 'high');
+  assert.equal(fs.existsSync(path.join(dir, 'backend.jsonl')), false);
+});
 test('an idle terminal observes and completes replies started by another input channel', async () => {
   process.env.BZZY_TEST_ADVANCED = 'slow';
   const session = makeSession(), info = await ensureRuntime(), owner = randomUUID(); let first = true, closeInput;
