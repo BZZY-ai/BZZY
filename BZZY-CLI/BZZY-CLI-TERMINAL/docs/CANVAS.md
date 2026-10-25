@@ -1,9 +1,9 @@
 # Character canvas
 
-`bzzy` opens the canvas by default in an interactive terminal. `bzzy --minimal`
-retains the transcript and message input, including the existing slash-command
-mode setup. JSON, detached execution and noninteractive commands keep their
-existing behavior.
+`bzzy --canvas` opens the canvas in an interactive terminal. Plain `bzzy` now
+opens the three-section Codex-style transcript, while `bzzy --minimal` retains
+the ultra-compact transcript and message input. JSON, detached execution and
+noninteractive commands keep their existing behavior.
 
 Right-click the workspace, or press **F10**, for New chat, Open chat and Settings.
 A new chat is empty. Insert BZZY opens Core's model catalog with its supported

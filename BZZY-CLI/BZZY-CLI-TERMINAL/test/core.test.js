@@ -20,6 +20,8 @@ test.afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); delete 
 test('yolo is opt-in on every invocation, including resume; malformed budgets fail early', () => {
   assert.equal(parseArgs(['--yolo', 'goal', 'finish']).options.yolo, true);
   assert.equal(parseArgs(['--minimal']).options.minimal, true);
+  assert.equal(parseArgs(['--canvas']).options.canvas, true);
+  assert.equal(parseArgs(['--settings']).options.settingsRequested, true);
   assert.equal(parseArgs([]).options.minimal, undefined);
   assert.equal(parseArgs(['resume', 'a']).options.yolo, false);
   for (const value of ['0', '-1', 'Infinity', '1.1', '9007199254740992']) assert.throws(() => parseArgs(['--token-budget', value]));
@@ -153,14 +155,21 @@ test('two evidence-backed matching verdicts form consensus when the third agent 
 });
 
 test('the DeepSeek key is passed only in the child environment, never in CLI args or model files', () => {
-  writeJson(path.join(dir, 'credentials.json'), { deepseek: 'secret-sentinel' });
-  const session = createSession(BUILTINS.deepseek, dir);
-  const launch = codexLaunch(BUILTINS.deepseek, session, {});
-  assert.equal(launch.env.BZZY_PROVIDER_API_KEY, 'secret-sentinel');
-  assert.ok(!launch.args.join(' ').includes('secret-sentinel'));
-  const catalog = readJson(path.join(dir, 'runtime', `${session.id}-models.json`));
-  assert.ok(!JSON.stringify(catalog).includes('secret-sentinel'));
-  assert.equal(catalog.models[0].slug, 'deepseek-flash');
+  const inherited = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    writeJson(path.join(dir, 'credentials.json'), { deepseek: 'secret-sentinel' });
+    const session = createSession(BUILTINS.deepseek, dir);
+    const launch = codexLaunch(BUILTINS.deepseek, session, {});
+    assert.equal(launch.env.BZZY_PROVIDER_API_KEY, 'secret-sentinel');
+    assert.ok(!launch.args.join(' ').includes('secret-sentinel'));
+    const catalog = readJson(path.join(dir, 'runtime', `${session.id}-models.json`));
+    assert.ok(!JSON.stringify(catalog).includes('secret-sentinel'));
+    assert.equal(catalog.models[0].slug, 'deepseek-flash');
+  } finally {
+    if (inherited == null) delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY = inherited;
+  }
 });
 
 test('Claude user questions collect actual answers, even in yolo mode, and never invent an answer headlessly', async () => {

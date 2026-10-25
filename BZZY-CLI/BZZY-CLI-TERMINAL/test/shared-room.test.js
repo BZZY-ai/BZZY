@@ -48,7 +48,8 @@ test('a read-only child TUI receives the full live group room, deduplicates mirr
     assert.ok(seen.some(item => item.type === 'peer.review' && item.data.id === 'live-review'));
     assert.equal(ui.sessionMode, 'VIEW'); assert.equal(ui.tui.peerLabel(second.id), 'claude · 2');
     const frame = ui.tui.lastFrame.map(clean).join('\n');
-    assert.match(frame, /SHARED ROOM/); assert.match(frame, /independent local control/); assert.match(frame, /peer judgment/);
+    assert.match(frame, /codex · 1 → claude · 2/); assert.match(frame, /Message all agents/);
+    assert.match(frame, /independent local control/); assert.match(frame, /peer judgment/);
     assert.doesNotMatch(ui.tui.entries.map(entry => entry.text).join('\n'), /UNRELATED-PARENT-CHAT/);
     assert.equal(getRecord('input-owner', first.id), null); assert.equal(getRecord('input-owner', parent.id), null);
     assert.equal(listRecords('execution').length, 0, 'observing the room cannot start model work');

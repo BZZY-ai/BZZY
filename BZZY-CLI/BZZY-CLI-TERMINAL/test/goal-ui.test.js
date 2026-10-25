@@ -83,5 +83,8 @@ test('goal colors follow authoritative lifecycle states and animated dots fit co
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
     }
   }
+  ui.updateSession({ ...session, goal: { id: 'goal-clock', objective: 'Keep time', status: 'paused', runtimeUsedSeconds: 3661 } });
+  ui.tui.render();
+  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /01:01:01/);
   assert.notEqual(goalIndicator({ status: 'active' }, 0).label, goalIndicator({ status: 'active' }, 1).label);
 });

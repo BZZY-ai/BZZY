@@ -185,7 +185,7 @@ for (const { key, chat = false } of [{ key: '' }, { key: 'fixture-pty-deepseek-k
       const afterModel = stdout.length;
       child.stdin.write(chat ? '\x1b[B\x1b[C\x1b[C\r' : '\r');
       if (chat) {
-        await until(() => stdout.slice(afterModel).includes('Your next goal starts here.'));
+        await until(() => stdout.slice(afterModel).includes('What should BZZY work on?'));
         child.stdin.write('/exit\r');
       }
       assert.equal(await done, 0, stderr);

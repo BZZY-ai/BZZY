@@ -179,13 +179,13 @@ finally:
   assert.equal(events(sessions()[0].id).filter(event => event.type === 'mode.changed').length, 3);
 });
 
-test('default CLI opens the character canvas, enters chat and returns with Esc without inference', { timeout: 20000 }, () => {
+test('explicit --canvas opens the character canvas, enters chat and returns with Esc without inference', { timeout: 20000 }, () => {
   saveDefaultSelection({ provider: 'codex', model: 'fixture-canvas', selectedEffort: 'high' });
   const code = String.raw`
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
-child = subprocess.Popen([sys.argv[1], sys.argv[2], '--no-pet'], stdin=slave, stdout=slave, stderr=slave, cwd=sys.argv[3], env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
+child = subprocess.Popen([sys.argv[1], sys.argv[2], '--canvas', '--no-pet'], stdin=slave, stdout=slave, stderr=slave, cwd=sys.argv[3], env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
 os.close(slave)
 output = b''
 def until(check):

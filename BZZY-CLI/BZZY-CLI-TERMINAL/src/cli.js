@@ -47,7 +47,7 @@ import { selectedProvider, authenticateSubscription, applyLaunchDefault, createC
 const HELP = `bzzy 0.2.0 · a persistent coding agent
 
 Usage:
-  bzzy [options]                         Open the character canvas
+  bzzy [options]                         Open the Codex-style terminal chat
   bzzy "initial context" --goal "task"  Send context first, then start a durable goal
   bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
@@ -86,6 +86,7 @@ Usage:
   bzzy --import FILE.zip|CODE          Restore a project ZIP or Relay terminal copy here
   bzzy setup                            Choose a backend and authenticate
   bzzy settings                         API key, default folder, Pair iPhone and Core controls
+  bzzy --settings                       Open the full-screen Settings view directly
   bzzy auth [codex|claude|deepseek|name]  Log in or save an API key
   bzzy providers                        List providers
   bzzy provider use NAME                 Set the default provider
@@ -94,7 +95,8 @@ Usage:
   bzzy doctor [--live]                   Verify CLI, subscription login and connection; --live tests replies
 
 Options:
-  --minimal             Show only the conversation and message input
+  --minimal             Use the ultra-compact transcript-only layout
+  --canvas              Open the character canvas
   --provider NAME       Select a provider for a new session
   --model MODEL         Select a model (provider default otherwise)
   --cwd DIRECTORY       Working directory
@@ -225,6 +227,8 @@ export function parseArgs(argv) {
     else if (raw === '--besties') { options.mode = 'besties'; options.bestiesSetup = true; }
     else if (raw === '--review-only') options.reviewOnly = true;
     else if (raw === '--minimal') options.minimal = true;
+    else if (raw === '--canvas') options.canvas = true;
+    else if (raw === '--settings') options.settingsRequested = true;
     else if (raw === '--yolo') options.yolo = true;
     else if (raw === '--json') options.json = true;
     else if (raw === '--live') options.live = true;
@@ -489,6 +493,10 @@ export async function main(argv) {
     : updateHandoff.settingsOnly || updateHandoff.coreStopped ? ['settings'] : [];
   if (['internal-mcp', 'internal-tools', 'internal-service', 'internal-execution', 'internal-assignment'].includes(argv[0])) return backendCommand(argv);
   const { options, args } = parseArgs(argv);
+  if (options.settingsRequested) {
+    if (args.length) throw new Error('Run bzzy --settings by itself.');
+    args.push('settings');
+  }
   if (updateHandoff) { options.restoreAfterUpdate = true; options.minimal = updateHandoff.minimal; }
   if (options.version) { process.stdout.write('bzzy 0.2.0\n'); return 0; }
   if (options.whoami) { process.stdout.write(whoami(options.cwd)); return 0; }
@@ -507,7 +515,8 @@ export async function main(argv) {
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
-  const ui = new UI({ ...options, canvas: !options.minimal, hostMetrics: true, updateHandoff });
+  const ui = new UI({ ...options, canvas: Boolean(options.canvas) && !options.minimal && args[0] !== 'settings',
+    hostMetrics: true, updateHandoff });
   ui.accountStatusEnabled = ui.interactive;
   ui.onDebate = (id, focus) => debateConversation(loadSession(id), focus, ui.executionOptions(options, { id }), ui);
   ui.onProvider = (id, argument, connection) => changeConversationProvider(loadSession(id), argument, ui, connection);

@@ -47,15 +47,22 @@ conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
-`bzzy` now opens a character canvas: insert model/effort characters, set goals,
-and connect them for Delegate, Debate, Besties or Parallel. Right-click or F10
-opens the context menu; Enter opens the conversation drawer and Esc returns to
-the canvas. Click a character's model or effort underneath it to change either;
-use Open session beside the centered alias to switch named chats. The goal stays
-at the top: double-click to edit, then Enter to start. The characters share a
-simple square pixel design in different colors. Settings stays in a canvas
-dialog. Links pause affected work before reconfiguration. `bzzy --minimal`
-keeps the transcript interface described below. See [canvas controls and limits](docs/CANVAS.md).
+`bzzy` opens a Codex-style terminal chat with three fixed sections: a one-row
+top bar for Open Sessions, New Session, host CPU/RAM and Settings; the live chat
+transcript; and a compact composer with the current model, effort, token count,
+`HH:MM:SS` runtime and color-coded goal state. User turns and agent replies use
+separate labeled rails, and the latest user request stays pinned directly below
+the top bar while a long reply streams. Open Sessions deploys an anchored
+dropdown of aliased terminals. A green or red Relay dot is always available in
+the status treatment. The gear opens a full-screen Settings view in place of the
+transcript and composer, while preserving the chat draft.
+
+`bzzy --canvas` retains the character workspace: insert model/effort characters,
+set goals, and connect them for Delegate, Debate, Besties or Parallel.
+Right-click or F10 opens the context menu; Enter opens the conversation drawer
+and Esc returns to the canvas. Links pause affected work before reconfiguration.
+`bzzy --minimal` keeps the ultra-compact transcript. See
+[canvas controls and limits](docs/CANVAS.md).
 
 In a minimal solo, Delegate or Debate chat, pause with `/pause` or `/goal pause`,
 then use `/delegate`, `/debate` or `/solo` (`/singular` is an alias). Delegate and
@@ -159,8 +166,10 @@ requires an explicitly increased total.
 
 Settings keeps its four main entries in compact cards. Open **Settings > BZZY
 Core > Terminal agent setups**, or `/settings modes`, to save each mode’s models,
-efforts and agent count. Debate, Parallel and Besties support two or three agents;
-Delegate has two roles, supervisor and executor. Model/effort fields use the Core
+efforts and agent count. The same page saves the Solo chat model and effort
+alongside Delegate, Debate, Parallel and Besties. Delegate has two roles,
+supervisor and executor; the other modes support two or three agents.
+Model/effort fields use the Core
 catalog and floating dropdowns. Editing starts no work; Save applies to the next
 mode launch, and `bzzy --MODE` reuses its saved combination directly. `--default` remains an
 explicit requirement that a matching preset exists. Explicit agent/participant
@@ -213,10 +222,11 @@ hints map to terminal emphasis/dim. Raw history/JSON events remain unchanged and
 clipboard copies are readable text. Invalid or incomplete markup falls back to
 literal safe text; markup never executes actions or grants permissions.
 
-Run `bzzy --minimal` for the conversation and bottom message input, with a small
-connection strip, at any terminal size. It keeps the same sessions, mouse input, command picker and
-approval controls. Use `/models`, `/settings`, `/sessions` or `/update` when
-needed. The layout and unsent draft survive an update.
+Run `bzzy --minimal` for the ultra-compact conversation and message input, with
+a small connection strip, at any terminal size. It keeps the same sessions,
+mouse input, command picker and approval controls. Use `/models`, `/settings`,
+`/sessions` or `/update` when needed. The layout and unsent draft survive an
+update.
 
 Use `/color blue`, `/color black` or `/color white` to switch the full palette
 instantly: chat roles, surfaces, buttons, selections, borders and status colors.
@@ -225,9 +235,26 @@ with dark text and readable accents. Blue is the default on every new launch.
 The selection belongs to this CLI only, works in minimal mode, and is retained
 when that same terminal reloads after an update. No provider request is sent.
 
-The TUI follows the reference sidebar layout on wide terminals, with Chat, Activity, Network, Sessions, Skills and Settings. Smaller terminals retain a compact layout and the complete pairing QR. Sky-blue controls have hover and pressed feedback; navigation, recent sessions, Settings actions, Back, Send, Paste, Latest, Show tools, Copy and the update checker accept mouse clicks. The composer preserves unsent drafts across local controls.
+The normal TUI uses the same restrained one-column shell at every interactive
+size instead of switching to a separate dashboard. The top bar contains named
+session access, New Session, Core-reported CPU/RAM and the Settings gear. Activity,
+Network, Skills and the shared room remain available through their commands and
+Ctrl+G. Settings and the complete pairing QR use the full content area beneath
+the top bar and never leave the chat composer underneath. Sky-blue controls have
+hover and pressed feedback; sessions, Settings actions, Back, Send, Copy and the
+update checker accept mouse clicks. The composer preserves unsent drafts across
+local controls.
 
-The header model control opens a floating searchable dropdown over the current chat. Click a model once to apply it; use the mouse wheel or arrows to browse, type to filter, and click outside or press Esc to cancel. The adjacent effort dropdown lists the selected model's supported reasoning levels. Save keeps the CLI default. Other selectors use floating dialogs with explicit Confirm/Cancel controls, preserving approval confirmations. Double-click the project alias to rename it inline; Enter/Save name confirms and Esc/Cancel returns. Core's own model and effort dropdowns remain independent in Settings → BZZY Core.
+The model control at the bottom opens a floating searchable dropdown over the
+current chat. Click a model once to apply it; use the mouse wheel or arrows to
+browse, type to filter, and click outside or press Esc to cancel. The adjacent
+effort dropdown lists the selected model's supported reasoning levels. Defaults
+for normal chat, Delegate and Debate remain under Settings → BZZY Core →
+Terminal agent setups. Other selectors use floating dialogs with explicit
+Confirm/Cancel controls, preserving approval confirmations. Double-click the
+project alias in the top bar to rename it inline; Enter/Save name confirms and
+Esc/Cancel returns. Core's own model and effort dropdowns remain independent in
+Settings → BZZY Core.
 
 Open **Skills** or `/skills` to view, create, import folders/ZIPs and explicitly enable workflows for every model within their project/global scope. New UI imports default to the current project. Choose **Sync Codex skills**, type `/skills sync`, or run `bzzy skills sync` to copy Codex workflows on Linux/macOS. It searches project, user, configured Codex and machine skill folders; project sources stay project-scoped. New/changed versions need review and enable; repeating sync preserves unchanged enable decisions and local BZZY edits. See [Core skills](../../BZZY-CORE/docs/SKILLS.md).
 
@@ -259,8 +286,9 @@ Each execution receives allowlisted caller configuration and locally declared pr
 
 The existing runtime supports expiring session credentials with explicit control permissions and revocation. `bzzy service token SESSION` remains read-only; `bzzy service grants` lists grants and `bzzy service revoke GRANT_ID` revokes one. See the [integration guide](docs/INTEGRATION.md) for scoped clients and reconnect semantics. Full-project `/export` bundles remain private owner backups and can contain secrets; `/share` uses the separate credential-filtered portable policy.
 
-Open **Settings** in the terminal, use `/settings`, or run `bzzy settings`
-directly. It includes hidden DeepSeek, Abliteration and OrcaRouter API-key save/replacement and device
+Open **Settings** from the top-right gear, use `/settings`, run `bzzy settings`,
+or launch `bzzy --settings` directly. It includes hidden DeepSeek, Abliteration
+and OrcaRouter API-key save/replacement and device
 pairing using the bundled Core Relay gateway. The main menu has four entries:
 **API keys**, **Default BZZY folder**, **Pair iPhone**, and **BZZY Core**.
 Open BZZY Core for status, Start, Stop, Restart and its independent model/effort default. Stop leaves Settings usable;
@@ -322,8 +350,9 @@ For runtime troubleshooting, run `BZZY_DIRECT=1 bzzy run "Reply only BZZY_OK wit
 
 The [review assessment](docs/REVIEW-2026-10.md) records which external recommendations were implemented, qualified or deferred.
 
-The top left shows separate **Core Online/Offline** and **Relay Online/Offline**
-indicators. Green requires a fresh Core response and, for Relay, a verified
-heartbeat on Core's authenticated socket. Stale or failed checks turn red; busy
-model work and cached state do not establish connectivity. The compact pairing
-header retains both indicators without reducing the QR quiet zone.
+The top status cluster shows a green or red **BZZY Relay** dot, and the bottom
+status row spells out separate **Core** and **Relay** states. Green requires a
+fresh Core response and, for Relay, a verified heartbeat on Core's authenticated
+socket. Stale or failed checks turn red; busy model work and cached state do not
+establish connectivity. The compact pairing header retains both indicators
+without reducing the QR quiet zone.

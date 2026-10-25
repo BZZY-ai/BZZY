@@ -75,24 +75,41 @@ test('effort dropdowns list only the selected model capabilities and support dir
   tui.key('', { name: 'escape' }); assert.equal(await fixed, null);
 });
 
-test('Send, navigation, Settings back and update controls react to actual SGR clicks', async t => {
+test('Send, top Settings and Back controls react to actual SGR clicks', async t => {
   const { ui, tui, input } = terminal(t);
   const click = hit => { assert.ok(hit); input.write(`\x1b[<0;${hit.left + 1};${hit.row}M`); };
   const answer = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
   const send = tui.hitTargets.find(hit => hit.type === 'confirm'); click(send);
   assert.equal(await answer, 'an unsent draft'); tui.render();
   assert.ok(tui.pressedTarget, 'a clicked action retains a brief pressed state');
-  const next = ui.ask('bzzy › '); await Promise.resolve();
-  tui.render(); click(tui.hitTargets.find(hit => hit.type === 'panel' && hit.panel === 'settings')); tui.render();
+  const next = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
+  click(tui.hitTargets.find(hit => hit.type === 'top-settings'));
+  assert.equal(await next, '/settings');
+  ui.openSettings(); tui.render();
   click(tui.hitTargets.find(hit => hit.type === 'settings-back')); assert.equal(tui.panel, 'chat');
-  tui.render(); click(tui.hitTargets.find(hit => hit.command === '/update')); assert.equal(await next, '/update');
+  const help = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
+  click(tui.hitTargets.find(hit => hit.type === 'model-control' && hit.command === '/help'));
+  assert.equal(await help, '/help');
 });
 
-test('disabled models and Save controls give feedback without dispatching a command', async t => {
+test('top New Session dispatches a local new-chat command instead of model input', async t => {
+  const { ui, tui, input } = terminal(t);
+  const next = ui.ask('bzzy › '); await Promise.resolve();
+  tui.value = 'draft survives'; tui.cursor = 14; tui.render();
+  const create = tui.hitTargets.find(hit => hit.type === 'session-new'); assert.ok(create);
+  input.write(`\x1b[<0;${create.left + 1};${create.row}M`);
+  assert.equal(await next, '/new');
+  assert.equal(tui.value, 'draft survives');
+  assert.equal(tui.inputQueue.length, 0);
+});
+
+test('disabled model controls give feedback without dispatching a command', async t => {
   const { ui, tui } = terminal(t);
   const answer = ui.ask('bzzy › '); await Promise.resolve(); tui.modelSelectionRequired = true; tui.render();
-  const save = tui.hitTargets.find(hit => hit.command === '/default'); tui.mouse(0, save.left + 1, save.row);
+  const effort = tui.hitTargets.find(hit => hit.command === '/models @effort' && hit.disabled);
+  assert.ok(effort); tui.mouse(0, effort.left + 1, effort.row);
   assert.match(tui.actionNotice.message, /Select a model first/); assert.ok(tui.resolveInput);
+  assert.equal(tui.hitTargets.some(hit => hit.command === '/default'), false, 'normal chat defaults live in full-screen Settings');
   tui.finish(null); assert.equal(await answer, null);
 });
 

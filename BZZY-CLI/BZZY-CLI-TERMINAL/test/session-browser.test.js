@@ -188,6 +188,27 @@ test('Sessions navigation is local, queues once during a reply and never interru
   } finally { ui.close(); }
 });
 
+test('the top Open Sessions control deploys an anchored dropdown of aliased chats without losing the draft', async () => {
+  const current = createSession(BUILTINS.codex, work, null, 'Current chat');
+  createSession(BUILTINS.codex, elsewhere, null, 'Previous chat');
+  const ui = terminal(); ui.setSession(current.id); ui.onSessions = () => queueSessionBrowser(ui);
+  try {
+    const waiting = ui.ask('bzzy › '); await Promise.resolve();
+    ui.tui.value = 'Keep this draft'; ui.tui.cursor = 5; ui.tui.render();
+    const open = ui.tui.hitTargets.find(hit => hit.type === 'top-sessions'); assert.ok(open);
+    ui.tui.mouse(0, open.left, open.row);
+    assert.equal(await waiting, '/sessions');
+    assert.deepEqual(ui.tui.topSessionAnchor, { left: open.left, row: 1 });
+
+    const choosing = chooseSavedSession(ui); await Promise.resolve(); ui.tui.render();
+    assert.equal(ui.tui.selection.presentation, 'dropdown');
+    assert.ok(ui.tui.popupRegion.top <= 3, 'the combobox stays attached to the top bar');
+    assert.deepEqual(ui.tui.selection.choices.map(choice => choice.label), namedTerminalSessions().map(session => session.alias));
+    ui.tui.key('', { name: 'escape' }); assert.equal(await choosing, null);
+    assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.cursor, 5);
+  } finally { ui.close(); }
+});
+
 test('mouse/keyboard Sessions navigation preserves the unsent draft, history and event cursor on cancel', async () => {
   const session = createSession(BUILTINS.codex, work, null, 'Saved chat');
   const ui = terminal(); ui.setSession(session.id); ui.onSessions = () => queueSessionBrowser(ui);
@@ -347,7 +368,7 @@ for (const action of ['attach', 'view', 'new']) {
         }
         await until(() => output.includes('saved-history-marker'));
         assert.ok(!output.includes('other-history-marker'));
-      } else await until(() => output.includes('Your next goal starts here.'));
+      } else await until(() => output.includes('What should BZZY work on?'));
       if (action === 'attach' || action === 'new') {
         child.stdin.write('/alias\r');
         await until(() => output.includes('Session alias [trabajo_01]'));

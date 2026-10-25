@@ -40,14 +40,14 @@ test('Skills sync imports from Codex into the shared library and stays idle unti
   assert.ok(skillRows(ui).some(row => row.text.includes('Codex → BZZY')));
  } finally { ui.close(); }
 });
-test('empty first chat exposes model/effort/Save clicks and preserves unsent text', async () => {
+test('empty first chat exposes bottom model/effort controls and preserves unsent text', async () => {
  const { ui, output, session } = terminal();
  try {
   assert.equal(session.modelSelectionRequired, true); assert.equal(session.model, null);
   for (const columns of [80, 120]) {
    output.columns = columns; ui.tui.render();
    const controls = ui.tui.hitTargets.filter(hit => hit.type === 'model-control');
-   for (const command of ['/providers', '/models @effort', '/default']) assert.ok(controls.some(hit => hit.command === command));
+   for (const command of ['/providers', '/models @effort']) assert.ok(controls.some(hit => hit.command === command));
    assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) <= columns - 1));
   }
   const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.key('unsent draft', {}); ui.tui.render();

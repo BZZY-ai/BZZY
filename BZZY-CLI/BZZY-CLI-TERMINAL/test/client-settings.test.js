@@ -16,7 +16,7 @@ import { PairingQRImage } from '../src/pairing-qr-image.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { palette, createTerminalTheme } from '../src/terminal-theme.js';
 import { createSession } from '../src/store.js';
-import { BUILTINS } from '../src/providers.js';
+import { BUILTINS, defaultSelection } from '../src/providers.js';
 import { home, readJson, writeJson } from '../src/files.js';
 import { listRecords, getRecord, putRecord, digest } from '../src/database.js';
 import { runtimeInfo, runtimeRequest } from '../src/runtime.js';
@@ -94,7 +94,7 @@ test('Settings presents the four requested options and preserves the chat draft'
   assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
 });
 
-test('Settings retains the host header and all four choices fit normal terminal heights', () => {
+test('Settings takes over the full screen and keeps all four choices at normal terminal heights', () => {
   const { ui, output } = terminal();
   ui.updateSession({ id: ui.sessionId, provider: 'codex', model: 'fixture-model-banner', cwd: '/fixture-project-path',
     executionState: 'running', usage: { tokens: 987654, available: true } });
@@ -103,10 +103,10 @@ test('Settings retains the host header and all four choices fit normal terminal 
     Object.assign(output, { rows, columns: 100 }); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
     for (const label of ['API keys', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
-    assert.match(frame, /fixture-model-banner/); assert.match(frame, /fixture-project-path/);
-    assert.match(frame, /987,654 tokens/); assert.match(frame, /[Ee]ffort:? default/);
-    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === 'settings'));
-    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === 'skills'));
+    assert.match(frame, /◉◉ Settings/);
+    assert.doesNotMatch(frame, /fixture-model-banner|fixture-project-path|987,654 tokens|Ask BZZY to do anything/);
+    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'settings'));
+    assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'confirm'), false);
     assert.doesNotMatch(frame, /Core service/);
     assert.equal(frame.includes(ui.sessionId), false); assert.ok(ui.tui.lastFrame.length <= rows);
   }
@@ -115,7 +115,7 @@ test('Settings retains the host header and all four choices fit normal terminal 
 test('terminal mode settings have separate clickable model/effort fields and preserve unsaved edits through Back', async () => {
   const { ui, output } = terminal(); ui.openSettings();
   await ui.settingsCommand('/settings modes'); assert.equal(ui.settings.page, 'modes');
-  assert.deepEqual(ui.settings.rows().map(row => row.action), ['mode:debate', 'mode:parallel', 'mode:besties', 'mode:delegate']);
+  assert.deepEqual(ui.settings.rows().map(row => row.action), ['solo-default', 'mode:debate', 'mode:parallel', 'mode:besties', 'mode:delegate']);
   await ui.settings.run('mode:debate'); assert.equal(ui.settings.pageTitle, 'Debate default');
   ui.settings.modes.modelPicker = async () => ({ provider: 'codex', model: 'fixture', effort: 'default' });
   await ui.settings.run('preset-model:0'); assert.equal(ui.settings.modes.draft.dirty, true);
@@ -133,6 +133,20 @@ test('terminal mode settings have separate clickable model/effort fields and pre
   assert.equal(listRecords('execution').length, 0); assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
   ui.settings.back(); ui.settings.back(); assert.equal(ui.settings.page, 'core'); ui.settings.back();
   assert.deepEqual(ui.settings.rows().map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
+});
+
+test('Terminal agent setups saves a Solo chat default without starting work', async () => {
+  const { ui } = terminal(); ui.openSettings();
+  await ui.settings.run('modes');
+  assert.equal(ui.settings.rows()[0].action, 'solo-default');
+  ui.settings.modelPicker = async () => ({ provider: 'codex', model: 'fixture-solo-model', effort: 'high',
+    capabilities: { supportsEffort: true, supportedEfforts: ['high'] } });
+  const before = listRecords('execution').length;
+  await ui.settings.run('solo-default');
+  assert.deepEqual(defaultSelection(), { provider: 'codex', model: 'fixture-solo-model', effort: 'high',
+    capabilities: { supportsEffort: true, supportedEfforts: ['high'] } });
+  assert.match(ui.settings.message, /Solo chat default saved/);
+  assert.equal(listRecords('execution').length, before);
 });
 
 test('removed Settings actions cannot change lifecycle, coordinator or identity from the compact menu', async () => {

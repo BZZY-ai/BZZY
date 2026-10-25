@@ -33,7 +33,7 @@ export function replaceCells(line, left, replacement, width, theme, background) 
   return prefix + ' '.repeat(Math.max(0, left - cellWidth(prefix))) + replacement + restore + suffix;
 }
 
-export function fillSurface(text, width, theme, background, foreground, bold = false) {
+export function fillSurface(text, width, theme, background, foreground, bold = false, restore = palette.background) {
   return theme.background(background) + theme.color(text + ' '.repeat(Math.max(0, width - cellWidth(text))), foreground, bold)
-    + theme.background(palette.background);
+    + theme.background(restore);
 }

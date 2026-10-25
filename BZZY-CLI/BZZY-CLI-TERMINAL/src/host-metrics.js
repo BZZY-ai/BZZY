@@ -31,3 +31,13 @@ export function hostMetricsLabel(sample, width = 80) {
   return width >= 65 ? `Host CPU ${percent} · RAM ${used}/${total} GB${core}`
     : `CPU ${cpu === null ? '—' : `${cpu.toFixed(0)}%`} · RAM ${used}/${total} GB`;
 }
+
+export function hostMetricsCompact(sample) {
+  const cpu = sample?.host?.cpuPercent, memory = sample?.host?.memory;
+  if (!memory || !Number.isFinite(memory.totalBytes) || memory.totalBytes <= 0 ||
+    !Number.isFinite(memory.usedBytes) || memory.usedBytes < 0 || memory.usedBytes > memory.totalBytes ||
+    cpu !== null && (!Number.isFinite(cpu) || cpu < 0 || cpu > 100)) return 'CPU — · RAM —';
+  const used = (memory.usedBytes / 1024 ** 3).toFixed(1);
+  const total = (memory.totalBytes / 1024 ** 3).toFixed(memory.totalBytes >= 10 * 1024 ** 3 ? 0 : 1);
+  return `CPU ${cpu === null ? '—' : `${cpu.toFixed(0)}%`} · RAM ${used}/${total} GB`;
+}

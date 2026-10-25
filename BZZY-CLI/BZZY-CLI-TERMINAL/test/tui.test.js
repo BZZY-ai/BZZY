@@ -29,9 +29,13 @@ test('connection indicators remain independent of busy model work and preserve t
     Object.assign(output, { columns: 150, rows: 40 });
     ui.tui.value = 'Keep typing'; ui.tui.cursor = 4; ui.tui.busy = true; ui.tui.state = 'responding';
     ui.connectionStatus = { core: true, relay: false }; ui.tui.render();
-    assert.match(clean(ui.tui.lastFrame[1]), /Core Online.*Relay Offline/);
+    const connected = ui.tui.lastFrame.map(clean).join('\n');
+    assert.match(connected, /● BZZY Relay.*CPU/); assert.match(connected, /Core ON.*Relay OFF/);
+    assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.foreground(palette.danger)));
+    ui.connectionStatus = { core: true, relay: true }; ui.tui.render();
+    assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.foreground(palette.goalSuccess)));
     ui.connectionStatus = null; ui.tui.render();
-    assert.match(clean(ui.tui.lastFrame[1]), /Core Offline.*Relay Offline/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Core OFF.*Relay OFF/);
     assert.equal(ui.tui.value, 'Keep typing'); assert.equal(ui.tui.cursor, 4);
     assert.equal(ui.tui.entries.length, 0, 'connection checks never become conversation events');
   } finally { ui.close(); }
@@ -104,17 +108,18 @@ test('every palette keeps body text, semantic labels and filled action buttons r
     ['accent', 'selection'], ['background', 'accent'], ['background', 'goalSuccess'], ['background', 'danger'], ['background', 'yolo'],
   ]) assert.ok(contrast(colors[foreground], colors[background]) >= 4.5, `${name}: ${foreground} on ${background}`);
 });
-test('user cards and agent replies retain distinct roles in RGB, basic-color and monochrome terminals', () => {
+test('user and agent turns retain labeled, distinct rails in RGB, basic-color and monochrome terminals', () => {
   const { ui, output } = terminal();
   try {
     for (const level of ['3', '1', '0']) {
       ui.tui.theme = createTerminalTheme(output, { FORCE_COLOR: level }); ui.tui.entryLayouts = new WeakMap();
       const user = ui.tui.entryLayout({ kind: 'user', text: 'Review the café 🐝 and 漢字 layout.', goal: true }, 66).lines;
       const agent = ui.tui.entryLayout({ kind: 'assistant', label: 'Codex', text: 'I checked the layout.\nThe saved history stays intact.' }, 66).lines;
-      assert.match(user.map(clean).join('\n'), /YOU · \/goal/); assert.match(agent.map(clean).join('\n'), /AGENT · Codex/);
+      assert.match(user.map(clean).join('\n'), /YOU · GOAL/); assert.match(agent.map(clean).join('\n'), /AGENT · Codex/);
+      assert.match(clean(user[1]), /▎ Review the café/); assert.match(clean(agent[1]), /▎ I checked the layout/);
       assert.doesNotMatch(agent.map(clean).join('\n'), /\[Copy\]/);
       assert.ok([...user, ...agent].every(line => cellWidth(line) <= 66));
-      assert.ok(user.map(clean).some(line => line.trim().startsWith('╭')));
+      assert.ok(user.map(clean).some(line => line.includes('▎')));
       if (level === '0') assert.doesNotMatch([...user, ...agent].join(''), /\x1b/);
       else {
         assert.ok(user.join('').includes(ui.tui.theme.foreground(palette.user)));
@@ -143,7 +148,7 @@ test('right-click on a reply body offers Copy response while left-click selectio
   try {
     const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.value = 'My draft'; ui.tui.cursor = 8;
     ui.event('text', { text: 'Complete response body.', itemId: 'copy-context' }); ui.tui.render();
-    ui.openSettings(); ui.tui.render(); ui.tui.setPanel('chat'); ui.tui.render();
+    ui.tui.setPanel('activity'); ui.tui.render(); ui.tui.setPanel('chat'); ui.tui.render();
     assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /\[Copy\]|\[c\]/);
     let body = ui.tui.hitTargets.filter(hit => hit.type === 'response').at(-1);
     ui.tui.mouse(0, body.left + 3, body.row); assert.equal(copied.length, 0); assert.ok(ui.tui.textSelection);
@@ -175,7 +180,7 @@ test('a disabled Continue row stays visible and cannot confirm an incomplete par
   } finally { ui.close(); }
 });
 
-test('full-screen chat retains streaming replies and pins the latest user message through long output', async () => {
+test('full-screen chat retains streaming replies and keeps the latest user turn fixed above long output', async () => {
   const term = terminal(), { ui } = term;
   try {
     ui.updateSession({ id: sessionId, provider: 'codex', model: 'chosen-model', cwd: '/project', executionState: 'running', usage: { tokens: 1234, available: true } });
@@ -188,15 +193,15 @@ test('full-screen chat retains streaming replies and pins the latest user messag
     assert.equal(ui.tui.pinned, 'Validate this ownership finding');
     assert.match(ui.tui.entries.find(entry => entry.kind === 'assistant').text, /Evidence line 69/);
     const frame = ui.tui.lastFrame.map(clean).join('\n');
-    assert.match(frame, /YOU ASKED[\s\S]*Validate this ownership finding/);
-    assert.match(frame, /Evidence line 69/); assert.match(frame, /1,234 tokens/); assert.match(frame, new RegExp(sessionId));
+    assert.match(frame, /YOU\s+│ Validate this ownership finding/);
+    assert.match(frame, /Evidence line 69/); assert.match(frame, /1,234 tokens/); assert.match(frame, /\d{2}:\d{2}:\d{2}/);
     assert.ok(term.written.includes('\x1b[1;')); assert.ok(term.written.includes('\x1b[?1049h'));
     ui.tui.key('n', { name: 'n' }); ui.event('text', { text: 'Still visible.', itemId: 'reply' }); ui.tui.render();
     assert.equal(ui.tui.value, 'n'); assert.match(ui.tui.entries.at(-1).text, /Still visible/);
     Object.assign(term.output, { columns: 80, rows: 24 }); ui.tui.render();
     const smaller = ui.tui.lastFrame.map(clean).join('\n');
     assert.match(smaller, /Validate this ownership finding/); assert.match(smaller, /Still visible/);
-    assert.match(smaller, new RegExp(sessionId)); assert.match(smaller, /1,234 tokens/);
+    assert.match(smaller, /YOU\s+│ Validate this ownership finding/); assert.match(smaller, /1,234 tokens/);
     ui.tui.key('\r', { name: 'return' }); assert.equal(await answer, 'n');
   } finally { ui.close(); }
   assert.equal(term.input.isRaw, false); assert.ok(term.written.includes('\x1b[?1049l'));
@@ -273,7 +278,7 @@ test('weekly quotas stay in the header and Activity shows readable progress with
     }
   } finally { ui.close(); }
 });
-test('the same eyes, model, tokens and host metrics remain above Settings, panels and pickers', async () => {
+test('the chat keeps top actions and runtime context while Settings replaces the transcript and composer', async () => {
   const term = terminal(), { ui, output } = term;
   try {
     ui.updateSession({ id: sessionId, provider: 'codex', model: 'chosen-model', selectedEffort: 'high', cwd: '/project',
@@ -281,36 +286,36 @@ test('the same eyes, model, tokens and host metrics remain above Settings, panel
     ui.hostMetricsEnabled = true;
     ui.hostMetricsMonitor = { close() {} };
     ui.hostMetrics = { host: { cpuPercent: 12, memory: { totalBytes: 16 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 } }, core: { rssBytes: 80 * 1024 ** 2 } };
-    ui.settings = { page: 'main', focus: 0, message: '', close() {}, rows: () => [
+    ui.settings = { page: 'main', pageTitle: 'Settings', pageSubtitle: 'Your workspace, connections and defaults', focus: 0, message: '', close() {}, rows: () => [
       { text: 'DeepSeek API key', action: 'deepseek' },
       { text: 'Default BZZY folder', action: 'workspace-root' },
       { text: 'Pair iPhone', action: 'pair' },
+      { text: 'BZZY Core', action: 'core' },
     ] };
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
       Object.assign(output, { columns, rows });
-      let expected;
-      for (const panel of ['chat', 'activity', 'http', 'settings']) {
-        ui.tui.setPanel(panel); ui.tui.render();
-        const frame = ui.tui.lastFrame.map(clean);
-        const boundary = frame.findIndex(line => /(?:^|│)─+│?$/.test(line));
-        const header = frame.slice(0, boundary + 1);
-        if (expected) assert.deepEqual(header, expected, 'screen changes only replace the lower region'); else expected = header;
-        assert.match(header.join('\n'), /chosen-model/); assert.match(header.join('\n'), /1,234 tokens/);
-        assert.match(header.join('\n'), /CPU.*12.*RAM.*4.0\/16 GB/);
-        assert.ok(ui.tui.eyeRegion && header.some(line => /[\u2800-\u28ff]/u.test(line)));
-        assert.equal(frame.length, rows);
-      }
-      const picker = ui.chooseOne('Named sessions', { choices: [{ value: 'named', label: 'My Project' }] });
-      await Promise.resolve(); ui.tui.render();
-      assert.deepEqual(ui.tui.lastFrame.map(clean).slice(0, expected.length), expected);
-      ui.tui.key('', { name: 'escape' }); await picker;
-      const before = term.written.length;
-      ui.privateView = { title: 'Share project', lines: ['Private fixture'] }; ui.tui.render();
-      const privateFrame = clean(term.written.slice(before));
-      assert.match(privateFrame, /chosen-model/); assert.match(privateFrame, /1,234 tokens/); assert.match(privateFrame, /CPU.*RAM/);
-      assert.ok(ui.tui.eyeRegion); assert.equal(ui.tui.lastFrame.length, 0, 'private content stays out of frame caches');
-      ui.tui.animationTime = 2; ui.tui.paintEyes(); assert.equal(ui.tui.lastFrame.length, 0);
-      ui.privateView = null;
+      ui.tui.setPanel('chat'); ui.tui.value = 'Keep this draft'; ui.tui.cursor = 5;
+      ui.event('message.user', { text: 'Question in the transcript' });
+      ui.event('text', { text: 'Answer in the transcript', itemId: 'settings-layout' });
+      ui.tui.render();
+      const chat = ui.tui.lastFrame.map(clean);
+      assert.match(chat[0], /(?:Open Sessions|Sessions).*(?:\+ New Session|\+ New).*CPU.*12.*RAM.*4\.0\/16(?: GB|G).*⚙/);
+      assert.match(chat.join('\n'), /chosen-model.*effort high/);
+      assert.match(chat.join('\n'), /1,234 tokens.*\d{2}:\d{2}:\d{2}/);
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-sessions'));
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'session-new'));
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-settings'));
+
+      ui.tui.setPanel('settings'); ui.tui.render();
+      const settings = ui.tui.lastFrame.map(clean);
+      assert.match(settings[0], /Settings.*CPU.*12.*RAM.*4\.0\/16 GB/);
+      assert.match(settings.join('\n'), /API key.*Default BZZY folder.*Pair iPhone.*BZZY Core/s);
+      assert.doesNotMatch(settings.join('\n'), /Question in the transcript|Answer in the transcript|Ask BZZY to do anything/);
+      assert.equal(ui.tui.lastFrame.length, rows);
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'settings'));
+
+      ui.tui.setPanel('chat'); ui.tui.render();
+      assert.equal(ui.tui.value, 'Keep this draft');
     }
   } finally { ui.close(); }
 });
@@ -398,14 +403,13 @@ test('besties has a shared room for deduplicated messages and evidence reviews w
     ui.event('peer.review', { id: 'review-one', seq: 12, groupId: sessionId, reviewer: second.id, peerSessionId: first.id, messageId: 'message-one', assessment: 'disputed', rationale: 'The independent control is still missing. This does not establish the claimed boundary failure.', evidence: ['evidence-1111'], createdAt: '2026-10-21T10:01:00.000Z' });
     assert.equal(ui.tui.sharedRoom.length, 2, 'sent and received copies of a message are one room entry');
     const input = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.value = 'preserved draft'; ui.tui.cursor = 15;
-    ui.tui.render(); const room = ui.tui.hitTargets.find(hit => hit.type === 'panel' && hit.panel === 'room'); assert.ok(room);
-    ui.tui.mouse(0, room.left + 2, room.row); assert.equal(ui.tui.panel, 'room'); assert.equal(ui.tui.value, 'preserved draft');
+    ui.tui.render(); ui.tui.setPanel('room'); assert.equal(ui.tui.panel, 'room'); assert.equal(ui.tui.value, 'preserved draft');
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /SHARED ROOM/); assert.match(frame, /Overview.*codex · 1.*codex · 2/);
+      assert.match(frame, /Overview.*codex · 1.*codex · 2/);
       assert.match(frame, /independent control is still missing/); assert.match(frame, /peer judgment/);
-      assert.doesNotMatch(frame, /Brain|Hands|Ctrl\+G switch/); assert.match(frame, /╭─ Message/);
+      assert.doesNotMatch(frame, /Brain|Hands|Ctrl\+G switch/); assert.match(frame, /\[0 Overview\].*codex · 1.*codex · 2/);
     }
     Object.assign(output, { columns: 100, rows: 32 }); ui.tui.render(); ui.tui.scroll = ui.tui.scrollbar.maximum; ui.tui.render();
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /codex · 1 → codex · 2/);
@@ -454,7 +458,7 @@ test('a model picker loads asynchronously, scrolls to the focused model and canc
     await Promise.resolve(); ui.tui.render();
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Choose model/);
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Model 20/);
-    assert.match(ui.tui.lastFrame.map(clean).join('\n'), new RegExp(sessionId));
+    assert.match(ui.tui.lastFrame[0], /(?:Open Sessions|Sessions).*(?:\+ New Session|\+ New)/);
     ui.tui.key('', { name: 'down' }); ui.tui.key('\r', { name: 'return' });
     assert.equal(await chosen, 'model-21'); assert.equal(ui.tui.value, 'unsent draft');
     const cancelled = ui.chooseOne('Choose provider', new Promise(() => {}));
@@ -468,22 +472,19 @@ test('slash suggestions filter, complete without switching agent tabs, and keep 
     const answer = ui.ask('bzzy › '); await Promise.resolve();
     let tabSwitches = 0;
     input.on('keypress', (_text, key) => { if (key.name === 'tab' && !key.bzzyHandled) tabSwitches++; });
-    input.write('/'); ui.tui.render();
+    input.write('/mo'); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
     assert.ok(frame.includes('/models'));
     for (const command of ['/debate', '/models', '/providers', '/default', '/doctor']) assert.ok(commandSuggestions('/').some(item => item.command === command));
-    const eyeRows = ui.tui.lastFrame.flatMap((line, index) => /[\u2800-\u28ff]/u.test(clean(line)) ? [index] : []);
-    assert.ok(eyeRows.length >= 5, 'the header has enough terminal pixels for the larger eyes');
-    assert.ok(eyeRows.every(index => index < ui.tui.eyeRegion.top + ui.tui.eyeRegion.rows), 'the mascot stays in the header');
     assert.doesNotMatch(frame, /F[123]/);
-    ui.tui.key('mod', {}); input.write('\t');
+    ui.tui.key('', { name: 'u', ctrl: true }); input.write('/mod\t');
     assert.equal(ui.tui.value, '/models '); assert.equal(tabSwitches, 0);
     ui.tui.key('', { name: 'u', ctrl: true }); input.write('/http\r');
     assert.equal(ui.tui.panel, 'http'); assert.ok(ui.tui.resolveInput, 'a local panel command leaves the chat prompt open');
     input.write('/do'); ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.completions().length, 0);
     input.write('c'); assert.equal(ui.tui.completions()[0].command, '/doctor');
     Object.assign(output, { columns: 80, rows: 24 }); ui.event('message.user', { text: 'Keep this question pinned' }); ui.tui.render();
-    const smaller = ui.tui.lastFrame.map(clean).join('\n'); assert.match(smaller, /Keep this question pinned/); assert.match(smaller, new RegExp(sessionId));
+    const smaller = ui.tui.lastFrame.map(clean).join('\n'); assert.match(smaller, /YOU ASKED[\s\S]*Keep this question pinned/);
     ui.tui.key('', { name: 'u', ctrl: true }); input.write('/goal status\r'); assert.equal(await answer, '/goal status');
   } finally { ui.close(); }
 });
@@ -505,14 +506,13 @@ test('Left and Right adjust only the focused model effort and confirmation retur
     assert.equal(await cancelled, null); assert.equal(options.choices[0].effort, 'high', 'cancelling does not mutate saved choices');
   } finally { ui.close(); }
 });
-test('mouse reports click views, scroll and drag the right scrollbar without becoming message text', async () => {
+test('keyboard views, mouse scroll and scrollbar drag never become message text', async () => {
   const term = terminal(), { ui, input } = term;
   const mouse = (button, x, y, released = false) => input.write(`\x1b[<${button};${x};${y}${released ? 'm' : 'M'}`);
   try {
     const answer = ui.ask('bzzy › '); await Promise.resolve(); input.write('unsent draft');
     for (let index = 0; index < 50; index++) ui.event('network.response', { method: 'GET', url: `https://approved.example/request-${index}`, status: 200 });
-    ui.tui.render();
-    const http = ui.tui.hitTargets.find(hit => hit.type === 'panel' && hit.panel === 'http'); mouse(0, http.left + 2, http.row);
+    ui.tui.render(); ui.tui.key('', { name: 'g', ctrl: true }); ui.tui.key('', { name: 'g', ctrl: true });
     ui.tui.render(); assert.equal(ui.tui.panel, 'http'); assert.equal(ui.tui.value, 'unsent draft');
     const bar = ui.tui.scrollbar; assert.ok(bar.maximum > 0);
     mouse(64, 30, bar.top + 2); ui.tui.render(); assert.ok(ui.tui.scroll > 0);
@@ -548,7 +548,7 @@ test('eye animation paints only changed mascot cells, respects spacing and stops
     clearTimeout(ui.tui.timer); clearTimeout(ui.tui.renderTimer); ui.tui.renderTimer = null;
     const answer = ui.ask('bzzy › '); await Promise.resolve();
     ui.event('message.user', { text: 'Keep this prompt visible while the mascot moves' });
-    ui.event('text', { text: 'The chat text must stay still.' }); ui.tui.render();
+    ui.event('text', { text: 'The chat text must stay still.' }); ui.tui.setPanel('activity'); ui.tui.render();
     const before = [...ui.tui.lastFrame], region = ui.tui.eyeRegion, written = term.written.length;
     assert.ok(region.columns >= 19 && region.rows >= 5);
     assert.ok(region.suffixes.every(suffix => suffix.startsWith('   ')), 'the sidebar keeps a gutter beside the mascot');
@@ -607,8 +607,8 @@ test('multiline tool descriptions stay out of the composer and the header always
     for (const rows of [32, 24, 18]) {
       Object.assign(output, { columns: 80, rows }); ui.tui.render();
       for (const line of ui.tui.lastFrame) assert.doesNotMatch(clean(line), /[\r\n]/);
-      const frame = ui.tui.lastFrame.map(clean).join('\n'); assert.match(frame, /my unsent message/); assert.match(frame, new RegExp(sessionId));
-      if (rows >= 24) assert.ok(ui.tui.lastFrame.slice(0, 9).some(line => /effort high/.test(clean(line))));
+      const frame = ui.tui.lastFrame.map(clean).join('\n'); assert.match(frame, /my unsent message/); assert.match(frame, /effort high/);
+      assert.match(frame, /\d{2}:\d{2}:\d{2}/);
     }
     ui.reader.close(); await answer;
   } finally { ui.close(); }

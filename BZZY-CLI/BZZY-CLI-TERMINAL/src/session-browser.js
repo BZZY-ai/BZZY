@@ -44,11 +44,15 @@ export async function chooseSavedSession(ui, { excludeId } = {}) {
       const aliases = new Map();
       for (const session of saved) aliases.set(sessionLabel(session), (aliases.get(sessionLabel(session)) || 0) + 1);
       const selected = await ui.chooseOne('Sessions', {
-        hint: 'Enter open · Right-click / F10 actions · Esc back',
-        descriptionRows: 1,
         choices: saved.map(session => ({ value: session.id, label: sessionLabel(session),
           ...(aliases.get(sessionLabel(session)) > 1 ? { description: session.cwd } : {}) })),
-      }, { scope: 'sessions' });
+      }, {
+        scope: 'sessions',
+        presentation: 'dropdown',
+        anchor: ui.tui?.topSessionAnchor,
+        hint: 'Enter open · Right-click / F10 actions · Esc back',
+        descriptionRows: 1,
+      });
       if (selected == null) return null;
       const id = typeof selected === 'object' ? selected.value : selected;
       const session = saved.some(item => item.id === id) && loadSession(id);
@@ -63,6 +67,7 @@ export async function chooseSavedSession(ui, { excludeId } = {}) {
       return { session, action: 'attach' };
     }
   } finally {
+    if (ui.tui) ui.tui.topSessionAnchor = null;
     ui.tui?.setPanel('chat');
     const sessionId = ui.activeTab || ui.sessionId, draft = ui.sessionBrowserDrafts?.get(sessionId);
     ui.sessionBrowserDrafts?.delete(sessionId);

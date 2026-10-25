@@ -85,7 +85,8 @@ test('delegate handoffs and attributed activity stay readable without exposing r
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /Supervisor reviewing/); assert.match(frame, /╭─ Message/); assert.match(frame, new RegExp(sessionId));
+      assert.match(frame, /Supervisor reviewing/); assert.match(frame, /Ask BZZY to do anything/);
+      assert.match(frame, /YOU\s+│ \/goal Solve this CTF/); assert.match(frame, /strong-model.*effort high/);
     }
   } finally { ui.close(); }
 });
@@ -139,16 +140,17 @@ test('pinned brain/hands models and efforts survive streaming, resizing and mini
   }
 });
 
-test('terminal navigation keeps the views, session ID and composer without persistent shortcut clutter', () => {
+test('terminal navigation keeps top session actions, model controls and composer without shortcut clutter', () => {
   const { ui, output } = terminal();
   try {
     ui.updateSession({ id: sessionId, provider: 'codex', model: 'fixture-brain', executionState: 'idle' });
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      for (const panel of ['chat', 'activity', 'http']) assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'panel' && hit.panel === panel));
+      for (const type of ['top-sessions', 'session-new', 'top-settings']) assert.ok(ui.tui.hitTargets.some(hit => hit.type === type));
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'model-control' && hit.command === '/providers'));
       assert.doesNotMatch(frame, /TELEGRAM/);
-      assert.match(frame, /╭─ Message/); assert.match(frame, new RegExp(sessionId));
+      assert.match(frame, /Ask BZZY to do anything/); assert.match(frame, /fixture-brain.*effort default/);
       assert.doesNotMatch(frame, /Ctrl\+S|Wheel\/PgUp|COPY/);
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'copy'), false);
     }

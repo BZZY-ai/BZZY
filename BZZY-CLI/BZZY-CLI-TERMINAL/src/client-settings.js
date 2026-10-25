@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { terminalSession } from '@bzzy/core';
 import { sessionPermissions } from '@bzzy/core/engine/session-access.js';
 import { CoreWorkspaces } from '@bzzy/core/workspaces';
-import { getProvider, saveKey, credentialStatus } from './providers.js';
+import { defaultSelection, getProvider, saveDefaultSelection, saveKey, credentialStatus } from './providers.js';
 import { sessions, loadSession } from './store.js';
 import { copyText } from './clipboard.js';
 import { PairingQRImage } from './pairing-qr-image.js';
@@ -52,10 +52,11 @@ export class ClientSettings {
   #qr = [];
   #expiry;
   #approvalRequest;
-  constructor(ui, { relayLoader = loadRelay, hostLoader = loadHost, workspaces = new CoreWorkspaces(), qrImage = new PairingQRImage() } = {}) {
+  constructor(ui, { relayLoader = loadRelay, hostLoader = loadHost, workspaces = new CoreWorkspaces(),
+    qrImage = new PairingQRImage(), modelPicker = chooseUnifiedModel } = {}) {
     this.ui = ui; this.relayLoader = relayLoader; this.workspaces = workspaces;
     this.hostLoader = hostLoader; this.hostHome = home();
-    this.qrImage = qrImage;
+    this.qrImage = qrImage; this.modelPicker = modelPicker;
     this.modes = new ModeSettings(ui);
     this.message = ''; this.warning = false; this.focus = 0; this.page = 'main';
   }
@@ -94,7 +95,14 @@ export class ClientSettings {
   }
   rows() {
     const rows = [], put = (text = '', tone = 'text', action) => rows.push({ text, tone, action });
-    if (this.page === 'modes') return this.modes.homeRows();
+    if (this.page === 'modes') {
+      const saved = defaultSelection();
+      return [{
+        text: 'Solo chat', action: 'solo-default', icon: '●', card: true, tone: 'accent',
+        detail: 'Normal terminal chat · independent of Core’s coordinator',
+        value: saved ? `${saved.provider} · ${saved.model || 'provider default'} · ${saved.effort}` : 'Set up',
+      }, ...this.modes.homeRows()];
+    }
     if (this.page === 'mode-edit') return this.modes.rows();
     if (this.page === 'main') {
       const key = this.keyStatus();
@@ -130,7 +138,7 @@ export class ClientSettings {
       rows.push({ text: 'Effort', value: (this.coreSelection?.effort || 'default') + ' ▾', action: 'core-effort', inline: 'agent-core', control: true });
       put('Save Core default', 'accent', 'core-save');
       put('Independent from the CLI chat default.', 'muted');
-      rows.push({ text: 'Terminal agent setups', action: 'modes', icon: '◎', card: true, tone: 'accent', detail: 'Debate · Parallel · Besties · Delegate' });
+      rows.push({ text: 'Terminal agent setups', action: 'modes', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Delegate · Debate · Parallel · Besties' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
       const push = notificationDeliveryStatus();
       put(); put(!push.configured ? 'iPhone push alerts · Apple setup needed' : push.message, 'muted');
@@ -299,7 +307,15 @@ export class ClientSettings {
     if (action !== 'modes' && !this.rows().some(row => row.action === action)) return;
     this.busy = true; this.message = ''; this.warning = false; this.changed();
     try {
-      if (action === 'modes') { this.page = 'modes'; this.focus = 0; }
+      if (action === 'solo-default') {
+        const current = defaultSelection() || (this.ui.sessionId ? loadSession(this.ui.sessionId) : null) || { cwd: this.ui.tui.cwd || process.cwd() };
+        const selection = await this.modelPicker(current, this.ui, { title: 'Solo chat default', scope: 'settings-solo' });
+        if (selection) {
+          saveDefaultSelection({ provider: selection.provider, model: selection.model, selectedEffort: selection.effort,
+            modelCapabilities: selection.capabilities });
+          this.message = `Solo chat default saved · ${selection.provider} · ${selection.model || 'provider default'} · effort ${selection.effort}.`;
+        }
+      } else if (action === 'modes') { this.page = 'modes'; this.focus = 0; }
       else if (action.startsWith('mode:')) { this.modes.open(action.slice(5)); this.page = 'mode-edit'; this.focus = 0; }
       else if (action.startsWith('preset-')) { const message = await this.modes.run(action); if (message) this.message = message; }
       else if (action === 'workspace-root') await this.configureWorkspace();

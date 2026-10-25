@@ -154,7 +154,8 @@ function conversation(tui, lines, rect) {
 }
 
 // Canvas owns the entire surface. Prompts, settings and conversations are local
-// windows; only --minimal enters the transcript frontend. Private QR/code views
+// windows. Explicit --canvas enters this surface; plain `bzzy` uses the compact
+// transcript frontend. Private QR/code views
 // retain their uncached renderer and complete quiet zones.
 export function renderCanvasShell(tui, width, height) {
   tui.privateFrame = false;
