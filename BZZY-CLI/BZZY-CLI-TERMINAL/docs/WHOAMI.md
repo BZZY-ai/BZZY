@@ -57,7 +57,7 @@ Tab/Shift+Tab or `/tab` to switch individual agent chats and the overview. Paren
 completion requires every peer's goal plus the original project's deliverables
 and acceptance checks. Independent patches are not automatically merged.
 
-Debate: `bzzy --debate`.
+Validate: `bzzy --validate`.
 Select 2–3 agents total: one main agent and one or two challengers, with their own
 models and efforts. Continue with two or configure the third, then enter the goal.
 Every selected agent investigates independently first. The main agent then opens
@@ -71,7 +71,7 @@ debate after its first challenge round.
 Majority agreement cannot skip the opening/challenge round or erase minority
 evidence. Original goal criteria and requested severity need separate supported
 assessments with actual evidence inspection and the normal acceptance checks.
-`--review-only` skips new investigation and reviews fixed material. `/debate
+`--review-only` skips new investigation and reviews fixed material. `/validate
 [focus]` reviews the supplied goal, corresponding achieved claim and all recorded
 goal evidence, runs a separate debate, and returns its assessment to the original
 conversation. Ordinary chat replies retain focused latest-reply review.
@@ -100,7 +100,7 @@ The shared room shows actual peer messages and reviews separately from user chat
 Original-workspace deliverables remain required. No peer supervises another.
 
 Scripted selections use `--agents codex:MODEL,claude:MODEL[,deepseek:MODEL]` for
-parallel/besties. Debate uses `--supervisor`, `--supervisor-model` and one or two
+parallel/besties. Validate uses `--supervisor`, `--supervisor-model` and one or two
 `--participant provider:model` flags. Delegate has separate `--supervisor`,
 `--executor`, `--supervisor-model` and `--executor-model` flags. `--rounds` limits
 debate to 1–5 rounds. `--concurrency` is bounded at 8; besties requires enough
@@ -122,7 +122,7 @@ preset until `/default` is used again. `--default` skips confirmation and select
 ```bash
 bzzy --default
 bzzy --parallel --default
-bzzy --debate --default
+bzzy --validate --default
 bzzy --besties --default
 bzzy --delegate --default --goal "Inspect the supplied project"
 ```
@@ -283,7 +283,7 @@ option reference; `bzzy integration` prints the public integration guide.
 It works noninteractively, including before setup, with no inference or network.
 
 Chat commands include `/goal`, `/default`, `/models`, `/providers`, `/new`,
-`/debate`, `/usage`, `/chat`, `/room`, `/activity`, `/http`, `/copy`,
+`/validate`, `/usage`, `/chat`, `/room`, `/activity`, `/http`, `/copy`,
 `/tabs`, `/tab NUMBER|NAME`, `/pause`, `/cancel`, `/detach`, `/help` and `/exit`.
 `/provider`, `/model` and `/quit` are aliases. Group views also accept `/pause all`
 and `/cancel all`. Tab/Shift+Tab switches chats; Ctrl+G cycles views; Ctrl+O toggles

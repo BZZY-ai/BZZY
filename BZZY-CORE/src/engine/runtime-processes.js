@@ -194,6 +194,13 @@ export async function pauseRuntimeExecutions({ timeoutMs = 8000 } = {}) {
     else removeRecord('runtime-stop-target', receipt.id);
   }
   while (true) {
+    // Document calls are daemon-owned rather than managed execution jobs.
+    // Include their verified backend identities in the operator stop barrier.
+    for (const session of listRecords('session').filter(item => item.role === 'learning-review' && item.purpose === 'document')) {
+      const identity = session.backendProcess;
+      remember(identity);
+      if (identity?.start !== 'platform-unverified') signalProcess(identity, 'SIGTERM', { group: true });
+    }
     for (const round of listRecords('round').filter(item => ['starting', 'running'].includes(item.state))) {
       const key = `${round.assignmentId}:${round.number}`;
       if (!assignmentStops.has(key)) {

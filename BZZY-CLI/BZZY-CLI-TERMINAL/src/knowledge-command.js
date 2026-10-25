@@ -35,8 +35,25 @@ export async function knowledgeCLI(args, options, ui) {
     if (rest.length !== 2) throw new Error('Use bzzy knowledge request OPERATION FILE.json.');
     operation = rest[0]; input = readKnowledgeDefinition(rest[1], options.cwd);
   } else throw new Error('Use bzzy knowledge status|search TEXT|profiles|learning [SESSION]|review [SESSION]|request OPERATION FILE.json.');
-  if (['learning.queue', 'candidate.evaluate'].includes(operation) || operation === 'learning.control' && input.action === 'resume') await activateCLIHost();
+  if (['learning.queue', 'candidate.evaluate', 'session-memory.queue', 'session-memory.rebuild'].includes(operation) || ['learning.control', 'session-memory.control'].includes(operation) && input.action === 'resume') await activateCLIHost();
   const result = admin.request(operation, input);
+  ui.event('info', { result, message: JSON.stringify(result, null, 2) });
+  return 0;
+}
+
+export async function sessionMemoryCLI(args, options, ui) {
+  const [action = 'status', target, ...extra] = args;
+  if (!['status', 'read', 'build', 'pause', 'resume', 'cancel'].includes(action) || extra.length) throw new Error('Use bzzy session-memory status|read|build|pause|resume|cancel [SESSION].');
+  const admin = new CoreKnowledge(), sessionId = findSession(target, options.cwd).id;
+  let result;
+  if (['pause', 'resume', 'cancel'].includes(action)) {
+    const status = admin.request('session-memory.status', { sessionId });
+    if (action === 'resume') await activateCLIHost();
+    result = admin.request('session-memory.control', { sessionId, action, expectedRevision: status.control.revision });
+  } else {
+    if (action === 'build') await activateCLIHost();
+    result = admin.request(`session-memory.${action === 'build' ? 'queue' : action}`, { sessionId });
+  }
   ui.event('info', { result, message: JSON.stringify(result, null, 2) });
   return 0;
 }

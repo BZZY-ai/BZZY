@@ -1,7 +1,6 @@
 import { skillRows, returnToSkillLibrary } from './skills-ui.js';
 import { subagentRows } from './subagents-ui.js';
 import { namedTerminalSessions } from './session-browser.js';
-import readline from 'node:readline';
 import { renderCanvasShell } from './canvas-panels.js';
 import { CanvasGraphics } from './canvas-graphics.js';
 import { clean, cellWidth, clip, wrap, wrapProse, duration } from './terminal-format.js';
@@ -19,6 +18,8 @@ import { choicePopup, visibleChoices } from './choice-popup.js';
 import { fillSurface, replaceCells, sliceCells } from './terminal-surface.js';
 import { settingsLayout } from './settings-layout.js';
 import { goalIndicator } from './goal-indicator.js';
+import { escapeInputKind, TerminalKeyInput } from './terminal-keys.js';
+import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -38,25 +39,19 @@ export class TerminalChat {
     this.animationTime = 0; this.animationStarted = performance.now();
     this.wasRaw = Boolean(this.input.isRaw);
     this.output.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?2004h' + mouseOn);
-    readline.emitKeypressEvents(this.input, { escapeCodeTimeout: 50 }); this.input.setRawMode?.(true); this.input.resume();
-    this.onKey = (text, key) => this.key(text, key || {});
-    this.input.on('keypress', this.onKey);
-    this.rawEscapeTimer = null; this.rawEscapeBuffer = '';
-    this.onRawData = chunk => {
-      const sequence = chunk?.toString?.('utf8') ?? String(chunk ?? '');
-      if (this.rawEscapeBuffer || sequence.startsWith('\x1b')) this.rawEscapeBuffer += sequence;
-      else return;
-      clearTimeout(this.rawEscapeTimer); this.rawEscapeTimer = null;
-      this.rawEscapeTimer = setTimeout(() => {
-        const buffered = this.rawEscapeBuffer;
-        this.rawEscapeBuffer = '';
-        this.rawEscapeTimer = null;
-        if (buffered.length <= 64 && isEscapeInput(buffered, { sequence: buffered }))
-          this.key('\x1b', { name: 'escape', sequence: '\x1b', meta: true });
-      }, 80);
-      this.rawEscapeTimer.unref?.();
+    this.input.setRawMode?.(true);
+    this.normalizedKeys = new WeakSet();
+    this.onKey = (text, key) => {
+      // A closed setup readline can leave its decoder on stdin. Only our
+      // normalized events may act; otherwise one byte can reach both decoders.
+      if (!key || !this.normalizedKeys.has(key)) { if (key) key.bzzyHandled = true; return; }
+      if (!key.bzzyHandled) this.key(text, key);
     };
-    this.input.on('data', this.onRawData);
+    this.input.prependListener('keypress', this.onKey);
+    const publish = (text, key) => { this.normalizedKeys.add(key); this.input.emit('keypress', text, key); };
+    this.keyInput = new TerminalKeyInput(publish, (text, key) => { this.key(text, key); publish(text, key); });
+    this.onRawData = chunk => this.keyInput.write(chunk);
+    this.input.on('data', this.onRawData); this.input.resume();
     this.onResize = () => { this.textSelection = null; if (this.copyMode) this.setCopyMode(false); this.lastFrame = []; this.dashboardFrame = null; this.paintedFrame = null; this.render(); };
     this.output.on?.('resize', this.onResize);
     this.onDrain = () => { this.outputBlocked = false; this.lastFrame = []; this.schedule(); };
@@ -240,8 +235,10 @@ export class TerminalChat {
       if (data.type === 'error') this.add('error', `${this.mode === 'delegate' ? 'Hands' : 'Agent'} · ${data.agent || data.workerSessionId?.slice(0, 8) || 'worker'}: ${data.message}`);
       if (data.type === 'tool' && this.mode === 'delegate') this.delegationPhase = 'Executor running';
     }
-    else if (type === 'debate.message') this.add('assistant', data.text, { label: `${data.participant} · ${data.role}${data.round ? ` · round ${data.round}/${data.maxRounds}` : ''}` });
-    else if (type === 'debate.result') this.add(data.status === 'complete' ? 'success' : 'notice', data.message);
+    else if (['debate.started', 'debate.phase', 'debate.message', 'debate.result'].includes(type)) {
+      const { entry } = recordDebateEvent(this.entries, type, data);
+      this.entryLayouts.delete(entry); this.streaming = false;
+    }
     else if (type === 'info' && data.message) { this.add('notice', data.message, { welcome: Boolean(data.welcome) }); if (!data.welcome) this.notice(data.message); }
     else if (type === 'execution.finished') { this.busy = false; this.streaming = false; }
     else if (type === 'goal' && data.status) this.goalStatus = data.status;
@@ -318,7 +315,7 @@ export class TerminalChat {
     if (message) this.add('notice', message);
   }
 
-  clear() { this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.schedule(); }
+  clear() { this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.schedule(); }
   selectTab(previous, next) {
     if (previous === next) return;
     this.textSelection = null;
@@ -636,6 +633,7 @@ export class TerminalChat {
       if (entry) { entry.expanded = !entry.expanded; this.entryLayouts.delete(entry); this.contentRevision++; this.schedule(); }
       return;
     }
+    if (hit?.type === 'debate-toggle') { this.toggleDebate(hit.entry); return; }
     if (hit?.type === 'alias-save') { const value = this.aliasEdit?.value.trim(); this.aliasEdit = null; if (value) this.localCommand('/alias ' + value); this.schedule(); return; }
     if (hit?.type === 'alias-cancel') { this.aliasEdit = null; this.schedule(); return; }
     if (this.aliasEdit && hit?.type !== 'alias') { this.aliasEdit = null; this.schedule(); }
@@ -686,10 +684,42 @@ export class TerminalChat {
       this.schedule();
     }
   }
+  toggleDebate(entry) {
+    if (!entry || entry.kind !== 'debate') return;
+    const cached = this.entryLayouts.get(entry);
+    entry.expanded = !entry.expanded; this.debateFocus = entry.expanded ? entry : null;
+    this.entryLayouts.delete(entry); this.contentRevision++; this.bodyCache = null;
+    if (cached) this.scroll = Math.max(0, this.scroll + this.entryLayout(entry, cached.width).lines.length - cached.lines.length);
+    this.schedule();
+  }
+  escapeMenu() {
+    if (this.ui.cancelDefinitionAuthoring) { this.ui.cancelDefinitionAuthoring(); this.schedule(); return true; }
+    if (this.ui.privateView && !this.resolveInput) { this.ui.privateView.onCancel?.(); return true; }
+    if (this.aliasEdit) { this.aliasEdit = null; this.schedule(); return true; }
+    if (this.copyMode) { this.setCopyMode(false); return true; }
+    if (this.textSelection) { this.textSelection = null; this.lastFrame = []; this.schedule(); return true; }
+    if (this.selection) { this.finishSelection(null); return true; }
+    if (this.promptDraft) { this.finish(null); return true; }
+    if (this.completions().length) { this.completionDismissed = true; this.schedule(); return true; }
+    if (this.panel === 'chat' && this.debateFocus?.expanded) { this.toggleDebate(this.debateFocus); return true; }
+    if (this.panel === 'settings') { this.leaveSettings(); return true; }
+    if (this.panel === 'skills' && returnToSkillLibrary(this.ui)) return true;
+    if (this.panel === 'agents' && this.ui.subagentCreatorDraft) {
+      this.ui.subagentCreatorDraft = null; this.ui.subagentPreview = null; this.ui.subagentView = 'library';
+      this.bodyCache = null; this.scroll = 0; this.agentTopRequested = true; this.schedule(); return true;
+    }
+    if (this.panel !== 'chat') { this.setPanel('chat'); return true; }
+    return false;
+  }
   key(text, key) {
-    if (isEscapeInput(text, key)) {
-      clearTimeout(this.rawEscapeTimer); this.rawEscapeTimer = null; this.rawEscapeBuffer = '';
-      key = { ...key, name: 'escape', meta: false };
+    const escape = escapeInputKind(text, key);
+    if (escape) {
+      key.bzzyHandled = true;
+      if (escape === 'ignore') return;
+      // A partial mouse packet must never swallow a later Escape key.
+      this.mouseReport = null;
+      key = { ...key, name: 'escape', meta: false, ctrl: false };
+      if (this.escapeMenu()) return;
     }
     if (key.meta && ['y', 'n'].includes(key.name) && this.pendingApproval && !this.hidden && !this.promptDraft && !this.selection) {
       key.bzzyHandled = true; this.approvalTask = this.ui.answerApproval(key.name === 'y' ? 'yes' : 'no'); return;
@@ -780,6 +810,9 @@ export class TerminalChat {
     }
     if (key.name === 'paste-start') { this.pasting = true; return; }
     if (key.name === 'paste-end') { this.pasting = false; return; }
+    if (key.ctrl && key.name === 'b' && this.panel === 'chat' && !this.promptDraft && !this.hidden && !this.pasting) {
+      key.bzzyHandled = true; this.toggleDebate(this.entries.findLast(entry => entry.kind === 'debate')); return;
+    }
     if (key.name === 'pageup' || key.name === 'pagedown') {
       if (this.panel === 'settings' && !this.promptDraft) { this.settingsOffset = Math.max(0, Math.min(this.settingsMaximum || 0, (this.settingsOffset || 0) + (key.name === 'pageup' ? -8 : 8))); this.settingsEnsureFocus = false; }
       else this.scroll = Math.max(0, this.scroll + (key.name === 'pageup' ? 8 : -8));
@@ -1001,6 +1034,7 @@ export class TerminalChat {
         if (entry.kind === 'assistant') for (let offset = 0; offset < layout.lines.length - 1; offset++)
           this.contentHits.push({ type: 'response', entry, row: lines.length + offset, left: 3, right: width - 2 });
         if (entry.kind === 'approval') this.contentHits.push({ type: 'approval-details', id: entry.questionId, row: lines.length, left: 3, right: width - 2 });
+        if (entry.kind === 'debate') for (const hit of layout.hits) this.contentHits.push({ ...hit, row: lines.length + hit.row });
         for (const line of layout.lines) lines.push(line);
       }
     }
@@ -1010,6 +1044,10 @@ export class TerminalChat {
   entryLayout(entry, width) {
     const cached = this.entryLayouts.get(entry);
     if (cached?.width === width && cached.text === entry.text) return cached;
+    if (entry.kind === 'debate') {
+      const layout = { ...debateEntryLayout(entry, width, this.theme), width, text: entry.text };
+      this.entryLayouts.set(entry, layout); return layout;
+    }
     const { color } = this.theme;
     const lines = [], put = (text, tone = palette.text, bold = false) => lines.push(color(text, tone, bold));
     const replyLine = line => color('  ▎ ', palette.agent) + fillSurface(line, width - 6, this.theme, palette.agentSurface, palette.text);
@@ -1304,16 +1342,16 @@ export class TerminalChat {
 
     const composerTop = lines.length;
     const breathingRoom = height >= 18;
-    if (this.panel === 'agents' && this.promptDraft && this.question)
+    if (this.promptDraft && this.question)
       lines.push(color(clip('  ' + this.question, width), palette.accent));
     if (breathingRoom) lines.push('');
     const skillDirectoryInput = this.panel === 'skills' && this.ui.skillView === 'import';
     const skillDetail = this.panel === 'skills' && Boolean(this.ui.skillPreview || this.ui.skillHistoryState
-      || this.ui.skillSyncDetails || this.ui.skillPromotionDraft);
+      || this.ui.skillSyncDetails || this.ui.skillPromotionDraft || this.ui.skillCreatorDraft);
     const hasSubmit = (this.promptDraft || skillDirectoryInput || !['skills', 'agents', 'metrics'].includes(this.panel))
       && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
     const prompt = this.promptDraft && this.question ? this.question
-      : this.panel === 'agents' ? 'Agents · Esc returns to chat'
+      : this.panel === 'agents' ? this.ui.subagentCreatorDraft ? 'Agent preview · Esc returns to library' : 'Agents · Esc returns to chat'
       : this.panel === 'metrics' ? 'Metrics · no data yet'
       : skillDirectoryInput ? 'Codex skills directory'
       : skillDetail ? 'Skill · Esc goes back'
@@ -1890,8 +1928,8 @@ export class TerminalChat {
     if (!body.length || opening) {
       const welcome = this.mode === 'delegate' ? ['', accent('  What should the team work on?'), color('  Chat normally, or use /goal to start supervised delegated work.', palette.text), muted('  The brain plans; hands execute; evidence is reviewed.'), muted('  Type / for commands.')]
         : ['', accent('  What should BZZY work on?'), color('  Ask a question, build something, or investigate a task.', palette.text), muted('  /goal <objective>   Persist until the outcome is verified'), muted('  Type / for commands, models and sessions.')];
-      const mode = this.entries.findLast(entry => /^(Parallel|Debate) mode/.test(entry.text));
-      if (mode) welcome.push('', ...wrap(mode.text, width - 5).map(line => muted('  ' + line)));
+      const mode = this.entries.findLast(entry => /^(Parallel|Debate|Validate) mode/.test(entry.text));
+      if (mode) welcome.push('', ...wrap(mode.text.replace(/^Debate mode/, 'Validate mode'), width - 5).map(line => muted('  ' + line)));
       body = this.panel === 'metrics' ? [] : this.panel === 'chat' ? welcome : this.panel === 'room' ? [accent('  Shared room · waiting for peer messages'), ...wrap('The two besties exchange findings, evidence and reviews here. Their separate chats stay available above. Use /goal <objective> to begin collaboration.', width - 5).map(line => muted('  ' + line))]
         : this.panel === 'http' ? [muted('  No HTTP records yet.'), ...wrap('WebFetch and browser visits appear automatically as backend-reported activity. For measured shell HTTP traffic, start bzzy with --capture-network. The http_request tool always records observed requests.', width - 5).map(line => muted('  ' + line))] : [muted('  No ' + this.panel + ' records yet.')];
     }
@@ -1964,7 +2002,7 @@ export class TerminalChat {
   restore(preserveScreen = false) { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write(this.canvasGraphics.clear() + '\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l' + (preserveScreen ? '' : '\x1b[?1049l')); }
   close({ preserveScreen = false } = {}) {
     this.writeFrame(this.canvasGraphics.clear());
-    if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer); clearTimeout(this.feedbackTimer); clearTimeout(this.noticeTimer); clearTimeout(this.rawEscapeTimer);
+    if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer); clearTimeout(this.feedbackTimer); clearTimeout(this.noticeTimer); this.keyInput.close();
     this.finish(null); this.finishSelection(null, true); this.input.removeListener('keypress', this.onKey); this.input.removeListener('data', this.onRawData); this.output.removeListener?.('resize', this.onResize); this.output.removeListener?.('drain', this.onDrain); process.removeListener('exit', this.onExit); this.restore(preserveScreen); this.input.pause();
   }
 }
@@ -1976,11 +2014,6 @@ function skillActionList(rows) {
   return rows.flatMap(row => row.segments
     ? row.segments.filter(segment => segment.action).map(segment => segment.action)
     : row.action ? [row.action] : []);
-}
-function isEscapeInput(text, key) {
-  return ['escape', 'esc'].includes(key?.name) || key?.code === 'Escape' || text === '\x1b'
-    || key?.ctrl && (key.name === '[' || text === '[') || key?.sequence === '\x1b'
-    || /^\x1b\[27(?:[;:]\d+)*(?:u|~)$/.test(key?.sequence || '');
 }
 function screenPoint(x, y, region) { return { x: Math.max(region.left, Math.min(region.right, x)), y: Math.max(region.top, Math.min(region.bottom, y)) }; }
 function screenRange(anchor, focus) { return anchor.y < focus.y || anchor.y === focus.y && anchor.x <= focus.x ? [anchor, focus] : [focus, anchor]; }

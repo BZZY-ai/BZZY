@@ -1,17 +1,17 @@
 export const chatHelp = `Modes
   --parallel   2–3 agents pursue one goal independently.
-  --debate     2–3 agents investigate and debate one goal.
+  --validate     2–3 agents investigate and validate one goal.
   --delegate   A strong brain model plans and reviews; a cheaper executor does the work.
   --besties    2–3 agents collaborate on a shared goal and review each other’s evidence.
 
 /goal <objective>  Start a goal, replacing the current one.
 /goal resume       Continue a paused or stalled goal from its saved checkpoint.
 /delegate          Switch this paused chat to the saved Delegate combo (or choose its two agents).
-/debate            Switch this paused chat to the saved Debate combo (or choose 2–3 agents).
+/validate            Validate an achieved goal immediately; otherwise switch this paused chat to its saved combo.
 /solo              Return this paused chat to its previous single agent; /singular is an alias.
 Pause with /pause or /goal pause before either switch. History and the saved goal stay in this chat; switching never resumes work.
 /default           Save this mode’s agents, models and efforts separately.
---parallel, --besties, --debate, --delegate reuse their saved presets automatically.
+--parallel, --besties, --validate, --delegate reuse their saved presets automatically.
 --default requires a matching saved preset.
 /alias [name]      Name this session; omit the name to open a prompt.
 --alias NAME       Name a new session, e.g. bzzy --alias trabajo_01.
@@ -44,7 +44,7 @@ export const chatCommands = [
   { command: '/agents', description: 'Create, view and use reusable specialist subagents across models' },
   { command: '/goal', description: 'Work until an objective is resolved', argument: true },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
-  { command: '/debate', description: 'Switch this paused chat to Debate; add a focus to challenge a reply' },
+  { command: '/validate', description: 'Check the original goal and evidence; add a focus to review a reply' },
   { command: '/models', description: 'Choose a model and reasoning effort' },
   { command: '/effort', description: 'Choose the current model’s reasoning effort' },
   { command: '/memory', description: 'Search project knowledge and past conversations', argument: true },

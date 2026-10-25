@@ -502,7 +502,7 @@ test('slash suggestions filter, complete without switching agent tabs, and keep 
     input.write('/mo'); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
     assert.ok(frame.includes('/models'));
-    for (const command of ['/debate', '/models', '/effort', '/providers', '/default', '/doctor']) assert.ok(commandSuggestions('/').some(item => item.command === command));
+    for (const command of ['/validate', '/models', '/effort', '/providers', '/default', '/doctor']) assert.ok(commandSuggestions('/').some(item => item.command === command));
     assert.doesNotMatch(frame, /F[123]/);
     ui.tui.key('', { name: 'u', ctrl: true }); input.write('/mod\t');
     assert.equal(ui.tui.value, '/models '); assert.equal(tabSwitches, 0);

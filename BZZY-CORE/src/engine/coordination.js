@@ -48,8 +48,7 @@ export class Coordinator {
     if (this.stopping) this.abort.abort();
     return !this.stopping;
   }
-  async finish(status, record, usage) {
-    clearInterval(this.timer); process.removeListener('SIGINT', this.onInterrupt); process.removeListener('SIGTERM', this.onInterrupt);
+  async finish(status, record, usage, { afterAssessment } = {}) {
     try {
     if (this.session.mode === 'debate' && status === 'complete' && !this.stopping) {
       this.session.acceptance = await assessDebateCompletion(this.session, record, { signal: this.abort.signal });
@@ -63,6 +62,10 @@ export class Coordinator {
         record.unresolvedDisagreement = [...new Set([...(record.unresolvedDisagreement || []), ...(this.session.acceptance.debate?.reasons || []), 'Original goal acceptance checks remain unsatisfied.'])];
       }
       putRecord('debate', this.session.id, record);
+    }
+    if (afterAssessment && !this.stopping && ['complete', 'awaiting_review'].includes(status)) {
+      const checked = await afterAssessment(record, status);
+      if (checked?.status === 'awaiting_review' && status === 'complete') status = 'awaiting_review';
     }
     if (this.stopping) {
       status = this.stopping === 'cancelled' ? 'cancelled' : ['runtime_limit', 'token_limit'].includes(this.stopping) ? 'budget_limited' : this.stopping === 'coordination_failure' ? 'awaiting_review' : 'paused';
@@ -96,7 +99,7 @@ export class Coordinator {
           const tokens = this.session.mode === 'besties' ? supervisorTokens(child) : child.goal?.nativeTokensUsed ?? child.goal?.supervisorTokensUsed ?? child.usage?.tokens ?? null;
           return { ...agent, status: child.goal?.status, tokens, available: tokens != null, elapsedSeconds: child.goal?.runtimeUsedSeconds || 0 };
         });
-        usage.totalTokens = usage.agents.reduce((sum, a) => sum + (a.tokens || 0), 0);
+        usage.totalTokens = usage.agents.reduce((sum, a) => sum + (a.chargedTokens ?? a.tokens ?? 0), 0);
         usage.complete = !record.pendingStopSessions.length && usage.agents.every(a => a.available);
       }
     }
@@ -122,6 +125,9 @@ export class Coordinator {
     writeProjectRecord(this.session, this.session.mode, this.session.id, { ...record, sessionId: this.session.id, artifactId: resultArtifact.id, summary: this.session.summary });
     printGoalSummary(this.session, this.ui); await new NotificationHub({ ui: this.ui }).publish(this.session);
     return status === 'complete' ? 0 : status === 'paused' || status === 'cancelled' ? 130 : 2;
-    } finally { this.unlock?.(); this.unlock = null; }
+    } finally {
+      clearInterval(this.timer); process.removeListener('SIGINT', this.onInterrupt); process.removeListener('SIGTERM', this.onInterrupt);
+      this.unlock?.(); this.unlock = null;
+    }
   }
 }

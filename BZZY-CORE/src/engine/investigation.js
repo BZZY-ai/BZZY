@@ -4,6 +4,7 @@ import { startAssignment, assignmentStatus, delay } from './delegation.js';
 import { getRecord, putRecord, digest, now } from './database.js';
 import { fileInfo, artifact } from './evidence.js';
 import { formatInvestigation } from './debate-format.js';
+import { debateEventUI } from './debate-events.js';
 
 export function investigationReadiness(investigation, totalAgents, { sessionId } = {}) {
   const reports = investigation?.reports || [], required = Math.min(2, totalAgents);
@@ -48,9 +49,9 @@ export function investigationConsensus(investigation, totalAgents) {
 }
 
 export async function investigate(session, choices, snapshot, options, ui, coordinator) {
+  ui = debateEventUI(session, ui, choices);
   const pending = new Map(), reports = []; let next = 0;
   const concurrency = Math.min(session.contract.limits.concurrency, choices.length);
-  ui.event('info', { message: `PHASE 1 · Independent analysis and permitted tests · ${choices.length} agents` });
   ui.event('debate.phase', { phase: 'investigation', agents: choices, status: 'started' });
   while ((next < choices.length || pending.size) && !coordinator.stopping) {
     while (next < choices.length && pending.size < concurrency) {
@@ -61,14 +62,14 @@ export async function investigate(session, choices, snapshot, options, ui, coord
         limits: { runtimeSeconds: Math.min(options.runtimeSeconds || 300, session.contract.limits.assignmentSeconds || 300) } },
       { executor: selection, snapshot, role: 'executor', allowDebate: true, independent: true, sharedEvidence: session.reviewSource?.evidenceIds || [] });
       pending.set(index, job.id);
-      ui.event('info', { message: `${selection.provider} · independent investigation · assignment ${job.id}` });
+      ui.event('debate.phase', { phase: 'investigation', status: 'running', participantIndex: index, assignmentId: job.id });
     }
     for (const [index, id] of pending) {
       const job = assignmentStatus(id);
       if (['starting', 'running'].includes(job.round.state)) continue;
       const report = { participant: choices[index], assignmentId: id, state: job.round.state, error: job.round.error || job.latestReport?.stopReason || null, report: job.latestReport?.report || null, artifacts: job.latestReport?.artifacts || [], usage: job.latestReport?.usage || { available: false } };
       reports[index] = report; pending.delete(index);
-      ui.event('debate.message', { participant: choices[index].provider, role: 'investigation', phase: 'investigation', assignmentId: id,
+      ui.event('debate.message', { participant: choices[index].provider, participantIndex: index, role: 'investigation', phase: 'investigation', round: 0, maxRounds: options.rounds || 5, assignmentId: id,
         state: report.state, error: report.error, text: formatInvestigation(report) });
     }
     const agents = reports.filter(Boolean).map(report => ({ ...report.participant, role: 'investigation', assignmentId: report.assignmentId, tokens: report.usage.tokens ?? null, available: Boolean(report.usage.available) }));

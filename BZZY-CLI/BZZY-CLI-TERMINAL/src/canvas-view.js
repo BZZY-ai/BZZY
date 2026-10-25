@@ -82,7 +82,7 @@ export function renderCanvas(tui, width, height, { stageWidth = width } = {}) {
       const bend = Math.min(4, Math.max(2, Math.abs(a.cx - b.cx) / 6)), points = vertical ? [[a.cx, a.cy], [a.cx + 20, a.cy], [b.cx + 20, b.cy], [b.cx, b.cy]] : [[a.cx, a.cy], [a.cx, a.cy - bend], [b.cx, b.cy - bend], [b.cx, b.cy]];
       const pulse = view.exchanges?.get(group.id), live = pulse && Date.now() - pulse.at < 2400;
       for (const [key, mask] of curve(points, width, height)) { const [x, y] = key.split(':').map(Number); put(x, y, color(String.fromCodePoint(0x2800 + mask), live ? palette.accent : palette.border)); }
-      const label = group.mode === 'delegate' ? vertical ? 'BRAIN ↓ HANDS' : 'BRAIN → HANDS' : group.mode.toUpperCase();
+      const label = group.mode === 'delegate' ? vertical ? 'BRAIN ↓ HANDS' : 'BRAIN → HANDS' : (group.mode === 'debate' ? 'Validate' : group.mode).toUpperCase();
       put(Math.max(0, Math.round((a.cx + b.cx - label.length) / 2) + (vertical ? 8 : 0)), Math.max(top, vertical ? Math.floor((a.cy + b.cy) / 2) : Math.min(a.cy, b.cy) - bend), color(' ' + label + ' ', live ? palette.accent : palette.muted));
       if (live && tui.ui.pet !== false) {
         const t = Math.max(0, Math.min(1, (Date.now() - pulse.at) / 2400)), direction = pulse.reverse ? 1 - t : t, v = 1 - direction;

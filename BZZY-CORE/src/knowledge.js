@@ -10,6 +10,8 @@ import { learningSettings, configureLearning, listLearningJobs, inspectLearningJ
   queueLearningReview, learningUsage } from './engine/learning.js';
 import { listSkillCandidates, inspectSkillCandidate, readSkillCandidate, acceptSkillCandidate, rejectSkillCandidate } from './engine/skills.js';
 import { registerLearningFixtures, listLearningFixtures, inspectLearningFixtures, revokeLearningFixtures, queueLearningEvaluation, inspectLearningEvaluation } from './engine/learning-evaluation.js';
+import { readSessionMemory, expandSessionMemory, resetSessionMemory } from './engine/session-memory.js';
+import { sessionCompactionStatus, queueSessionCompaction, controlSessionCompaction, configureSessionCompaction } from './engine/session-compactor.js';
 
 const fail = message => { throw new Error(message); };
 const shape = (input, fields) => {
@@ -37,7 +39,27 @@ export class CoreKnowledge {
     this.#check();
     const contextFields = ['sessionId', 'cwd'];
     const scoped = fields => { shape(input, [...contextFields, ...fields]); return this.context(input); };
+    const historyScoped = fields => {
+      shape(input, ['sessionId', ...fields]);
+      if (typeof input.sessionId !== 'string' || !input.sessionId.trim()) fail('Choose a saved terminal conversation for session memory.');
+      return this.context(input);
+    };
     switch (operation) {
+      case 'session-memory.status': return sessionCompactionStatus(historyScoped([]));
+      case 'session-memory.read': return readSessionMemory(historyScoped(['maxBytes', 'limit']), input);
+      case 'session-memory.expand': return expandSessionMemory(historyScoped(['id', 'offset', 'limit']), input);
+      case 'session-memory.queue': return queueSessionCompaction(historyScoped([]), { force: true });
+      case 'session-memory.rebuild': {
+        const session = historyScoped(['expectedGeneration', 'reviewed']);
+        if (input.reviewed !== true || typeof input.expectedGeneration !== 'string') fail('Review the current memory generation before rebuilding.');
+        resetSessionMemory(session, { expectedGeneration: input.expectedGeneration });
+        return queueSessionCompaction(session, { force: true });
+      }
+      case 'session-memory.control': return controlSessionCompaction(historyScoped(['action', 'expectedRevision']), input.action, { expectedRevision: input.expectedRevision });
+      case 'session-memory.settings':
+        shape(input, ['settings', 'expectedRevision', 'reviewed']);
+        if (input.reviewed !== true) fail('Review the compactor budget settings before saving.');
+        return configureSessionCompaction(input.settings, { expectedRevision: input.expectedRevision });
       case 'status': {
         const session = scoped([]), project = projectIdentityForSession(session);
         return { project: { id: project.id, root: project.root }, brief: knowledgeContextFor(session),

@@ -24,7 +24,7 @@ import { recall, invalidateMemory } from './memory.js';
 import { sandboxSupport } from './policy.js';
 import { projectContext } from './project.js';
 import { subscriptionStatus } from './auth.js';
-import { prepareChatDebate, finishChatDebate } from './chat-debate.js';
+import { prepareChatDebate, finishChatDebate, defaultChatDebateAgents } from './chat-debate.js';
 import { restoreConversation, conversationInput } from './runtime-client.js';
 import { changeConversationProvider } from './conversation-settings.js';
 import { chooseDelegation, describeDelegation } from './delegation-setup.js';
@@ -41,7 +41,7 @@ import { retireTelegram } from './migrations.js';
 import { backendCommand } from '@bzzy/core/engine/entry.js';
 import { activateCLIHost, coreHostStatus, stopCoreHost, restartCoreHost } from '@bzzy/core/engine/host-service.js';
 import { syncCodexSkills, skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
-import { knowledgeCLI } from './knowledge-command.js';
+import { knowledgeCLI, sessionMemoryCLI } from './knowledge-command.js';
 import { subagentsCLI } from '@bzzy/core/engine/subagents-cli.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
@@ -58,10 +58,12 @@ Usage:
   bzzy subagents create FILE.json      Save a specialist definition for this project
   bzzy knowledge search TEXT           Search this engagement's knowledge and past chats
   bzzy knowledge review [SESSION]      Queue a bounded lesson review for an existing chat
+  bzzy session-memory status [SESSION] Inspect this session's history index and background budget
+  bzzy session-memory build [SESSION]  Index saved history without replaying the chat
   bzzy --delegate                       Choose brain and hands; chat normally or start /goal
   bzzy --besties                        Choose two peers; chat normally or start a shared /goal
   bzzy --parallel [2|3]                 Select agents, enter a goal, then open their chat tabs
-  bzzy --debate                         Analyze, test, then debate the next reply
+  bzzy --validate                         Analyze, test, then validate the next reply
   bzzy run "task" [options]              Run one task
   bzzy goal "objective" [options]        Work until the goal completes or stalls
   bzzy goal status|pause|resume|clear [session]
@@ -70,7 +72,7 @@ Usage:
   bzzy --attach SESSION                 Restore chat and transfer input ownership
   bzzy --resume SESSION                 Resume a saved chat or unfinished goal
   bzzy delegate "objective" --supervisor codex --executor deepseek
-  bzzy debate "question" --artifact FILE --participant claude --participant deepseek
+  bzzy validate "question" --artifact FILE --participant claude --participant deepseek
   bzzy parallel "objective" --agents codex,claude,deepseek
   bzzy besties "objective" --agents codex:MODEL,claude:MODEL
   bzzy service start|status|stop|restart|web  Manage the local background runtime
@@ -116,23 +118,23 @@ Options:
   --read-only           Enforce read-only tools (requires a working OS sandbox)
   --detach              Leave execution running after this terminal exits
   --follow              Keep a noninteractive view connected
-  --mode MODE           solo, delegate, besties, debate or parallel
+  --mode MODE           solo, delegate, besties, validate or parallel
   --delegate            Choose supervisor/executor models; the brain plans, delegates and verifies
   --besties             2–3 agents work together on one goal and review each other’s evidence
-  --debate              2–3 agents investigate and debate one goal
+  --validate              2–3 agents investigate and validate one goal
   --parallel [2|3]      Choose 2 or 3 agents, continue to goal setup, then open agent chat tabs
   --supervisor NAME     Supervisor provider, optionally provider:model
   --executor NAME       Delegation executor provider, optionally provider:model
   --supervisor-model M  Independently select the supervisor model
   --executor-model M    Independently select the executor model
-  --participant NAME    Debate participant; repeat to select more agents
+  --participant NAME    Validate participant; repeat to select more agents
   --agents A,B[,C]      Parallel or besties agents; optionally provider:model
   --default             Reuse this mode’s saved preset without questions or selectors
   --whoami              Print the detailed architecture, storage and integration reference
   --update              Pull the latest source and reinstall bzzy
-  --artifact FILE       Material to snapshot and debate
-  --rounds N            Debate round limit (default 5, maximum 5)
-  --review-only         Skip independent investigation; debate a fixed snapshot
+  --artifact FILE       Material to snapshot and validate
+  --rounds N            Validate round limit (default 5, maximum 5)
+  --review-only         Skip independent investigation; validate a fixed snapshot
   --concurrency N       Maximum active workers
   --request-id ID       Idempotency key for a retried request
   --capture-network     Record proxy-aware agent HTTP/HTTPS traffic locally
@@ -145,14 +147,14 @@ Options:
   -h, --help            Show help
   -v, --version         Show version
 
-Chat commands: /goal <objective>, /goal status|pause|resume|clear, /delegate, /debate, /solo,
+Chat commands: /goal <objective>, /goal status|pause|resume|clear, /delegate, /validate, /solo,
 /new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /effort, /default, /usage, /settings, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
-/default saves a separate preset for normal chat, delegate, debate, besties or parallel.
+/default saves a separate preset for normal chat, delegate, validate, besties or parallel.
 Mode flags automatically use their saved defaults; --default also requires a saved preset.
-/delegate and /debate switch this paused chat to their saved combo; /solo (or /singular) restores its previous single agent.
+/validate on an achieved goal starts its review immediately. Otherwise /delegate and /validate switch this paused chat to their saved combo; /solo (or /singular) restores its previous single agent.
 Use /pause or /goal pause first. Switching preserves history and goals and never resumes work.
 /models: ↑/↓ chooses a model; ←/→ sets supported effort; Enter confirms.
 /effort: choose a supported reasoning effort for the current model.
@@ -169,8 +171,9 @@ Use /goal <objective> to start one shared persistent goal. Peers exchange findin
 Completion requires both peers' acceptance checks and supported cross-reviews; disagreements remain visible.
 Use Tab / Shift+Tab to switch peer chats, or --view / --attach with the group session ID.
 Besties SHARED ROOM (/room) shows actual messages and evidence reviews exchanged by the peers.
-/debate [objective] opens a participant checklist for the latest reply.
-Debate: independent analysis and permitted tests, then read-only evidence rounds.
+/validate immediately checks an achieved goal against its original objective and evidence; add a focus to review a reply.
+/debate and --debate remain compatibility aliases; saved configurations are preserved.
+Validate: independent analysis and permitted tests, then read-only evidence rounds.
 Type / for command suggestions: ↑/↓ chooses, Tab completes, Enter confirms.
 Terminal: Ctrl+G cycles views; /chat, /activity, /http opens a view.
 Click views, agent tabs and picker options; wheel or drag the right scrollbar.
@@ -224,7 +227,7 @@ export function parseArgs(argv) {
       if (value != null && !/^[23]$/.test(value)) throw new Error('--parallel requires 2 or 3 agents.');
       if (value != null) options.parallelCount = Number(value);
     }
-    else if (raw === '--debate') { options.mode = 'debate'; options.debateSetup = true; }
+    else if (raw === '--validate' || raw === '--debate') { options.mode = 'debate'; options.debateSetup = true; }
     else if (raw === '--default') options.useDefault = true;
     else if (raw === '--whoami') options.whoami = true;
     else if (raw === '--update') options.update = true;
@@ -257,10 +260,11 @@ export function parseArgs(argv) {
     }
   }
   if ([options.view, options.attach, options.resume].filter(Boolean).length > 1) throw new Error('Choose --view, --attach or --resume.');
+  if (options.mode === 'validate') options.mode = 'debate';
   if (options.mode && !['solo', 'delegate', 'besties', 'debate', 'parallel'].includes(options.mode)) throw new Error('Invalid execution mode.');
   if (options.yolo && options.readOnly) throw new Error('--yolo conflicts with --read-only.');
   if (options.useDefault && (options.agents || options.participants)) throw new Error('Use either --default or explicit --agents/--participant selections.');
-  if (options.rounds > 5 || options.concurrency > 8) throw new Error('Maximum 5 debate rounds and 8 concurrent workers.');
+  if (options.rounds > 5 || options.concurrency > 8) throw new Error('Maximum 5 validation rounds and 8 concurrent workers.');
   if (options.effort && !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.effort)) throw new Error('Invalid reasoning effort.');
   if (options.alias != null) options.alias = normalizeSessionAlias(options.alias);
   options.cwd = path.resolve(options.cwd);
@@ -375,9 +379,9 @@ async function chat(provider, options, ui, existingSession) {
   ui.setSession(session.id);
   if (existingSession) await restoreConversation(session, ui);
   ui.updateSession?.(session); pet.greet();
-  ui.event('info', { message: `${provider.name}\n/goal <objective> · /providers · /models · /debate [objective] · /help`, welcome: true });
+  ui.event('info', { message: `${provider.name}\n/goal <objective> · /providers · /models · /validate [objective] · /help`, welcome: true });
   if (options.mode === 'parallel') ui.event('info', { message: 'Parallel mode · chat normally, or use /goal <objective> for independent work by ' + (session.parallelAgents?.map(agent => agent.provider + (agent.model ? ':' + agent.model : '')).join(', ') || options.agents || 'codex,claude,deepseek'), welcome: true });
-  if (options.mode === 'debate') ui.event('info', { message: 'Debate mode · get a first response, select the agents, then investigate and debate for up to five rounds.', welcome: true });
+  if (options.mode === 'debate') ui.event('info', { message: 'Validate mode · get a first response, select the agents, then investigate and validate for up to five rounds.', welcome: true });
   if (session.mode === 'delegate' && session.executor) ui.event('info', { message: describeDelegation(session) });
   if (session.mode === 'besties') ui.event('info', { message: describeBesties(session), welcome: true });
   const debateReply = focus => ui.onDebate(session.id, focus);
@@ -400,7 +404,7 @@ async function chat(provider, options, ui, existingSession) {
       if (input === '/pause' || input === '/cancel') {
         await controlSession(session, input.slice(1));
         session = loadSession(session.id); ui.updateSession?.(session);
-        ui.event('info', { message: input === '/pause' ? 'Chat paused. You can use /delegate, /debate or /solo; work stays paused until you continue.' : 'Chat cancelled.' });
+        ui.event('info', { message: input === '/pause' ? 'Chat paused. You can use /delegate, /validate or /solo; work stays paused until you continue.' : 'Chat cancelled.' });
         continue;
       }
       if (input === '/help') { ui.event('info', { message: chatHelp }); continue; }
@@ -415,7 +419,7 @@ async function chat(provider, options, ui, existingSession) {
       }
       if (/^\/import(?:\s|$)/.test(input)) { forgetPrivateImportInput(ui, input); await importTerminal(input.replace(/^\/import\s*/, ''), session.cwd, ui); continue; }
       if (/^\/skill_that(?:\s|$)/.test(input)) { await skillThat(session, input.replace(/^\/skill_that\s*/, ''), ui); continue; }
-      if (input === '/debate' || input.startsWith('/debate ')) { await debateReply(input.slice(7).trim()); if (ui.detached) return 0; continue; }
+      if (/^\/(?:validate|debate)(?:\s|$)/.test(input)) { await debateReply(input.replace(/^\/(?:validate|debate)\s*/, '')); if (ui.detached) return 0; continue; }
       if (input === '/new') {
         session = newConversation(session, options);
         ui.setSession(session.id); ui.updateSession(session); continue;
@@ -457,7 +461,9 @@ async function chat(provider, options, ui, existingSession) {
 
 async function debateConversation(source, focus, options, ui) {
   if (!source) throw new Error('No conversation selected.');
-  const agents = (source.mode === 'debate' && source.debateAgents) || options.debateAgents || await chooseDebate({ ...options, provider: source.provider, model: source.model }, ui);
+  const agents = source.goal?.status === 'complete'
+    ? options.debateAgents || defaultChatDebateAgents(source)
+    : (source.mode === 'debate' && source.debateAgents) || options.debateAgents || await chooseDebate({ ...options, provider: source.provider, model: source.model }, ui);
   if (!agents) return;
   const selected = agents.slice(1);
   const debate = prepareChatDebate(source, focus, selected, { ...options, debateAgents: agents });
@@ -521,7 +527,7 @@ export async function main(argv) {
   options.cwd = fs.realpathSync(options.cwd);
   await retireTelegram();
   const launchCommand = args[0];
-  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'subagents']);
+  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'subagents']);
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
@@ -534,6 +540,7 @@ export async function main(argv) {
   const launch = async () => {
     const [command, ...rest] = args;
     if (command === 'knowledge') return knowledgeCLI(rest, options, ui);
+    if (command === 'session-memory') return sessionMemoryCLI(rest, options, ui);
     if (command === 'subagents') return subagentsCLI(rest, options, ui);
     if (command === 'skills') {
       if (rest.length !== 1 || rest[0] !== 'sync') throw new Error('Use bzzy skills sync, or open Skills in the terminal.');
@@ -642,16 +649,16 @@ export async function main(argv) {
     }
     if (command === 'resume') return await resume(findSession(rest[0], options.cwd), options, ui);
     if (command === 'goal' && ['status', 'pause', 'cancel', 'clear', 'resume'].includes(rest[0])) return await goalControl(rest[0], rest[1], options, ui);
-    const executionCommands = ['run', 'goal', 'chat', 'delegate', 'besties', 'debate', 'parallel', 'paralel'];
+    const executionCommands = ['run', 'goal', 'chat', 'delegate', 'besties', 'validate', 'debate', 'parallel', 'paralel'];
     const positionalContext = options.goal
       ? (executionCommands.includes(command) ? rest : args).join(' ').trim()
       : '';
     if (options.contextFile && positionalContext) throw new Error('Choose --context-file or positional initialization context, not both.');
     const initialContext = positionalContext;
     if (command && !executionCommands.includes(command) && !positionalContext) throw new Error(`Unknown command ${command}. Use bzzy --help.`);
-    if (options.contextFile && !(options.goal || ['goal', 'delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command))) throw new Error('--context-file requires --goal or a goal execution command.');
+    if (options.contextFile && !(options.goal || ['goal', 'delegate', 'besties', 'validate', 'debate', 'parallel', 'paralel'].includes(command))) throw new Error('--context-file requires --goal or a goal execution command.');
     const contextFileText = options.contextFile ? readContextFile(options.contextFile, options.cwd) : undefined;
-    if (['delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command)) options.mode = command === 'paralel' ? 'parallel' : command;
+    if (['delegate', 'besties', 'validate', 'debate', 'parallel', 'paralel'].includes(command)) options.mode = command === 'paralel' ? 'parallel' : command === 'validate' ? 'debate' : command;
     if (!options.mode || options.mode === 'solo') applyLaunchDefault(options);
     if (['parallel', 'besties', 'debate', 'delegate'].includes(options.mode)
       && !options.agents && !options.participants && !options.supervisor && !options.executor) {
@@ -714,7 +721,7 @@ export async function main(argv) {
     }
     else provider = selectedProvider(options);
     if (provider.auth === 'api-key' && !options.modelSelectionRequired) await ensureApiKey(provider, ui);
-    if (options.goal || ['goal', 'run', 'delegate', 'besties', 'debate', 'parallel', 'paralel'].includes(command)) {
+    if (options.goal || ['goal', 'run', 'delegate', 'besties', 'validate', 'debate', 'parallel', 'paralel'].includes(command)) {
       const prompt = options.goal || rest.join(' ');
       if (!prompt.trim()) throw new Error(`Supply a ${command === 'run' ? 'task' : 'goal objective'}.`);
       const goal = Boolean(options.goal || command !== 'run' || ['parallel', 'besties', 'debate'].includes(options.mode));

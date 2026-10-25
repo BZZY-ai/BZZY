@@ -41,6 +41,16 @@ function noExecution() {
   if (fs.existsSync(file)) assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /thread\/start|turn\/start|thread\/goal\/set/);
 }
 
+test('achieved /validate and the legacy /debate alias bypass mode setup for immediate original-goal review', async () => {
+  const session = createSession(BUILTINS.codex, directory, 'original-model');
+  session.goal = { id: 'achieved-local-goal', status: 'complete', objective: 'Original achieved objective.' }; saveSession(session);
+  const screen = ui();
+  for (const command of ['/validate', '/validate original severity', '/debate', '/debate original severity']) {
+    assert.equal(await conversationModeCommand(command, session.id, screen), false);
+  }
+  assert.equal(loadSession(session.id).mode, undefined); noExecution();
+});
+
 test('a confirmed /pause enables both mode switches in the same goal-less chat with saved defaults and no inference', async () => {
   saveModeDefault('delegate', combo);
   const session = createSession(BUILTINS.codex, directory, 'original-solo', 'Same chat');

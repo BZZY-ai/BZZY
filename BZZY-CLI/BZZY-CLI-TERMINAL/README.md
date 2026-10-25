@@ -51,6 +51,16 @@ library; `bzzy subagents list|show|create|update|delete` provides JSON managemen
 See [subagent instructions and limits](../../BZZY-CORE/docs/SUBAGENTS.md). These
 definitions are separate from persistent iPhone Agents.
 
+**Skill Creator** and **Agent Creator** draft reusable definitions with the current
+terminal model and effort. Describe the behavior, review the generated draft and
+choose Save; skills remain inactive until enabled. Escape cancels generation or
+returns from a preview without saving.
+
+Core also maintains a bounded [session history index](../../BZZY-CORE/docs/SESSION-MEMORY.md)
+across alias, model and mode changes. Its compactor uses the configured BZZY Core
+model. Inspect with `bzzy session-memory status [SESSION]`, index older history
+with `build`, and control background work with `pause`, `resume` or `cancel`.
+
 Core owns execution, provider/authentication configuration, model discovery,
 conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core
@@ -65,7 +75,9 @@ the top bar while a long reply streams. Open Sessions deploys an anchored
 dropdown of aliased terminals. A green or red Relay dot is always available in
 the status treatment. The gear opens a full-screen Settings view in place of the
 transcript and composer, while preserving the chat draft. Esc returns from any
-Settings page to chat.
+Settings page to chat. Esc also closes other menu screens; when a prompt,
+picker or skill preview is open, it cancels that view first and preserves the
+unsent chat draft.
 
 **Skills** opens the existing project/global skills library, including **Sync
 skills from Codex into BZZY**. **Metrics** is a reserved empty view for now.
@@ -74,23 +86,30 @@ the current USD balance; click it for freshness/source details. Subscription
 providers do not show an account balance control.
 
 `bzzy --canvas` retains the character workspace: insert model/effort characters,
-set goals, and connect them for Delegate, Debate, Besties or Parallel.
+set goals, and connect them for Delegate, Validate, Besties or Parallel.
 Right-click or F10 opens the context menu; Enter opens the conversation drawer
 and Esc returns to the canvas. Links pause affected work before reconfiguration.
 `bzzy --minimal` keeps the ultra-compact transcript. See
 [canvas controls and limits](docs/CANVAS.md).
 
-In a minimal solo, Delegate or Debate chat, pause with `/pause` or `/goal pause`,
-then use `/delegate`, `/debate` or `/solo` (`/singular` is an alias). Delegate and
-Debate use their saved agent presets, or open setup if none exists. Solo restores
+In a minimal solo, Delegate or Validate chat, pause with `/pause` or `/goal pause`,
+then use `/delegate`, `/validate` or `/solo` (`/singular` is an alias). Delegate and
+Validate use their saved agent presets, or open setup if none exists. Solo restores
 the model and effort used before either mode; chats launched in these modes use the saved
 solo default, or their current primary model if none exists. Both switches keep
 the same chat, working directory, history and goal. Work stays paused until you
 send a message or explicitly run `/goal resume`. Wait for active replies and
 workers to finish stopping before switching; idle alone is not a pause.
-`/debate <focus>` reviews a supplied goal against its achieved claim and complete
-recorded evidence; ordinary chat replies retain the focused review flow.
-Debate requires challenge/response, preserves minority objections and checks the
+On an achieved goal, bare `/validate` starts the review immediately, reading the
+original `/goal`, requirements and recorded evidence. It reuses the saved agents
+or creates independent reviewers using the current model. `/validate <focus>`
+also supports focused reply review. `/debate` and `--debate` remain compatibility
+aliases for existing workflows; saved setups stay intact.
+Validate appears in a compact block: click its header or press Ctrl+B to expand
+the latest discussion, and Esc to collapse it. Each participant keeps a distinct
+color even when providers and models match. The consensus and any unresolved
+objections remain visible below the collapsed discussion.
+Validate requires challenge/response, preserves minority objections and checks the
 original criteria and requested severity. Delegate automatically passes a pinned
 mission brief and can request missing context without guessing or silently
 resuming. See [orchestration](../../BZZY-CORE/docs/ORCHESTRATION.md).
@@ -183,7 +202,7 @@ requires an explicitly increased total.
 Settings keeps its four main entries in compact cards. Open **Settings > BZZY
 Core > Terminal agent setups**, or `/settings modes`, to save each mode’s models,
 efforts and agent count. The same page saves the Solo chat model and effort
-alongside Delegate, Debate, Parallel and Besties. Delegate has two roles,
+alongside Delegate, Validate, Parallel and Besties. Delegate has two roles,
 supervisor and executor; the other modes support two or three agents.
 Model/effort fields use the Core
 catalog and floating dropdowns. Editing starts no work; Save applies to the next
@@ -265,7 +284,7 @@ The model control at the bottom opens a floating searchable dropdown over the
 current chat. Click a model once to apply it; use the mouse wheel or arrows to
 browse, type to filter, and click outside or press Esc to cancel. The adjacent
 effort dropdown lists the selected model's supported reasoning levels. Defaults
-for normal chat, Delegate and Debate remain under Settings → BZZY Core →
+for normal chat, Delegate and Validate remain under Settings → BZZY Core →
 Terminal agent setups. Other selectors use floating dialogs with explicit
 Confirm/Cancel controls, preserving approval confirmations. Double-click the
 project alias in the top bar to rename it inline; Enter/Save name confirms and
@@ -354,7 +373,7 @@ small terminals show the required dimensions and retain the manual-code option.
 Environment API keys take priority until you explicitly choose the saved key
 for new requests from this terminal. Keys never appear in chat/history.
 
-Multi-agent modes (`--delegate`, `--besties`, `--parallel`, `--debate`) use Linux bubblewrap or macOS sandbox-exec. Policies constrain filesystem writes and tool networking; they do not establish complete host-read confidentiality. Claude's adapter still rejects disabled tool networking when it cannot preserve model connectivity safely.
+Multi-agent modes (`--delegate`, `--besties`, `--parallel`, `--validate`) use Linux bubblewrap or macOS sandbox-exec. Policies constrain filesystem writes and tool networking; they do not establish complete host-read confidentiality. Claude's adapter still rejects disabled tool networking when it cannot preserve model connectivity safely.
 
 The former Telegram integration has been removed. No bot setup, chat attachment,
 background polling or Telegram notification transport remains. Startup retires

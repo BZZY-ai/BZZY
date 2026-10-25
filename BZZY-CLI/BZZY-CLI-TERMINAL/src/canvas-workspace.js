@@ -230,12 +230,12 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
     }
     if (command === 'resume') {
       const snapshot = await api(target), goal = snapshot.session.goal;
-      if (!goal || goal.status === 'complete') throw new Error('Set a new goal, or choose Debate to review an achieved goal.');
+      if (!goal || goal.status === 'complete') throw new Error('Set a new goal, or choose Validate to review an achieved goal.');
       await input(target, { operation: 'goal', resumeGoal: true, ...(goal.status === 'paused' || isStalledGoal(goal) ? { resumeGoalId: goal.id } : {}), ...(goal.status === 'paused' ? { resumeGoalStatus: 'paused' } : {}), options: ui.executionOptions(options, snapshot.session) }); return;
     }
     if (command === 'goal' || command === 'edit-goal') {
       if (group()?.mode === 'debate' && loadSession(target).goal?.status === 'complete') {
-        if (command === 'edit-goal') throw new Error('This Debate reviews an achieved goal. Pause and unlink to set a different goal, or choose Review achieved goal + evidence.');
+        if (command === 'edit-goal') throw new Error('This Validate reviews an achieved goal. Pause and unlink to set a different goal, or choose Review achieved goal + evidence.');
         await action('review'); return;
       }
       let objective;
@@ -261,7 +261,7 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
       if (!from || from === to) return;
       const mode = await ui.chooseOne('Link · affected work will pause', [
         { value: 'delegate', label: 'Delegate · source is BRAIN → target is HANDS' },
-        { value: 'debate', label: 'Debate · challenge the goal and evidence' },
+        { value: 'debate', label: 'Validate · challenge the goal and evidence' },
         { value: 'besties', label: 'Besties · exchange evidence and peer reviews' },
         { value: 'parallel', label: 'Parallel · independent approaches to one goal' },
       ], { presentation: 'context' }); if (!mode) return;
@@ -354,7 +354,7 @@ export async function canvasWorkspace(options, ui, initial, launch, { connect = 
         else if (text === '/default') await action('default');
         else if (text === '/solo' || text === '/singular') await action('unlink');
         else if (text === '/delegate' || text === '/parallel' || text === '/besties') await action('link');
-        else if (text === '/debate') await action(group()?.mode === 'debate' ? 'review' : 'link');
+        else if (['/validate', '/debate'].includes(text)) await action(group()?.mode === 'debate' ? 'review' : 'link');
         else if (text === '/cancel' || text === '/goal cancel') await input(binding()?.controlId || focused()?.sessionId, { operation: 'control', action: 'cancel' });
         else if (/^\/export(?:\s|$)/.test(text)) await exportProject(loadSession(binding()?.controlId || focused()?.sessionId || view.canvas.id), text.replace(/^\/export\s*/, ''), ui);
         else if (text === '/share') await shareTerminal(loadSession(view.canvas.id), ui);

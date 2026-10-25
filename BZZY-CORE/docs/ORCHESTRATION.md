@@ -1,4 +1,4 @@
-# Debate and Delegate: original context and evidence
+# Validate and Delegate: original context and evidence
 
 Both modes use Core's existing provider adapters, permissions, durable sessions,
 budgets and pause/recovery controls. API-key models receive context through the
@@ -10,7 +10,7 @@ Core creates an immutable brief before assigning work: original objective, full
 applicable task instructions, constraints, scope, acceptance criteria,
 deliverables, declared verification, current user directives and selected
 evidence references. Delegate includes relevant current-goal checkpoint
-decisions/questions. Independent Debate investigations exclude prior checkpoint
+decisions/questions. Independent Validate investigations exclude prior checkpoint
 opinions. Unrelated parent ledgers and other projects are not replayed.
 
 Briefs pin the source session/goal, instruction revision and content hash.
@@ -50,7 +50,15 @@ byte range, assignment and round even for an actor's own artifacts. Review
 rechecks hashes. Workspace changes remain isolated and require the existing
 explicit conflict-checked application operation.
 
-## Debate verifies the supplied goal and its achieved claim
+## Validate verifies the original goal and its achieved claim
+
+`/validate` on an achieved goal immediately starts a linked review of the
+original `/goal` input, every acceptance condition and all recorded goal evidence.
+It reuses selected reviewers or the saved Validate preset. Without a preset,
+separate independent conversations use the current model; additional provider
+subscriptions are not required. This action does not enable automatic reviews
+after every ordinary goal. `/debate` and `--debate` remain compatibility aliases;
+stored `debate` mode, presets and event names remain readable.
 
 For **“Find a real High vulnerability”**, a linked review carries the exact
 original objective, instructions, criteria, achieved claim, previous acceptance
@@ -59,6 +67,10 @@ evidence inventory is copied with provenance and remains accessible through
 bounded artifact reads. Missing, changed or excessive evidence fails explicitly.
 The original chat/goal and completion record remain retained; the new assessment
 is linked through its own result.
+The immutable source mission includes original user directives with source event
+references, bounded to 256 directives and the existing 2 MiB mission limit.
+Independent workers receive those constraints, rather than arbitrary historical
+assistant verdicts or parent-session summary access.
 New artifacts carry a goal ID. Automatic output and acceptance collections use
 that binding instead of replaying prior goals' replies. Completed-goal context
 ends at its completion event, keeping later casual user messages out of the
@@ -90,6 +102,23 @@ satisfy High merely because several models call it real. Core rechecks reviewer
 identity, source revisions, objection/evidence coverage, required deliverables
 and declared verification before completion. Unsatisfied checks downgrade the
 result to `awaiting_review`/`inconclusive`, retaining the reported claim for audit.
+
+After those checks, Core's independently configured model writes a bounded
+consensus explanation through the verified no-tools document runner. Chosen
+reviewer models remain unchanged. The explanation cannot upgrade a host-checked
+status, grant permission or establish evidence. An unconfigured or unavailable
+Core model leaves the checked review intact, without falling back to a different
+provider. The synthesis shares the review's remaining token/runtime budget; its
+usage is recorded before the final goal summary and notification. Consensus is
+bounded to 20,000 tokens and 45 seconds, further limited by the goal's remaining
+budget. Input that exceeds the conservative dispatch estimate fails explicitly
+without truncating the checked decision or dissent. The run lock,
+pause/cancel handling and timeout controls remain active until synthesis ends.
+
+One durable validation ID groups phase, participant and final-result events.
+Participants have separate IDs even when they use the same provider and model.
+Linked review events also enter the original session's stream for replay; saving
+the linked result again does not append a duplicate final result.
 
 Host checks establish attribution, scope, inspection, integrity and declared
 contract compliance. Whether an observation proves a vulnerability or severity

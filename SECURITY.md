@@ -44,11 +44,20 @@ generic text-only candidate; it never copies the private case bundle. Scanning
 supplements review and cannot prove arbitrary text contains no private detail.
 See BZZY-CORE/docs/KNOWLEDGE.md for implemented scope and limits.
 
-Debate and Delegate now pin automatic mission context and source revisions.
+Session history summaries are derived navigation data scoped to one terminal
+session, with original source references and integrity checks. They grant no
+permissions or completion evidence. Compaction and definition creators use the
+restricted document backend with no tools and an empty private working directory;
+model output passes host validation before publication or reviewed saving.
+Compaction uses the independent Core assistant model, durable usage reservations
+and explicit recovery after uncertain requests. See
+BZZY-CORE/docs/SESSION-MEMORY.md for bounds and provider billing limitations.
+
+Validate and Delegate now pin automatic mission context and source revisions.
 Missing-context reports stop workers and require explicit revision-pinned
 answers/follow-ups. Majority agreement cannot skip an evidence challenge; the
 original goal, criteria and claimed severity are assessed separately. Complete
-original-evidence inspection and declared contract checks gate Debate completion.
+original-evidence inspection and declared contract checks gate Validate completion.
 Imported achieved goals remain historical and cannot authorize new verification
 commands or targets. These host checks establish scope/provenance/inspection;
 semantic vulnerability truth still needs sound assessment and appropriate tests.

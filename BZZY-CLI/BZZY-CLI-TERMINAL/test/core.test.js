@@ -37,6 +37,9 @@ test('provider and workflow shortcuts select chat backends and bounded modes dir
   assert.equal(parseArgs(['--parallel', '--claude']).options.mode, 'parallel');
   for (const effort of ['none', 'minimal']) assert.equal(parseArgs(['--provider', 'abliteration', '--effort', effort]).options.effort, effort);
   assert.equal(parseArgs(['--debate', '--rounds', '5']).options.mode, 'debate');
+  assert.equal(parseArgs(['--validate', '--rounds', '5']).options.mode, 'debate');
+  assert.equal(parseArgs(['--mode', 'validate']).options.mode, 'debate');
+  assert.equal(parseArgs(['validate', 'Check the original goal.']).args[0], 'validate');
   assert.throws(() => parseArgs(['--debate', '--rounds', '6']), /Maximum 5/);
 });
 

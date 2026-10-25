@@ -27,6 +27,7 @@ import { assertCoreAvailable } from './maintenance.js';
 import { HostMetricsSampler } from './host-metrics.js';
 import { authorizedOwnPhoneTerminalInput } from './update-access.js';
 import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, pauseAllLearning } from './learning.js';
+import { recoverSessionCompactions, processSessionCompactions, pauseSessionCompaction, pauseAllSessionCompactions } from './session-compactor.js';
 import { CoreKnowledge } from '../knowledge.js';
 
 const runtimeBuild = digest(['src', 'assets', 'bin'].flatMap(directory => fs.readdirSync(path.join(root, directory), { recursive: true })
@@ -103,8 +104,9 @@ export async function serveRuntime() {
   for (const session of listRecords('session')) if (!sessionDeleted(session.id) && session.goal?.status === 'verifying') recoverOrphanedVerification(session.id);
   superviseExecutions();
   recoverLearningJobs();
+  recoverSessionCompactions();
   const send = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(JSON.stringify(value)); };
-  let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise, learningPump; const streams = new Set();
+  let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise, learningPump, memoryPump; const streams = new Set();
   const metrics = new HostMetricsSampler(), knowledge = new CoreKnowledge();
   let relayService, relayServicePromise;
   const relay = () => relayServicePromise ||= import('../relay/service.js')
@@ -132,7 +134,7 @@ export async function serveRuntime() {
         if (!rootToken) { send(response, 403, { error: 'Only the local owner can stop Core work.' }); return; }
         const input = await readBody(request);
         if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'shutdown') || input.shutdown !== undefined && typeof input.shutdown !== 'boolean') throw new Error('Choose only the operator shutdown mode.');
-        persistOperatorStopIntent(); quiescing = true; pauseAllLearning('host_operator_stop');
+        persistOperatorStopIntent(); quiescing = true; pauseAllLearning('host_operator_stop'); pauseAllSessionCompactions('host_operator_stop');
         if (!operatorStopPromise) operatorStopPromise = pauseRuntimeExecutions().catch(error => { operatorStopPromise = undefined; throw error; });
         const result = await operatorStopPromise;
         // Queue the durable pause outcome before stopping connectivity. A slow
@@ -323,6 +325,7 @@ export async function serveRuntime() {
           appendEvent(id, `control.${control.state}`, control, db); return { controlId: control.id };
         });
         if (['pause', 'cancel'].includes(body.action)) pauseLearningForSession(id, 'user_' + body.action);
+        if (['pause', 'cancel'].includes(body.action)) pauseSessionCompaction(id, 'user_' + body.action);
         const pending = getRecord('control', result.controlId);
         if (['pause', 'cancel'].includes(body.action) && ['queued', 'dispatched'].includes(pending?.state)) requestExecutionStop(id, result.controlId, body.action);
         send(response, 202, result); return;
@@ -352,6 +355,11 @@ export async function serveRuntime() {
         .finally(() => { learningPump = undefined; });
     }
     if (active.length >= 8) return;
+    if (!memoryPump) {
+      memoryPump = processSessionCompactions({ canRun: learningMayRun })
+        .catch(() => { /* Derived memory retains its durable failure state. */ })
+        .finally(() => { memoryPump = undefined; });
+    }
     for (const candidate of listRecords('execution', { state: 'queued' }).filter(j => !j.stopAction).slice(0, 8 - active.length)) {
       const logPath = path.join(home(), 'runtime', `${candidate.id}-execution.log`);
       const job = reserveExecutionLaunch(candidate.id, logPath, { engineDirectory: root, engineBuild: runtimeBuild });
@@ -384,7 +392,7 @@ export async function serveRuntime() {
     }
   }, 100, { label: 'Runtime scheduler' });
   const shutdown = () => {
-    if (stopping) return; stopping = true; clearInterval(scheduler); pauseAllLearning('host_shutdown');
+    if (stopping) return; stopping = true; clearInterval(scheduler); pauseAllLearning('host_shutdown'); pauseAllSessionCompactions('host_shutdown');
     pushWorker.close(); updateWatcher.close();
     metrics.close();
     if (runtimeInfo()?.token === token) fs.rmSync(runtimeFile(), { force: true });
@@ -394,6 +402,7 @@ export async function serveRuntime() {
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);
   await new Promise(resolve => server.once('close', resolve));
   await learningPump;
+  await memoryPump;
   await relayServicePromise?.then(service => service.close());
   process.removeListener('SIGTERM', shutdown); process.removeListener('SIGINT', shutdown); unlock(); return 0;
 }

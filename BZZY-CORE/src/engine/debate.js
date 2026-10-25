@@ -8,33 +8,41 @@ import { investigate as defaultInvestigate, investigationConsensus, investigatio
 import { accumulateDebateObjections, assessObjectionDispositions, assessDebateGoal, assessDebateEvidenceCoverage, formatInvestigation, formatPosition, formatDecision } from './debate-format.js';
 import { configuredDebate, applyDebateSelection } from './debate-setup.js';
 import { saveSession } from './store.js';
-import { createMissionContext, missionContextCurrent } from './mission-context.js';
+import { createMissionContext, missionContextCurrent, missionEvidenceCurrent } from './mission-context.js';
+import { chatReviewSourceCurrent } from './chat-debate.js';
+import { debateEventUI, debateIdentity, debateParticipants } from './debate-events.js';
+import { sessionMemoryEligible } from './session-memory.js';
+import { queueSessionCompaction } from './session-compactor.js';
+import { synthesizeDebateConsensus, consensusTokenBudget } from './debate-consensus.js';
 
 export async function runDebate(session, options, ui, dependencies = {}) {
   // Runtime/model options are never executable adapter overrides.
   const { Coordinator = DefaultCoordinator, startAssignment = defaultStartAssignment, followupAssignment = defaultFollowupAssignment,
-    waitAssignment = defaultWaitAssignment, assignmentStatus = defaultAssignmentStatus, investigate = defaultInvestigate } = dependencies;
+    waitAssignment = defaultWaitAssignment, assignmentStatus = defaultAssignmentStatus, investigate = defaultInvestigate,
+    synthesizeConsensus = synthesizeDebateConsensus } = dependencies;
+  const selectedAgents = configuredDebate({ ...options, provider: session.provider, model: session.model, debateAgents: options.debateAgents || session.debateAgents });
+  ui = debateEventUI(session, ui, selectedAgents);
   const coordinator = new Coordinator(session, ui, options); coordinator.start();
   const transcript = [], agents = []; let investigationUsage = [], usage = { totalTokens: 0, complete: true, agents }, stopReason = 'round_limit', decision = null, objectionLedger = [];
   try {
     const rounds = options.rounds || 5;
-    if (!Number.isSafeInteger(rounds) || rounds < 1 || rounds > 5) throw new Error('Debate rounds must be 1–5.');
+    if (!Number.isSafeInteger(rounds) || rounds < 1 || rounds > 5) throw new Error('Validation rounds must be 1–5.');
+    ui.event('debate.started', { title: session.reviewSource ? 'Review achieved goal' : 'Evidence review', participants: debateParticipants(session, selectedAgents), maxRounds: rounds });
     const selected = options.artifact ? getRecord('artifact', options.artifact) : null;
-    if (selected && ![session.id, session.parentSessionId].includes(selected.sessionId) && !session.allowedArtifactIds?.includes(selected.id)) throw new Error('Selected debate evidence is outside this conversation scope.');
+    if (selected && ![session.id, session.parentSessionId].includes(selected.sessionId) && !session.allowedArtifactIds?.includes(selected.id)) throw new Error('Selected validation evidence is outside this conversation scope.');
     if (selected) readArtifact(selected.id, 0, 1); // Validate the immutable source before copying it.
     const content = selected ? fs.readFileSync(selected.path) : options.artifact ? fs.readFileSync(inside(session.cwd, options.artifact)) : Buffer.from(`GOAL\n${session.goal.objective}\n\nIndependently investigate this goal in the supplied workspace before debating its support.`);
-    if (content.length > 512 * 1024) throw new Error('Selected debate material exceeds 512 KiB. Select a smaller artifact.');
+    if (content.length > 512 * 1024) throw new Error('Selected validation material exceeds 512 KiB. Select a smaller artifact.');
     if (selected && selected.sessionId === session.parentSessionId) { session.allowedArtifactIds = [...new Set([...(session.allowedArtifactIds || []), selected.id])]; saveSession(session); }
     const material = artifact(session, content, 'debate-selected-material', selected?.mediaType || 'text/plain');
     if (selected) { Object.assign(material, { importedFrom: selected.id, importedSha256: selected.sha256,
       ...(selected.source ? { source: selected.source, sourceWorkspace: selected.sourceWorkspace, sourceSha256: selected.sourceSha256 } : {}) }); putRecord('artifact', material.id, material); }
     const snapshot = snapshotWorkspace(session, 'debate-fixed-snapshot');
     const materialPath = path.join(snapshot.directory, 'BZZY_SELECTED_MATERIAL.txt');
-    if (fs.existsSync(materialPath)) throw new Error('Reserved debate snapshot path already exists.');
+    if (fs.existsSync(materialPath)) throw new Error('Reserved validation snapshot path already exists.');
     fs.writeFileSync(materialPath, content, { mode: 0o600 });
     snapshot.manifest['BZZY_SELECTED_MATERIAL.txt'] = { size: content.length, sha256: digest(content) };
     snapshot.manifestHash = digest(snapshot.manifest); putRecord('snapshot', snapshot.id, snapshot);
-    const selectedAgents = configuredDebate({ ...options, provider: session.provider, model: session.model, debateAgents: options.debateAgents || session.debateAgents });
     applyDebateSelection(session, selectedAgents); saveSession(session);
     const [supervisor, ...choices] = selectedAgents;
     const reviewPolicy = { ...session.policy, mode: 'read-only', writablePaths: [] };
@@ -52,24 +60,24 @@ export async function runDebate(session, options, ui, dependencies = {}) {
     const persistLedger = () => putRecord('debate-objections', session.id, { version: 1, goalId: session.goal.id, snapshotHash: snapshot.manifestHash, entries: objectionLedger, updatedAt: now() });
     if (!options.reviewOnly) {
       objectionLedger = accumulateDebateObjections(objectionLedger, investigation?.reports || [], { phase: 'investigation', consensus }); persistLedger();
-      if (consensus.reached) ui.event('info', { message: `Independent agreement ${consensus.counts[consensus.verdict]}/${consensus.total} · ${consensus.verdict}. Challenge and response are still required; contrary evidence remains in the objection ledger.` });
+      if (consensus.reached) ui.event('debate.phase', { phase: 'investigation', status: 'agreement', consensus });
       const readiness = investigationReadiness(investigation, selectedAgents.length, { sessionId: session.id });
       if (!readiness.passed) {
         stopReason = 'insufficient_investigation_evidence';
         const remaining = [`Only ${readiness.usable}/${readiness.total} independent reports contained a usable conclusion with recorded evidence; ${readiness.required} are required.`, ...readiness.reasons];
-        const result = { version: 1, material: { id: material.id, sha256: material.sha256 }, snapshotId: snapshot.id, opening: null, transcript, decision: null,
+        const result = { version: 1, debateId: debateIdentity(session), material: { id: material.id, sha256: material.sha256 }, snapshotId: snapshot.id, opening: null, transcript, decision: null,
           stopReason, unresolvedDisagreement: remaining, investigation, investigationReadiness: readiness, missionContext, objectionLedger,
           goalSatisfaction: 'inconclusive', assessment: { passed: false, challengeRounds: 0 }, independentInvestigationPerformed: true,
           newVerificationPerformed: null, newVerificationDuringRounds: false, verificationReporting: 'The evidence phase did not support an adversarial discussion.', maxRounds: rounds, usage, outcome: 'unresolved' };
         putRecord('debate', session.id, result);
-        ui.event('info', { message: `DEBATE STOPPED · evidence phase not ready\n${remaining.map(item => `• ${item}`).join('\n')}\nResolve the investigation blockers or provide concrete finding material, then run the debate again.` });
         const code = await coordinator.finish('awaiting_review', result, usage);
-        ui.event('debate.result', { sessionId: session.id, status: session.goal.status, decision: null, unresolvedDisagreement: remaining, evidence: session.goal.evidence,
-          message: `Debate finished · insufficient evidence\n${remaining.map(item => `• ${item}`).join('\n')}` });
+        ui.event('debate.phase', { phase: 'finished', status: 'inconclusive' });
+        ui.event('debate.result', { sessionId: session.id, status: session.goal.status, decision: null, consensus, goalSatisfaction: 'inconclusive', unresolvedDisagreement: remaining, evidence: session.goal.evidence,
+          message: `Validation finished · insufficient evidence\n${remaining.map(item => `• ${item}`).join('\n')}` });
         return code;
       }
     }
-    ui.event('info', { message: 'PHASE 2 · Main agent opening case' });
+    ui.event('debate.phase', { phase: 'opening', status: 'started' });
     const openingContext = `You are the main agent responding with the opening case in an evidence-based debate about BZZY_SELECTED_MATERIAL.txt.
 ${options.reviewOnly ? 'Assess the fixed material now; no new experiments are allowed in this review-only debate.' : 'All selected agents completed independent assessments. Inspect BZZY_INVESTIGATION_REPORTS.json and the shared evidence only now, after independence was preserved.'}
 Synthesize the strongest supported case, acknowledge contrary evidence and uncertainty, and identify the claims that still need verification. Agreement is not evidence.
@@ -85,17 +93,16 @@ PERSISTENT OBJECTION LEDGER (IDs are assigned by Core; preserve every contrary p
     let defenderError = defender.round.error || defender.latestReport?.error || defender.latestReport?.stopReason || null;
     agents[choices.length] = { ...supervisor, role: 'main', tokens: defender.latestReport?.usage?.tokens ?? null, available: Boolean(defender.latestReport?.usage?.available) };
     updateUsage();
-    ui.event('debate.message', { participant: supervisor.provider, role: 'main opening', assignmentId: defenderJob, state: defender.round.state,
+    ui.event('debate.message', { participant: supervisor.provider, participantIndex: 0, role: 'main opening', round: 0, maxRounds: rounds, assignmentId: defenderJob, state: defender.round.state,
       error: defenderError, text: currentCase ? formatPosition(currentCase) : formatInvestigation({ state: defender.round.state, error: defenderError }) });
     const opening = { mainResponse: currentCase, assignmentId: defenderJob, snapshotHash: snapshot.manifestHash, createdAt: now() };
     objectionLedger = accumulateDebateObjections(objectionLedger, [{ participant: supervisor, assignmentId: defenderJob, report: currentCase }], { phase: 'opening' }); persistLedger();
     putRecord('debate-opening', session.id, opening); appendEvent(session.id, 'debate.opening', opening);
     decision = currentCase?.decision || null;
 
-    ui.event('info', { message: `PHASE 3 · Challenge and revision · up to ${rounds} rounds` });
     const jobs = [], previousPositions = new Map(); let finalObjectionReview = { complete: false, unresolved: [] }, goalReview = { passed: false, goalSatisfaction: 'inconclusive', reasons: ['No challenge response assessed the original goal.'] }, sourceEvidenceCoverage = { complete: !sourceEvidenceIds.length, reviewed: [], missing: sourceEvidenceIds, partial: [] };
     for (let round = 1; round <= rounds && !coordinator.stopping; round++) {
-      ui.event('info', { message: `Debate round ${round}/${rounds} · fixed snapshot ${snapshot.manifestHash.slice(0, 12)}` });
+      ui.event('debate.phase', { phase: 'challenge', status: 'started', round, maxRounds: rounds, snapshotHash: snapshot.manifestHash });
       const reports = [];
       for (let index = 0; index < choices.length && !coordinator.stopping; index++) {
         const selection = choices[index];
@@ -116,10 +123,11 @@ CURRENT MAIN CASE:\n${JSON.stringify(currentCase)}\nPERSISTENT OBJECTION LEDGER:
         agents[index] = { ...selection, tokens: report?.usage?.tokens ?? null, available: Boolean(report?.usage?.available) };
         updateUsage();
         const assessment = reports.at(-1);
-        ui.event('debate.message', { participant: selection.provider, role: 'reviewer', round, maxRounds: rounds, assignmentId: job.id,
+        ui.event('debate.message', { participant: selection.provider, participantIndex: index + 1, role: 'reviewer', round, maxRounds: rounds, assignmentId: job.id,
           state: assessment.state, error: assessment.error, text: assessment.report ? formatPosition(assessment.report) : formatInvestigation(assessment) });
       }
       if (coordinator.stopping) break;
+      ui.event('debate.phase', { phase: 'response', status: 'started', round, maxRounds: rounds });
       objectionLedger = accumulateDebateObjections(objectionLedger, reports, { phase: 'challenge', round }); persistLedger();
       const context = `You are the main agent responding to a challenge round by revising the current case about BZZY_SELECTED_MATERIAL.txt.
 Defend supported claims, concede valid objections, or revise conclusions. Address every specific objection ID and state what changed from the prior case. Agreement is not evidence.
@@ -136,7 +144,7 @@ PRIOR MAIN CASE:\n${JSON.stringify(currentCase)}\nCHALLENGER REPORTS:\n${JSON.st
       defenderError = defender.round.error || defender.latestReport?.error || defender.latestReport?.stopReason || null;
       agents[choices.length] = { ...supervisor, role: 'main', tokens: defender.latestReport?.usage?.tokens ?? null, available: Boolean(defender.latestReport?.usage?.available) };
       updateUsage();
-      ui.event('debate.message', { participant: supervisor.provider, role: 'main agent', round, maxRounds: rounds, assignmentId: defenderJob,
+      ui.event('debate.message', { participant: supervisor.provider, participantIndex: 0, role: 'main agent', round, maxRounds: rounds, assignmentId: defenderJob,
         state: defender.round.state, error: defenderError, text: response ? formatPosition(response) : formatInvestigation({ state: defender.round.state, error: defenderError }) });
       const current = { round, caseBefore: currentCase, assessments: reports, mainResponse: response, snapshotHash: snapshot.manifestHash, createdAt: now() };
       transcript.push(current);
@@ -172,7 +180,7 @@ PRIOR MAIN CASE:\n${JSON.stringify(currentCase)}\nCHALLENGER REPORTS:\n${JSON.st
     const remaining = [...new Set([...(Array.isArray(decision?.remainingObjections) ? decision.remainingObjections : []), ...finalObjectionReview.unresolved,
       ...(!finalObjectionReview.complete ? objectionLedger.map(item => item.id) : []), ...goalReview.reasons,
       ...(!decision ? ['No complete decision record was returned.'] : []), ...(getRecord('debate-investigation', session.id)?.reports || []).filter(report => !report.report).map(report => `${report.participant.provider}: independent investigation returned no report.`)])];
-    const result = { version: 1, material: { id: material.id, sha256: material.sha256 }, snapshotId: snapshot.id, opening, transcript, decision,
+    const result = { version: 1, debateId: debateIdentity(session), material: { id: material.id, sha256: material.sha256 }, snapshotId: snapshot.id, opening, transcript, decision,
       stopReason: coordinator.stopping || stopReason, unresolvedDisagreement: remaining,
       missionContext, investigation, investigationConsensus: consensus, objectionLedger, objectionReview: finalObjectionReview,
       goalSatisfaction: goalReview.goalSatisfaction, goalAssessment: goalReview.assessment || null, goalReview, sourceEvidenceCoverage,
@@ -186,17 +194,58 @@ PRIOR MAIN CASE:\n${JSON.stringify(currentCase)}\nCHALLENGER REPORTS:\n${JSON.st
     const unresolved = !result.assessment.passed;
     result.outcome = unresolved ? 'unresolved' : 'assessed';
     putRecord('debate', session.id, result);
-    const code = await coordinator.finish(unresolved ? 'awaiting_review' : 'complete', result, usage);
-    ui.event('debate.result', { sessionId: session.id, status: session.goal.status, decision, goalSatisfaction: result.goalSatisfaction,
+    const afterAssessment = async (checkedResult, checkedStatus) => {
+      ui.event('debate.phase', { phase: 'consensus', status: 'started' });
+      const remainingTokens = session.goal.tokenBudget == null ? consensusTokenBudget : Math.max(0, session.goal.tokenBudget - (coordinator.tokenOffset || 0) - usage.totalTokens);
+      const maximumRuntime = Math.min(options.runtimeSeconds ?? Infinity, session.contract.limits.runtimeSeconds ?? Infinity);
+      const elapsed = coordinator.started ? (Date.now() - coordinator.started) / 1000 : 0;
+      const remainingSeconds = Math.min(45, Math.max(0, maximumRuntime - (session.goal.runtimeUsedSeconds || 0) - elapsed));
+      result.consensus = await synthesizeConsensus(session, checkedResult, { signal: coordinator.abort.signal, tokenBudget: remainingTokens, runtimeSeconds: remainingSeconds, checkedStatus });
+      const charged = result.consensus.chargedTokens || 0;
+      if (result.consensus.selection && (charged || result.consensus.usageAvailable)) {
+        usage.agents.push({ ...result.consensus.selection, role: 'consensus', tokens: result.consensus.tokens ?? null,
+          available: result.consensus.usageAvailable === true, chargedTokens: charged });
+        usage.totalTokens += charged; usage.complete &&= result.consensus.usageAvailable === true;
+        coordinator.checkBudget(usage.totalTokens);
+      }
+      const decisive = (checkedResult.assessment?.inspectedEvidence || []).map(id => getRecord('artifact', id));
+      if (!chatReviewSourceCurrent(session) || !missionContextCurrent(getRecord('session', session.id) || session, missionContext) ||
+          decisive.some(item => !item) || !missionEvidenceCurrent(decisive)) {
+        const reason = 'The original goal, source instructions or inspected evidence changed during Core consensus.';
+        checkedResult.reportedGoalSatisfaction ||= checkedResult.goalSatisfaction;
+        checkedResult.goalSatisfaction = 'inconclusive'; checkedResult.outcome = 'unresolved';
+        checkedResult.assessment = { ...checkedResult.assessment, passed: false, postConsensusCurrent: false };
+        checkedResult.unresolvedDisagreement = [...new Set([...(checkedResult.unresolvedDisagreement || []), reason])];
+        if (checkedResult.decision) checkedResult.decision = { ...checkedResult.decision, goalSatisfaction: 'inconclusive' };
+        session.acceptance = { ...session.acceptance, passed: false, debate: { ...session.acceptance?.debate, passed: false,
+          reasons: [...(session.acceptance?.debate?.reasons || []), reason] } };
+        checkedResult.acceptance = session.acceptance;
+        const { text, ...invalidated } = checkedResult.consensus;
+        checkedResult.consensus = { ...invalidated, state: 'unavailable', reason: 'source_changed' };
+        return { status: 'awaiting_review' };
+      }
+    };
+    const code = await coordinator.finish(unresolved ? 'awaiting_review' : 'complete', result, usage, { afterAssessment });
+    putRecord('debate', session.id, result);
+    ui.event('debate.phase', { phase: 'finished', status: session.goal.status });
+    ui.event('debate.result', { sessionId: session.id, status: session.goal.status, decision: result.decision, consensus: result.consensus || consensus, goalSatisfaction: result.goalSatisfaction,
       unresolvedDisagreement: result.unresolvedDisagreement, evidence: session.goal.evidence,
-      message: `Debate ${session.goal.status === 'complete' ? 'finished' : session.goal.status === 'awaiting_review' ? 'finished · unresolved' : session.goal.status}\n${formatDecision(decision, result.unresolvedDisagreement)}` });
+      message: `Validation ${session.goal.status === 'complete' ? 'finished' : session.goal.status === 'awaiting_review' ? 'finished · unresolved' : session.goal.status}\n${result.consensus?.state === 'ready' ? `Core consensus · ${result.consensus.selection.provider}${result.consensus.selection.model ? ' · ' + result.consensus.selection.model : ''}\n${result.consensus.text}\n\n` : ''}${formatDecision(result.decision, result.unresolvedDisagreement)}` });
     return code;
   } catch (error) {
     ui.event('error', { message: error.message });
-    const partial = { version: 1, transcript, decision, objectionLedger, outcome: 'unresolved', goalSatisfaction: 'inconclusive',
+    const partial = { version: 1, debateId: debateIdentity(session), transcript, decision, objectionLedger, outcome: 'unresolved', goalSatisfaction: 'inconclusive',
       assessment: { passed: false, challengeRounds: transcript.length, semanticVerification: 'not-automated' },
       unresolvedDisagreement: ['The assessment stopped before the original goal and evidence could be verified.'], stopReason: error.message, usage };
     putRecord('debate', session.id, partial);
-    return coordinator.finish('awaiting_review', partial, usage);
+    const code = await coordinator.finish('awaiting_review', partial, usage);
+    ui.event('debate.phase', { phase: 'finished', status: session.goal.status });
+    ui.event('debate.result', { status: session.goal.status, decision: null, consensus: null, goalSatisfaction: 'inconclusive',
+      unresolvedDisagreement: partial.unresolvedDisagreement, message: 'Validation stopped · assessment remains inconclusive.' });
+    return code;
+  } finally {
+    if (sessionMemoryEligible(session)) {
+      try { queueSessionCompaction(session); } catch { /* Derived memory cannot change the review outcome. */ }
+    }
   }
 }

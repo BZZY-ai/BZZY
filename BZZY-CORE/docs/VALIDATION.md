@@ -1,3 +1,36 @@
+# Session memory, definition creators and Validate (2026-10-25)
+
+Node.js 24/macOS full suites pass: **470 Core tests passed, 1 skipped**
+(471 total), and **534 CLI tests passed, 21 skipped** (555 total), zero failures.
+Both product syntax checks and `git diff --check` pass. An unsigned iPhone
+simulator Debug build also passes for the renamed mode/default labels.
+
+Session-memory coverage includes session/alias/model/mode identity, same-directory
+isolation, immutable event references, streamed messages, Unicode-safe expansion,
+tree generations and rebuild races, scope/credential rejection and private-value
+redaction across chunks, leaves and streamed events. Oversized logical messages
+are safely omitted. Compactor fixtures exercise Core selection, authentication,
+idle priority, reservations and actual overage charging, unknown-request recovery,
+orphan backend cleanup and real daemon stop/restart without automatic replay.
+
+Creators use offline provider fixtures to verify current-model selection, the
+native no-tools profile, ephemeral document contexts, cancellation, draft review,
+strict output schemas, unchanged selection and conflict-safe saving. Real PTY
+checks verify physical Escape from Settings, preserved drafts/cursors, and the
+Validate block's click/Ctrl+B expansion and Escape collapse. Participant colors
+stay distinct across same-model slots and supported palettes/layouts.
+
+Validate tests retain original-goal/severity/evidence gates, independence and
+minority objections; cover immediate `/validate` and legacy aliases; keep controls
+and locks through Core consensus; recheck source freshness afterward; and test
+exactly-once mirrored final events during concurrent Canvas observation. Original
+bodies, usage and runtime survive replay, and newer parent goals stay unchanged.
+
+These are synthetic offline checks, not live provider billing measurements or
+vulnerability-accuracy evaluations. No running installation was updated. See
+[session memory](SESSION-MEMORY.md) and [orchestration](ORCHESTRATION.md) for the
+implemented bounds, billing limitations and verification responsibilities.
+
 # Reusable specialist subagents (2026-10-25)
 
 Node.js 24/macOS full suites pass: **397 Core tests passed, 1 skipped**

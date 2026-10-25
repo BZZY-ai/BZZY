@@ -23,7 +23,7 @@ export function applyParallelSelection(session, selections) {
 export function configuredDebate(options = {}) {
   const choices = options.debateAgents || [agentChoice(options.supervisor || options.provider || 'codex', options.supervisorModel || options.model),
     ...(options.participants || ['claude', 'deepseek']).map(value => typeof value === 'string' ? agentChoice(value) : value)];
-  if (!Array.isArray(choices) || choices.length < 2 || choices.length > 3) throw new Error('Debate needs 2 or 3 agents total: a main agent and one or two challengers.');
+  if (!Array.isArray(choices) || choices.length < 2 || choices.length > 3) throw new Error('Validate needs 2 or 3 agents total: a main agent and one or two challengers.');
   return choices.map((choice, index) => ({ ...agentChoice(choice.provider, choice.model), ...choice, effort: choice.effort || (index === 0 ? options.effort : null) || 'default' }));
 }
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { createSession, loadSession, saveSession } from './store.js';
-import { getProvider } from './providers.js';
+import { getProvider, selectionFromSession, modeDefault } from './providers.js';
 import { database, events, getRecord, putRecord, appendEvent, listRecords } from './database.js';
 import { artifact } from './evidence.js';
 import { prepareTask } from './task.js';
@@ -9,7 +9,10 @@ import { childPolicy } from './policy.js';
 import { formatDecision } from './debate-format.js';
 import { duration } from './format-duration.js';
 import { configuredDebate, applyDebateSelection } from './debate-setup.js';
-import { createMissionContext, missionSourceRevision, missionResultRevision, missionEvidenceCurrent, sanitizeMissionValue } from './mission-context.js';
+import { createMissionContext, missionSourceRevision, missionResultRevision, missionEvidenceCurrent, missionContextCurrent, sanitizeMissionValue } from './mission-context.js';
+import { debateIdentity, latestDebateResult, appendDebateResultOnce } from './debate-events.js';
+import { identityAlive } from './process-identity.js';
+import { queueSessionCompaction } from './session-compactor.js';
 
 function completionBoundary(source) {
   if (!source.goal || source.goal.status !== 'complete') return null;
@@ -34,8 +37,25 @@ function sourceEvidence(source) {
     if (!item || !workers.has(item.sessionId)) throw new Error('The goal cites missing evidence or evidence outside this goal’s sessions.');
     return item;
   });
-  if (!missionEvidenceCurrent(evidence)) throw new Error('The goal evidence is missing, altered or stale. Revalidate it before starting the debate.');
+  if (!missionEvidenceCurrent(evidence)) throw new Error('The goal evidence is missing, altered or stale. Recheck it before starting validation.');
   return evidence;
+}
+
+export function defaultChatDebateAgents(source) {
+  const preset = source.debateAgents || modeDefault('debate');
+  if (preset) return configuredDebate({ debateAgents: preset });
+  const selected = selectionFromSession(source);
+  // Independence comes from separate worker conversations and evidence access,
+  // rather than requiring additional provider subscriptions.
+  return configuredDebate({ debateAgents: [selected, { ...selected }] });
+}
+
+export function chatReviewSourceCurrent(session) {
+  if (!session.reviewSource) return true;
+  const pin = session.reviewSource, source = loadSession(pin.sessionId);
+  return Boolean(source && (source.goal?.id || null) === pin.goalId && missionSourceRevision(source) === pin.sourceRevision &&
+    (source.goal?.status || 'reply') === pin.claimedStatus && (!pin.resultRevision || missionResultRevision(source) === pin.resultRevision) &&
+    (!pin.missionContextId || missionContextCurrent(source, pin.missionContextId)));
 }
 
 export function latestReply(sessionId, { throughSeq = Infinity, afterTime } = {}) {
@@ -52,7 +72,7 @@ export function latestReply(sessionId, { throughSeq = Infinity, afterTime } = {}
     }
     if (batch.length < 1000 || after >= throughSeq) break;
   }
-  if (!text.trim()) throw new Error('There is no assistant reply to debate yet. Ask a question first, then use /debate.');
+  if (!text.trim()) throw new Error('There is no assistant reply to validate yet. Ask a question first, then use /validate.');
   return { question, text: finalReply || text, eventSequences: evidence };
 }
 export function prepareChatDebate(source, focus, participants, options = {}) {
@@ -68,8 +88,9 @@ export function prepareChatDebate(source, focus, participants, options = {}) {
   const sourceMission = createMissionContext(source, { purpose: 'goal-review', independent: true, evidenceIds: evidence.map(item => item.id) });
   const originalObjective = source.goal?.objective || focus || source.contract?.objective || selected.question;
   const session = createSession(getProvider(source.provider), source.cwd, source.model);
-  const agents = configuredDebate({ ...options, provider: source.provider, model: source.model, effort: source.selectedEffort,
-    participants, debateAgents: options.debateAgents });
+  const agents = options.debateAgents || participants?.length
+    ? configuredDebate({ ...options, provider: source.provider, model: source.model || source.resolvedModel, effort: source.selectedEffort,
+      participants, debateAgents: options.debateAgents }) : defaultChatDebateAgents(source);
   applyDebateSelection(session, agents);
   source.debateAgents = agents; saveSession(source);
   const objective = originalObjective || focus || 'Assess the preceding reply against the supplied user request.';
@@ -108,10 +129,20 @@ export function prepareChatDebate(source, focus, participants, options = {}) {
 }
 export function finishChatDebate(sourceId, debateId) {
   const result = getRecord('debate', debateId), session = loadSession(debateId);
+  const identity = result?.debateId || (session && debateIdentity(session)) || debateId;
+  const final = latestDebateResult(debateId, identity), run = getRecord('run', debateId);
+  if (!final && (listRecords('execution', { sessionId: debateId, states: ['queued', 'launching', 'starting', 'running', 'waiting_for_input'] }).length ||
+      run && ['starting', 'running', 'waiting_for_input'].includes(run.state) && identityAlive(run.runner))) {
+    return { pending: true, debateId: identity, sessionId: debateId, status: session?.goal?.status };
+  }
   const decision = result?.decision || null;
   const elapsedSeconds = session?.goal?.runtimeUsedSeconds || 0, usage = session?.summary?.usage || result?.usage;
   const statistics = `${duration(elapsedSeconds)} · ${usage ? usage.totalTokens.toLocaleString() + (usage.complete ? ' tokens' : ' known tokens · usage incomplete') : 'usage unavailable'}`;
-  const record = { sessionId: debateId, status: session?.goal?.status, decision, elapsedSeconds, usage, unresolvedDisagreement: result?.unresolvedDisagreement || [], evidence: session?.goal?.evidence || [],
-    message: `Debate ${session?.goal?.status === 'awaiting_review' ? 'finished · unresolved' : session?.goal?.status || 'interrupted'} · ${statistics}\nSession: ${debateId}\n${formatDecision(decision, result?.unresolvedDisagreement || [])}` };
-  putRecord('conversation-debate', sourceId, record); appendEvent(sourceId, 'debate.result', record); return record;
+  const record = { debateId: identity, sessionId: debateId, status: session?.goal?.status,
+    consensus: result?.consensus || result?.investigationConsensus || null, goalSatisfaction: result?.goalSatisfaction || 'inconclusive', decision, elapsedSeconds, usage, unresolvedDisagreement: result?.unresolvedDisagreement || [], evidence: session?.goal?.evidence || [],
+    message: final?.message || `Validation ${session?.goal?.status === 'awaiting_review' ? 'finished · unresolved' : session?.goal?.status || 'interrupted'} · ${statistics}\nSession: ${debateId}\n${result?.consensus?.state === 'ready' ? `Core consensus\n${result.consensus.text}\n\n` : ''}${formatDecision(decision, result?.unresolvedDisagreement || [])}` };
+  putRecord('conversation-debate', sourceId, record);
+  appendDebateResultOnce(sourceId, final ? { ...final, sourceSessionId: sourceId, elapsedSeconds, usage } : record);
+  try { queueSessionCompaction(sourceId); } catch { /* A derived index cannot alter the durable review result. */ }
+  return record;
 }

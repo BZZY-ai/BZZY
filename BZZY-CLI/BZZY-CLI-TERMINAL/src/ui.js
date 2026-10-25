@@ -197,6 +197,17 @@ export class UI {
     else if (type === 'worker.progress') this.output.write(`  [${clean(data.agent || data.workerSessionId?.slice(0, 8) || 'worker')}] ${clean(data.name || data.message || data.status || data.type)}\n`);
     else if (type === 'activity') this.output.write(`  ◉ ${clean(data.message || data.summary)}\n`);
     else if (type === 'network.response') this.output.write(`  ↔ ${clean(data.method)} ${clean(data.url)} → ${data.status} · ${data.durationMs}ms\n`);
+    else if (type === 'debate.message') {
+      this.newline();
+      const slot = Number.isSafeInteger(data.participantIndex) ? `Agent ${data.participantIndex + 1}` : clean(data.participant || 'Agent');
+      this.output.write(`\n${slot} · ${clean(data.role || 'review')}\n${clean(data.text)}\n`);
+    }
+    else if (type === 'debate.result') {
+      const resolved = data.status === 'complete' && !data.unresolvedDisagreement?.length && !data.decision?.remainingObjections?.length
+        && !['unsupported', 'inconclusive'].includes(data.goalSatisfaction);
+      const satisfaction = ['supported', 'unsupported', 'inconclusive'].includes(data.goalSatisfaction) ? ` · goal ${data.goalSatisfaction}` : '';
+      this.output.write(`\nCONSENSUS · ${resolved ? 'Review complete' : 'Needs review'}${satisfaction}\n${clean(data.message || 'The review returned no conclusion.')}\n`);
+    }
     else if (data.message) this.output.write(`${clean(data.message)}\n`);
     if (type === 'execution.finished') this.messageStreams.clear();
   }

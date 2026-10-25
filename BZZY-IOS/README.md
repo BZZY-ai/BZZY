@@ -239,7 +239,7 @@ Both Cores must stay online during transfer. Imported identities/paths are remap
 ## Models, defaults and goal pause
 
 Settings → Models and defaults configures each computer’s independent CLI solo,
-Core assistant, Besties, Parallel, Debate and Delegate defaults. Provider/model
+Core assistant, Besties, Parallel, Validate and Delegate defaults. Provider/model
 catalogs come from Core; effort options follow the selected model. Each agent
 has its own selection, with two or three agents except Delegate’s supervisor and
 executor. Saves use revision checks and explicit same-request retry. They affect
@@ -332,7 +332,7 @@ Chat layout: opening a conversation hides the global BZZY/computer header and
 connection footer to leave room for messages. The top-right Chat settings menu
 contains Share, Import, Activity, Details, model/effort, defaults, YOLO and Set goal.
 Pause/Resume stays beside the compact goal status above the composer. The mode
-beside the alias opens a dropdown for Solo, Delegate, Debate, Parallel and Besties.
+beside the alias opens a dropdown for Solo, Delegate, Validate, Parallel and Besties.
 Unpaused chats offer Pause first; Core independently requires a saved paused
 state and stopped workers. Selecting a mode consumes its existing preset, keeps
 the same chat/history/goal and starts no work. Missing presets point to Mode

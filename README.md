@@ -28,6 +28,12 @@ attributed recall, evidence freshness, scoped skills, private approved profiles
 and bounded idle reviews with explicit candidate evaluation and activation.
 CLI `/memory` and `/learn` open its review controls in the existing Skills panel.
 
+[Session history memory](BZZY-CORE/docs/SESSION-MEMORY.md) adds a bounded index of
+each terminal's own conversation across model and mode changes. Its background
+compactor uses the configured BZZY Core model. Skills and Agents libraries also
+offer creators that draft definitions with the terminal's current model for
+review before saving.
+
 ## Install Core and CLI
 
 On macOS or Linux, run the bundled installer from the terminal package:
@@ -45,7 +51,7 @@ automatically replay paused goals.
 
 CLI Settings also contains API keys (DeepSeek, Abliteration and OrcaRouter), the default BZZY folder and Pair iPhone.
 iPhone Settings → Models and defaults edits independent solo CLI, Core assistant,
-Besties, Parallel, Debate and Delegate presets. Mode flags reuse their saved setup
+Besties, Parallel, Validate and Delegate presets. Mode flags reuse their saved setup
 automatically; a missing preset opens setup. Terminal projects keep their original working directory. Use `/alias NAME` to
 show a session in CLI/iOS; both lists put the most recent activity first.
 

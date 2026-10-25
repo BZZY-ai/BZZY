@@ -15,7 +15,7 @@ test('--whoami prints a detailed text reference before setup without starting ba
         DEEPSEEK_API_KEY: 'whoami-api-secret-sentinel', BZZY_TELEGRAM_BOT_TOKEN: 'whoami-bot-secret-sentinel' } });
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
     assert.match(result.stdout, /^# bzzy 0\.2\.0/);
-    for (const mode of ['--parallel', '--debate', '--delegate', '--besties', '--default']) assert.ok(result.stdout.includes(mode));
+    for (const mode of ['--parallel', '--validate', '--delegate', '--besties', '--default']) assert.ok(result.stdout.includes(mode));
     for (const topic of ['bzzy.sqlite', 'credentials.json', 'goal-history', 'defaultSelection', 'parallelDefault', 'debateDefault', 'bestiesDefault',
       'delegateDefault', 'HH:MM:SS', 'awaiting_review', 'BRAIN', 'HANDS', 'BzzyClient', '/v1/sessions/ID/events', 'Idempotency-Key',
       'read-only', 'context-file', 'sandbox-exec', 'WHOAMI.md']) assert.ok(result.stdout.includes(topic), `Missing ${topic}`);

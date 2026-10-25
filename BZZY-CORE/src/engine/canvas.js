@@ -234,9 +234,9 @@ export function canvasEventActors(canvas, sessionId, event, bindings = canvasBin
 export function prepareCanvasReview(sessionId, revision, nodeId, requestId) {
   return edit(sessionId, revision, requestId, { action: 'review', nodeId }, canvas => {
     const group = groupFor(canvas, nodeId);
-    if (group?.mode !== 'debate') throw new Error('Link two or three characters for Debate first.');
+    if (group?.mode !== 'debate') throw new Error('Link two or three characters for Validate first.');
     const source = loadSession(nodeFor(canvas, group.lead).sessionId);
-    if (source.goal?.status !== 'complete') throw new Error('Debate review needs an achieved goal and its recorded evidence.');
+    if (source.goal?.status !== 'complete') throw new Error('Validate review needs an achieved goal and its recorded evidence.');
     assertSessionIdle(source);
     if (group.reviewSessionId) {
       const review = loadSession(group.reviewSessionId); assertSessionIdle(review);
@@ -261,7 +261,9 @@ export function finishCanvasReviews(sessionId) {
     if (!group.reviewSessionId || group.reviewFinished) continue;
     const session = loadSession(group.reviewSessionId);
     if (['complete', 'awaiting_review', 'cancelled', 'failed'].includes(session.goal?.status)) {
-      finishChatDebate(nodeFor(canvas, group.lead).sessionId, session.id); group.reviewFinished = true;
+      const result = finishChatDebate(nodeFor(canvas, group.lead).sessionId, session.id);
+      if (result.pending) continue;
+      group.reviewFinished = true;
       canvas.revision++; putRecord(kind, sessionId, canvas);
     }
   }

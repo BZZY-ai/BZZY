@@ -141,7 +141,7 @@ export class ClientSettings {
       put('Independent from the CLI chat default.', 'muted');
       rows.push({ text: 'Update BZZY CLI + Core', action: 'update-bzzy', icon: '↻', card: true, tone: 'accent',
         detail: 'Check the official release and update both products · this terminal reloads' });
-      rows.push({ text: 'Terminal agent setups', action: 'modes', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Delegate · Debate · Parallel · Besties' });
+      rows.push({ text: 'Terminal agent setups', action: 'modes', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Delegate · Validate · Parallel · Besties' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
       const push = notificationDeliveryStatus();
       put(); put(!push.configured ? 'iPhone push alerts · Apple setup needed' : push.message, 'muted');

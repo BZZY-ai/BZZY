@@ -21,6 +21,8 @@ import { duration } from './format-duration.js';
 import { delegationTokenLines } from './delegation-format.js';
 import { agentExecutionScope } from './agent-execution.js';
 import { learningForTurn } from './learning-hooks.js';
+import { sessionMemoryEligible } from './session-memory.js';
+import { queueSessionCompaction, pauseSessionCompaction } from './session-compactor.js';
 import { pauseLearningForSession } from './learning.js';
 import { randomUUID } from 'node:crypto';
 
@@ -202,6 +204,12 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
       closeOpenActivities(session);
       writeProjectRecord(session, 'goals', session.goal?.id || session.id, { sessionId: session.id, goal: session.goal, summary: session.summary, acceptance: session.acceptance || null });
       learningForTurn(session, prompt, { goal, stopped: Boolean(stopping || failedThisTurn) });
+      if (sessionMemoryEligible(session)) {
+        try {
+          if (stopping || failedThisTurn) pauseSessionCompaction(session.id, 'source_stopped');
+          else queueSessionCompaction(session);
+        } catch { /* A derived index must never fail the completed foreground turn. */ }
+      }
       if (goal) {
         printGoalSummary(session, recorded);
         try { await new NotificationHub({ ui: recorded }).publish(session); } catch (error) { recorded.event('error', { message: `Goal notification failed: ${error.message}` }); }

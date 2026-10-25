@@ -64,7 +64,7 @@ test('missing presets give a clear error with --default, and debate supports two
     let configured = 0;
     const selected = await chooseDebate({ cwd: directory }, { interactive: true, async chooseOne(title, options) {
       const picker = await options;
-      if (title === 'Debate · Select agents') return configured < count ? `agent:${configured}` : 'continue';
+      if (title === 'Validate · Select agents') return configured < count ? `agent:${configured}` : 'continue';
       if (title.includes('Choose provider')) return 'codex';
       assert.equal(picker.selectEffort, true); configured++;
       return { value: configured === 1 ? 'fixture-brain' : 'fixture-light', effort: configured === 1 ? 'xhigh' : 'low' };
@@ -73,7 +73,7 @@ test('missing presets give a clear error with --default, and debate supports two
     assert.ok(selected.slice(1).every(agent => agent.effort === 'low'));
     assert.equal(sessions().length, 0);
   }
-  for (const mode of ['parallel', 'debate', 'delegate', 'besties']) assert.ok(chatHelp.includes(`--${mode}`));
+  for (const mode of ['parallel', 'validate', 'delegate', 'besties']) assert.ok(chatHelp.includes(`--${mode}`));
   assert.match(chatHelp, /\/default/); assert.match(chatHelp, /--default/);
 });
 

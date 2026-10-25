@@ -167,15 +167,32 @@ export function recoverLearningJobs() {
 }
 
 export function sanitizeLearningText(text, secrets = sharedSecrets()) {
+  return redactLearningText(text, secrets, () => '[redacted]');
+}
+
+// Keep SQLite/Unicode character offsets stable while redacting a complete
+// logical message. The caller can then slice it without exposing secret halves.
+export function maskLearningText(text, secrets = sharedSecrets()) {
+  const unavailable = new Set(String(text) + secrets.join(''));
+  let marker = ['*', '~', '^', '|', '`', '#'].find(character => !unavailable.has(character));
+  for (let code = 0xe000; !marker; code++) {
+    const candidate = String.fromCodePoint(code);
+    if (!unavailable.has(candidate)) marker = candidate;
+  }
+  return { text: redactLearningText(text, secrets, value => marker.repeat([...value].length)), marker };
+}
+
+function redactLearningText(text, secrets, redact) {
   let result = String(text);
-  for (const secret of secrets) result = result.replaceAll(secret, '[redacted]');
-  return result.replace(/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----/g, '[redacted]')
-    .replace(/\b(?:Bearer|Basic)\s+[^\s"<>]+|\bsk-[A-Za-z0-9_-]{12,}|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gi, '[redacted]')
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[redacted]@')
+  for (const secret of secrets) result = result.replaceAll(secret, () => redact(secret));
+  return result.replace(/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----/g, match => redact(match))
+    .replace(/\b(?:Bearer|Basic)\s+[^\s"<>]+|\bsk-[A-Za-z0-9_-]{12,}|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gi, match => redact(match))
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi,
+      (match, scheme) => scheme + redact(match.slice(scheme.length, -1)) + '@')
     .replace(/((?:["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)["']?)\s*[=:]\s*)(["'])([^\r\n]*?)\2/gi,
-      (match, prefix, quote, value) => /^(?:<[^>]+>|\$\{[^}]+\}|\[redacted\])$/.test(value.trim()) ? match : prefix + quote + '[redacted]' + quote)
+      (match, prefix, quote, value) => /^(?:<[^>]+>|\$\{[^}]+\}|\[redacted\])$/.test(value.trim()) ? match : prefix + quote + redact(value) + quote)
     .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)\s*[=:]\s*)([^\r\n,;"']+)/gi,
-      (match, prefix, value) => /^(?:<[^>]+>|\$\{[^}]+\}|\[redacted\])$/.test(value.trim()) ? match : prefix + '[redacted]');
+      (match, prefix, value) => /^(?:<[^>]+>|\$\{[^}]+\}|\[redacted\])$/.test(value.trim()) ? match : prefix + redact(value));
 }
 export function sanitizeLearningValue(value, secrets = sharedSecrets()) {
   if (typeof value === 'string') return sanitizeLearningText(value, secrets);

@@ -116,17 +116,19 @@ export async function changeSessionMode(sessionId, mode, ui, connection) {
   }, (id, owner, selected, authorization) => setSessionMode(id, owner, selected, authorization), {
     assert: assertSessionModeSwitch,
     message: session => `${session.mode === 'delegate' ? `Delegate · brain: ${session.provider} · ${session.model || 'provider default'} · executor: ${session.executor.provider} · ${session.executor.model || 'provider default'}`
-      : session.mode === 'debate' ? `Debate · ${session.debateAgents.map(agent => `${agent.provider} · ${agent.model || 'provider default'}`).join(' / ')}`
+      : session.mode === 'debate' ? `Validate · ${session.debateAgents.map(agent => `${agent.provider} · ${agent.model || 'provider default'}`).join(' / ')}`
       : `Solo · ${session.provider} · ${session.model || 'provider default'}`} · same chat retained · still paused. Send a message or use /goal resume when ready.`,
   });
 }
 
 export async function conversationModeCommand(input, sessionId, ui, connection) {
-  const command = /^\/(delegate|debate|solo|singular)(?:\s|$)/.exec(input);
+  const command = /^\/(delegate|validate|debate|solo|singular)(?:\s|$)/.exec(input);
   if (!command) return false;
-  if (command[1] === 'debate' && input.trim() !== '/debate') return false; // Keep /debate <focus> for a selected-reply challenge.
-  if (input.trim() !== '/' + command[1]) throw new Error('Use /delegate, /debate or /solo without arguments after pausing the chat.');
-  await changeSessionMode(sessionId, command[1] === 'singular' ? 'solo' : command[1], ui, connection);
+  const review = ['validate', 'debate'].includes(command[1]);
+  if (review && loadSession(sessionId)?.goal?.status === 'complete') return false; // Review the original achieved goal immediately.
+  if (review && input.trim() !== '/' + command[1]) return false;
+  if (input.trim() !== '/' + command[1]) throw new Error('Use /delegate, /validate or /solo without arguments after pausing the chat.');
+  await changeSessionMode(sessionId, command[1] === 'singular' ? 'solo' : review ? 'debate' : command[1], ui, connection);
   return true;
 }
 export async function executeManaged(provider, session, options, ui, prompt, flags = {}) {
@@ -285,7 +287,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           continue;
         }
         const selectedApi = client(info, activeId, owner);
-        if (/^\/(?:delegate|solo|singular)(?:\s|$)/.test(text) || text === '/debate') {
+        if (/^\/(?:delegate|solo|singular)(?:\s|$)/.test(text) || /^\/(?:validate|debate)$/.test(text) && loadSession(activeId)?.goal?.status !== 'complete') {
           modalTask = true;
           try {
             await conversationModeCommand(text, activeId, ui, { info, owner, authorize: () => requireOwner(activeId, owner) });
@@ -323,14 +325,14 @@ async function watch(info, sessionId, owner, ui, options = {}) {
         }
         if (text === '/pause' || text === '/cancel') { await selectedApi('POST', 'control', { action: text.slice(1) }, randomUUID()); ui.event('info', { message: 'Stopping the current response…' }); continue; }
         if (text === '/pause all' || text === '/cancel all') { await api('POST', 'control', { action: text.startsWith('/pause') ? 'pause' : 'cancel' }, randomUUID()); continue; }
-        if (text === '/debate' || text.startsWith('/debate ')) {
-          if (!ui.onDebate) throw new Error('Use /debate from an attached interactive chat.');
-          if (children.length && activeId === sessionId) throw new Error('Select an agent chat tab before choosing its reply to debate.');
+        if (/^\/(?:validate|debate)(?:\s|$)/.test(text)) {
+          if (!ui.onDebate) throw new Error('Use /validate from an attached interactive chat.');
+          if (children.length && activeId === sessionId) throw new Error('Select an agent chat tab before validating its result.');
           modalTask = true;
           try {
             const current = await selectedApi('GET');
-            if (['queued', 'launching', 'running'].includes(current.execution?.state)) throw new Error('Wait for the current reply to finish, or use /pause, before debating it.');
-            await ui.onDebate(activeId, text.slice(7).trim());
+            if (['queued', 'launching', 'running'].includes(current.execution?.state)) throw new Error('Wait for the current reply to finish, or use /pause, before validating it.');
+            await ui.onDebate(activeId, text.replace(/^\/(?:validate|debate)\s*/, ''));
             if (ui.detached) { detached = true; break; }
           } finally {
             modalTask = false;

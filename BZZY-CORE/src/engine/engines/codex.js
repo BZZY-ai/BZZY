@@ -136,12 +136,12 @@ export class CodexEngine {
   async open() {
     if (this.rpc && !this.rpc.closed) return;
     this.closing = null;
-    if (this.options.toolHost && this.session.coreSkillsProtocol !== 4) {
+    if (this.options.toolHost && this.session.coreSkillsProtocol !== 5) {
       if (this.session.engineThreadId) {
         this.session.engineThreadId = null;
         this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
       }
-      this.session.coreSkillsProtocol = 4;
+      this.session.coreSkillsProtocol = 5;
     }
     const installed = version('codex');
     assertCodexVersion(installed);
@@ -259,6 +259,7 @@ export class CodexEngine {
   notification(method, params) {
     if (method === 'account/rateLimits/updated' && this.provider.auth === 'subscription') { const quota = codexQuota(params); if (quota) this.ui.event('account.quota', quota); }
     if (params.threadId && this.threadId && params.threadId !== this.threadId) return;
+    if (method === 'thread/compacted') { this.session.sessionMemoryRefresh = true; saveSession(this.session); }
     if (method === 'item/started' || method === 'item/completed') {
       const item = params.item, phase = method === 'item/started' ? 'started' : 'completed';
       if (phase === 'started') {

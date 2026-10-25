@@ -2,7 +2,7 @@ import { modeDefault, saveModeDefault } from './providers.js';
 import { chooseUnifiedModel, chooseEffort } from './model-controls.js';
 
 export const modeSettings = Object.freeze({
-  debate: { title: 'Debate', icon: '◇', description: 'A main agent answers independent challenges.', roles: ['Main agent', 'Challenger 1', 'Challenger 2'] },
+  debate: { title: 'Validate', icon: '◇', description: 'A main agent answers independent challenges.', roles: ['Main agent', 'Challenger 1', 'Challenger 2'] },
   parallel: { title: 'Parallel', icon: '▥', description: 'Independent agents work on the same goal.', roles: ['Agent 1', 'Agent 2', 'Agent 3'] },
   besties: { title: 'Besties', icon: '◎', description: 'Equal collaborators share findings and review evidence.', roles: ['Bestie 1', 'Bestie 2', 'Bestie 3'] },
   delegate: { title: 'Delegate', icon: '◈', description: 'A supervisor plans and reviews an executor’s work.', roles: ['Supervisor · brain', 'Executor · hands'] },

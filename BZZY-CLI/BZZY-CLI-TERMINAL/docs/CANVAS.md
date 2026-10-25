@@ -31,7 +31,7 @@ The **Goal** row below the alias shows the selected character's objective, or
 the group's control goal for a linked character. Double-click that row to edit
 it in place, then press **Enter / Start goal** to submit through Core. Escape
 cancels and preserves the conversation draft. An active or paused goal still
-requires the existing replacement confirmation. An achieved Debate source stays
+requires the existing replacement confirmation. An achieved Validate source stays
 immutable: use its review action, or pause and unlink to set a different goal.
 
 The canvas remains mounted throughout interaction. Context-menu goal entry,
@@ -50,7 +50,7 @@ uncached rendering and full QR quiet zones.
 - **Set goal**, **Pause work** and **Resume paused goal** use Core's existing
   durable goal and input admission operations. Chat remains available in the
   expanded conversation, including approvals, typed answers, sharing and skills.
-- **Link to another BZZY** selects a target and Delegate, Debate, Besties or
+- **Link to another BZZY** selects a target and Delegate, Validate, Besties or
   Parallel. The affected conversations pause and workers must stop before the
   link is applied. Linking does not resume work or change tool permissions.
 - **Move character** places it with the next click. Positions persist and scale
@@ -58,7 +58,7 @@ uncached rendering and full QR quiet zones.
 
 Delegate links are directed: the source is BRAIN and the target is HANDS. The
 brain plans, delegates bounded assignments, reviews evidence and controls the
-goal. Tall terminals show the brain above its hands. Debate's **Review achieved
+goal. Tall terminals show the brain above its hands. Validate's **Review achieved
 goal + evidence** creates a separate review of the source's original objective,
 achieved claim and complete evidence inventory; it does not overwrite that goal.
 Parallel and Besties use the existing independent and collaborative Core engines.

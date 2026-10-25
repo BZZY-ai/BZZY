@@ -183,7 +183,7 @@ The fully approved own-phone base grant can read `settings.get`,
 `settings.providers`, paged `settings.models` and save `settings.configure`.
 Scoped friends and Agent/terminal derived resources cannot administer defaults.
 Saves require the displayed revision and an idempotency ID. CLI, Core, Besties,
-Parallel, Debate and Delegate selections remain independent; Delegate has two
+Parallel, Validate and Delegate selections remain independent; Delegate has two
 roles, and the other multi-agent modes allow two or three agents. Model discovery
 uses Core's provider catalog and does not require an Agents folder.
 

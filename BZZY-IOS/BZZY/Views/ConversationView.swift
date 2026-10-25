@@ -334,7 +334,7 @@ struct ConversationCanvas: View {
     private var modeTitle: String {
         guard isLive else { return isDemo ? "Solo" : "Draft" }
         guard relay.coreSessionID == conversationID else { return "…" }
-        return relay.coreIsAgent ? "Agent" : relay.coreSessionMode.capitalized
+        return relay.coreIsAgent ? "Agent" : relay.coreSessionMode == "debate" ? "Validate" : relay.coreSessionMode.capitalized
     }
     private var modePicker: some View {
         Menu {
@@ -347,8 +347,8 @@ struct ConversationCanvas: View {
                 Button {
                     relay.performHostAction { _ = await relay.changeCoreSessionMode(mode, sessionID: conversationID) }
                 } label: {
-                    if relay.coreSessionMode == mode { Label(mode.capitalized, systemImage: "checkmark") }
-                    else { Text(mode.capitalized) }
+                    if relay.coreSessionMode == mode { Label(mode == "debate" ? "Validate" : mode.capitalized, systemImage: "checkmark") }
+                    else { Text(mode == "debate" ? "Validate" : mode.capitalized) }
                 }.disabled(relay.coreExecutionState != "paused" || relay.coreSessionMode == mode || relay.coreBusy || relay.coreCommandUncertain)
             }
         } label: {

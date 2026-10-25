@@ -4,11 +4,12 @@ import { listSubagentRuns, subagentStatus } from '@bzzy/core/engine/subagents.js
 import { compactAssignmentStatus } from '@bzzy/core/engine/assignment-views.js';
 import { chooseProvider } from './providers.js';
 import { chooseModel } from './models.js';
+import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
 
 const definitionFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
 const cwdFor = ui => (ui.sessionId && loadSession(ui.sessionId)?.cwd) || ui.tui?.cwd || process.cwd();
 const contextKey = ui => JSON.stringify([ui.sessionId || null, cwdFor(ui)]);
-const reset = ui => { ui.subagentPreview = null; ui.subagentOffset = 0; ui.subagentView = 'library'; ui.subagentRunId = null; ui.subagentRunOffset = 0; };
+const reset = ui => { ui.subagentCreatorDraft = null; ui.subagentPreview = null; ui.subagentOffset = 0; ui.subagentView = 'library'; ui.subagentRunId = null; ui.subagentRunOffset = 0; };
 const selectionLabel = agent => agent.provider || agent.model || agent.effort
   ? `${agent.provider || 'current provider'} · ${agent.model || 'provider default'} · ${agent.effort || 'default effort'}`
   : 'Inherit the invoking chat’s provider, model and effort';
@@ -22,6 +23,8 @@ async function prompt(ui, method, ...args) {
 export function subagentRows(ui) {
   const context = contextKey(ui);
   if (ui.subagentAdminContext && ui.subagentAdminContext !== context) reset(ui);
+  const creator = creatorRows(ui, 'subagent');
+  if (creator) return creator;
   const parent = ui.sessionId && loadSession(ui.sessionId);
   if (ui.subagentView === 'runs' && parent) {
     const page = listSubagentRuns(parent, { offset: ui.subagentRunOffset || 0, limit: 10 });
@@ -65,7 +68,8 @@ export function subagentRows(ui) {
   const page = listSubagentDefinitions({ cwd: cwdFor(ui), offset: ui.subagentOffset || 0, limit: 20 });
   const rows = [{ text: 'AGENTS · reusable specialists', tone: 'accent' },
     { text: 'Use these specialists from any supported chat model or goal.', tone: 'muted' },
-    { text: 'Create specialist', action: 'create', tone: 'accent' },
+    { text: 'Agent Creator · use current model', action: 'creator', tone: 'accent' },
+    { text: 'Create specialist manually', action: 'create' },
     ...(parent ? [{ text: 'View invocations in this chat', action: 'runs' }] : []), { text: '' }];
   for (const agent of page.subagents) {
     rows.push({ text: `${agent.name} · ${agent.scope}`, action: `view:${agent.scope}:${agent.name}`, tone: 'accent' },
@@ -116,7 +120,7 @@ async function editDefinition(ui, existing) {
   ui.event('info', { message: `Saved ${saved.name}. It is available to supported models; saving starts no execution.` });
 }
 
-export async function subagentsCommand(text, ui) {
+export async function subagentsCommand(text, ui, { generateDefinition } = {}) {
   const match = /^\/(?:agents|subagents)(?:\s+(.*))?$/.exec(text.trim());
   if (!match) return false;
   ui.openTerminal();
@@ -130,6 +134,9 @@ export async function subagentsCommand(text, ui) {
   try {
     if (!action || action === 'library') reset(ui);
     else if (action === 'create') await editDefinition(ui);
+    else if (action === 'creator') { reset(ui); await startCreator(ui, 'subagent', { generate: generateDefinition }); }
+    else if (action === 'creator-cancel') ui.cancelDefinitionAuthoring?.();
+    else if (action === 'creator-save') ui.subagentPreview = saveCreator(ui, 'subagent');
     else if (action === 'runs') { ui.subagentView = 'runs'; ui.subagentRunId = null; ui.subagentRunOffset = 0; }
     else if (action.startsWith('run:')) { ui.subagentRunId = action.slice(4); ui.subagentView = 'run'; }
     else if (action === 'runs-next' || action === 'runs-previous') ui.subagentRunOffset = Math.max(0, (ui.subagentRunOffset || 0) + (action === 'runs-next' ? 10 : -10));

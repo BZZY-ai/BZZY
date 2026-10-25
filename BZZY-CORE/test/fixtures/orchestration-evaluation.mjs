@@ -20,13 +20,18 @@ export function debateEvaluationActors(parent, { scenario = 'complete', selected
       if (this.session.goal.tokenBudget != null && tokens >= this.session.goal.tokenBudget) { this.stopping = 'token_limit'; this.abort.abort(); }
       return !this.stopping;
     }
-    async finish(requested, record, usage) {
+    async finish(requested, record, usage, { afterAssessment } = {}) {
       let status = this.stopping === 'token_limit' ? 'budget_limited' : requested;
       if (status === 'complete') {
         const { assessDebateCompletion } = await import('../../src/engine/verification.js');
         this.session.acceptance = await assessDebateCompletion(this.session, record, { signal: this.abort.signal });
         if (!this.session.acceptance.passed) status = 'awaiting_review';
       }
+      if (afterAssessment && !this.stopping) {
+        const checked = await afterAssessment(record, status);
+        if (checked?.status === 'awaiting_review' && status === 'complete') status = 'awaiting_review';
+      }
+      if (this.stopping) status = this.stopping === 'token_limit' ? 'budget_limited' : this.stopping === 'cancelled' ? 'cancelled' : 'paused';
       Object.assign(this.session.goal, { status, reason: this.stopping || record.stopReason || null });
       this.session.executionState = 'idle'; this.session.summary = { usage }; saveSession(this.session);
       activity.finishes.push({ requested, status, record });

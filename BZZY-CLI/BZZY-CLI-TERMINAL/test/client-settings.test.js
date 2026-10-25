@@ -149,7 +149,7 @@ test('terminal mode settings have separate clickable model/effort fields and pre
   const { ui, output } = terminal(); ui.openSettings();
   await ui.settingsCommand('/settings modes'); assert.equal(ui.settings.page, 'modes');
   assert.deepEqual(ui.settings.rows().map(row => row.action), ['solo-default', 'mode:debate', 'mode:parallel', 'mode:besties', 'mode:delegate']);
-  await ui.settings.run('mode:debate'); assert.equal(ui.settings.pageTitle, 'Debate default');
+  await ui.settings.run('mode:debate'); assert.equal(ui.settings.pageTitle, 'Validate default');
   ui.settings.modes.modelPicker = async () => ({ provider: 'codex', model: 'fixture', effort: 'default' });
   await ui.settings.run('preset-model:0'); assert.equal(ui.settings.modes.draft.dirty, true);
   for (const [columns, rows] of [[80, 24], [140, 40]]) {

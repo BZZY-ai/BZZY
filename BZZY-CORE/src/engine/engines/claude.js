@@ -123,6 +123,8 @@ export class ClaudeEngine {
           const delta = event.event.delta.text;
           text += delta;
           this.ui.event('text', { text: delta });
+        } else if (event.type === 'system' && event.subtype === 'compact_boundary') {
+          this.session.sessionMemoryRefresh = true; saveSession(this.session);
         } else if (event.type === 'assistant') {
           if (event.session_id) this.session.engineThreadId = event.session_id;
           if (event.message?.model && event.message.model !== '<synthetic>') this.session.resolvedModel = event.message.model;

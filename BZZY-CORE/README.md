@@ -17,13 +17,19 @@ the same engine and private state.
 
 Implemented:
 
+- Session-scoped hierarchical history indexes with bounded summary/original
+  expansion tools, source references, Core-model background compaction, budgets
+  and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).
+- Model-assisted Skill and specialist Agent creators using the current terminal
+  model, restricted document generation, reviewed drafts and checked saving.
+
 - Reusable named specialist subagents, invoked from ordinary chat or goals across
   Core's supported providers. The CLI Agents library manages project/global
   definitions and displays invocation history; Core owns pinned definitions,
   isolated worker copies, bounded parallelism, budgets, follow-ups, cancellation
   and evidence review. See [specialist subagents](docs/SUBAGENTS.md).
 
-- Hardened Debate and Delegate handoffs: automatic source-pinned mission briefs,
+- Hardened Validate and Delegate handoffs: automatic source-pinned mission briefs,
   durable requests for missing context, mandatory challenge rounds, retained
   minority objections, evidence inspection coverage and original-goal/severity
   assessment through Core's acceptance gate. See
@@ -35,9 +41,9 @@ Implemented:
   fixture comparisons and revision-pinned owner activation. See
   [knowledge and learning](docs/KNOWLEDGE.md).
 
-- Paused terminal conversations can switch between solo, Delegate and Debate through
+- Paused terminal conversations can switch between solo, Delegate and Validate through
   Core's owner operations, preserving chat/goal identity, history, policies and
-  budgets. CLI `/delegate` and `/debate` use saved mode defaults or setup; `/solo` restores
+  budgets. CLI `/delegate` and `/validate` use saved mode defaults or setup; `/solo` restores
   the prior solo model. Switching requires a confirmed pause with stopped
   workers and never submits inference or resumes a goal.
 
@@ -433,7 +439,7 @@ The `@bzzy/core/connections` facade validates the Core identity and returns only
 safe state to the CLI. Connection and metrics polling never start a stopped Core.
 
 The full paired iPhone can switch an existing paused terminal between Solo,
-Delegate, Debate, Parallel and Besties using the mode dropdown. Core reads that
+Delegate, Validate, Parallel and Besties using the mode dropdown. Core reads that
 mode's preset and preserves the conversation, goal, permissions and remaining
 budget. Workers must finish stopping first; a switch never resumes work. See
 [session admission](docs/SESSION-INPUT.md).

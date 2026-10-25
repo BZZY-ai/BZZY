@@ -165,7 +165,7 @@ struct CoreDefaultsEditor: View {
                         .bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                     if sessionID == nil {
                         Picker("Default for", selection: $target) {
-                            ForEach(targets, id: \.self) { Text($0 == "cli" ? "CLI chat" : $0 == "core" ? "Core assistant" : $0.capitalized).tag($0) }
+                            ForEach(targets, id: \.self) { Text($0 == "cli" ? "CLI chat" : $0 == "core" ? "Core assistant" : $0 == "debate" ? "Validate" : $0.capitalized).tag($0) }
                         }.pickerStyle(.menu).accessibilityIdentifier("defaults-target")
                         if !["cli", "core", "delegate"].contains(target) {
                             Stepper("Agents: \(choices.count)", value: Binding(get: { choices.count }, set: { count in

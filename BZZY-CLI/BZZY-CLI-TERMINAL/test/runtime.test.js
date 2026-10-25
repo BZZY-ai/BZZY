@@ -501,7 +501,8 @@ test('debate stops before an opening case when independent work yields no usable
   assert.equal(result.stopReason, 'insufficient_investigation_evidence'); assert.equal(result.opening, null); assert.deepEqual(result.transcript, []);
   assert.equal(result.investigationReadiness.usable, 0); assert.equal(result.investigationReadiness.required, 2);
   const history = (await new BzzyClient(launched.info).events(session.id, 0, 1000)).events;
-  assert.ok(history.some(event => event.type === 'info' && /evidence phase not ready/.test(event.data.message)));
+  assert.ok(history.some(event => event.type === 'debate.phase' && event.data.phase === 'finished' && event.data.status === 'inconclusive'));
+  assert.ok(history.some(event => event.type === 'debate.result' && /insufficient evidence/.test(event.data.message)));
   assert.ok(!history.some(event => ['debate.opening', 'debate.round'].includes(event.type)));
   assert.equal(listRecords('assignment').filter(item => item.parentSessionId === session.id).length, 3, 'only the three independent investigations ran');
 });

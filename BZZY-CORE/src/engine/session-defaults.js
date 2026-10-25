@@ -7,7 +7,7 @@ export function saveSessionDefaultSelection(session) {
   const parentId = session.parallelSessionId || session.parentSessionId;
   const parent = ['parallel', 'besties', 'debate'].includes(session.mode) ? session : parentId && loadSession(parentId);
   if (parent?.mode === 'debate') {
-    if (!parent.debateAgents) throw new Error('Choose debate agents before saving this mode’s default.');
+    if (!parent.debateAgents) throw new Error('Choose validation agents before saving this mode’s default.');
     return saveModeDefault('debate', [selectionFromSession(parent), ...parent.debateAgents.slice(1)]);
   }
   if (!['parallel', 'besties'].includes(parent?.mode)) {

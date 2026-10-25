@@ -386,7 +386,7 @@ inside bzzy and labels that fallback. Clipboard contents are not read on startup
 No text needs to be scraped from the TUI
 to implement these panels in another client.
 
-`/debate` creates a child debate session linked from the selected conversation.
+`/validate` creates a child debate session linked from the selected conversation.
 Subscribe to that child for its independent-investigation phase, discussion
 turns and final result. A `debate.result` is also recorded on the original chat,
 so reconnecting clients can restore the decision. `status: awaiting_review`

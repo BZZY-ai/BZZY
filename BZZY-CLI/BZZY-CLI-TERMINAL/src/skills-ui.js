@@ -3,6 +3,7 @@ import { skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { projectIdentityForSession, resolveProjectIdentity } from '@bzzy/core/engine/project-identity.js';
 import { knowledgeAction, knowledgeRows } from './knowledge-ui.js';
+import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,7 +30,7 @@ const preview = (ui, id, options = {}) => {
   ui.skillPreview = { ...readSkill(id, { ...currentContext(ui), ...options, enabledOnly: false }), historical: Boolean(options.historical) };
   ui.skillPreviewContext = contextKey(ui);
 };
-const resetViews = ui => { ui.skillPreview = null; ui.skillHistoryState = null; ui.skillPromotionDraft = null; ui.skillSyncDetails = false; ui.knowledgeView = null; };
+const resetViews = ui => { ui.skillCreatorDraft = null; ui.skillPreview = null; ui.skillHistoryState = null; ui.skillPromotionDraft = null; ui.skillSyncDetails = false; ui.knowledgeView = null; };
 const preferencesFile = () => path.join(home(), 'cli-preferences.json');
 const savedImportDirectory = () => {
   try {
@@ -59,7 +60,7 @@ const setSkillView = (ui, view) => {
   }
 };
 export function returnToSkillLibrary(ui) {
-  const fromDetail = Boolean(ui.skillPreview || ui.skillHistoryState || ui.skillSyncDetails || ui.skillPromotionDraft);
+  const fromDetail = Boolean(ui.skillCreatorDraft || ui.skillPreview || ui.skillHistoryState || ui.skillSyncDetails || ui.skillPromotionDraft);
   if (ui.skillPreview && ui.skillHistoryState) ui.skillPreview = null;
   else resetViews(ui);
   setSkillView(ui, 'library');
@@ -280,6 +281,8 @@ export function skillRows(ui) {
   ensureSkillView(ui);
   if (ui.knowledgeView) return knowledgeRows(ui);
   if (ui.skillAdminContext && ui.skillAdminContext !== contextKey(ui)) resetViews(ui);
+  const creator = creatorRows(ui, 'skill');
+  if (creator) return creator;
   if (ui.skillPromotionDraft) {
     const { definition } = ui.skillPromotionDraft;
     return [{ text: 'Review a separate global workflow', tone: 'accent' }, { text: definition.name }, { text: definition.description }, { text: definition.instructions },
@@ -347,7 +350,8 @@ export function skillRows(ui) {
     return rows;
   }
   const page = listSkills({ ...currentContext(ui), offset: ui.skillOffset || 0, limit: 30 });
-  const rows = [tabs, { text: '' }];
+  const rows = [tabs, { text: '' }, { text: 'Skill Creator · use current model', action: 'creator', tone: 'accent' },
+    { text: 'Create skill manually', action: 'create' }, { text: '' }];
   const projectSkills = page.skills.filter(skill => skill.scope === 'project');
   const globalSkills = page.skills.filter(skill => skill.scope !== 'project');
   const appendSkill = skill => {
@@ -370,7 +374,7 @@ export function skillRows(ui) {
   return rows;
 }
 
-export async function skillsCommand(text, ui, { sync, discover = codexSkillDirectories, importer = importSkill } = {}) {
+export async function skillsCommand(text, ui, { sync, discover = codexSkillDirectories, importer = importSkill, generateDefinition } = {}) {
   if (!/^\/skills(?:\s|$)/.test(text)) return false;
   ui.openTerminal();
   if (!ui.tui) { ui.event('error', { message: 'Open the interactive terminal to manage skills.' }); return true; }
@@ -383,6 +387,9 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
     if (action.startsWith('knowledge:')) await knowledgeAction(action.slice(10), ui);
     else if (!action) resetViews(ui);
     else if (action === 'library') returnToSkillLibrary(ui);
+    else if (action === 'creator') { resetViews(ui); setSkillView(ui, 'library'); await startCreator(ui, 'skill', { generate: generateDefinition }); }
+    else if (action === 'creator-cancel') ui.cancelDefinitionAuthoring?.();
+    else if (action === 'creator-save') { saveCreator(ui, 'skill'); resetViews(ui); setSkillView(ui, 'library'); }
     else if (action === 'tab:import') setSkillView(ui, 'import');
     else if (action === 'tab:library') setSkillView(ui, 'library');
     else if (action === 'save-directory') {
