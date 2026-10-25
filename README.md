@@ -30,9 +30,14 @@ CLI `/memory` and `/learn` open its review controls in the existing Skills panel
 
 [Session history memory](BZZY-CORE/docs/SESSION-MEMORY.md) adds a bounded index of
 each terminal's own conversation across model and mode changes. Its background
-compactor uses the configured BZZY Core model. Skills and Agents libraries also
+compactor shares one configurable model with validation consensus, inheriting the
+BZZY Core model by default. Skills and Agents libraries also
 offer creators that draft definitions with the terminal's current model for
 review before saving.
+
+Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALIDATION.md)
+after `/validate` checks the original requirements and recorded evidence. The
+consensus explanation cannot change the host-checked outcome.
 
 ## Install Core and CLI
 
@@ -49,7 +54,9 @@ ZIP sharing. Core runs as a user service. Use `bzzy-core start|status|stop|resta
 or **CLI Settings → BZZY Core**. Stop pauses work durably; Start/Restart do not
 automatically replay paused goals.
 
-CLI Settings also contains API keys (DeepSeek, Abliteration and OrcaRouter), the default BZZY folder and Pair iPhone.
+CLI **Settings → Default models** brings Solo, Core, Validate, Delegate,
+Parallel, Besties and the shared Consensus & Compactor selection into one table.
+Settings also contains API keys, the default BZZY folder, Pair iPhone and BZZY Core.
 iPhone Settings → Models and defaults edits independent solo CLI, Core assistant,
 Besties, Parallel, Validate and Delegate presets. Mode flags reuse their saved setup
 automatically; a missing preset opens setup. Terminal projects keep their original working directory. Use `/alias NAME` to

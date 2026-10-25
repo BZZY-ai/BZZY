@@ -24,8 +24,8 @@ deleting execution evidence or hiding approval requests.
 `CoreAssistant` is a trusted local configuration API. Core starts unconfigured,
 even if terminal defaults already exist. Choose its provider/model/effort using
 the host commands below or Core's configuration API. It is not a main CLI
-Settings entry; that menu contains only DeepSeek API key, Default BZZY folder
-and Pair iPhone. Provider/model discovery still uses Core's installed adapters
+Settings entry of its own; CLI Settings → Default models includes its Core row.
+Provider/model discovery still uses Core's installed adapters
 and catalogs without a second client-side model list. Saving checks the
 Core settings revision and never changes CLI defaults or starts a model turn.
 
@@ -94,6 +94,36 @@ The `contextId` is the underlying session UUID for host-side integration. Create
 one context per authorized project/assistant rather than one global conversation
 mixing unrelated agents. Context creation starts no execution, grants no tools
 or account bindings, creates no agent definition and installs no schedule.
+
+## Shared compactor and consensus model
+
+Session history compaction and Validate's final consensus explanation share a
+separate Core-owned selection. CLI Settings → Default models shows one
+**Consensus & Compactor** row. Its initial `source: "core"` inherits the live Core
+assistant selection; `source: "custom"` stores an explicit provider/model/effort
+override. This override works even before Core's assistant is configured and
+changes neither Core assistant defaults, ordinary chat nor reviewer models.
+
+The trusted local API lives in `engine/background-model.js`:
+
+```js
+import { backgroundModelSettings, configureBackgroundModel } from '@bzzy/core/engine/background-model.js';
+
+const shown = backgroundModelSettings();
+configureBackgroundModel({ source: 'custom', provider: 'codex', effort: 'default' }, {
+  expectedRevision: shown.revision,
+  requestId: crypto.randomUUID(),
+});
+```
+
+Send `{ source: 'core' }` to resume live inheritance. Reads return
+`{ source, revision, configured, selection, coordinatorRevision }`; custom choices
+have no coordinator revision. Saves require exact revision checks and optionally
+support durable idempotency. They validate Core's provider registry, never accept
+credentials or start inference, and grant no model tools or remote administration
+rights. Existing compaction jobs retain their pinned choice; new jobs and future
+consensus requests capture the effective shared selection and both relevant
+revisions. Compactor token/time/day limits remain separate budget settings.
 
 ## Background task transport
 

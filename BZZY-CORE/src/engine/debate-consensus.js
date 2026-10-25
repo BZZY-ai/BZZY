@@ -1,4 +1,4 @@
-import { CoreAssistant } from '../assistant.js';
+import { backgroundModelSettings } from './background-model.js';
 import { sanitizeLearningText, sanitizeLearningValue } from './learning.js';
 import { runRestrictedDocumentModel } from './document-model.js';
 import { loadSession } from './store.js';
@@ -10,9 +10,10 @@ export const consensusTokenBudget = 20000;
 
 // This explanation cannot complete a goal or authorize additional tests.
 export async function synthesizeDebateConsensus(session, result, { signal, runModel = runRestrictedDocumentModel, tokenBudget = consensusTokenBudget, runtimeSeconds = 45, checkedStatus = session.goal?.status } = {}) {
-  const settings = new CoreAssistant().settings();
-  if (!settings.configured) return { state: 'unavailable', reason: 'core_not_configured', authoritative: false };
-  if (signal?.aborted || tokenBudget < 1000 || runtimeSeconds <= 0) return { state: 'unavailable', reason: 'review_budget_exhausted', authoritative: false };
+  const settings = backgroundModelSettings();
+  const provenance = { selectionSource: settings.source, backgroundModelRevision: settings.revision, coordinatorRevision: settings.coordinatorRevision };
+  if (!settings.configured) return { state: 'unavailable', reason: 'core_not_configured', authoritative: false, ...provenance };
+  if (signal?.aborted || tokenBudget < 1000 || runtimeSeconds <= 0) return { state: 'unavailable', reason: 'review_budget_exhausted', authoritative: false, ...provenance };
   const selection = settings.selection, input = sanitizeLearningValue({ checkedStatus,
     goalSatisfaction: result.goalSatisfaction, assessment: result.assessment, originalObjective: session.reviewSource?.objective || session.goal?.objective,
     decision: result.decision, unresolvedDisagreement: result.unresolvedDisagreement, investigationConsensus: result.investigationConsensus,
@@ -20,16 +21,16 @@ export async function synthesizeDebateConsensus(session, result, { signal, runMo
   if (runModel === runRestrictedDocumentModel) {
     const provider = getProvider(selection.provider);
     if (provider.auth === 'api-key') {
-      try { apiKey(provider); } catch { return { state: 'unavailable', reason: 'auth_required', authoritative: false, selection }; }
+      try { apiKey(provider); } catch { return { state: 'unavailable', reason: 'auth_required', authoritative: false, selection, ...provenance }; }
     }
   }
   const prompt = JSON.stringify(input);
-  if (Buffer.byteLength(prompt) > 96000) return { state: 'unavailable', reason: 'consensus_context_limit', authoritative: false, selection };
+  if (Buffer.byteLength(prompt) > 96000) return { state: 'unavailable', reason: 'consensus_context_limit', authoritative: false, selection, ...provenance };
   const reserved = Math.min(consensusTokenBudget, tokenBudget);
   // Byte counts conservatively bound input tokens, with policy/instruction
   // overhead and response headroom. Oversized input is never truncated.
   if (Buffer.byteLength(prompt) + Buffer.byteLength(generationSecurityPolicy) + 2560 > reserved) {
-    return { state: 'unavailable', reason: 'consensus_input_budget', authoritative: false, selection };
+    return { state: 'unavailable', reason: 'consensus_input_budget', authoritative: false, selection, ...provenance };
   }
   const controller = new AbortController(), combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const initialGoalId = session.goal?.id, initialStatus = session.goal?.status;
@@ -54,13 +55,13 @@ export async function synthesizeDebateConsensus(session, result, { signal, runMo
     const text = response.text?.trim(), known = response.usageAvailable === true && Number.isSafeInteger(response.tokens) && response.tokens >= 0;
     const usage = { tokens: known ? response.tokens : null, usageAvailable: known, chargedTokens: known ? response.tokens : reserved };
     if (!text || Buffer.byteLength(text) > 8192 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(text) || sanitizeLearningText(text) !== text) {
-      return { state: 'unavailable', reason: 'invalid_consensus_output', authoritative: false, selection, ...usage };
+      return { state: 'unavailable', reason: 'invalid_consensus_output', authoritative: false, selection, ...provenance, ...usage };
     }
-    return { state: 'ready', text, selection, coordinatorRevision: settings.revision, authoritative: false,
+    return { state: 'ready', text, selection, ...provenance, authoritative: false,
       checkedStatus, ...usage };
   } catch (error) {
     const known = error?.code === 'DOCUMENT_BUDGET' && error.usageAvailable === true && Number.isSafeInteger(error.tokens) && error.tokens >= 0;
-    return { state: 'unavailable', reason: combinedSignal.aborted ? 'consensus_interrupted' : 'consensus_failed', authoritative: false, selection,
+    return { state: 'unavailable', reason: combinedSignal.aborted ? 'consensus_interrupted' : 'consensus_failed', authoritative: false, selection, ...provenance,
       tokens: known ? error.tokens : null, usageAvailable: known, chargedTokens: known ? error.tokens : reserved };
   } finally { clearInterval(monitor); }
 }

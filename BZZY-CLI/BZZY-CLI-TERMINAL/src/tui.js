@@ -16,10 +16,11 @@ import { renderMessageContent } from './message-renderer.js';
 import { hostMetricsCompact, hostMetricsLabel } from './host-metrics.js';
 import { choicePopup, visibleChoices } from './choice-popup.js';
 import { fillSurface, replaceCells, sliceCells } from './terminal-surface.js';
-import { settingsLayout } from './settings-layout.js';
-import { goalIndicator } from './goal-indicator.js';
+import { settingsLayout, settingsActions, navigateSettings } from './settings-layout.js';
+import { goalIndicator, goalValidationIndicator } from './goal-indicator.js';
 import { escapeInputKind, TerminalKeyInput } from './terminal-keys.js';
 import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
+import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -76,7 +77,7 @@ export class TerminalChat {
       const instant = performance.now(), previous = this.frame;
       this.animationTime = (instant - this.animationStarted) / 1000; this.frame = Math.floor(this.animationTime * 10);
       if (!this.copyMode && !this.outputBlocked) {
-        if (previous !== this.frame && (this.canvasVisible() && this.ui.pet !== false && !this.selection || this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated)) this.schedule();
+        if (previous !== this.frame && (this.canvasVisible() && this.ui.pet !== false && !this.selection || this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated || goalValidationIndicator(this.goal, this.goalValidation, this.frame)?.animated)) this.schedule();
         if (!this.renderTimer && this.ui.pet !== false) this.paintEyes();
       }
       const interval = this.ui.pet === false ? 100 : animationInterval;
@@ -126,7 +127,13 @@ export class TerminalChat {
     this.effort = session.selectedEffort === 'default' ? 'effort default' : session.selectedEffort || session.reasoningEffort || '';
     this.cwd = session.projectRoot || session.cwd || this.cwd;
     this.alias = session.alias || '';
-    this.goal = session.goal;
+    this.retiredGoalIds ||= new Set();
+    if (!session.goal?.id || !this.retiredGoalIds.has(session.goal.id)) {
+      if (this.snapshotGoalId && session.goal?.id !== this.snapshotGoalId) this.retiredGoalIds.add(this.snapshotGoalId);
+      this.snapshotGoalId = session.goal?.id || null; this.goal = session.goal;
+      if (!session.goalValidation || session.goalValidation.state === 'none') this.goalValidation = null;
+      else this.acceptGoalValidation(session.goalValidation, { snapshot: true });
+    }
     this.executionPolicy = session.contract?.policy || session.policy;
     if (snapshot.questions) {
       this.pendingApproval = snapshot.questions.find(question => question.kind === 'approval' && (!question.state || question.state === 'pending'));
@@ -162,6 +169,22 @@ export class TerminalChat {
     if (this.entries.length > 5000) this.entries.splice(0, 500);
     return entry;
   }
+  acceptGoalValidation(value, { snapshot = false } = {}) {
+    if (!value || !this.goal?.id || value.sourceGoalId !== this.goal.id || value.sourceSessionId && value.sourceSessionId !== (this.ui.activeTab || this.ui.sessionId)
+      || !Number.isSafeInteger(value.revision) || value.revision < 1) return;
+    if (value.state === 'validated' && !snapshot) {
+      // Replayed events can predate source/evidence changes without a newer
+      // stored revision. Only Core's current projection can restore green.
+      try { value = goalValidationFor({ id: value.sourceSessionId || this.ui.activeTab || this.ui.sessionId, goal: this.goal }); }
+      catch { this.goalValidation = null; return; }
+      if (value.state === 'none' || value.sourceGoalId !== this.goal.id) { this.goalValidation = null; return; }
+    }
+    this.goalValidationVersions ||= new Map();
+    const previous = this.goalValidationVersions.get(value.sourceGoalId);
+    if (previous && (previous.revision > value.revision || previous.revision === value.revision && previous.state !== 'validated' && value.state === 'validated')) return;
+    if (previous && previous.revision === value.revision && previous.reviewSessionId !== value.reviewSessionId) return;
+    this.goalValidation = { ...value }; this.goalValidationVersions.set(value.sourceGoalId, this.goalValidation);
+  }
   event(type, data) {
     this.contentRevision = (this.contentRevision || 0) + 1;
     if (type === 'text' || type === 'peer.text') {
@@ -175,7 +198,7 @@ export class TerminalChat {
       else this.add('assistant', data.text, { label, peerSessionId, itemId: data.itemId, turnId: data.turnId });
       this.streaming = true;
     } else if (type === 'message.user') {
-      if (data.kind === 'goal') this.goal = { status: 'active', objective: clean(data.text) };
+      if (data.kind === 'goal') { this.goal = { status: 'active', objective: clean(data.text) }; this.goalValidation = null; }
       this.pinned = (data.kind === 'goal' ? '/goal ' : '') + clean(data.text); this.add('user', data.text, { goal: data.kind === 'goal', channel: data.channel }); this.streaming = false; this.scroll = 0;
       if (this.mode === 'delegate') this.delegationPhase = 'Supervisor planning';
     } else if (['peer.message', 'peer.sent', 'peer.review'].includes(type)) {
@@ -227,7 +250,7 @@ export class TerminalChat {
       }
     }
     else if (type === 'summary') {
-      if (this.goal && data.status) this.goal = { ...this.goal, status: data.status, reason: data.reason || null };
+      if (this.goal && data.status && (!data.debateId || data.debateId === this.goal.id)) this.goal = { ...this.goal, status: data.status, reason: data.reason || null };
       this.add(data.status === 'complete' ? 'success' : 'notice', data.message); this.busy = false; if (['besties', 'parallel'].includes(this.mode) && data.usage) this.acceptGroupUsage(data.usage);
     }
     else if (type === 'error' || type === 'control.failed') { this.add('error', data.message); this.notice(data.message, true); }
@@ -239,6 +262,7 @@ export class TerminalChat {
       const { entry } = recordDebateEvent(this.entries, type, data);
       this.entryLayouts.delete(entry); this.streaming = false;
     }
+    else if (type === 'goal.validation') this.acceptGoalValidation(data);
     else if (type === 'info' && data.message) { this.add('notice', data.message, { welcome: Boolean(data.welcome) }); if (!data.welcome) this.notice(data.message); }
     else if (type === 'execution.finished') { this.busy = false; this.streaming = false; }
     else if (type === 'goal' && data.status) this.goalStatus = data.status;
@@ -315,7 +339,7 @@ export class TerminalChat {
     if (message) this.add('notice', message);
   }
 
-  clear() { this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.schedule(); }
+  clear() { this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.goalValidation = null; this.goalValidationVersions = new Map(); this.retiredGoalIds = new Set(); this.snapshotGoalId = null; this.schedule(); }
   selectTab(previous, next) {
     if (previous === next) return;
     this.textSelection = null;
@@ -607,9 +631,7 @@ export class TerminalChat {
     if (this.selection && !hit) { if (['dropdown', 'context'].includes(this.selection.presentation) && !(this.popupRegion && x >= this.popupRegion.left && x <= this.popupRegion.right && y >= this.popupRegion.top && y <= this.popupRegion.bottom)) this.finishSelection(null); return; }
     if (hit) this.feedback(hit);
     if (hit?.type === 'canvas-close') {
-      if (this.promptDraft) this.finish(null);
-      else if (this.panel !== 'chat') { if (this.ui.settingsOnly && this.panel === 'settings') this.finish(null); else this.setPanel('chat'); }
-      else this.localCommand('/canvas back');
+      this.goBack();
       return;
     }
     if (hit?.type === 'canvas-pane') { this.ui.canvasView.drawer = true; this.setPanel(hit.panel); return; }
@@ -626,6 +648,7 @@ export class TerminalChat {
     if (hit?.type === 'usage-balance') { this.balanceTask = this.ui.showProviderBalance?.(); return; }
     if (hit?.type === 'top-settings') { this.localCommand('/settings'); return; }
     if (hit?.type === 'settings-exit') { this.leaveSettings(); return; }
+    if (hit?.type === 'back') { this.goBack(); return; }
     if (hit?.type === 'yolo') { this.permissionTask = this.ui.toggleYolo(); return; }
     if (hit?.type === 'approval') { this.approvalTask = this.ui.answerApproval(hit.answer); return; }
     if (hit?.type === 'approval-details') {
@@ -671,7 +694,7 @@ export class TerminalChat {
     else if (hit?.type === 'tools') { this.showTools = !this.showTools; this.schedule(); }
     else if (hit?.type === 'commands') { if (this.canCompose()) { this.value = '/'; this.cursor = 1; this.schedule(); } }
     else if (hit?.type === 'confirm') this.key('', { name: 'return' });
-    else if (hit?.type === 'cancel') this.key('', { name: 'escape' });
+    else if (hit?.type === 'cancel') { if (hit.back) this.goBack(); else this.key('', { name: 'escape' }); }
     else if (this.resolveInput && !this.selection && y === this.composerRow) {
       const cells = Math.max(0, x - (this.composerTextLeft || 3) - (this.composerLeft || 0)) + (this.composerOffset || 0), chars = [...this.value];
       let used = 0, index = 0;
@@ -691,6 +714,29 @@ export class TerminalChat {
     this.entryLayouts.delete(entry); this.contentRevision++; this.bodyCache = null;
     if (cached) this.scroll = Math.max(0, this.scroll + this.entryLayout(entry, cached.width).lines.length - cached.lines.length);
     this.schedule();
+  }
+  goBack() {
+    if (this.selection) { this.finishSelection(null); return; }
+    if (this.promptDraft) { this.finish(null); return; }
+    if (this.ui.privateView) { if (this.resolveInput) this.finish(null); else this.ui.privateView.onCancel?.(); return; }
+    if (this.aliasEdit) { this.aliasEdit = null; this.schedule(); return; }
+    if (this.ui.cancelDefinitionAuthoring) { this.ui.cancelDefinitionAuthoring(); this.schedule(); return; }
+    if (this.panel === 'settings') {
+      if (this.ui.settings.busy) return;
+      if (this.ui.settings.qrView) this.ui.settings.qrView = false;
+      else if (!this.ui.settings.back()) this.leaveSettings();
+      this.lastFrame = []; this.schedule(); return;
+    }
+    if (this.panel === 'skills' && returnToSkillLibrary(this.ui)) return;
+    if (this.panel === 'agents') {
+      if (this.ui.subagentView === 'run') { this.ui.subagentView = 'runs'; this.ui.subagentRunId = null; }
+      else if (this.ui.subagentCreatorDraft || this.ui.subagentPreview || this.ui.subagentView && this.ui.subagentView !== 'library') {
+        this.ui.subagentCreatorDraft = null; this.ui.subagentPreview = null; this.ui.subagentView = 'library'; this.ui.subagentRunId = null;
+      } else { this.setPanel('chat'); return; }
+      this.bodyCache = null; this.scroll = 0; this.agentTopRequested = true; this.schedule(); return;
+    }
+    if (this.panel !== 'chat') this.setPanel('chat');
+    else if (this.ui.canvasView?.drawer) this.localCommand('/canvas back');
   }
   escapeMenu() {
     if (this.ui.cancelDefinitionAuthoring) { this.ui.cancelDefinitionAuthoring(); this.schedule(); return true; }
@@ -830,10 +876,10 @@ export class TerminalChat {
       key.bzzyHandled = true;
       if (key.name === 'escape') { this.leaveSettings(); return; }
       if (key.name === 'home' || key.name === 'end') { this.settingsOffset = key.name === 'home' ? 0 : this.settingsMaximum || 0; this.settingsEnsureFocus = false; this.schedule(); return; }
-      const actions = this.ui.settings.rows().filter(row => row.action);
+      const rows = this.ui.settings.rows(), actions = settingsActions(rows);
       if (['up', 'down', 'left', 'right', 'tab'].includes(key.name)) {
-        const direction = ['up', 'left'].includes(key.name) || key.name === 'tab' && key.shift ? -1 : 1;
-        this.ui.settings.focus = (this.ui.settings.focus + direction + actions.length) % actions.length; this.settingsEnsureFocus = true; this.schedule();
+        const next = navigateSettings(rows, this.ui.settings.focus, key.name, { shift: key.shift, column: this.settingsColumn || 0 });
+        this.ui.settings.focus = next.focus; this.settingsColumn = next.column; this.settingsEnsureFocus = true; this.schedule();
       } else if (key.name === 'return') this.settingsAction(actions[this.ui.settings.focus]?.action);
       return;
     }
@@ -954,8 +1000,9 @@ export class TerminalChat {
         put('  [ Confirm ]   [ Cancel ]', palette.accent);
       }
     } else if (this.panel === 'settings') {
-      const layout = settingsLayout(this.ui.settings, width, this.theme, { spaced: (this.output.rows || 24) >= 18 });
-      this.settingsFocusRow = layout.focusRow; this.contentHits.push(...layout.hits); lines.push(...layout.lines);
+      const tightMain = this.ui.settings.page === 'main' && (this.output.rows || 24) <= 24 && this.ui.settings.rows().filter(row => row.card).length > 4;
+      const layout = settingsLayout(this.ui.settings, width, this.theme, { spaced: (this.output.rows || 24) >= 18 && !tightMain });
+      this.settingsFocusRow = layout.focusRow; this.settingsFocusedAction = layout.focusAction; this.contentHits.push(...layout.hits); lines.push(...layout.lines);
     } else if (this.panel === 'skills') {
       let actionIndex = 0;
       for (const row of skillRows(this.ui)) {
@@ -1132,6 +1179,23 @@ export class TerminalChat {
       column += cellWidth(label) + 1; line += fillSurface(label, cellWidth(label), this.theme, command === '/default' && !disabled ? palette.selection : palette.surface, disabled ? palette.muted : palette.accent, !disabled) + ' ';
     }
     lines.push(line); return lines;
+  }
+  goalBadgeLayout(width, { reserved = 0, surface = palette.background, showEmpty = false } = {}) {
+    const primary = goalIndicator(this.goal, this.frame), validation = goalValidationIndicator(this.goal, this.goalValidation, this.frame);
+    if (!primary && !showEmpty) return { line: '', extra: [] };
+    const badge = (indicator, maximum) => {
+      const text = ' ' + clip(indicator.label, Math.max(1, maximum - 2)) + ' ';
+      return fillSurface(text, cellWidth(text), this.theme, indicator.tone, indicator.empty ? palette.muted : palette.background, true, surface);
+    };
+    const available = Math.max(3, width - reserved - 2), extra = [];
+    let line = '  ' + badge(primary || { label: 'Goal · none', tone: palette.elevated, empty: true }, available);
+    if (validation) {
+      const rendered = badge(validation, Math.max(3, width - 4));
+      if (cellWidth(line) + cellWidth(rendered) + 1 <= width - reserved) line += ' ' + rendered;
+      else extra.push('  ' + rendered);
+      if (validation.reason) extra.push(this.theme.color(clip('  ' + validation.reason, width), validation.tone));
+    }
+    return { line, extra };
   }
   simpleChatLayout() {
     return !this.ui.canvas && !this.ui.minimal && ['chat', 'room', 'skills', 'agents', 'metrics'].includes(this.panel);
@@ -1342,8 +1406,10 @@ export class TerminalChat {
 
     const composerTop = lines.length;
     const breathingRoom = height >= 18;
-    if (this.promptDraft && this.question)
-      lines.push(color(clip('  ' + this.question, width), palette.accent));
+    if (this.promptDraft && this.question) {
+      hits.push({ type: 'back', row: lines.length, left: 3, right: 9 });
+      lines.push(color('  ← Back', palette.accent, true) + color(clip('  ' + this.question, Math.max(0, width - 8)), palette.text));
+    }
     if (breathingRoom) lines.push('');
     const skillDirectoryInput = this.panel === 'skills' && this.ui.skillView === 'import';
     const skillDetail = this.panel === 'skills' && Boolean(this.ui.skillPreview || this.ui.skillHistoryState
@@ -1395,19 +1461,17 @@ export class TerminalChat {
     lines.push(align(modelPart + effortPart, color(usage, palette.muted)));
     if (breathingRoom) lines.push('');
 
-    const indicator = goalIndicator(this.goal, this.frame);
-    const goalLabel = indicator?.label || 'Goal · none';
-    const goalPart = '  ' + fillSurface(' ' + clip(goalLabel, Math.max(1, width - 16)) + ' ', Math.min(width - 2, cellWidth(goalLabel) + 2),
-      this.theme, indicator?.tone || palette.elevated, indicator ? palette.background : palette.muted, true, surface);
     const enabled = this.ui.yoloEnabled?.() || false;
-    const yoloLabel = this.promptDraft ? ' Cancel '
+    const yoloLabel = this.promptDraft ? ' ← Back '
       : this.ui.permissionSubmitting ? ' YOLO … ' : enabled ? ' YOLO ON ' : ' YOLO OFF ';
+    const badges = this.goalBadgeLayout(width, { reserved: cellWidth(yoloLabel) + 1, surface, showEmpty: true });
+    const goalPart = badges.line;
     const help = '? help  ·  / commands';
     const goalWidth = cellWidth(goalPart);
     const middle = goalWidth + cellWidth(help) + cellWidth(yoloLabel) + 5 <= width ? '  ' + color(help, palette.muted) : '';
     const yoloLeft = width - cellWidth(yoloLabel) + 1;
     const goalRow = lines.length;
-    hits.push({ type: this.promptDraft ? 'cancel' : 'yolo', row: goalRow, left: yoloLeft, right: width });
+    hits.push({ type: this.promptDraft ? 'cancel' : 'yolo', back: Boolean(this.promptDraft), row: goalRow, left: yoloLeft, right: width });
     if (middle) {
       const helpStart = goalWidth + 2;
       hits.push({ type: 'model-control', command: '/help', row: goalRow,
@@ -1418,6 +1482,7 @@ export class TerminalChat {
     }
     lines.push(align(goalPart + middle, fillSurface(yoloLabel, cellWidth(yoloLabel), this.theme,
       enabled ? palette.yolo : palette.surface, enabled ? palette.background : palette.muted, true, surface)));
+    lines.push(...badges.extra);
 
     const hint = this.copyMode ? '  COPY MODE · live updates held · Esc returns'
       : '  ? for shortcuts  ·  / commands  ·  PgUp/PgDn to scroll';
@@ -1545,12 +1610,25 @@ export class TerminalChat {
     const compactTop = !this.ui.canvas && !this.ui.minimal;
     const header = compactTop ? [this.settingsTopBar(width)] : this.persistentHeader(width, height);
     if (compactTop) this.eyeRegion = null;
-    this.sceneHeaderLength = header.length + (this.dashboardRendering ? 3 : 0);
+    const backRow = header.length + 1;
+    header.push(color('  ← Back', settings.busy ? palette.muted : palette.accent, true)
+      + (compactTop && subtitle ? color(clip('  ' + subtitle, Math.max(0, width - 8)), palette.muted) : ''));
+    this.hitTargets.push({ type: 'back', row: backRow, left: 3, right: 9 });
     if (!compactTop) {
       header.push(color(clip('  ' + title, width), palette.text, true)
         + (height <= 24 && subtitle ? color(clip(' · ' + subtitle, width - cellWidth(title) - 2), palette.muted) : ''));
       if (height > 24 && subtitle) header.push(color(clip('  ' + subtitle, width), palette.muted));
-    } else if (subtitle) header.push(color(clip('  ' + subtitle, width), palette.muted));
+    }
+    if (settings.page === 'default-models' && compactTop) {
+      const usage = this.tokenLabel() + ' · ' + this.elapsedClock();
+      const context = `  bzzy · ${this.model} · ${(this.effort || 'default').replace(/^effort /, '')} effort`;
+      if (width < 60) { header.push(color(clip(context, width), palette.text)); header.push(color(clip('  ' + usage, width), palette.muted)); }
+      else {
+        const left = clip(context, Math.max(1, width - cellWidth(usage) - 2));
+        header.push(color(left, palette.text) + ' '.repeat(Math.max(1, width - cellWidth(left) - cellWidth(usage))) + color(usage, palette.muted));
+      }
+    }
+    this.sceneHeaderLength = header.length + (this.dashboardRendering ? 3 : 0);
     const compact = height - header.length < 16;
     if (!compact) header.push('');
     const footer = compact ? [] : [''];
@@ -1559,8 +1637,12 @@ export class TerminalChat {
     const exit = settings.page !== 'main' ? 'back' : this.ui.settingsOnly ? 'close' : 'chat';
     if (!compact) footer.push('');
     const exitRow = footer.length;
-    footer.push(color(clip('  ‹ ' + (exit === 'back' ? 'Back' : exit === 'close' ? 'Close' : 'Back to chat')
-      + '    ↑/↓ choose · Enter open · Esc ' + (this.ui.settingsOnly ? 'exit' : 'chat'), width), palette.muted));
+    const navigationHint = settings.page === 'default-models' ? '↑/↓ rows · ←/→ cells · Enter edit' : '↑/↓ choose · Enter open';
+    const backLabel = '  ← ' + (exit === 'back' ? 'Back' : exit === 'close' ? 'Close' : 'Back to chat'), escapeHint = 'Esc ' + (this.ui.settingsOnly ? 'exit' : 'chat');
+    if (settings.page === 'default-models' && width < 72) {
+      footer.push(color(clip(backLabel + '    ' + escapeHint, width), palette.muted));
+      footer.push(color(clip('  ' + navigationHint, width), palette.muted));
+    } else footer.push(color(clip(backLabel + '    ' + navigationHint + ' · ' + escapeHint, width), palette.muted));
     if (!compact) footer.push('');
     const bodyHeight = Math.max(1, height - header.length - footer.length);
     const body = this.content(width - 2), focus = this.settingsFocusRow || 0;
@@ -1618,10 +1700,11 @@ export class TerminalChat {
       const openLeft = compact ? this.compactControlLeft + cellWidth('C Copy code  ') : 16;
       this.hitTargets.push({ type: 'settings', action: 'copy-code', row: actionRow, left: copyLeft, right: Math.min(width, copyLeft + 10) },
         { type: 'settings', action: 'open-qr', row: actionRow, left: openLeft, right: Math.min(width, openLeft + 11) });
-      lines[actionRow - 1] = replaceCells(lines[actionRow - 1], width - 10, color(' ‹ Back ', palette.accent), width, this.theme, palette.background);
+      lines[actionRow - 1] = replaceCells(lines[actionRow - 1], width - 10, color(' ← Back ', palette.accent), width, this.theme, palette.background);
       this.hitTargets.push({ type: 'qr-back', row: actionRow, left: width - 9, right: width - 3 });
     } else {
-      lines.push(color(clip('  Pair iPhone', width), palette.accent, true), '');
+      this.hitTargets.push({ type: 'qr-back', row: lines.length + 1, left: 3, right: 9 });
+      lines.push(color(clip('  ← Back  Pair iPhone', width), palette.accent, true), '');
       for (const line of wrap('Open the QR image to scan with your iPhone, or use the code.', width - 4)) lines.push(color('  ' + line, palette.muted));
       const actionRow = lines.length + 1;
       lines.push(color(clip('  [ Open QR image ]   [ Copy code ]', width), palette.accent, true), '');
@@ -1653,7 +1736,7 @@ export class TerminalChat {
     if (view.notice && lines.length < height - 4) lines.push(color(clip('  ' + clean(view.notice), width), palette.warning));
     while (lines.length < height - 3) lines.push('');
     const cancelRow = lines.length + 1, cancelLeft = width - 10;
-    lines.push(replaceCells(color(clip('  ' + clean(this.resolveInput ? this.question : 'Waiting for encrypted transfer'), width - 12), palette.muted), cancelLeft, color(' Cancel ', palette.accent, true), width, this.theme, palette.background));
+    lines.push(replaceCells(color(clip('  ' + clean(this.resolveInput ? this.question : 'Waiting for encrypted transfer'), width - 12), palette.muted), cancelLeft, color(' ← Back ', palette.accent, true), width, this.theme, palette.background));
     const value = this.hidden ? '•'.repeat([...this.value].length) : clean(this.value);
     lines.push(color(clip('  › ' + value, width), palette.text), '');
     let frame = '\x1b[?25l';
@@ -1736,7 +1819,9 @@ export class TerminalChat {
     if (picker) {
       const action = picker.kind === 'effort' ? 'core-effort' : 'core-model', command = picker.kind === 'effort' ? '/effort' : '/providers';
       const presetAction = picker.scope === 'preset-count' ? 'preset-count' : picker.scope?.startsWith('preset:') ? `preset-${picker.kind === 'effort' ? 'effort' : 'model'}:${picker.scope.slice(7)}` : null;
-      const anchor = picker.anchor || this.hitTargets.find(hit => presetAction ? hit.type === 'settings' && hit.action === presetAction : picker.scope === 'core' ? hit.type === 'settings' && hit.action === action : hit.type === 'model-control' && hit.command === command);
+      const defaultModels = picker.scope?.startsWith('defaults:');
+      const anchor = picker.anchor || this.hitTargets.find(hit => defaultModels ? hit.type === 'settings' && hit.action === this.settingsFocusedAction
+        : presetAction ? hit.type === 'settings' && hit.action === presetAction : picker.scope === 'core' ? hit.type === 'settings' && hit.action === action : hit.type === 'model-control' && hit.command === command);
       const popup = choicePopup(picker, { width, height, anchor, minimumTop: this.sceneHeaderLength, theme: this.theme });
       this.popupRegion = { left: popup.left + 1, right: popup.left + popup.width, top: popup.top + 1, bottom: popup.top + popup.lines.length };
       for (let index = 0; index < popup.lines.length; index++) {
@@ -1803,6 +1888,10 @@ export class TerminalChat {
     if (simpleChat) this.eyeRegion = null;
     const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme), ...this.delegateHeader(width)]
       : simpleChat ? [this.simpleTopBar(width)] : this.persistentHeader(width, height);
+    if (this.panel !== 'chat' && this.panel !== 'settings' && !this.promptDraft) {
+      this.hitTargets.push({ type: 'back', row: header.length + 1, left: 3, right: 9 });
+      header.push(color('  ← Back', palette.accent, true) + color(clip('  ' + this.panel[0].toUpperCase() + this.panel.slice(1), Math.max(0, width - 8)), palette.muted));
+    }
     if (pinned.length && !this.ui.minimal) {
       if (simpleChat) {
         for (const [index, line] of pinned.slice(0, maximumPinned).entries()) {
@@ -1845,15 +1934,13 @@ export class TerminalChat {
       }
       if (this.panel === 'chat' && !this.promptDraft || this.panel === 'room' && !this.promptDraft) {
         const enabled = this.ui.yoloEnabled?.() || false, label = this.ui.permissionSubmitting ? ' YOLO … ' : enabled ? ' YOLO ON ' : ' YOLO OFF ';
-        const left = width - cellWidth(label) - 1, indicator = goalIndicator(this.goal, this.frame);
-        let line = '  ';
-        if (indicator) {
-          const text = ' ' + clip(indicator.label, Math.max(1, left - 5)) + ' ';
-          line += fillSurface(text, cellWidth(text), this.theme, indicator.tone, palette.background, true);
-        }
+        const left = width - cellWidth(label) - 1, badges = this.goalBadgeLayout(width, { reserved: this.ui.minimal ? 0 : cellWidth(label) + 1 });
+        let line = badges.line || '  ';
         line += ' '.repeat(Math.max(0, left - cellWidth(line)));
         line += fillSurface(label, cellWidth(label), this.theme, enabled ? palette.yolo : palette.surface, enabled ? palette.background : palette.muted, true);
         if (!this.ui.minimal) { bottomHits.push({ type: 'yolo', row: bottom.length, left: left + 1, right: left + cellWidth(label) }); bottom.push(line); }
+        else if (badges.line) bottom.push(badges.line);
+        bottom.push(...badges.extra);
         if (this.pendingApproval && (!this.pendingApproval.expiresAt || this.pendingApproval.expiresAt > Date.now())) {
           const disabled = this.ui.sessionMode === 'VIEW' || !this.ui.onAnswerApproval || this.approvalSubmitting;
           let approvalLine = '  '; let column = 3;
@@ -1878,8 +1965,8 @@ export class TerminalChat {
       bottom.push(edge('╭─ ') + color(prompt, palette.text, true) + edge(' ' + '─'.repeat(Math.max(0, width - cellWidth(prompt) - 5)) + '╮'));
       if (this.promptDraft) {
         const left = width - 11;
-        bottom[bottom.length - 1] = replaceCells(bottom.at(-1), left, color(' Cancel ', palette.accent, true), width, this.theme, palette.background);
-        bottomHits.push({ type: 'cancel', row: bottom.length - 1, left: left + 1, right: left + 8 });
+        bottom[bottom.length - 1] = replaceCells(bottom.at(-1), left, color(' ← Back ', palette.accent, true), width, this.theme, palette.background);
+        bottomHits.push({ type: 'cancel', back: true, row: bottom.length - 1, left: left + 1, right: left + 8 });
       }
       const visibleValue = this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
       const before = this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');

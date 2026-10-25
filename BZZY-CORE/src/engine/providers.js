@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { home, readJson, writeJson } from './store.js';
+import { home, readJson, writeJson, lockFile } from './store.js';
+import { digest } from './database.js';
 
 export const BUILTINS = {
   codex: { id: 'codex', name: 'ChatGPT / Codex subscription', backend: 'codex', auth: 'subscription' },
@@ -58,6 +59,30 @@ export function config() {
 }
 
 export const saveConfig = value => writeJson(path.join(home(), 'config.json'), value);
+function editConfig(change) {
+  let unlock;
+  try { unlock = lockFile(path.join(home(), 'config.json.lock'), 'Model defaults are being updated.'); }
+  catch (error) {
+    if (error.code === 'BZZY_LOCKED') throw Object.assign(new Error('Defaults changed. Reload before saving.'), { code: 'CONFLICT' });
+    throw error;
+  }
+  try { return change(config()); } finally { unlock(); }
+}
+export function updateConfig(change) {
+  return editConfig(current => {
+    const next = change(structuredClone(current));
+    if (!next || typeof next !== 'object' || Array.isArray(next)) throw new Error('Invalid host configuration update.');
+    saveConfig(next); return next;
+  });
+}
+export function modelDefaultRevision(target) {
+  const value = config();
+  if (!['solo', 'parallel', 'debate', 'besties', 'delegate'].includes(target)) throw new Error('Unknown default target.');
+  return digest(target === 'solo' ? { provider: value.defaultProvider, selection: value.defaultSelection || null } : value[`${target}Default`] || null);
+}
+function checkDefaultRevision(target, expectedRevision) {
+  if (expectedRevision !== undefined && expectedRevision !== modelDefaultRevision(target)) throw Object.assign(new Error('Defaults changed. Reload before saving.'), { code: 'CONFLICT' });
+}
 export const providers = () => ({ ...BUILTINS, ...config().providers });
 
 export function getProvider(id) {
@@ -68,10 +93,11 @@ export function getProvider(id) {
 
 export function setDefault(id) {
   getProvider(id);
-  const value = config();
-  value.defaultProvider = id;
-  if (value.defaultSelection?.provider !== id) delete value.defaultSelection;
-  saveConfig(value);
+  return editConfig(value => {
+    value.defaultProvider = id;
+    if (value.defaultSelection?.provider !== id) delete value.defaultSelection;
+    saveConfig(value);
+  });
 }
 
 export function defaultSelection(providerId) {
@@ -84,10 +110,13 @@ export function defaultSelection(providerId) {
   return { provider: selection.provider, model, effort, capabilities };
 }
 
-export function saveDefaultSelection(session) {
+export function saveDefaultSelection(session, { expectedRevision } = {}) {
   const selection = selectionFromSession(session);
-  const value = config(); value.defaultProvider = selection.provider; value.defaultSelection = selection; saveConfig(value);
-  return selection;
+  return editConfig(value => {
+    checkDefaultRevision('solo', expectedRevision);
+    value.defaultProvider = selection.provider; value.defaultSelection = selection; saveConfig(value);
+    return selection;
+  });
 }
 
 export function selectionFromSession(session) {
@@ -115,12 +144,15 @@ export function modeDefault(mode) {
   } catch { return null; }
 }
 
-export function saveModeDefault(mode, selections) {
+export function saveModeDefault(mode, selections, { expectedRevision } = {}) {
   if (!['parallel', 'debate', 'besties', 'delegate'].includes(mode)) throw new Error('Unknown preset mode.');
   const agents = normalizeParallelDefault(selections);
   if (mode === 'delegate' && agents.length !== 2) throw new Error(`${mode} needs two agents.`);
-  const value = config(); value[`${mode}Default`] = agents; saveConfig(value);
-  return { mode, agents };
+  return editConfig(value => {
+    checkDefaultRevision(mode, expectedRevision);
+    value[`${mode}Default`] = agents; saveConfig(value);
+    return { mode, agents };
+  });
 }
 
 export function parallelDefault() {
@@ -128,9 +160,7 @@ export function parallelDefault() {
 }
 
 export function saveParallelDefault(selections) {
-  const parallelAgents = normalizeParallelDefault(selections);
-  const value = config(); value.parallelDefault = parallelAgents; saveConfig(value);
-  return { parallelAgents };
+  return { parallelAgents: saveModeDefault('parallel', selections).agents };
 }
 
 export function addProvider(id, options) {
@@ -142,12 +172,13 @@ export function addProvider(id, options) {
   if (url.username || url.password || url.search || url.hash) throw new Error('Provider URL must not contain credentials, query parameters, or a fragment.');
   if (!/^[A-Z][A-Z0-9_]*$/.test(options.envKey || '')) throw new Error('Supply an environment variable name such as MY_API_KEY.');
   if (!options.model?.trim()) throw new Error('Supply --model for this provider.');
-  const value = config();
-  value.providers[id] = {
-    id, name: id, backend: 'codex', auth: 'api-key', baseUrl: url.href.replace(/\/$/, ''),
-    envKey: options.envKey, model: options.model, contextWindow: options.contextWindow || 128000,
-  };
-  saveConfig(value);
+  return editConfig(value => {
+    (value.providers ||= {})[id] = {
+      id, name: id, backend: 'codex', auth: 'api-key', baseUrl: url.href.replace(/\/$/, ''),
+      envKey: options.envKey, model: options.model, contextWindow: options.contextWindow || 128000,
+    };
+    saveConfig(value);
+  });
 }
 
 export function saveKey(id, key) {

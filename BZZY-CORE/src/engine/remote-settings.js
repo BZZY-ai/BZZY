@@ -1,7 +1,7 @@
 import { CoreAssistant } from '../assistant.js';
 import { providerSelection } from '../conversations.js';
 import { requireUpdateGrant } from './update-access.js';
-import { config, defaultSelection, modeDefault, saveDefaultSelection, saveModeDefault } from './providers.js';
+import { config, defaultSelection, modeDefault, saveDefaultSelection, saveModeDefault, modelDefaultRevision } from './providers.js';
 import { digest, reserveRequest } from './database.js';
 import { object, fail } from '../validation.js';
 
@@ -24,9 +24,9 @@ export function configureRemoteDefaults(row, input, requestId) {
   const scope = `remote-defaults:${row.peerId}:${row.id}`;
   // CoreAssistant owns its independent durable revision/idempotency contract.
   if (input.target === 'core') {
-    const current = remoteDefaults(row);
     // Use a separate receipt to retain the original revision for deliberate retries.
     const reservation = reserveRequest(scope + ':prepare', requestId, input, () => {
+      const current = remoteDefaults(row);
       if (current.revision !== input.expectedRevision) fail('CONFLICT', 'Defaults changed. Reload before saving.', 409);
       return { revision: new CoreAssistant().settings().revision };
     });
@@ -35,9 +35,10 @@ export function configureRemoteDefaults(row, input, requestId) {
   }
   return reserveRequest(scope, requestId, input, () => {
     requireUpdateGrant(row);
+    const expectedTargetRevision = modelDefaultRevision(input.target === 'cli' ? 'solo' : input.target);
     if (remoteDefaults(row).revision !== input.expectedRevision) fail('CONFLICT', 'Defaults changed. Reload before saving.', 409);
-    if (input.target === 'cli') saveDefaultSelection({ ...agents[0], selectedEffort: agents[0].effort });
-    else saveModeDefault(input.target, agents);
+    if (input.target === 'cli') saveDefaultSelection({ ...agents[0], selectedEffort: agents[0].effort }, { expectedRevision: expectedTargetRevision });
+    else saveModeDefault(input.target, agents, { expectedRevision: expectedTargetRevision });
     return remoteDefaults(row);
   });
 }

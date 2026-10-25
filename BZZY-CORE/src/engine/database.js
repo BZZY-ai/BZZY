@@ -22,6 +22,7 @@ export function database() {
     CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind,id));
     CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS session_events ON events(session_id,seq);
+    CREATE INDEX IF NOT EXISTS session_event_types ON events(session_id,type,seq);
     CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),updated_at DESC,id);
     CREATE INDEX IF NOT EXISTS records_session_state ON records(kind,json_extract(data,'$.sessionId'),json_extract(data,'$.state'),updated_at DESC,id);
     CREATE INDEX IF NOT EXISTS records_session ON records(kind,json_extract(data,'$.sessionId'),updated_at DESC,id);
@@ -43,6 +44,9 @@ export function getRecord(kind, id) {
   return row ? JSON.parse(row.data) : null;
 }
 export function putRecord(kind, id, data, db = database()) {
+  if (kind === 'session' && data && Object.hasOwn(data, 'goalValidation')) {
+    const { goalValidation: _projection, ...persisted } = data; data = persisted;
+  }
   db.prepare('INSERT INTO records VALUES (?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at').run(kind, id, JSON.stringify(data), now());
   return data;
 }

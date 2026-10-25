@@ -10,7 +10,7 @@ function window(tui, lines, rect, title) {
   for (let row = 0; row < height; row++) put(left, top + row, fillSurface('│' + ' '.repeat(Math.max(0, width - 2)) + '│', width, theme, palette.surface, palette.border));
   put(left, top, fillSurface('╭' + '─'.repeat(width - 2) + '╮', width, theme, palette.elevated, palette.border));
   put(left + 2, top, fillSurface(' ' + clip(title, width - 16) + ' ', Math.max(1, width - 13), theme, palette.elevated, palette.text, true));
-  put(left + width - 10, top, fillSurface(' Close × ', 9, theme, palette.elevated, palette.accent));
+  put(left + width - 10, top, fillSurface(' ← Back ', 9, theme, palette.elevated, palette.accent));
   put(left, top + height - 1, fillSurface('╰' + '─'.repeat(width - 2) + '╯', width, theme, palette.surface, palette.border));
   tui.hitTargets = [{ type: 'canvas-close', row: top + 1, left: left + width - 9, right: left + width - 1 }];
   tui.canvasOverlay = { ...rect, right: left + width, bottom: top + height };
@@ -58,6 +58,7 @@ function goalInput(tui, lines, width) {
 function settings(tui, lines, width, height, minimumTop) {
   const settings = tui.ui.settings, theme = tui.theme, size = Math.max(14, Math.min(78, width - 4));
   const layout = settingsLayout(settings, size - 2, theme);
+  tui.settingsFocusedAction = layout.focusAction;
   const subtitle = wrap(settings.pageSubtitle || '', size - 6, 2, true);
   const messages = settings.message ? wrap(settings.message, size - 6, 2, true) : [];
   const rows = Math.max(6, Math.min(height - minimumTop - 1, layout.lines.length + subtitle.length + messages.length + 5));
@@ -75,7 +76,7 @@ function settings(tui, lines, width, height, minimumTop) {
   layout.lines.slice(tui.settingsOffset, tui.settingsOffset + bodyHeight).forEach((line, i) => put(rect.left + 1, first + i, line));
   for (const hit of layout.hits) if (hit.row >= tui.settingsOffset && hit.row < tui.settingsOffset + bodyHeight) tui.hitTargets.push({ ...hit, row: first + hit.row - tui.settingsOffset + 1, left: hit.left + rect.left + 1, right: Math.min(rect.left + size - 1, hit.right + rect.left + 1) });
   messages.forEach((line, i) => put(rect.left + 3, rect.top + rows - messages.length - 3 + i, theme.color(line, settings.warning ? palette.warning : palette.accent)));
-  const back = settings.page !== 'main' ? '‹ Back' : '‹ Canvas';
+  const back = '← Back';
   put(rect.left + 3, rect.top + rows - 2, theme.color(clip(back + '   ·   ↑/↓ choose · Enter open', size - 6), palette.muted));
   tui.hitTargets.push({ type: 'settings-back', row: rect.top + rows - 1, left: rect.left + 3, right: rect.left + 12 });
   tui.textRegion = null; tui.scrollbar = null;

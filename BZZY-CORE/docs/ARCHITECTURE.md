@@ -118,6 +118,12 @@ existing queue and command journal. Configuration is privileged local setup;
 session control grants confer no global administration rights. See
 [Core's default AI and background tasks](ASSISTANT.md).
 
+`engine/background-model.js` owns the shared Consensus & Compactor selection.
+Its default follows Core; an explicit custom override stays independent from
+Core and terminal defaults. Host-only revisioned configuration starts no work,
+and compaction jobs and consensus requests pin the resolved model and source
+revisions. Provider authentication and restricted document execution are unchanged.
+
 `src/relay/` now supplies the outbound home-host gateway using the deployed
 Relay SDK as a local package dependency. Host endpoint keys live in a separate
 private identity file, never in source or Relay state. Core registers its own public certificate through authenticated `host.register`

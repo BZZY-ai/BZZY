@@ -6,6 +6,7 @@ import { getRecord, putRecord, listRecords, appendEvent, transaction } from './d
 import { processIdentity, identityAlive } from './process-identity.js';
 import { goalEvent } from './lifecycle.js';
 import { destinationSnapshot } from './notification-registry.js';
+import { goalValidationFor } from './goal-validation.js';
 export { home, privateDir, readJson, writeJson } from './files.js';
 
 export function normalizeSessionAlias(value) {
@@ -22,6 +23,7 @@ export function sessionPath(id) {
 
 export function saveSession(session) {
   session.updatedAt = new Date().toISOString();
+  let durable;
   transaction(db => {
     if (sessionDeleted(session.id)) throw Object.assign(new Error('This chat was deleted.'), { code: 'SESSION_DELETED', status: 404 });
     const previous = getRecord('session', session.id);
@@ -32,11 +34,12 @@ export function saveSession(session) {
       if (pending) session.executionState = 'waiting_for_input';
       else if (session.executionState === 'waiting_for_input') session.executionState = previous?.executionState === 'waiting_for_input' ? 'running' : previous?.executionState || 'running';
     }
-    putRecord('session', session.id, session, db);
-    recordSessionLifecycle(session, previous, db);
+    durable = Object.fromEntries(Object.keys(session).filter(key => key !== 'goalValidation').map(key => [key, session[key]]));
+    putRecord('session', session.id, durable, db);
+    recordSessionLifecycle(durable, previous, db);
   });
   // Compatibility export. SQLite is authoritative; a stale export is recoverable.
-  writeJson(sessionPath(session.id), session);
+  writeJson(sessionPath(session.id), durable);
 }
 
 // Called inside the same transaction as a saved lifecycle transition.
@@ -63,7 +66,12 @@ export function recordSessionLifecycle(session, previous, db) {
 export const sessionDeleted = id => typeof id === 'string' && Boolean(getRecord('session-deletion', id));
 export function loadSession(id) {
   if (sessionDeleted(id)) return null;
-  return getRecord('session', id) || readJson(sessionPath(id), null);
+  const session = getRecord('session', id) || readJson(sessionPath(id), null);
+  if (!session) return null;
+  delete session.goalValidation;
+  const validation = goalValidationFor(session);
+  if (validation.state !== 'none') session.goalValidation = validation;
+  return session;
 }
 
 export function createSession(provider, cwd, model, alias) {

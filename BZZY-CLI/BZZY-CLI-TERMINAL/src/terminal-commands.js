@@ -29,7 +29,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /skill_that [name] Turn the last completed goal into SKILL.md with detailed steps and references.
 /doctor            Test the current subscription login, backend connection and model reply.
 /settings          Workspace, iPhone, Core and private DeepSeek/Abliteration/OrcaRouter API-key setup.
-/settings modes    Save models, efforts and counts for terminal agent modes.
+/settings default-models  Edit all provider/model/effort defaults in one table; /settings modes is an alias.
 /yolo              Toggle native permission bypass for this terminal’s next run.
 /color blue|black|white Switch the complete TUI palette; each launch defaults to blue.
 bzzy settings      Open Settings directly without starting a conversation.

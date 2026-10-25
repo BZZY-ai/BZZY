@@ -25,6 +25,7 @@ import { identityAlive } from '../src/process-identity.js';
 let directory, previous;
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'DEEPSEEK_API_KEY', 'BZZY_FIXTURE_CORE_SETTINGS_KEY'];
 const terminals = [];
+const mainSettingsActions = ['deepseek', 'workspace-root', 'pair', 'default-models', 'core'];
 test.beforeEach(() => {
   previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   directory = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/private/tmp' : os.tmpdir(), 'bzzy-settings-')));
@@ -76,12 +77,12 @@ function pairingFixture({ expiresIn = 600000, grants = [], pending = [] } = {}) 
   return { calls, module: { CoreRelayClient: Gateway, initializeRelayIdentity: () => ({ id: 'fixture-public-host' }) } };
 }
 
-test('Settings presents the four requested options and preserves the chat draft', async () => {
+test('Settings presents the five requested options and preserves the chat draft', async () => {
   const { ui } = terminal(), answer = ui.ask('bzzy › '); await Promise.resolve();
   ui.tui.key('unfinished chat', {}); ui.openSettings(); ui.tui.render();
   assert.ok(ui.tui.panels().includes('settings'));
   assert.equal(ui.settings.page, 'main');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), mainSettingsActions);
   const frame = ui.tui.lastFrame.map(clean).join('\n');
   assert.match(frame, /API keys/); assert.match(frame, /BZZY folder/); assert.match(frame, /Pair iPhone/);
   assert.doesNotMatch(frame, /Core coordinator|Prepare host identity|Copy public host certificate|Restart Core|Stop Core/);
@@ -94,7 +95,7 @@ test('Settings presents the four requested options and preserves the chat draft'
   assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
 });
 
-test('Settings takes over the full screen and keeps all four choices at normal terminal heights', () => {
+test('Settings takes over the full screen and keeps all five choices at normal terminal heights', () => {
   const { ui, output } = terminal();
   ui.updateSession({ id: ui.sessionId, provider: 'codex', model: 'fixture-model-banner', cwd: '/fixture-project-path',
     executionState: 'running', usage: { tokens: 987654, available: true } });
@@ -102,7 +103,7 @@ test('Settings takes over the full screen and keeps all four choices at normal t
   for (const rows of [24, 32]) {
     Object.assign(output, { rows, columns: 100 }); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
-    for (const label of ['API keys', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
+    for (const label of ['API keys', 'Default BZZY folder', 'Pair iPhone', 'Default models', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
     assert.match(frame, /^\s*Settings/m); assert.doesNotMatch(frame, /◉◉|bzzy/);
     assert.doesNotMatch(frame, /fixture-model-banner|fixture-project-path|987,654 tokens|Ask BZZY to do anything/);
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'settings'));
@@ -116,7 +117,7 @@ test('Esc leaves any Settings page for the active chat and preserves the draft',
   const { ui } = terminal(), answer = ui.ask('bzzy › '); await Promise.resolve();
   ui.tui.value = 'Keep this draft'; ui.tui.cursor = 5;
   ui.openSettings(); await ui.settings.run('modes');
-  assert.equal(ui.tui.panel, 'settings'); assert.equal(ui.settings.page, 'modes');
+  assert.equal(ui.tui.panel, 'settings'); assert.equal(ui.settings.page, 'default-models');
   ui.tui.key('\x1b', { sequence: '\x1b', meta: true });
   assert.equal(ui.tui.panel, 'chat');
   assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.cursor, 5);
@@ -145,42 +146,45 @@ test('BZZY Core Settings exposes one action that updates both CLI and Core', asy
   assert.equal(listRecords('execution').length, 0);
 });
 
-test('terminal mode settings have separate clickable model/effort fields and preserve unsaved edits through Back', async () => {
+test('Default models has independent clickable provider/model/effort fields and preserves unsaved edits through Back', async () => {
   const { ui, output } = terminal(); ui.openSettings();
-  await ui.settingsCommand('/settings modes'); assert.equal(ui.settings.page, 'modes');
-  assert.deepEqual(ui.settings.rows().map(row => row.action), ['solo-default', 'mode:debate', 'mode:parallel', 'mode:besties', 'mode:delegate']);
-  await ui.settings.run('mode:debate'); assert.equal(ui.settings.pageTitle, 'Validate default');
-  ui.settings.modes.modelPicker = async () => ({ provider: 'codex', model: 'fixture', effort: 'default' });
-  await ui.settings.run('preset-model:0'); assert.equal(ui.settings.modes.draft.dirty, true);
+  await ui.settingsCommand('/settings modes'); assert.equal(ui.settings.page, 'default-models');
+  assert.deepEqual(ui.settings.rows().filter(row => row.modelGroup).map(row => row.text), ['Solo', 'BZZY Core', 'Validate', 'Delegate', 'Parallel', 'Besties', 'Consensus & Compactor']);
+  assert.equal(ui.settings.pageTitle, 'Default models');
+  ui.chooseOne = async () => 'codex';
+  ui.settings.defaults.modelPicker = async () => ({ provider: 'codex', model: 'fixture', effort: 'default' });
+  await ui.settings.run('defaults:provider:validate:0'); await ui.settings.run('defaults:model:validate:0');
+  assert.equal(ui.settings.defaults.drafts.get('validate').dirty, true);
   for (const [columns, rows] of [[80, 24], [140, 40]]) {
-    Object.assign(output, { columns, rows }); ui.settings.focusAction('preset-model:0'); ui.tui.settingsEnsureFocus = true; ui.tui.render();
-    const model = ui.tui.hitTargets.find(hit => hit.action === 'preset-model:0'), effort = ui.tui.hitTargets.find(hit => hit.action === 'preset-effort:0');
-    assert.ok(model && effort); assert.equal(model.row, effort.row); assert.ok(model.right < effort.left);
-    const lines = ui.tui.lastFrame.map(clean), modelLine = lines.findIndex(line => line.includes('Model · codex · fixture'));
-    assert.match(lines[modelLine], /Effort · default/); assert.equal(lines[modelLine + 1].trim(), '');
+    Object.assign(output, { columns, rows }); ui.settings.focusAction('defaults:model:validate:0'); ui.tui.settingsEnsureFocus = true; ui.tui.render();
+    const provider = ui.tui.hitTargets.find(hit => hit.action === 'defaults:provider:validate:0');
+    const model = ui.tui.hitTargets.find(hit => hit.action === 'defaults:model:validate:0'), effort = ui.tui.hitTargets.find(hit => hit.action === 'defaults:effort:validate:0');
+    assert.ok(provider && model && effort); assert.equal(provider.row, model.row); assert.equal(model.row, effort.row);
+    assert.ok(provider.right < model.left); assert.ok(model.right < effort.left);
     assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
   }
-  ui.settings.back(); assert.equal(ui.settings.page, 'modes');
-  await ui.settings.run('mode:debate'); assert.equal(ui.settings.modes.draft.agents[0].model, 'fixture');
-  await ui.settings.run('preset-save'); assert.equal(ui.settings.warning, true); assert.match(ui.settings.message, /every agent/);
-  await ui.settings.run('preset-model:1'); await ui.settings.run('preset-save');
-  assert.equal(ui.settings.warning, false, ui.settings.message); assert.match(ui.settings.message, /2 agents/);
+  ui.settings.back(); assert.equal(ui.settings.page, 'main');
+  await ui.settings.run('default-models'); assert.equal(ui.settings.defaults.drafts.get('validate').agents[0].model, 'fixture');
+  await ui.settings.run('defaults:save:validate'); assert.equal(ui.settings.warning, true); assert.match(ui.settings.message, /every agent/);
+  await ui.settings.run('defaults:provider:validate:1'); await ui.settings.run('defaults:model:validate:1'); await ui.settings.run('defaults:save:validate');
+  assert.equal(ui.settings.warning, false, ui.settings.message); assert.match(ui.settings.message, /Validate defaults saved/);
   assert.equal(listRecords('execution').length, 0); assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
-  ui.settings.back(); ui.settings.back(); assert.equal(ui.settings.page, 'core'); ui.settings.back();
-  assert.deepEqual(ui.settings.rows().map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
+  ui.settings.back(); assert.equal(ui.settings.page, 'main');
+  assert.deepEqual(ui.settings.rows().map(row => row.action), mainSettingsActions);
 });
 
-test('Terminal agent setups saves a Solo chat default without starting work', async () => {
+test('Default models saves a Solo default only after group Save, without starting work', async () => {
   const { ui } = terminal(); ui.openSettings();
-  await ui.settings.run('modes');
-  assert.equal(ui.settings.rows()[0].action, 'solo-default');
-  ui.settings.modelPicker = async () => ({ provider: 'codex', model: 'fixture-solo-model', effort: 'high',
+  await ui.settings.run('default-models'); ui.chooseOne = async () => 'codex';
+  ui.settings.defaults.modelPicker = async () => ({ provider: 'codex', model: 'fixture-solo-model', effort: 'default',
     capabilities: { supportsEffort: true, supportedEfforts: ['high'] } });
+  ui.settings.defaults.effortPicker = async () => ({ effort: 'high' });
   const before = listRecords('execution').length;
-  await ui.settings.run('solo-default');
+  await ui.settings.run('defaults:provider:solo:0'); await ui.settings.run('defaults:model:solo:0'); await ui.settings.run('defaults:effort:solo:0');
+  assert.equal(defaultSelection(), null); await ui.settings.run('defaults:save:solo');
   assert.deepEqual(defaultSelection(), { provider: 'codex', model: 'fixture-solo-model', effort: 'high',
     capabilities: { supportsEffort: true, supportedEfforts: ['high'] } });
-  assert.match(ui.settings.message, /Solo chat default saved/);
+  assert.match(ui.settings.message, /Solo defaults saved/);
   assert.equal(listRecords('execution').length, before);
 });
 
@@ -196,7 +200,7 @@ test('removed Settings actions cannot change lifecycle, coordinator or identity 
   assert.equal(getRecord('core.assistant', 'default'), null);
   assert.deepEqual(listRecords('session'), before); assert.equal(listRecords('execution').length, 0);
   assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), mainSettingsActions);
 });
 
 test('Core controls use the owner lifecycle API on a secondary page without executing a chat', async () => {
@@ -212,7 +216,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'core-model', 'core-effort', 'core-save', 'update-bzzy', 'modes', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'update-bzzy', 'back']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');
@@ -273,7 +277,7 @@ test('Pair iPhone uses maximum access without pickers and its secondary screen r
   assert.equal(ui.settings.page, 'pair'); assert.equal(ui.tui.panel, 'chat');
   ui.tui.setPanel('settings'); await ui.settings.run('back');
   assert.equal(ui.settings.page, 'main'); assert.equal(ui.tui.panel, 'settings');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), mainSettingsActions);
   assert.equal(ui.settings.rows().some(row => /^BZZY-PAIR-/.test(row.text)), false);
   await ui.settings.run('pair'); assert.equal(fixture.calls.length, 1, 'reopening Pair reuses the current temporary invitation');
   await ui.settings.run('back'); assert.equal(ui.settings.page, 'main');
@@ -459,7 +463,7 @@ test('workspace Settings saves a separate managed root and preserves external te
   assert.ok(fs.statSync(selected).isDirectory());
   assert.deepEqual(listRecords('session').map(session => ({ id: session.id, cwd: session.cwd })), before);
   assert.match(ui.settings.rows().find(row => row.action === 'workspace-root').detail, /BZZY managed/);
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['deepseek', 'workspace-root', 'pair', 'core']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), mainSettingsActions);
   assert.equal(listRecords('execution').length, 0);
   assert.equal(fs.lstatSync(selected).isSymbolicLink(), false);
 });

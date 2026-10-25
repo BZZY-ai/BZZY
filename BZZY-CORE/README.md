@@ -18,8 +18,11 @@ the same engine and private state.
 Implemented:
 
 - Session-scoped hierarchical history indexes with bounded summary/original
-  expansion tools, source references, Core-model background compaction, budgets
+  expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).
+- Compactor and Validate consensus share one owner-configured provider/model/effort
+  selection, inheriting Core by default with an optional independent override.
+  Changing it starts no inference and preserves selections pinned to existing jobs.
 - Model-assisted Skill and specialist Agent creators using the current terminal
   model, restricted document generation, reviewed drafts and checked saving.
 
@@ -34,6 +37,12 @@ Implemented:
   minority objections, evidence inspection coverage and original-goal/severity
   assessment through Core's acceptance gate. See
   [orchestration](docs/ORCHESTRATION.md).
+
+- Source-bound validation badges for achieved goals. A separate green check
+  requires the latest linked review to pass Core's original-goal, evidence and
+  acceptance gates. Stale, unsupported, inconclusive and stopped reviews remain
+  distinct; consensus text grants no verified state. See
+  [goal validation](docs/GOAL-VALIDATION.md).
 
 - Project-scoped knowledge recall and reviewed learning: stable engagement IDs,
   attributed/freshness-aware memory and public-history search, private approved
@@ -229,8 +238,9 @@ comparison. This own-phone flow automatically requests full session control,
 terminal catalog access, project sharing and Agent management, with no access-mode
 or scope picker. Fingerprint confirmation, expiry and revocation remain on the
 secondary screen. Existing grants gain no new permissions automatically. The
-main Settings menu contains API keys, Default BZZY folder, Pair iPhone and BZZY
-Core; lifecycle/coordinator commands and APIs remain available separately.
+main Settings menu contains API keys, Default BZZY folder, Pair iPhone, Default
+models and BZZY Core. The Default models table consolidates all model defaults;
+lifecycle/coordinator commands and APIs remain available separately.
 The daemon keeps an explicitly enabled gateway connected after CLI closes and
 restores it after a daemon restart. Installation prepares a disabled user manifest;
 plain `bzzy` or `bzzy-core start` activates it. After explicit stop, background

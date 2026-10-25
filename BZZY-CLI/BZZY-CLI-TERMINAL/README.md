@@ -57,8 +57,9 @@ choose Save; skills remain inactive until enabled. Escape cancels generation or
 returns from a preview without saving.
 
 Core also maintains a bounded [session history index](../../BZZY-CORE/docs/SESSION-MEMORY.md)
-across alias, model and mode changes. Its compactor uses the configured BZZY Core
-model. Inspect with `bzzy session-memory status [SESSION]`, index older history
+across alias, model and mode changes. Its compactor uses the shared **Consensus &
+Compactor** default, which inherits BZZY Core unless explicitly changed. Inspect
+with `bzzy session-memory status [SESSION]`, index older history
 with `build`, and control background work with `pause`, `resume` or `cancel`.
 
 Core owns execution, provider/authentication configuration, model discovery,
@@ -109,6 +110,11 @@ Validate appears in a compact block: click its header or press Ctrl+B to expand
 the latest discussion, and Esc to collapse it. Each participant keeps a distinct
 color even when providers and models match. The consensus and any unresolved
 objections remain visible below the collapsed discussion.
+The original chat then shows **Goal achieved ✓ · Validated ✓** only when Core's
+checks support the exact original goal. Unsuccessful reviews show **Not validated
+✗** or an explicit inconclusive/stale/stopped state. An older review or a positive
+consensus paragraph cannot award the check. Changed goals or evidence invalidate
+it. See [validation gates](../../BZZY-CORE/docs/GOAL-VALIDATION.md).
 Validate requires challenge/response, preserves minority objections and checks the
 original criteria and requested severity. Delegate automatically passes a pinned
 mission brief and can request missing context without guessing or silently
@@ -199,18 +205,22 @@ It keeps the same goal and objective, resets the recurring-blocker audit and
 retains spent tokens. A completed goal cannot resume; an exhausted token budget
 requires an explicitly increased total.
 
-Settings keeps its four main entries in compact cards. Open **Settings > BZZY
-Core > Terminal agent setups**, or `/settings modes`, to save each mode’s models,
-efforts and agent count. The same page saves the Solo chat model and effort
-alongside Delegate, Validate, Parallel and Besties. Delegate has two roles,
-supervisor and executor; the other modes support two or three agents.
-Model/effort fields use the Core
-catalog and floating dropdowns. Editing starts no work; Save applies to the next
+Settings now includes **Default models** alongside API keys, the default folder,
+Pair iPhone and BZZY Core. Open it to edit a table of **Role | Provider | Model |
+Effort**: Solo, BZZY Core, Validate, Delegate Brain/Executor, Parallel, Besties,
+and one shared **Consensus & Compactor** row. `/settings default-models` opens it
+directly; `/settings modes` remains an alias. Delegate has two roles; Validate,
+Parallel and Besties support two or three agents. Each group has Save and
+Reload/Discard controls. Model and effort choices use Core's provider catalogs.
+Editing starts no work; Save applies to the next
 mode launch, and `bzzy --MODE` reuses its saved combination directly. `--default` remains an
 explicit requirement that a matching preset exists. Explicit agent/participant
 selections override the saved combination.
 Terminal mode presets stay independent from the normal chat and Core assistant
-defaults. Unsaved edits survive Back; Reload saved setup explicitly discards them.
+defaults. Consensus & Compactor can inherit BZZY Core or use a custom shared
+selection. Unsaved edits survive Back; Reload/Discard explicitly discards them.
+See [default models](docs/DEFAULT-MODELS.md). Nested screens and pickers include
+a clickable **← Back** control; Escape retains its existing cancellation behavior.
 
 Set Core's default home for agents/managed imports with
 `bzzy-core workspace set /absolute/BZZY` or **Settings > Default BZZY folder**; this never moves or links
@@ -284,12 +294,12 @@ The model control at the bottom opens a floating searchable dropdown over the
 current chat. Click a model once to apply it; use the mouse wheel or arrows to
 browse, type to filter, and click outside or press Esc to cancel. The adjacent
 effort dropdown lists the selected model's supported reasoning levels. Defaults
-for normal chat, Delegate and Validate remain under Settings → BZZY Core →
-Terminal agent setups. Other selectors use floating dialogs with explicit
+for normal chat, Core and every mode are under Settings → Default models.
+Other selectors use floating dialogs with explicit
 Confirm/Cancel controls, preserving approval confirmations. Double-click the
 project alias in the top bar to rename it inline; Enter/Save name confirms and
-Esc/Cancel returns. Core's own model and effort dropdowns remain independent in
-Settings → BZZY Core.
+Esc/Cancel returns. Core's own provider, model and effort remain independent in
+its Default models row.
 
 Open **Skills** from the top bar or type `/skills` to view project skills and
 Core/global skills, create or import one skill folder/ZIP, and explicitly enable

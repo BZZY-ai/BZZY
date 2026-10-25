@@ -13,6 +13,7 @@ import { createMissionContext, missionSourceRevision, missionResultRevision, mis
 import { debateIdentity, latestDebateResult, appendDebateResultOnce } from './debate-events.js';
 import { identityAlive } from './process-identity.js';
 import { queueSessionCompaction } from './session-compactor.js';
+import { recordGoalValidationStarted, recordGoalValidationResult } from './goal-validation.js';
 
 function completionBoundary(source) {
   if (!source.goal || source.goal.status !== 'complete') return null;
@@ -124,7 +125,8 @@ export function prepareChatDebate(source, focus, participants, options = {}) {
     originalAcceptance: source.acceptance || null, evidence: copied, reviewFocus: focus || null,
     evidencePolicy: 'All inventoried evidence is available through read_artifact. Inspect every source item; report missing proof, contradictory controls and unsupported severity explicitly.' }), null, 2), 'debate-selected-reply');
   saveSession(session);
-  appendEvent(source.id, 'debate.linked', { sessionId: session.id, objective, selectedArtifact: material.id, eventSequences: selected.eventSequences });
+  appendEvent(source.id, 'debate.linked', { sessionId: session.id, sourceGoalId: source.goal?.id || null, objective, selectedArtifact: material.id, eventSequences: selected.eventSequences });
+  try { recordGoalValidationStarted(session); } catch { /* A badge cannot change the original goal or prevent its review. */ }
   return { session, options: { ...options, mode: 'debate', debateAgents: agents, participants, rounds: options.rounds || 5, artifact: material.id, detach: false } };
 }
 export function finishChatDebate(sourceId, debateId) {
@@ -143,6 +145,7 @@ export function finishChatDebate(sourceId, debateId) {
     message: final?.message || `Validation ${session?.goal?.status === 'awaiting_review' ? 'finished · unresolved' : session?.goal?.status || 'interrupted'} · ${statistics}\nSession: ${debateId}\n${result?.consensus?.state === 'ready' ? `Core consensus\n${result.consensus.text}\n\n` : ''}${formatDecision(decision, result?.unresolvedDisagreement || [])}` };
   putRecord('conversation-debate', sourceId, record);
   appendDebateResultOnce(sourceId, final ? { ...final, sourceSessionId: sourceId, elapsedSeconds, usage } : record);
+  try { recordGoalValidationResult(session); } catch { /* The checked review remains durable if its badge is unavailable. */ }
   try { queueSessionCompaction(sourceId); } catch { /* A derived index cannot alter the durable review result. */ }
   return record;
 }

@@ -1,3 +1,36 @@
+# Default models, Back navigation and goal validation badges (2026-10-25)
+
+Final Node.js 24/macOS suites: **497 Core tests passed, 1 skipped** (498 total)
+and **562 CLI tests passed, 21 skipped** (583 total), zero failures. Both syntax
+checks and `git diff --check` pass. No running installation was updated.
+
+Default-model coverage verifies all groups in one table, provider/model/effort
+separation, counts, inherited/custom shared Consensus & Compactor selection,
+current-chat isolation, supported effort changes, cancelled async selectors,
+draft retention and conflicting saves. Deterministic interleavings verify that
+stale phone saves and project imports cannot restore older GUI defaults.
+Existing Core coordinator and own-phone configuration protocols remain compatible.
+
+Real 80×24 PTY checks verify all five Settings cards, aligned table columns,
+keyboard/mouse cell selection, parent Back navigation and preserved chat drafts.
+Narrow layouts stack labeled cells. Prompt/picker Back cancels approvals and
+destructive choices, discards private input, and prioritizes inner popups over
+background creator cancellation. Pairing QR coverage remains intact.
+
+Validation badge tests start from host-accepted original-goal reviews, then test
+latest-review ordering, pending-to-final revisions, old-goal and delayed events,
+missing receipts, wrong sessions/foreign-task evidence, missing proof, changed
+criteria/source bytes and imported/legacy goals. Consensus prose and matching
+votes cannot award green. Read-only projections never rewrite goal status or
+persist as authoritative session fields; central SQLite/JSON, alias and export
+boundaries strip supplied projections. The actual execution terminal hook emits
+a newer validation revision after the runner settles.
+
+PTY badge frames exercise validated, unsupported, inconclusive and stale states
+beside the original achieved goal. These are synthetic offline fixtures, not
+claims of live vulnerability accuracy. Semantic and declared-contract limits
+remain documented in [goal validation](GOAL-VALIDATION.md).
+
 # Session memory, definition creators and Validate (2026-10-25)
 
 Node.js 24/macOS full suites pass: **470 Core tests passed, 1 skipped**

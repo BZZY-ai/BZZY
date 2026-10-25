@@ -38,12 +38,19 @@ without arbitrary parent-history summary access.
 
 ## Background compactor
 
-The compactor uses the **BZZY Core assistant's configured provider, model and
-effort**, independently of the terminal's current model. Configure Core with
-`bzzy-core assistant set PROVIDER --model MODEL --effort EFFORT`, or the existing
-iPhone model settings. Unconfigured Core or missing host authentication waits
-without falling back to the terminal model. Jobs pin their selected configuration.
-Authentication stays in Core's private backend setup.
+The compactor and Validate's consensus explanation share one provider/model/effort
+selection. It **inherits BZZY Core by default**, independently of the terminal's
+current model. CLI Settings → Default models → Consensus & Compactor can choose
+an independent custom selection or return to Core inheritance. Core itself remains
+configurable with `bzzy-core assistant set PROVIDER --model MODEL --effort EFFORT`
+and its existing settings APIs.
+
+Inherited selection follows later Core changes; a custom selection remains
+independent. Unconfigured inheritance or missing host authentication waits without
+falling back to another provider. Jobs pin their selection, the shared settings
+revision and, when inherited, Core's revision. Changing defaults affects fresh
+jobs, while existing jobs keep their original selection through retries and
+explicit resume. Authentication stays in Core's private backend setup.
 
 The optional worker gives foreground work scheduling priority. Indexing never
 waits for model output; short material may be retained verbatim without inference.
@@ -84,3 +91,9 @@ requiring `expectedRevision` and `reviewed:true`. Rebuild requires the exact
 `expectedGeneration` and `reviewed:true`: old queued summaries cannot overwrite
 the replacement generation. Control requires the displayed control revision.
 These administration operations are not model tools or remote session grants.
+
+The trusted local `backgroundModelSettings()` / `configureBackgroundModel()` API
+owns the shared model choice separately from compactor budgets. Configuration
+requires the displayed revision and optionally an idempotency request ID. It
+validates Core's installed provider/model/effort selection, stores no credentials
+and starts no inference. See [Core model settings](ASSISTANT.md).

@@ -29,6 +29,7 @@ import { authorizedOwnPhoneTerminalInput } from './update-access.js';
 import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, pauseAllLearning } from './learning.js';
 import { recoverSessionCompactions, processSessionCompactions, pauseSessionCompaction, pauseAllSessionCompactions } from './session-compactor.js';
 import { CoreKnowledge } from '../knowledge.js';
+import { recordGoalValidationResult } from './goal-validation.js';
 
 const runtimeBuild = digest(['src', 'assets', 'bin'].flatMap(directory => fs.readdirSync(path.join(root, directory), { recursive: true })
   .filter(file => !file.split(path.sep).some(part => part.startsWith('._')) && fs.statSync(path.join(root, directory, file)).isFile()).sort()
@@ -529,5 +530,9 @@ export async function executeJob(id) {
     if (!['running', 'launching'].includes(current?.state)) return;
     putRecord('execution', id, { ...current, state: code === 0 ? 'finished' : 'stopped', exitCode: code, error, finishedAt: now() }, db);
     appendEvent(session.id, 'execution.finished', { id, exitCode: code, error }, db);
-  }); return code;
+  });
+  if (session.reviewSource?.goalId) {
+    try { recordGoalValidationResult(session.id); } catch { /* Badge projection cannot undo a settled execution. */ }
+  }
+  return code;
 }

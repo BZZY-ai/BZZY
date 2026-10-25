@@ -8,7 +8,7 @@ import { transaction, getRecord, putRecord, appendEvent, digest } from './databa
 import { home, privateDir, writeJson } from './files.js';
 import { loadSession, sessionPath, sessions } from './store.js';
 import { assertSessionIdle } from './models.js';
-import { config, saveConfig } from './providers.js';
+import { config, updateConfig } from './providers.js';
 import { codexHome, claudeHome, claudeAuthHomes } from './auth.js';
 import { conversationCursor } from './conversation.js';
 import { sharedKinds, portableState, sharedSecrets, assertShareText, validateSharedManifest, SHARE_LIMITS } from './share-bundle-policy.js';
@@ -259,7 +259,7 @@ export async function importProject(filename, directory, ui, { shared = false, k
     }
   }
   const stage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-import-'))), created = [], sessionFiles = [];
-  const previousSettings = config(); let committed = false, settingsChanged = false;
+  let previousSettings, importedSettings, committed = false;
   try {
     ui?.event('info', { message: 'Reading the project ZIP and restoring its saved context…' });
     await archive('extract', { archive: source, directory: stage, ...(shared ? { portable: true, limits: SHARE_LIMITS } : {}) });
@@ -381,11 +381,11 @@ export async function importProject(filename, directory, ui, { shared = false, k
       if (loadSession(row.id) || present(sessionPath(row.id))) throw new Error('Imported session ID already exists. Try importing again.');
     }
     for (const row of records) if (getRecord(row.kind, row.id)) throw new Error('Imported context ID already exists. Try importing again.');
-    const settings = structuredClone(previousSettings); settings.providers ||= {};
+    const importedProviders = {};
     const providerFields = new Set(['id', 'name', 'backend', 'auth', 'baseUrl', 'envKey', 'model', 'contextWindow', 'reasoningEffort', 'supportedEfforts']);
     for (const [id, provider] of Object.entries(shared ? {} : manifest.providers || {})) {
       if (!/^[a-z][a-z0-9_-]{0,39}$/.test(id) || !provider || typeof provider !== 'object' || !['codex', 'claude'].includes(provider.backend) || !['subscription', 'api-key'].includes(provider.auth)) throw new Error('Invalid imported provider settings.');
-      if (!Object.hasOwn(settings.providers, id)) settings.providers[id] = Object.fromEntries(Object.entries(provider).filter(([key]) => providerFields.has(key)));
+      importedProviders[id] = Object.fromEntries(Object.entries(provider).filter(([key]) => providerFields.has(key)));
     }
     agentImport?.signal?.throwIfAborted(); agentImport?.authorize?.();
     merge(workspace, root, created);
@@ -412,7 +412,11 @@ export async function importProject(filename, directory, ui, { shared = false, k
         putRecord(row.kind, row.id, row.data, db);
       }
       agentImport?.commit?.({ db, primarySession: primary?.data, manifest, bundleId });
-      settingsChanged = true; saveConfig(settings);
+      importedSettings = updateConfig(current => {
+        previousSettings = structuredClone(current); current.providers ||= {};
+        for (const [id, provider] of Object.entries(importedProviders)) if (!Object.hasOwn(current.providers, id)) current.providers[id] = provider;
+        return current;
+      });
     });
     committed = true;
     const selectedPrimary = primary || imported.find(row => !row.data.parentSessionId);
@@ -424,7 +428,13 @@ export async function importProject(filename, directory, ui, { shared = false, k
     if (!committed) {
       for (const file of sessionFiles) fs.rmSync(file, { force: true });
       for (const file of created.reverse()) fs.rmSync(file, { recursive: true, force: true });
-      if (settingsChanged) saveConfig(previousSettings);
+      if (importedSettings) {
+        try { updateConfig(current => {
+          if (digest(current) !== digest(importedSettings)) throw Object.assign(new Error('Configuration changed during import rollback.'), { code: 'CONFLICT' });
+          return previousSettings;
+        }); }
+        catch (rollback) { if (rollback.code !== 'CONFLICT') throw rollback; }
+      }
     }
     throw error;
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }

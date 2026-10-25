@@ -10,6 +10,10 @@ export function readJson(file, fallback) {
   catch (error) { if (error.code === 'ENOENT') return fallback; throw new Error(`Cannot read ${file}: ${error.message}`); }
 }
 export function writeJson(file, value) {
+  if (path.dirname(path.resolve(file)) === path.join(home(), 'sessions') && /^[a-f0-9-]{36}\.json$/.test(path.basename(file)) &&
+      value && typeof value === 'object' && Object.hasOwn(value, 'goalValidation')) {
+    const { goalValidation: _projection, ...persisted } = value; value = persisted;
+  }
   privateDir(path.dirname(file));
   const temp = `${file}.${randomUUID()}.tmp`;
   try {

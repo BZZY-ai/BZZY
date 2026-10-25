@@ -49,8 +49,9 @@ session, with original source references and integrity checks. They grant no
 permissions or completion evidence. Compaction and definition creators use the
 restricted document backend with no tools and an empty private working directory;
 model output passes host validation before publication or reviewed saving.
-Compaction uses the independent Core assistant model, durable usage reservations
-and explicit recovery after uncertain requests. See
+Compaction and consensus share a Core-owned model selection, inheriting the Core
+assistant by default. Changing defaults starts no work and grants no permissions.
+Compaction retains durable usage reservations and explicit recovery after uncertain requests. See
 BZZY-CORE/docs/SESSION-MEMORY.md for bounds and provider billing limitations.
 
 Validate and Delegate now pin automatic mission context and source revisions.

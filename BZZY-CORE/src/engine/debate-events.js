@@ -1,5 +1,6 @@
 import { appendEvent, database, transaction } from './database.js';
 import { loadSession } from './store.js';
+import { recordGoalValidationResult } from './goal-validation.js';
 
 export const debateIdentity = session => session.goal?.id || session.id;
 export const debateParticipants = (session, choices) => choices.map((choice, index) => ({ id: `${debateIdentity(session)}:participant:${index}`,
@@ -25,6 +26,9 @@ export function debateEventUI(session, ui, choices = session.debateAgents || [])
       const mirrored = { ...value, sourceSessionId: sourceId };
       if (type === 'debate.result') appendDebateResultOnce(sourceId, mirrored);
       else appendEvent(sourceId, type, mirrored);
+      if (type === 'debate.result') {
+        try { recordGoalValidationResult(session); } catch { /* A derived badge cannot change the durable review outcome. */ }
+      }
     }
   };
   return wrapped;

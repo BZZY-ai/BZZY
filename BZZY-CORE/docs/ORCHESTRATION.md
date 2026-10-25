@@ -103,11 +103,14 @@ identity, source revisions, objection/evidence coverage, required deliverables
 and declared verification before completion. Unsatisfied checks downgrade the
 result to `awaiting_review`/`inconclusive`, retaining the reported claim for audit.
 
-After those checks, Core's independently configured model writes a bounded
-consensus explanation through the verified no-tools document runner. Chosen
+After those checks, the shared **Consensus & Compactor** model writes a bounded
+consensus explanation through the verified no-tools document runner. This
+selection inherits Core by default and permits an independent owner override
+through CLI Settings → Default models. It is the same setting used by session
+history compaction; each request snapshots its source and settings revisions. Chosen
 reviewer models remain unchanged. The explanation cannot upgrade a host-checked
 status, grant permission or establish evidence. An unconfigured or unavailable
-Core model leaves the checked review intact, without falling back to a different
+shared model leaves the checked review intact, without falling back to a different
 provider. The synthesis shares the review's remaining token/runtime budget; its
 usage is recorded before the final goal summary and notification. Consensus is
 bounded to 20,000 tokens and 45 seconds, further limited by the goal's remaining

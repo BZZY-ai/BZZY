@@ -1,16 +1,15 @@
 import { notificationDeliveryStatus } from '@bzzy/core/engine/push-status.js';
-import { CoreAssistant } from '@bzzy/core';
-import { chooseUnifiedModel, chooseEffort } from './model-controls.js';
+import { DefaultModels, chooseDefaultModel } from './default-models.js';
+import { settingsActions } from './settings-layout.js';
 import { randomUUID } from 'node:crypto';
 import { terminalSession } from '@bzzy/core';
 import { sessionPermissions } from '@bzzy/core/engine/session-access.js';
 import { CoreWorkspaces } from '@bzzy/core/workspaces';
-import { defaultSelection, getProvider, saveDefaultSelection, saveKey, credentialStatus } from './providers.js';
+import { getProvider, saveKey, credentialStatus } from './providers.js';
 import { sessions, loadSession } from './store.js';
 import { copyText } from './clipboard.js';
 import { PairingQRImage } from './pairing-qr-image.js';
 import { home } from './files.js';
-import { ModeSettings, modeSettings } from './mode-settings.js';
 import { updateCommand } from './update-checker.js';
 
 const loadRelay = () => {
@@ -24,6 +23,9 @@ const messages = {
   MODE_INCOMPLETE: 'Choose a model for every agent before saving.',
   MODE_MODEL_REQUIRED: 'Choose this agent’s model first.',
   MODE_COUNT_INVALID: 'Choose two or three agents. Delegate always uses two.',
+  DEFAULT_MODEL_REQUIRED: 'Choose a provider for this row before its model or effort.',
+  DEFAULTS_STALE_CONTEXT: 'Settings changed while the selector was open. Reopen Default models.',
+  INVALID_REQUEST: 'Choose a valid provider, model and supported effort for every row in this group.',
   HOST_ENROLLMENT_REQUIRED: 'This host needs Relay enrollment. Run bzzy-core relay init and enroll its public certificate.',
   HOST_REQUIRED: 'Relay needs this host’s public certificate enrolled by its operator.',
   BZZY_LOCKED: 'Another Core Relay gateway is running. Stop that gateway before connecting here.',
@@ -54,25 +56,25 @@ export class ClientSettings {
   #expiry;
   #approvalRequest;
   constructor(ui, { relayLoader = loadRelay, hostLoader = loadHost, workspaces = new CoreWorkspaces(),
-    qrImage = new PairingQRImage(), modelPicker = chooseUnifiedModel, updater = updateCommand } = {}) {
+    qrImage = new PairingQRImage(), modelPicker = chooseDefaultModel, updater = updateCommand } = {}) {
     this.ui = ui; this.relayLoader = relayLoader; this.workspaces = workspaces;
     this.hostLoader = hostLoader; this.hostHome = home();
     this.qrImage = qrImage; this.modelPicker = modelPicker; this.updater = updater;
-    this.modes = new ModeSettings(ui);
+    this.defaults = new DefaultModels(ui, { modelPicker, isCurrent: () => !this.closed && this.page === 'default-models'
+      && (!this.ui.tui?.panel || this.ui.tui.panel === 'settings') });
     this.message = ''; this.warning = false; this.focus = 0; this.page = 'main';
   }
   changed() { if (this.closed) return; if (this.ui.tui) this.ui.tui.settingsEnsureFocus = true; this.ui.tui?.schedule(); }
   get pageTitle() {
-    return this.page === 'mode-edit' ? `${modeSettings[this.modes.mode].title} default`
-      : { main: 'Settings', core: 'BZZY Core', keys: 'API keys', modes: 'Terminal agent setups', pair: 'Pair iPhone', approve: 'Confirm iPhone' }[this.page] || 'Settings';
+    return { main: 'Settings', core: 'BZZY Core', keys: 'API keys', 'default-models': 'Default models', pair: 'Pair iPhone', approve: 'Confirm iPhone' }[this.page] || 'Settings';
   }
   get pageSubtitle() {
-    return { main: 'Your workspace, connections and defaults', core: 'Service and assistant · terminal presets stay independent',
-      modes: 'Saved CLI combinations · editing starts no work', 'mode-edit': 'Choose each role’s model and effort, then save',
+    return { main: 'Your workspace, connections and defaults', core: 'Background service, updates and status',
+      'default-models': 'Provider, model and effort for every role · Save each group when ready',
       pair: 'Your iPhone · full access through Core', approve: 'Compare the complete fingerprint with your iPhone' }[this.page] || '';
   }
   focusAction(action) {
-    const index = this.rows().filter(row => row.action).findIndex(row => row.action === action);
+    const index = settingsActions(this.rows()).findIndex(row => row.action === action);
     if (index >= 0) this.focus = index;
   }
   keyStatus(id = 'deepseek') {
@@ -84,27 +86,18 @@ export class ClientSettings {
   grants() { return (this.gateway?.grants() || []).filter(grant => !grant.revokedAt && grant.expiresAt > Date.now()); }
   back() {
     if (this.page === 'main' || this.busy) return false;
-    if (this.page === 'mode-edit') { this.page = 'modes'; this.focus = 0; this.message = ''; this.changed(); return true; }
-    if (this.page === 'modes') { this.page = 'core'; this.focus = 0; this.message = ''; this.changed(); return true; }
     if (this.page === 'approve') {
       this.page = 'pair'; this.#approvalRequest = undefined; this.message = ''; this.warning = false;
       this.focusAction('approve'); this.changed(); return true;
     }
     const previous = this.page;
+    if (previous === 'default-models') this.defaults.leave();
     this.page = 'main'; this.qrView = false; this.message = ''; this.warning = false;
-    this.focusAction(previous === 'core' ? 'core' : previous === 'keys' ? 'deepseek' : 'pair'); this.changed(); return true;
+    this.focusAction(previous === 'core' ? 'core' : previous === 'default-models' ? 'default-models' : previous === 'keys' ? 'deepseek' : 'pair'); this.changed(); return true;
   }
   rows() {
     const rows = [], put = (text = '', tone = 'text', action) => rows.push({ text, tone, action });
-    if (this.page === 'modes') {
-      const saved = defaultSelection();
-      return [{
-        text: 'Solo chat', action: 'solo-default', icon: '●', card: true, tone: 'accent',
-        detail: 'Normal terminal chat · independent of Core’s coordinator',
-        value: saved ? `${saved.provider} · ${saved.model || 'provider default'} · ${saved.effort}` : 'Set up',
-      }, ...this.modes.homeRows()];
-    }
-    if (this.page === 'mode-edit') return this.modes.rows();
+    if (this.page === 'default-models') return [...this.defaults.rows(), { text: '← Back', action: 'back', tone: 'muted' }];
     if (this.page === 'main') {
       const key = this.keyStatus();
       rows.push({ text: 'API keys', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
@@ -113,7 +106,8 @@ export class ClientSettings {
       rows.push({ text: 'Default BZZY folder', action: 'workspace-root', icon: '▱', card: true, tone: 'accent', detail: folder });
       rows.push({ text: 'Pair iPhone', action: 'pair', icon: '⌁', card: true, tone: 'accent',
         detail: this.pending().length ? 'iPhone waiting for approval' : this.grants().length ? 'iPhone paired' : 'Full access · QR or code' });
-      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, updates, default assistant and terminal agent setups', value: this.hostStatus ? this.hostLabel() : undefined });
+      rows.push({ text: 'Default models', action: 'default-models', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Core · Validate · Delegate · Consensus & Compactor' });
+      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, updates and status', value: this.hostStatus ? this.hostLabel() : undefined });
       return rows;
     }
     if (this.page === 'keys') {
@@ -122,7 +116,7 @@ export class ClientSettings {
         rows.push({ text: provider.name + ' API key', action: 'key:' + id, card: true, icon: '⌘',
           detail: status.unavailable ? 'Unavailable' : status.environment ? 'Environment key · replace securely' : status.saved ? 'Configured · replace securely' : 'Add your key securely' });
       }
-      put('Back', 'muted', 'back'); return rows;
+      put('← Back', 'muted', 'back'); return rows;
     }
     if (this.page === 'core') {
       rows.push({ text: 'Background service', section: true });
@@ -132,21 +126,13 @@ export class ClientSettings {
       put('Stop', 'warning', 'core-stop');
       put('Restart', 'accent', 'core-restart');
       rows.slice(-3).forEach(row => { row.inline = 'lifecycle'; row.control = true; });
-      const assistant = (this.assistant ||= new CoreAssistant()).settings();
-      if (!Object.hasOwn(this, 'coreSelection')) { this.coreSelection = assistant.selection; this.coreRevision = assistant.revision; }
-      rows.push({ text: 'Default Core assistant', section: true });
-      rows.push({ text: 'Model', value: this.coreSelection ? `${this.coreSelection.provider} · ${this.coreSelection.model || 'Provider default'} ▾` : 'Choose a model ▾', action: 'core-model', inline: 'agent-core', control: true });
-      rows.push({ text: 'Effort', value: (this.coreSelection?.effort || 'default') + ' ▾', action: 'core-effort', inline: 'agent-core', control: true });
-      put('Save Core default', 'accent', 'core-save');
-      put('Independent from the CLI chat default.', 'muted');
       rows.push({ text: 'Update BZZY CLI + Core', action: 'update-bzzy', icon: '↻', card: true, tone: 'accent',
         detail: 'Check the official release and update both products · this terminal reloads' });
-      rows.push({ text: 'Terminal agent setups', action: 'modes', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Delegate · Validate · Parallel · Besties' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
       const push = notificationDeliveryStatus();
       put(); put(!push.configured ? 'iPhone push alerts · Apple setup needed' : push.message, 'muted');
       if (!push.configured) put('Core model and voice chat still work.', 'muted');
-      put(); put('Back', 'muted', 'back');
+      put(); put('← Back', 'muted', 'back');
       return rows;
     }
     if (this.page === 'approve') {
@@ -184,7 +170,7 @@ export class ClientSettings {
       put(`Access expires ${new Date(grant.expiresAt).toLocaleString()}`, 'muted');
       put('Unpair device', 'warning', `revoke:${grant.id}`);
     }
-    put(); put('Back', 'muted', 'back');
+    put(); put('← Back', 'muted', 'back');
     return rows;
   }
   invitationCode() { return this.#invitation?.code; }
@@ -307,45 +293,19 @@ export class ClientSettings {
   }
   async run(action) {
     if (!this.ui.interactive || !this.ui.tui || this.ui.closed || this.closed || this.busy) return;
-    if (action !== 'modes' && !this.rows().some(row => row.action === action)) return;
+    if (action !== 'modes' && !settingsActions(this.rows()).some(row => row.action === action)) return;
     this.busy = true; this.message = ''; this.warning = false; this.changed();
     try {
       if (action === 'update-bzzy') {
         this.busy = false; this.changed();
         await this.updater(this.ui);
         return;
-      } else if (action === 'solo-default') {
-        const current = defaultSelection() || (this.ui.sessionId ? loadSession(this.ui.sessionId) : null) || { cwd: this.ui.tui.cwd || process.cwd() };
-        const selection = await this.modelPicker(current, this.ui, { title: 'Solo chat default', scope: 'settings-solo' });
-        if (selection) {
-          saveDefaultSelection({ provider: selection.provider, model: selection.model, selectedEffort: selection.effort,
-            modelCapabilities: selection.capabilities });
-          this.message = `Solo chat default saved · ${selection.provider} · ${selection.model || 'provider default'} · effort ${selection.effort}.`;
-        }
-      } else if (action === 'modes') { this.page = 'modes'; this.focus = 0; }
-      else if (action.startsWith('mode:')) { this.modes.open(action.slice(5)); this.page = 'mode-edit'; this.focus = 0; }
-      else if (action.startsWith('preset-')) { const message = await this.modes.run(action); if (message) this.message = message; }
+      } else if (action === 'default-models' || action === 'modes') { this.page = 'default-models'; this.defaults.open(); this.focus = 0; }
+      else if (action.startsWith('defaults:')) { const message = await this.defaults.run(action); if (message) this.message = message; }
       else if (action === 'workspace-root') await this.configureWorkspace();
       else if (action === 'deepseek') { this.page = 'keys'; this.focus = 0; }
       else if (action.startsWith('key:')) await this.saveDeepseek(action.slice(4));
-      else if (action === 'core') { delete this.coreSelection; delete this.coreRevision; this.page = 'core'; this.focus = 0; await this.refreshHost(); }
-      else if (action === 'core-model') {
-        const shown = (this.assistant ||= new CoreAssistant()).settings();
-        this.coreRevision = shown.revision;
-        const selected = await chooseUnifiedModel({ ...this.coreSelection, cwd: this.ui.tui.cwd || process.cwd() }, this.ui, { title: 'BZZY Core default model', scope: 'core' });
-        if (selected) this.coreSelection = selected;
-      } else if (action === 'core-effort') {
-        if (!this.coreSelection) throw Object.assign(new Error('Select a Core model first.'), { code: 'ASSISTANT_SETUP_REQUIRED' });
-        const selected = await chooseEffort({ ...this.coreSelection, selectedEffort: this.coreSelection.effort, modelCapabilities: this.coreSelection.capabilities, cwd: this.ui.tui.cwd || process.cwd() }, this.ui, { scope: 'core' });
-        if (selected) this.coreSelection = { ...this.coreSelection, ...selected };
-      } else if (action === 'core-save') {
-        if (!this.coreSelection) throw Object.assign(new Error('Select a Core model first.'), { code: 'ASSISTANT_SETUP_REQUIRED' });
-        const assistant = this.assistant ||= new CoreAssistant();
-        const { provider, model, effort } = this.coreSelection;
-        assistant.configure({ source: 'core', provider, model, effort }, { expectedRevision: this.coreRevision ?? assistant.settings().revision, requestId: randomUUID() });
-        this.coreRevision = assistant.settings().revision;
-        this.message = 'Core default saved. CLI default is independent.';
-      }
+      else if (action === 'core') { this.page = 'core'; this.focus = 0; await this.refreshHost(); }
       else if (action === 'core-status') await this.refreshHost();
       else if (['core-start', 'core-stop', 'core-restart'].includes(action)) await this.controlHost(action);
       else if (action === 'pair') { this.page = 'pair'; this.focus = 0; await this.pair(); }
@@ -405,7 +365,7 @@ export class ClientSettings {
   }
   close() {
     if (this.closeTask) return this.closeTask;
-    this.closed = true; this.clearInvitation();
+    this.closed = true; this.defaults.leave(); this.clearInvitation();
     return this.closeTask = Promise.resolve(this.gateway?.close()).catch(() => {});
   }
 }
