@@ -1,5 +1,6 @@
 import { updateCommand } from './update-checker.js';
 import { skillsCommand } from './skills-ui.js';
+import { subagentsCommand } from './subagents-ui.js';
 import { knowledgeCommand } from './knowledge-ui.js';
 import readline from 'node:readline';
 import { TerminalChat } from './tui.js';
@@ -96,6 +97,8 @@ export class UI {
     if (this.sessionId !== id) {
       this.tabs = null; this.activeTab = null; this.tui?.clear();
       this.skillPreview = null; this.skillHistoryState = null; this.skillPromotionDraft = null; this.skillSyncDetails = false;
+      this.subagentPreview = null; this.subagentOffset = 0; this.subagentAdminContext = null;
+      this.subagentView = 'library'; this.subagentRunId = null; this.subagentRunOffset = 0;
       this.knowledgeView = null; this.knowledgeState = null; this.knowledgeHits = null; this.knowledgeContextKey = null;
     }
     this.sessionId = id; this.sessionMode = mode;
@@ -154,6 +157,7 @@ export class UI {
     if (input.trim() === '/update') { await updateCommand(this); return true; }
     if (await knowledgeCommand(input, this)) return true;
     if (await skillsCommand(input, this)) return true;
+    if (await subagentsCommand(input, this)) return true;
     if (!/^\/settings(?:\s|$)/.test(input)) return false;
     this.openSettings();
     const action = input.slice(9).trim();

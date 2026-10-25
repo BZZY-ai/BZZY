@@ -236,7 +236,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           finally { modalTask = false; }
           continue;
         }
-        if (text === '/update' || text === '/yolo' || /^\/(?:settings|skills|session-action)(?:\s|$)/.test(text)) {
+        if (text === '/update' || text === '/yolo' || /^\/(?:settings|skills|agents|subagents|session-action)(?:\s|$)/.test(text)) {
           modalTask = true;
           try { await ui.settingsCommand(text); } finally { modalTask = false; }
           continue;

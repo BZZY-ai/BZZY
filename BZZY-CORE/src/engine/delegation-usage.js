@@ -6,7 +6,7 @@ export function assignmentsFor(session) {
   return database().prepare(`SELECT data FROM records WHERE kind='assignment' AND ${assignmentFilter(session)} ORDER BY updated_at DESC,id`).all(...assignmentParameters(session)).map(row => JSON.parse(row.data));
 }
 export const assignmentFilter = (session, field = 'data') => `json_extract(${field},'$.parentSessionId')=? AND ${session.goal
-  ? `(json_extract(${field},'$.goalId')=? OR (json_extract(${field},'$.goalId') IS NULL AND json_extract(${field},'$.createdAt')>=?))`
+  ? `(json_extract(${field},'$.goalId')=? OR (json_extract(${field},'$.goalId') IS NULL AND json_extract(${field},'$.chatRunId') IS NULL AND json_extract(${field},'$.createdAt')>=?))`
   : `json_extract(${field},'$.goalId') IS NULL`}`;
 export const assignmentParameters = session => session.goal ? [session.id, session.goal.id, session.goal.createdAt] : [session.id];
 export function assignmentCounts(session) {

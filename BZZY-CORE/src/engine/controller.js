@@ -16,12 +16,13 @@ import { cancelAssignment, waitAssignment } from './delegation.js';
 import { TrafficRecorder } from './traffic.js';
 import { closeOpenActivities } from './activity.js';
 import { ActivityReporter } from './live-activity.js';
-import { activeAssignmentsFor, delegationUsage } from './delegation-usage.js';
+import { activeAssignmentsFor, delegationUsage, assignmentCounts } from './delegation-usage.js';
 import { duration } from './format-duration.js';
 import { delegationTokenLines } from './delegation-format.js';
 import { agentExecutionScope } from './agent-execution.js';
 import { learningForTurn } from './learning-hooks.js';
 import { pauseLearningForSession } from './learning.js';
+import { randomUUID } from 'node:crypto';
 
 export function classifyFailure(error) {
   const message = String(error.message || error);
@@ -59,7 +60,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   const unlock = lockSession(session), started = Date.now(), indicator = ui.executionIndicator?.(options.pet !== false && !ui.persistsEvents) || { start() {}, stop() {} }, abort = new AbortController();
   let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, controls, processing = false, failedThisTurn = false;
   options = { ...options, goalMode: goal, policy, strictPolicy: Boolean(options.strictPolicy || options.readOnly || session.strictPolicy) }; session.policy = policy; session.captureNetwork = Boolean(options.captureNetwork);
-  const run = { sessionId: session.id, state: 'running', runner: processIdentity(), startedAt: now(), heartbeatAt: now() };
+  const run = { id: randomUUID(), sessionId: session.id, state: 'running', runner: processIdentity(), startedAt: now(), heartbeatAt: now() };
   const stop = (reason = 'interrupted') => {
     if (stopping) { engine?.close().catch(() => {}); return; }
     stopping = reason; abort.abort(); ui.cancelled = true; indicator.stop();
@@ -82,7 +83,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
     putRecord('run', session.id, run); saveSession(session);
     options.activityReporter = new ActivityReporter(session, recorded, goal ? session.goal.objective : prompt);
-    host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, onNeedsContext: () => stop('needs_context') }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
+    host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, runId: run.id, prompt, tokenBudget: options.tokenBudget, onNeedsContext: () => stop('needs_context') }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
     if (options.captureNetwork) { traffic = await new TrafficRecorder(session, provider, recorded).open(); options.networkEnv = traffic.env; }
     if (options.yolo) recorded.event('info', { message: provider.backend === 'codex' ? 'YOLO · approvals off · Codex sandbox disabled' : 'YOLO · Claude permission checks bypassed' });
     const limit = options.runtimeSeconds || session.contract?.limits.runtimeSeconds;
@@ -96,7 +97,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
         const cancellation = session.assignmentId && getRecord('assignment-control', session.assignmentId);
         if (cancellation?.action === 'cancel' && (cancellation.round == null || cancellation.round === session.assignmentRound)) stop('cancelled');
         if (session.assignmentId && getRecord('worker-report', session.id)?.status === 'needs_context') stop('needs_context');
-        if (goal && session.mode === 'delegate') {
+        if (goal && (session.mode === 'delegate' || assignmentCounts(session).total)) {
           const usage = delegationUsage(session), key = JSON.stringify([usage.supervisorTokens, usage.delegatedTokens, usage.complete]);
           if (key !== lastUsageKey && Date.now() - lastUsageAt >= 2000) {
             lastUsageKey = key; lastUsageAt = Date.now();
@@ -105,7 +106,11 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
             recorded.event('delegation.usage', usage);
           }
           if (session.goal.tokenBudget != null && usage.totalTokens >= session.goal.tokenBudget) stop('token_limit');
-        } else if (!goal && options.tokenBudget != null && (session.usage?.tokens || 0) >= options.tokenBudget) stop('token_limit');
+        } else if (!goal && options.tokenBudget != null && delegationUsage({ ...session, goal: null }).totalTokens >= options.tokenBudget) stop('token_limit');
+        if (session.assignmentId) {
+          const assignment = getRecord('assignment', session.assignmentId), parent = assignment?.parentSessionId && loadSession(assignment.parentSessionId);
+          if (assignment?.chatRunId && (!parent || getRecord('run', parent.id)?.id !== assignment.chatRunId || getRecord('run', parent.id)?.state !== 'running' || ['paused', 'cancelled', 'failed', 'idle'].includes(parent.executionState))) stop('parent_stopped');
+        }
         for (const control of listRecords('control', { sessionId: session.id, state: 'queued' })) {
           putRecord('control', control.id, { ...control, state: 'dispatched' });
           try {
@@ -177,7 +182,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     try {
       const cleanups = await Promise.allSettled([engine?.close(), host?.close(), traffic?.close()]);
       for (const cleanup of cleanups) if (cleanup.status === 'rejected') recorded.event('error', { message: `Cleanup failed: ${cleanup.reason.message}` });
-      const activeAssignments = activeAssignmentsFor(session);
+      const activeAssignments = activeAssignmentsFor(goal ? session : { ...session, goal: null });
       for (const job of activeAssignments) cancelAssignment(session.id, job.id, stopping || 'Parent execution ended before assignment review.');
       await Promise.all(activeAssignments.map(job => waitAssignment(session.id, job.id, 5)));
     }
@@ -187,7 +192,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
       const elapsed = (Date.now() - started) / 1000;
       session.elapsedSeconds = (session.elapsedSeconds || 0) + elapsed; session.stopReason = stopping || null;
       if (goal) session.goal.runtimeUsedSeconds = (session.goal.runtimeUsedSeconds || 0) + elapsed;
-      session.summary = { usage: usageSummary(session), elapsedSeconds: elapsed, finishedAt: now() };
+      session.summary = { usage: usageSummary(goal ? session : { ...session, goal: null }), elapsedSeconds: elapsed, finishedAt: now() };
       if (session.mode === 'delegate') { session.delegationUsage = session.summary.usage; recorded.event('delegation.usage', session.summary.usage); }
       if (goal) { session.goal.delegatedTokensUsed = session.summary.usage.delegatedTokens; session.goal.tokensUsed = session.summary.usage.totalTokens; }
       if (goal) session.goal.evidence = [...new Set([...(session.goal.evidence || []), ...artifactsFor(session.id).filter(a => a.label === 'agent-output' &&

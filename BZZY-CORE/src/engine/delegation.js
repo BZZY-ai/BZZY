@@ -15,6 +15,7 @@ import { assignmentCounts, activeAssignmentsFor, budgetUsage, currentAssignmentU
 import { compactAssignmentRound } from './assignment-views.js';
 import { createMissionContext, missionSourceRevision, missionContextCurrent } from './mission-context.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
+import { assertSubagentDefinitionPin } from './subagent-definitions.js';
 
 const contextKind = 'assignment-context';
 const contextText = (value, limit, label) => {
@@ -22,12 +23,15 @@ const contextText = (value, limit, label) => {
   if (/(?:["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)["']?)\s*[=:]\s*["']?(?!<|\$\{|\[redacted\])[^\s"']+/i.test(value)) throw new Error('Context answers must use authorized host setup, never credential values.');
   assertShareText(value, sharedSecrets()); return value.trim();
 };
-const parentStopped = parent => ['paused', 'cancelled'].includes(parent.executionState) || ['paused', 'cancelled'].includes(parent.goal?.status)
+const parentStopped = (parent, job) => !parent || ['paused', 'cancelled'].includes(parent.executionState)
+  || (job?.chatRunId ? getRecord('run', parent.id)?.id !== job.chatRunId || getRecord('run', parent.id)?.state !== 'running'
+    || !['running', 'waiting_for_input'].includes(parent.executionState) : ['paused', 'cancelled'].includes(parent.goal?.status))
   || readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
+const sourceRevisionFor = (parent, job) => missionSourceRevision(parent, { chat: Boolean(job?.chatRunId) });
 function currentSource(parent, job) {
   const saved = parent?.id && loadSession(parent.id);
   if (!saved || (saved.goal?.id || null) !== (parent.goal?.id || null) || missionSourceRevision(saved) !== missionSourceRevision(parent)) throw new Error('The source goal objective or instructions changed. Refresh this conversation.');
-  if (job && (job.parentSessionId !== saved.id || job.goalId !== (saved.goal?.id || null) || job.missionContext && !missionContextCurrent(saved, job.missionContext))) throw new Error('The assignment source goal or instructions changed. Create a new bounded assignment with the current mission.');
+  if (job && (job.parentSessionId !== saved.id || (job.chatRunId ? job.sourceGoalId : job.goalId) !== (saved.goal?.id || null) || job.missionContext && !missionContextCurrent(saved, job.missionContext))) throw new Error('The assignment source goal or instructions changed. Create a new bounded assignment with the current mission.');
   return saved;
 }
 export function assignmentContextRequest(job) {
@@ -54,14 +58,14 @@ export function recordWorkerReport(session, input) {
   const job = getRecord('assignment', session.assignmentId), saved = loadSession(session.id);
   if (!job || job.workerSessionId !== session.id || saved?.assignmentId !== job.id || saved.assignmentRound !== session.assignmentRound || job.currentRound !== session.assignmentRound || job.closure !== 'open' || !['starting', 'running'].includes(getRecord('round', `${job.id}:${job.currentRound}`)?.state)) throw new Error('This worker no longer owns the active assignment round.');
   const parent = currentSource(loadSession(job.parentSessionId), job);
-  if (parentStopped(parent)) throw new Error('The parent conversation is paused. No new worker result was published.');
+  if (parentStopped(parent, job)) throw new Error('The parent conversation is paused. No new worker result was published.');
   const previous = assignmentContextRequest(job);
   if (previous?.state === 'pending' && input.status !== 'needs_context') throw new Error('Outstanding context questions must be answered by the supervisor before another completion claim.');
   if (input.status !== 'needs_context') {
     const report = { ...input, sessionId: session.id, round: job.currentRound, reportedAt: now(), provenance: 'worker-claim' };
     return transaction(db => {
       const live = getRecord('assignment', job.id), source = currentSource(loadSession(parent.id), live);
-      if (parentStopped(source) || live.currentRound !== session.assignmentRound || live.workerSessionId !== session.id ||
+      if (parentStopped(source, live) || live.currentRound !== session.assignmentRound || live.workerSessionId !== session.id ||
           !['starting', 'running'].includes(getRecord('round', `${live.id}:${live.currentRound}`)?.state) || assignmentContextRequest(live)?.state === 'pending') throw new Error('The worker round or context changed before its report was saved.');
       putRecord('worker-report', session.id, report, db); return { recorded: true, requiresSupervisorReview: true };
     });
@@ -75,15 +79,15 @@ export function recordWorkerReport(session, input) {
   });
   if (new Set(questions.map(question => question.id)).size !== questions.length) throw new Error('Context question IDs must be unique.');
   return reserveRequest(`assignment-context:${job.id}:${job.currentRound}`, input.requestId,
-    { questions, summary: input.summary, evidence: input.evidence, sourceGoalRevision: missionSourceRevision(parent) }, db => {
+    { questions, summary: input.summary, evidence: input.evidence, sourceGoalRevision: sourceRevisionFor(parent, job) }, db => {
       const latest = getRecord('assignment', job.id), pending = assignmentContextRequest(latest);
       const source = currentSource(loadSession(parent.id), latest);
       if (pending?.state === 'pending') throw new Error('This assignment already has an outstanding context request.');
-      if (parentStopped(source) || latest.currentRound !== job.currentRound || latest.workerSessionId !== session.id || !['starting', 'running'].includes(getRecord('round', `${job.id}:${job.currentRound}`)?.state)) throw new Error('Assignment changed before the context request was saved.');
+      if (parentStopped(source, latest) || latest.currentRound !== job.currentRound || latest.workerSessionId !== session.id || !['starting', 'running'].includes(getRecord('round', `${job.id}:${job.currentRound}`)?.state)) throw new Error('Assignment changed before the context request was saved.');
       const id = digest([job.id, job.currentRound, input.requestId]);
       const request = { id, sessionId: parent.id, parentSessionId: parent.id, assignmentId: job.id, workerSessionId: session.id,
-        round: job.currentRound, requestId: input.requestId, revision: 1, state: 'pending', sourceGoalId: parent.goal?.id || null,
-        sourceGoalRevision: missionSourceRevision(parent), questions, answers: [], createdAt: now() };
+        round: job.currentRound, requestId: input.requestId, revision: 1, state: 'pending', sourceGoalId: job.goalId,
+        sourceGoalRevision: sourceRevisionFor(parent, job), questions, answers: [], createdAt: now() };
       const report = { ...input, questions, contextRequestId: id, sessionId: session.id, round: job.currentRound, reportedAt: now(), provenance: 'worker-claim' };
       putRecord(contextKind, id, request, db); putRecord('assignment', job.id, { ...latest, contextRequestId: id, contextRequest: compactContext(request) }, db);
       putRecord('worker-report', session.id, report, db); appendEvent(parent.id, 'assignment.needs_context', compactContext(request), db);
@@ -91,19 +95,20 @@ export function recordWorkerReport(session, input) {
     });
 }
 
-export function answerAssignmentContext(parent, id, input) {
+export function answerAssignmentContext(parent, id, input, { chatRunId } = {}) {
   const job = getRecord('assignment', id); parent = currentSource(parent, input.contextDisposition === 'declined' ? undefined : job);
-  if (!job || job.parentSessionId !== parent.id || job.goalId !== (parent.goal?.id || null)) throw new Error('Context request belongs to another objective.');
-  if (parentStopped(parent)) throw new Error('Resume the parent conversation before answering its worker.');
+  if (!job || job.parentSessionId !== parent.id || (job.chatRunId ? job.sourceGoalId : job.goalId) !== (parent.goal?.id || null)) throw new Error('Context request belongs to another objective.');
+  const runScope = chatRunId && job.chatRunId ? { ...job, chatRunId } : job;
+  if (parentStopped(parent, runScope)) throw new Error('Resume the parent conversation before answering its worker.');
   return reserveRequest(`assignment-context-answer:${id}`, input.requestId || digest(input), input,
-    db => answerContextInTransaction(parent, job, input, db));
+    db => answerContextInTransaction(parent, runScope, input, db));
 }
 function answerContextInTransaction(parent, job, input, db) {
   const latest = getRecord('assignment', job.id), request = assignmentContextRequest(latest);
   const declined = input.contextDisposition === 'declined';
   parent = currentSource(parent, declined ? undefined : latest);
-  if (parentStopped(parent)) throw new Error('The parent conversation is paused. Its worker context was not changed.');
-  const sourceChanged = request?.sourceGoalRevision !== missionSourceRevision(parent);
+  if (parentStopped(parent, job)) throw new Error('The parent conversation is paused. Its worker context was not changed.');
+  const sourceChanged = request?.sourceGoalRevision !== sourceRevisionFor(parent, job);
   if (!request || request.id !== input.contextRequestId || request.revision !== input.expectedContextRevision || request.state !== 'pending' ||
       sourceChanged && (!declined || input.expectedSourceGoalRevision !== request.sourceGoalRevision)) throw new Error('Context request or source goal changed. Reload the exact request before answering; declining stale context also requires its source revision.');
   if (input.contextDisposition !== undefined && !declined) throw new Error('Choose only an explicit declined context disposition.');
@@ -128,7 +133,7 @@ function answerContextInTransaction(parent, job, input, db) {
     revision: request.revision + 1, answeredAt: now() };
   putRecord(contextKind, request.id, changed, db); putRecord('assignment-context-answer', requestId,
     { id: requestId, requestId: request.id, revision: changed.revision, sha256: digest(changed) }, db);
-  putRecord('assignment', job.id, { ...latest, contextRequest: compactContext(changed) }, db);
+  putRecord('assignment', job.id, { ...latest, contextRequest: compactContext(changed), ...(job.chatRunId ? { chatRunId: job.chatRunId } : {}) }, db);
   appendEvent(parent.id, 'assignment.context_answered', compactContext(changed), db); return compactContext(changed);
 }
 
@@ -155,33 +160,49 @@ export function assignmentStatus(id) {
   }
   return { ...job, contextRequest: compactContext(assignmentContextRequest(job)), round };
 }
-function checkLimits(parent) {
-  const { total, active } = assignmentCounts(parent);
-  if (active >= (parent.contract?.limits.concurrency || 1)) throw new Error('Assignment concurrency limit reached. Wait for or cancel the active assignment.');
+function checkLimits(parent, subagent) {
+  const { total, active } = assignmentCounts(subagent?.chatRunId ? { ...parent, goal: null } : parent);
+  if (active >= (subagent ? Math.min(parent.contract?.limits.concurrency || 3, 4) : parent.contract?.limits.concurrency || 1)) throw new Error('Assignment concurrency limit reached. Wait for or cancel the active assignment.');
+  if (subagent && total >= Math.min(parent.contract?.limits.maxAssignments || 64, 64)) throw new Error('Subagent assignment count limit reached.');
+  if (subagent && database().prepare("SELECT count(*) AS n FROM records WHERE kind='round' AND json_extract(data,'$.state') IN ('starting','running')").get().n >= 16) throw new Error('Host worker concurrency limit reached.');
   if (parent.contract?.limits.maxAssignments != null && total >= parent.contract.limits.maxAssignments) throw new Error('Assignment count limit reached.');
 }
-export function startAssignment(parent, input, { executor, snapshot, role = 'executor', allowDebate = false, sharedEvidence = [], launch = launchAssignment, independent = false } = {}) {
+export function startAssignment(parent, input, { executor, snapshot, role = 'executor', allowDebate = false, sharedEvidence = [], launch = launchAssignment, independent = false, subagent } = {}) {
   const source = currentSource(parent);
-  if (parentStopped(source)) throw new Error('The parent conversation is paused. No assignment was launched.');
-  if (parent.mode !== 'delegate' && !allowDebate) throw new Error('Delegation was not enabled for this task.');
+  if (subagent) {
+    assertSubagentDefinitionPin(subagent.definition);
+    if (parent.parentSessionId || parent.assignmentId || ['executor', 'reviewer', 'peer', 'bestie'].includes(parent.role) || parent.purpose === 'agent') throw new Error('Subagents require an authorized parent conversation and a pinned definition.');
+  }
+  if (parentStopped(source, subagent)) throw new Error('The parent conversation is paused. No assignment was launched.');
+  if (parent.mode !== 'delegate' && !allowDebate && !subagent) throw new Error('Delegation was not enabled for this task.');
   const selection = executor || parent.executor;
   if (!selection) throw new Error('Choose an executor provider/model.');
   const provider = getProvider(selection.provider);
-  const policy = childPolicy(parent.policy || parent.contract.policy, input.policy);
+  const policy = childPolicy(parent.policy || parent.contract?.policy, input.policy);
   const contract = normalizeContract({ ...input, policy, scope: parent.contract?.scope || {}, constraints: [...new Set([...(parent.contract?.constraints || []), ...(input.constraints || [])])],
-    limits: { runtimeSeconds: Math.min(input.limits?.runtimeSeconds || 1200, parent.contract?.limits.assignmentSeconds || 1200),
+    limits: { runtimeSeconds: Math.min(input.limits?.runtimeSeconds || 1200, parent.contract?.limits.assignmentSeconds || (subagent ? 3600 : 1200)),
       maxRetries: 0, ...(input.limits?.tokenBudget ? { tokenBudget: input.limits.tokenBudget } : {}) } }, input.objective);
   if (!input.context?.trim() || !input.acceptanceCriteria?.length) throw new Error('An assignment needs context and acceptanceCriteria in addition to its objective.');
-  for (const job of activeAssignmentsFor(parent)) assignmentStatus(job.id);
+  const usageScope = subagent?.chatRunId ? { ...parent, goal: null } : parent;
+  for (const job of activeAssignmentsFor(usageScope)) assignmentStatus(job.id);
   const id = randomUUID(), requestId = input.requestId || randomUUID();
-  const missionContext = createMissionContext(source, { purpose: allowDebate ? 'debate' : 'delegate', independent, evidenceIds: sharedEvidence });
-  const result = reserveRequest(`assignment:${parent.id}:${parent.goal?.id || 'chat'}`, requestId, { input, selection, role, snapshot: snapshot?.id, sourceGoalRevision: missionContext.sourceRevision, sharedEvidence }, db => {
-    checkLimits(parent);
-    const remaining = parent.goal?.tokenBudget == null ? null : parent.goal.tokenBudget - budgetUsage(parent);
+  const missionContext = createMissionContext(source, { purpose: subagent ? 'subagent' : allowDebate ? 'debate' : 'delegate', independent, evidenceIds: sharedEvidence, taskContext: subagent?.taskContext });
+  const result = reserveRequest(`assignment:${parent.id}:${subagent?.chatRunId || parent.goal?.id || 'chat'}`, requestId, { input, selection, role, snapshot: snapshot?.id, sourceGoalRevision: missionContext.sourceRevision, sharedEvidence, ...(subagent ? { subagent } : {}) }, db => {
+    if (parentStopped(loadSession(parent.id), subagent)) throw new Error('The parent conversation stopped before dispatch.');
+    checkLimits(parent, subagent);
+    const remaining = subagent?.chatRunId || parent.goal?.tokenBudget == null ? null : parent.goal.tokenBudget - budgetUsage(parent);
     if (remaining != null && remaining <= 0) throw new Error('Parent usage budget is exhausted.');
     if (remaining != null) contract.limits.tokenBudget = Math.min(contract.limits.tokenBudget || remaining, remaining);
-    const job = { id, parentSessionId: parent.id, goalId: parent.goal?.id || null, missionContext, selection, contract, role, closure: 'open', currentRound: 1, createdAt: now(), snapshotId: snapshot?.id || null, workspace: null, sharedEvidence, captureNetwork: Boolean(parent.captureNetwork) };
+    if (subagent?.budget != null) {
+      const reserved = activeAssignmentsFor(usageScope).reduce((sum, item) => { const job = getRecord('assignment', item.id); return sum + Math.max(0, (job.contract?.limits.tokenBudget || 0) - (currentAssignmentUsage(job).tokens || 0)); }, 0);
+      const available = subagent.budget - budgetUsage(usageScope) - reserved;
+      if (available < 1) throw new Error('Parent usage budget is exhausted or reserved by active workers.');
+      contract.limits.tokenBudget = Math.min(contract.limits.tokenBudget, available);
+    }
+    const job = { id, parentSessionId: parent.id, goalId: subagent?.chatRunId ? null : parent.goal?.id || null, missionContext, selection, contract, role, closure: 'open', currentRound: 1, createdAt: now(), snapshotId: snapshot?.id || null, workspace: null, sharedEvidence, captureNetwork: Boolean(parent.captureNetwork),
+      ...(subagent ? { subagentDefinition: subagent.definition, chatRunId: subagent.chatRunId || null, sourceGoalId: parent.goal?.id || null, subagentTaskContext: subagent.taskContext } : {}) };
     putRecord('assignment', id, job, db);
+    if (subagent?.invocation) putRecord('subagent-invocation', subagent.invocation.id, { ...subagent.invocation, assignmentId: id }, db);
     putRecord('round', `${id}:1`, { assignmentId: id, number: 1, state: 'starting', requestId, createdAt: now(), feedback: null }, db);
     appendEvent(parent.id, 'assignment.created', job, db); return { id, round: 1 };
   });
@@ -192,7 +213,7 @@ function dispatchAssignment(id, number, launch) {
     const job = getRecord('assignment', id), round = getRecord('round', `${id}:${number}`);
     if (!job || !round || round.state !== 'starting' || round.dispatchRequestedAt) return false;
     const parent = loadSession(job.parentSessionId);
-    if (!parent || parentStopped(parent)) {
+    if (!parent || parentStopped(parent, job)) {
       putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: 'Parent conversation paused before dispatch.' }, db); return false;
     }
     putRecord('round', `${id}:${number}`, { ...round, dispatchRequestedAt: now() }, db); return true;
@@ -210,25 +231,41 @@ function launchAssignment(id, number) {
     if (round?.state === 'starting') putRecord('round', `${id}:${number}`, { ...round, state: 'failed', reason: error.message });
   });
 }
-export function followupAssignment(parent, id, input, { sharedEvidence, launch = launchAssignment } = {}) {
+export function followupAssignment(parent, id, input, { sharedEvidence, launch = launchAssignment, chatRunId, budget } = {}) {
   const job = assignmentStatus(id);
   const source = currentSource(parent, job);
-  if (parentStopped(source)) throw new Error('The parent conversation is paused. No follow-up was launched.');
+  const runScope = chatRunId && job.chatRunId ? { ...job, chatRunId } : job;
+  if (parentStopped(source, runScope)) throw new Error('The parent conversation is paused. No follow-up was launched.');
   if (job.parentSessionId !== parent.id || job.goalId != null && job.goalId !== parent.goal?.id) throw new Error('Assignment belongs to another objective.');
   if (!input.feedback?.trim() || !input.objective?.trim()) throw new Error('Follow-up needs supervisor feedback and a focused objective.');
   const maxRounds = (parent.contract?.limits.maxRetries ?? 2) + 1;
   const result = reserveRequest(`followup:${id}`, input.requestId || randomUUID(), input, db => {
     const latest = getRecord('assignment', id);
     currentSource(source, latest);
-    if (parentStopped(loadSession(parent.id))) throw new Error('The parent conversation is paused. No follow-up was launched.');
+    if (parentStopped(loadSession(parent.id), runScope)) throw new Error('The parent conversation is paused. No follow-up was launched.');
     if (latest.currentRound !== job.currentRound || latest.closure !== 'open' || ['starting', 'running'].includes(getRecord('round', `${id}:${latest.currentRound}`)?.state)) throw new Error('Assignment is not ready for a follow-up.');
     if (job.currentRound >= maxRounds) throw new Error('Assignment follow-up limit reached; take over directly or record the unresolved result.');
-    if (parent.goal?.tokenBudget != null && budgetUsage(parent) >= parent.goal.tokenBudget) throw new Error('Parent usage budget is exhausted.');
+    if (!job.chatRunId && parent.goal?.tokenBudget != null && budgetUsage(parent) >= parent.goal.tokenBudget) throw new Error('Parent usage budget is exhausted.');
+    if (job.subagentDefinition) {
+      if ((currentAssignmentUsage(job).elapsedSeconds || 0) >= job.contract.limits.runtimeSeconds) throw new Error('Subagent runtime budget is exhausted.');
+      const usageScope = job.chatRunId ? { ...parent, goal: null } : parent;
+      const { active } = assignmentCounts(usageScope);
+      if (active >= Math.min(parent.contract?.limits.concurrency || 3, 4)) throw new Error('Assignment concurrency limit reached.');
+      if (database().prepare("SELECT count(*) AS n FROM records WHERE kind='round' AND json_extract(data,'$.state') IN ('starting','running')").get().n >= 16) throw new Error('Host worker concurrency limit reached.');
+      if (budget != null) {
+        const reserved = activeAssignmentsFor(usageScope).reduce((sum, item) => { const activeJob = getRecord('assignment', item.id); return sum + Math.max(0, (activeJob.contract?.limits.tokenBudget || 0) - (currentAssignmentUsage(activeJob).tokens || 0)); }, 0);
+        const available = budget - budgetUsage(usageScope) - reserved;
+        if (available < 1) throw new Error('Parent usage budget is exhausted or reserved by active workers.');
+        const used = currentAssignmentUsage(job).tokens || 0;
+        const contract = { ...latest.contract, limits: { ...latest.contract.limits, tokenBudget: Math.min(latest.contract.limits.tokenBudget, used + available) } };
+        putRecord('assignment', id, { ...latest, contract }, db);
+      }
+    }
     if (job.contract.limits.tokenBudget != null && (currentAssignmentUsage(job).tokens || 0) >= job.contract.limits.tokenBudget) throw new Error('Assignment usage budget is exhausted.');
     let contextRequest = assignmentContextRequest(latest);
     if (contextRequest?.state === 'pending') {
       if (!input.contextRequestId) throw new Error('Answer the outstanding context questions in this follow-up before restarting the worker.');
-      contextRequest = answerContextInTransaction(source, latest, input, db);
+      contextRequest = answerContextInTransaction(source, runScope, input, db);
       if (contextRequest.state === 'declined') throw new Error('A declined context request cannot launch more worker execution. Review the bounded result as inconclusive or abandoned.');
     } else if (input.contextRequestId) {
       if (contextRequest?.id !== input.contextRequestId || contextRequest.state !== 'answered') throw new Error('The follow-up context answer changed. Reload its request.');
@@ -238,10 +275,10 @@ export function followupAssignment(parent, id, input, { sharedEvidence, launch =
     const number = latest.currentRound + 1;
     const selectedEvidence = [...new Set([...(sharedEvidence || latest.sharedEvidence || []), ...(contextRequest?.answers || []).flatMap(answer => answer.evidence || [])])];
     if (selectedEvidence.length > 4096) throw new Error('The answered context exceeds the bounded host evidence manifest limit.');
-    const missionContext = createMissionContext(source, { purpose: job.role === 'reviewer' ? 'debate' : 'delegate', independent: false,
-      evidenceIds: selectedEvidence });
+    const missionContext = createMissionContext(source, { purpose: job.subagentDefinition ? 'subagent' : job.role === 'reviewer' ? 'debate' : 'delegate', independent: false,
+      evidenceIds: selectedEvidence, taskContext: job.subagentTaskContext });
     putRecord('round', `${id}:${number}`, { assignmentId: id, number, state: 'starting', createdAt: now(), feedback: input.feedback, objective: input.objective, contextRequest }, db);
-    putRecord('assignment', id, { ...getRecord('assignment', id), currentRound: number, missionContext, sharedEvidence: selectedEvidence }, db);
+    putRecord('assignment', id, { ...getRecord('assignment', id), currentRound: number, missionContext, sharedEvidence: selectedEvidence, ...(chatRunId && job.chatRunId ? { chatRunId } : {}) }, db);
     appendEvent(parent.id, 'assignment.followup', { id, round: number, objective: input.objective, provider: job.selection.provider, model: job.selection.model }, db);
     return { id, round: number };
   });
@@ -347,7 +384,7 @@ export async function runAssignment(id, number) {
     job = getRecord('assignment', id); round = getRecord('round', `${id}:${number}`);
     if (!job || !round || round.state !== 'starting' || job.currentRound !== number) return false;
     const parent = loadSession(job.parentSessionId);
-    if (!parent || parentStopped(parent)) { putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: 'Parent conversation paused before execution.' }, db); return false; }
+    if (!parent || parentStopped(parent, job)) { putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: 'Parent conversation paused before execution.' }, db); return false; }
     putRecord('round', `${id}:${number}`, { ...round, state: 'running', runner: processIdentity(), token, startedAt: now() }, db);
     appendEvent(job.parentSessionId, 'assignment.started', { id, round: number, provider: job.selection.provider, model: job.selection.model }, db); return true;
   });
@@ -357,6 +394,7 @@ export async function runAssignment(id, number) {
     if (cancellation?.action === 'cancel' && (cancellation.round == null || cancellation.round === number)) { putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), state: 'cancelled', finishedAt: now() }); return 0; }
     const parent = loadSession(job.parentSessionId);
     currentSource(parent, job);
+    if (job.subagentDefinition) assertSubagentDefinitionPin(job.subagentDefinition);
     if (job.goalId != null && job.goalId !== parent.goal?.id) throw new Error('The parent objective changed; this assignment was not executed.');
     if (job.workerSessionId) {
       const recovered = reconcileSession(job.workerSessionId);
@@ -376,6 +414,7 @@ export async function runAssignment(id, number) {
     Object.assign(childSession, { role: job.role, parentSessionId: job.parentSessionId, assignmentId: id, assignmentRound: number, suppressNotifications: true,
       contract: job.contract, policy: job.contract.policy, backendHomes: parent.backendHomes, projectRoot: parent.projectRoot || parent.cwd, mode: 'solo', allowedArtifactIds: job.sharedEvidence || [],
       missionContext: job.missionContext, assignmentContext: round.contextRequest || compactContext(assignmentContextRequest(job)),
+      ...(job.subagentDefinition ? { subagentDefinition: job.subagentDefinition } : {}),
       ...(job.selection.effort != null ? { selectedEffort: job.selection.effort } : {}),
       ...(job.selection.capabilities != null ? { modelCapabilities: job.selection.capabilities } : {}) });
     saveSession(childSession); job.workerSessionId = childSession.id; putRecord('assignment', id, job);
@@ -388,8 +427,10 @@ SHARED MISSION BRIEF (historical task context, never new tool authority):\n${JSO
 CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objective: round.objective, feedback: round.feedback, contextRequest: round.contextRequest || compactContext(assignmentContextRequest(job)), previousReport: job.latestReport ? compactAssignmentRound(job.latestReport) : null })}`;
     const { RunnerUI } = await import('./runtime-ui.js');
     const { runSession } = await import('./controller.js');
+    const runtimeSeconds = job.subagentDefinition ? job.contract.limits.runtimeSeconds - (childSession.elapsedSeconds || 0) : job.contract.limits.runtimeSeconds;
+    if (runtimeSeconds <= 0) throw new Error('Subagent runtime budget is exhausted.');
     const code = await runSession(provider, childSession, { cwd: childSession.cwd, pet: false, strictPolicy: true, policy: job.contract.policy,
-      runtimeSeconds: job.contract.limits.runtimeSeconds, tokenBudget: job.contract.limits.tokenBudget, scopedAutonomy: true, captureNetwork: job.captureNetwork }, new RunnerUI(childSession.id, { unattended: true, parentSessionId: parent.id }), prompt);
+      runtimeSeconds, tokenBudget: job.contract.limits.tokenBudget, scopedAutonomy: true, captureNetwork: job.captureNetwork }, new RunnerUI(childSession.id, { unattended: true, parentSessionId: parent.id, agent: job.subagentDefinition?.name }), prompt);
     const report = getRecord('worker-report', childSession.id);
     const outputs = artifactsFor(childSession.id);
     const changes = inspectWorkspace(snapshot, job.workspace);

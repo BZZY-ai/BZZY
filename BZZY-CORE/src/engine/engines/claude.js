@@ -37,6 +37,7 @@ export function claudeArgs(session, options, mcpConfig, uid = process.getuid?.()
   }
   if (options.agentScope) args.push('--restricted', '--tools', '', '--strict-mcp-config', '--disable-slash-commands', '--setting-sources', '',
     '--settings', JSON.stringify({ disableAllHooks: true, autoMemoryEnabled: false }));
+  if (session.subagentDefinition) args.push('--disallowedTools', 'Agent', 'Task');
   const effort = reasoningEffort(session, options);
   if (effort) args.push('--effort', effort);
   session.reasoningEffort = effort || 'provider default';

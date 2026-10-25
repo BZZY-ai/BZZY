@@ -18,6 +18,11 @@ Keep this directory layout when cloning: the Node packages use sibling file
 dependencies. Agent and sharing implementations live in Core and their clients.
 There is no separate Agent or sharing daemon.
 
+CLI **Agents** manages [reusable specialist subagents](BZZY-CORE/docs/SUBAGENTS.md),
+such as HTTP analysts or finding reviewers. Core invokes them from normal chats
+and goals across supported models, with separate contexts, bounded parallelism
+and evidence review. Persistent iPhone Agents remain a separate resource type.
+
 Core also owns [project knowledge and reviewed learning](BZZY-CORE/docs/KNOWLEDGE.md):
 attributed recall, evidence freshness, scoped skills, private approved profiles
 and bounded idle reviews with explicit candidate evaluation and activation.

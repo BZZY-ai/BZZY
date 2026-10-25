@@ -42,13 +42,22 @@ with `npm install -g ./bzzy-cli-0.2.0.tgz`, or extract it and run `./install.sh`
 A bundled release needs no sibling directories and its installer does not invoke
 npm. A terminal-only source checkout is no longer a complete installation.
 
+The top-bar **Agents** option manages reusable specialist subagents: create a
+project/global definition, inherit the current model or select one from Core's
+catalog, and choose **Use in chat** to fill an editable invocation draft. Models
+can invoke these specialists from normal chats and goals, with independent worker
+contexts, progress, follow-ups and evidence review. `/agents` opens the same
+library; `bzzy subagents list|show|create|update|delete` provides JSON management.
+See [subagent instructions and limits](../../BZZY-CORE/docs/SUBAGENTS.md). These
+definitions are separate from persistent iPhone Agents.
+
 Core owns execution, provider/authentication configuration, model discovery,
 conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
 `bzzy` opens a Codex-style terminal chat with three fixed sections: a one-row
-top bar for Open Sessions, New Session, Skills, Metrics, host CPU/RAM and
+top bar for Open Sessions, New Session, Skills, Agents, Metrics, host CPU/RAM and
 Settings; the live chat transcript; and a compact composer with the current model, effort, token count,
 `HH:MM:SS` runtime and color-coded goal state. User turns and agent replies use
 separate labeled rails, and the latest user request stays pinned directly below

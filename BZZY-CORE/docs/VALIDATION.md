@@ -1,3 +1,37 @@
+# Reusable specialist subagents (2026-10-25)
+
+Node.js 24/macOS full suites pass: **397 Core tests passed, 1 skipped**
+(398 total), and **512 CLI tests passed, 21 skipped** (533 total), with zero
+failures. Both product syntax checks and `git diff --check` pass. The publish
+candidate was verified separately from unrelated working-tree edits; existing
+fixture executability and Relay dependencies were prepared in that checkout.
+
+New coverage includes nine registry tests, twenty-nine runtime tests and ten CLI
+Agents tests. They cover project/global discovery and isolation, strict definition
+schemas and credentials, revisions/content pins, duplicate/conflicting requests,
+provider/model/effort inheritance for Codex/Claude/DeepSeek/Abliteration/OrcaRouter,
+isolated workspaces, policy/evidence ownership, bounded concurrency and budget
+reservations, cumulative time limits and native recursion restrictions.
+
+Actual offline provider fixtures drive the model tool call, detached assignment
+runner, pinned specialist handoff, saved evidence/report and parent cleanup.
+Cross-turn context answers/declines start no work; explicit follow-ups preserve
+the selected specialist. New user chat directives do not invalidate unrelated
+saved-goal context, while changed scope still rejects stale work. Resumed goals
+exclude later chat workers from acceptance and usage. Orphans remain interrupted
+until an explicit follow-up; worker claims cannot complete a parent goal.
+
+UI coverage checks Agents at 80/120/140 columns, creation/editing/deletion,
+project/global availability, inherited/fixed selections, invocation details,
+multiline instructions, Esc/draft restoration and draft-only Use in chat while
+another run is active. Existing top actions, model/effort/usage and host telemetry
+remain visible within the tested layouts.
+
+These checks use synthetic local provider fixtures, not live vulnerability hunts.
+They do not measure finding accuracy or establish native execution parity for
+every provider/model/OS combination. Existing platform/network capability skips
+remain reported. See [subagent behavior and limits](SUBAGENTS.md).
+
 # Debate and Delegate hardening (2026-10-24)
 
 Final full suites on Node.js 24/macOS: **353 Core tests passed, 1 skipped**

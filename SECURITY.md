@@ -20,6 +20,17 @@ Imported Agent history is data, receives fresh identities and stays inactive.
 CLI terminals retain their existing native execution permissions and are not
 covered by this narrower Agent tool policy. See BZZY-CORE/docs/AGENT-EXECUTION.md.
 
+Reusable specialist subagents are a separate Core-owned terminal worker feature.
+Owner-managed project/global definitions carry behavior and optional selection or
+narrower limits, never account bindings or permission grants. Invocations pin
+immutable definitions and current task context, use the existing strict worker
+policy and isolated workspace copies, and require supervisor evidence review.
+Core and backend configuration disable recursive agent spawning. Normal-chat
+invocations bind to a live parent run without resuming an older saved goal;
+parent stop/recovery retains durable assignment records without replay. Existing
+native terminal read-isolation limits still apply; copies are not a blanket host
+confidentiality sandbox. See BZZY-CORE/docs/SUBAGENTS.md.
+
 Knowledge recall filters engagement identity and session ancestry before search;
 historical text does not authorize execution. Learning reviews use an empty
 private cwd and adapter-enforced no-tool backend profiles, bounded sanitized

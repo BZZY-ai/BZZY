@@ -17,6 +17,12 @@ the same engine and private state.
 
 Implemented:
 
+- Reusable named specialist subagents, invoked from ordinary chat or goals across
+  Core's supported providers. The CLI Agents library manages project/global
+  definitions and displays invocation history; Core owns pinned definitions,
+  isolated worker copies, bounded parallelism, budgets, follow-ups, cancellation
+  and evidence review. See [specialist subagents](docs/SUBAGENTS.md).
+
 - Hardened Debate and Delegate handoffs: automatic source-pinned mission briefs,
   durable requests for missing context, mandatory challenge rounds, retained
   minority objections, evidence inspection coverage and original-goal/severity

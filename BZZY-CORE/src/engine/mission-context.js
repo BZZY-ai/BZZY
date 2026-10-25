@@ -20,7 +20,7 @@ function userDirectives(parent) {
   const completed = parent.goal.status === 'complete' && database().prepare("SELECT seq FROM events WHERE session_id=? AND type='goal.completed' AND json_extract(data,'$.goalId')=? ORDER BY seq DESC LIMIT 1").get(parent.id, parent.goal.id);
   return database().prepare("SELECT seq,data FROM events WHERE session_id=? AND type='message.user' AND created_at>=? AND seq<=? ORDER BY seq LIMIT 257").all(parent.id, parent.goal.createdAt, completed?.seq || Number.MAX_SAFE_INTEGER);
 }
-export const missionSourceRevision = parent => digest({ ...critical(parent), directives: userDirectives(parent) });
+export const missionSourceRevision = (parent, { chat = false } = {}) => digest({ ...critical(parent), directives: chat ? [] : userDirectives(parent) });
 export const missionResultRevision = parent => digest({ goalId: parent.goal?.id || null, status: parent.goal?.status || null,
   evidence: parent.goal?.evidence || [], acceptance: parent.acceptance || null, modeResult: parent.modeResult?.goalId === parent.goal?.id ? parent.modeResult : null });
 
@@ -65,13 +65,14 @@ export function missionEvidenceCurrent(entries) {
   } catch { return false; }
 }
 
-export function createMissionContext(parent, { purpose = 'delegate', independent = false, evidenceIds = [] } = {}) {
-  if (!uuid(parent?.id) || !parent.contract || !parent.goal && !parent.contract.objective) fail('A saved task is required for a mission brief.');
+export function createMissionContext(parent, { purpose = 'delegate', independent = false, evidenceIds = [], taskContext } = {}) {
+  if (!uuid(parent?.id) || purpose !== 'subagent' && (!parent.contract || !parent.goal && !parent.contract.objective)) fail('A saved task is required for a mission brief.');
   if (!Array.isArray(evidenceIds) || evidenceIds.length > 4096 || evidenceIds.some(id => !uuid(id))) fail('Mission evidence must contain bounded recorded artifact IDs.');
   const source = critical(parent), secrets = sharedSecrets();
-  const checkpoint = !independent && getRecord('checkpoint', parent.id);
+  const chat = purpose === 'subagent' && taskContext?.mode === 'chat';
+  const checkpoint = !independent && !chat && getRecord('checkpoint', parent.id);
   const currentCheckpoint = checkpoint && checkpoint.objective === source.objective && (!parent.goal?.createdAt || checkpoint.updatedAt >= parent.goal.createdAt) ? checkpoint : null;
-  const rows = userDirectives(parent);
+  const rows = chat ? [] : userDirectives(parent);
   if (rows.length > 256) fail('The mission has too many user directives for a safe automatic handoff. Consolidate the instructions explicitly.');
   const directives = rows.map(row => { const data = JSON.parse(row.data); return { sourceId: `${parent.id}:${row.seq}`, text: typeof data.text === 'string' ? data.text : '' }; });
   const evidence = [...new Set(evidenceIds)].map(id => {
@@ -79,20 +80,22 @@ export function createMissionContext(parent, { purpose = 'delegate', independent
     if (!item || !uuid(item.sessionId)) fail('Mission evidence is unavailable.');
     const worker = getRecord('session', item.sessionId), job = worker?.assignmentId && getRecord('assignment', worker.assignmentId);
     if (item.sessionId !== parent.id && !(parent.allowedArtifactIds || []).includes(id) &&
-        !(job && job.parentSessionId === parent.id && job.goalId === (parent.goal?.id || null) && job.workerSessionId === item.sessionId)) fail('Mission evidence is outside this task.');
+        !(job && job.parentSessionId === parent.id && (job.goalId === (parent.goal?.id || null) || job.chatRunId && job.sourceGoalId === (parent.goal?.id || null)) && job.workerSessionId === item.sessionId)) fail('Mission evidence is outside this task.');
     // The host supplies selected evidence; callers must already authorize the
     // assignment's share. Never discover unrelated evidence from a project path.
     return { id, sha256: item.sha256, label: item.label || 'recorded evidence', size: item.size, sessionId: item.sessionId };
   });
   if (!missionEvidenceCurrent(evidence)) fail('Mission evidence is missing, altered or no longer matches its recorded source.');
-  const original = { goal: { id: source.goalId, objective: source.objective }, instructions: source.instructions,
-    constraints: source.constraints, scope: source.scope, acceptanceCriteria: source.acceptanceCriteria,
-    deliverables: source.artifacts, verification: source.verification, policy: source.policy,
+  const original = { goal: { id: chat ? null : source.goalId, objective: chat ? taskContext.assignment : source.objective }, instructions: chat ? taskContext.request : source.instructions,
+    constraints: source.constraints, scope: source.scope, acceptanceCriteria: chat ? [{ id: 'specialist-result', description: taskContext.assignment }] : source.acceptanceCriteria,
+    deliverables: chat ? [] : source.artifacts, verification: chat ? [] : source.verification, policy: source.policy,
     directives, decisions: currentCheckpoint?.decisions || [], pendingQuestions: currentCheckpoint?.unresolvedQuestions || [],
-    completedWork: currentCheckpoint?.completedWork || [], evidence, independent, ...(source.reviewSource ? { reviewSource: source.reviewSource } : {}) };
+    completedWork: currentCheckpoint?.completedWork || [], evidence, independent,
+    ...(purpose === 'subagent' && taskContext ? { currentTask: taskContext } : {}),
+    ...(!chat && source.reviewSource ? { reviewSource: source.reviewSource } : {}) };
   const brief = sanitized(original, secrets), encoded = JSON.stringify(brief);
   if (Buffer.byteLength(encoded) > 2 * 1024 * 1024) fail('The mission brief exceeds 2 MiB. Consolidate its instructions explicitly; mandatory context was not truncated.');
-  const sha256 = digest(brief), sourceRevision = missionSourceRevision(parent);
+  const sha256 = digest(brief), sourceRevision = missionSourceRevision(parent, { chat });
   const id = digest({ sourceSessionId: parent.id, sourceGoalId: source.goalId, sourceRevision, purpose, sha256 });
   const record = { version: 1, id, sourceSessionId: parent.id, sourceGoalId: source.goalId, sourceRevision, purpose,
     sha256, brief, redacted: JSON.stringify(original) !== encoded, createdAt: now() };
@@ -106,7 +109,8 @@ export function createMissionContext(parent, { purpose = 'delegate', independent
 
 export function missionContextCurrent(parent, value) {
   const record = typeof value === 'string' ? getRecord('core.mission.context', value) : value;
-  if (!record || record.sourceSessionId !== parent?.id || record.sourceGoalId !== (parent.goal?.id || null) || record.sourceRevision !== missionSourceRevision(parent)) return false;
+  if (!record || record.sourceSessionId !== parent?.id || record.sourceGoalId !== (parent.goal?.id || null) || record.sourceRevision !== missionSourceRevision(parent,
+    { chat: record.purpose === 'subagent' && record.brief?.currentTask?.mode === 'chat' })) return false;
   const saved = getRecord('core.mission.context', record.id);
   const expectedId = digest({ sourceSessionId: record.sourceSessionId, sourceGoalId: record.sourceGoalId,
     sourceRevision: record.sourceRevision, purpose: record.purpose, sha256: record.sha256 });

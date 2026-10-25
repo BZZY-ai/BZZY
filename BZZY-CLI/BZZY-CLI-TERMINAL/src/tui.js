@@ -1,4 +1,5 @@
 import { skillRows, returnToSkillLibrary } from './skills-ui.js';
+import { subagentRows } from './subagents-ui.js';
 import { namedTerminalSessions } from './session-browser.js';
 import readline from 'node:readline';
 import { renderCanvasShell } from './canvas-panels.js';
@@ -191,8 +192,10 @@ export class TerminalChat {
       if (worker && !data.closedAt && data.status === 'running') this.delegationPhase = 'Executor running';
       const index = this.activities.findIndex(item => item.id && item.id === data.id);
       if (index >= 0) this.activities[index] = data; else this.activities.push(data);
-    } else if (type.startsWith('assignment.') && this.mode === 'delegate') {
-      this.assignmentEvent(type, data);
+    } else if (type.startsWith('assignment.')) {
+      const id = data.assignmentId || data.id, previous = this.assignments.get(id);
+      if (data.subagentDefinition || previous?.specialist) this.subagentEvent(type, data);
+      else if (this.mode === 'delegate') this.assignmentEvent(type, data);
     } else if (type === 'delegation.usage') {
       this.delegationUsage = data;
     } else if (type === 'besties.usage' || type === 'parallel.usage') {
@@ -253,6 +256,21 @@ export class TerminalChat {
   peerLabel(id) {
     const peer = this.peers.find(item => (item.sessionId || item.id) === id), tab = this.ui.tabs?.find(item => item.id === id);
     return agentLabel(peer?.namespace || peer?.agent || tab?.agent || id?.slice(0, 8) || 'Peer');
+  }
+
+  subagentEvent(type, data) {
+    const id = data.assignmentId || data.id;
+    if (!id) return;
+    const previous = this.assignments.get(id) || {}, specialist = data.subagentDefinition?.name || previous.specialist;
+    const objective = clean(data.contract?.objective || previous.objective || '').slice(0, 180);
+    const state = type === 'assignment.finished' ? data.state : type === 'assignment.failed' ? 'failed'
+      : type === 'assignment.reviewed' ? data.outcome : type === 'assignment.needs_context' ? 'needs_context'
+      : ['assignment.created', 'assignment.started', 'assignment.followup'].includes(type) ? 'running' : previous.state;
+    this.assignments.set(id, { ...previous, specialist, objective, state, round: data.round || data.currentRound || previous.round || 1 });
+    if (type === 'assignment.created') this.add('notice', `Subagent ${specialist} · starting\n${objective}`);
+    else if (type === 'assignment.finished') this.add('notice', `Subagent ${specialist} · ${clean(data.state || 'stopped')}\n${clean(data.report?.summary || objective)}\nThe main assistant must review the supporting evidence.`);
+    else if (type === 'assignment.failed') this.add('error', `Subagent ${specialist} · failed\n${clean(data.error || 'Inspect partial evidence before retrying.')}`);
+    else if (type === 'assignment.needs_context') this.add('notice', `Subagent ${specialist} · needs context\nThe worker stopped for the main assistant to answer its questions.`);
   }
 
   assignmentEvent(type, data) {
@@ -379,7 +397,7 @@ export class TerminalChat {
   canvasVisible() { return Boolean(this.ui.canvas && this.ui.canvasView && !this.ui.canvasView.drawer && this.panel === 'chat' && !this.promptDraft && !this.hidden && !this.ui.privateView); }
   canCompose() {
     if (this.canvasVisible() || this.selection || this.renderingPicker) return false;
-    if (!this.promptDraft && (this.ui.canvasView?.historyThread || this.panel === 'settings' || this.panel === 'metrics'
+    if (!this.promptDraft && (this.ui.canvasView?.historyThread || this.panel === 'settings' || this.panel === 'metrics' || this.panel === 'agents'
       || this.panel === 'skills' && this.ui.skillView !== 'import')) return false;
     return Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft);
   }
@@ -392,13 +410,13 @@ export class TerminalChat {
     this.value = ''; this.cursor = 0; this.schedule();
   }
   completions() {
-    if (['settings', 'skills', 'metrics'].includes(this.panel)) return [];
+    if (['settings', 'skills', 'agents', 'metrics'].includes(this.panel)) return [];
     if (!this.resolveInput || this.hidden || this.selection || this.renderingPicker || this.pasting || !/^bzzy\b/.test(this.question || '')) return [];
     if (this.completionQuery !== this.value) { this.completionQuery = this.value; this.completionFocus = 0; this.completionDismissed = false; }
     return this.completionDismissed ? [] : commandSuggestions(this.value);
   }
   completeCommand(choice) { this.value = choice.command + ' '; this.cursor = [...this.value].length; this.schedule(); }
-  panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'metrics', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'metrics', 'settings']; }
+  panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'agents', 'metrics', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'agents', 'metrics', 'settings']; }
   setPanel(panel) {
     if (this.ui.coreLifecycleInterrupted && panel !== 'settings') return;
     if (this.promptDraft || this.selection) return;
@@ -421,6 +439,7 @@ export class TerminalChat {
     if (panel === 'settings' && this.panel !== 'settings') { this.settingsDraft = { value: this.value, cursor: this.cursor }; this.value = ''; this.cursor = 0; }
     this.settingsEnsureFocus = panel === 'settings';
     if (panel === 'skills') this.skillTopRequested = true;
+    if (panel === 'agents') this.agentTopRequested = true;
     this.textSelection = null; this.panel = panel; this.scroll = 0; this.schedule();
   }
   leaveSettings() {
@@ -589,6 +608,7 @@ export class TerminalChat {
     }
     if (hit?.type === 'session-new') { this.localCommand('/new'); return; }
     if (hit?.type === 'top-skills') { this.localCommand('/skills'); return; }
+    if (hit?.type === 'top-agents') { this.localCommand('/agents'); return; }
     if (hit?.type === 'top-metrics') { this.setPanel('metrics'); return; }
     if (hit?.type === 'usage-balance') { this.balanceTask = this.ui.showProviderBalance?.(); return; }
     if (hit?.type === 'top-settings') { this.localCommand('/settings'); return; }
@@ -610,6 +630,7 @@ export class TerminalChat {
       else this.localCommand(hit.command);
     }
     else if (hit?.type === 'skill-action') this.localCommand('/skills ' + hit.action);
+    else if (hit?.type === 'agent-action') this.localCommand('/agents ' + hit.action);
     else if (hit?.type === 'saved-session') this.localCommand('/open-session ' + hit.id);
     else if (hit?.type === 'alias') {
       const time = Date.now();
@@ -766,6 +787,18 @@ export class TerminalChat {
     if (this.panel === 'metrics' && !this.promptDraft) {
       if (key.name === 'escape') { this.setPanel('chat'); return; }
     }
+    if (this.panel === 'agents' && !this.promptDraft) {
+      key.bzzyHandled = true;
+      if (key.name === 'escape') { this.setPanel('chat'); return; }
+      const actions = subagentRows(this.ui).filter(row => row.action);
+      if (['up', 'down', 'tab'].includes(key.name) && actions.length) {
+        const backwards = key.name === 'up' || key.name === 'tab' && key.shift;
+        this.agentFocus = ((this.agentFocus || 0) + (backwards ? actions.length - 1 : 1)) % actions.length;
+        this.agentEnsureFocus = true; this.schedule(); return;
+      }
+      if (key.name === 'return' && actions[this.agentFocus || 0]) this.localCommand('/agents ' + actions[this.agentFocus || 0].action);
+      return;
+    }
     if (this.panel === 'skills' && !this.promptDraft) {
       if (key.name === 'escape') {
         if (returnToSkillLibrary(this.ui)) return;
@@ -895,6 +928,16 @@ export class TerminalChat {
         if (row.action) for (let offset = 0; offset < wrapped.length; offset++)
           this.contentHits.push({ type: 'skill-action', action: row.action, row: lines.length + offset, left: 2, right: width });
         for (const line of wrapped) put('  ' + line, row.tone === 'muted' ? palette.muted : palette.accent, rowFocused);
+      }
+    } else if (this.panel === 'agents') {
+      let actionIndex = 0;
+      for (const row of subagentRows(this.ui)) {
+        const selected = row.action && actionIndex++ === (this.agentFocus || 0);
+        if (selected) this.agentFocusRow = lines.length;
+        const wrapped = wrap((selected ? '› ' : '  ') + row.text, width - 4);
+        if (row.action) for (let offset = 0; offset < wrapped.length; offset++)
+          this.contentHits.push({ type: 'agent-action', action: row.action, row: lines.length + offset, left: 2, right: width });
+        for (const line of wrapped) put('  ' + line, palette[row.tone] || palette.text, Boolean(selected));
       }
     } else if (this.panel === 'metrics') {
       // Reserved empty surface for the upcoming metrics view.
@@ -1033,7 +1076,7 @@ export class TerminalChat {
     lines.push(line); return lines;
   }
   simpleChatLayout() {
-    return !this.ui.canvas && !this.ui.minimal && ['chat', 'room', 'skills', 'metrics'].includes(this.panel);
+    return !this.ui.canvas && !this.ui.minimal && ['chat', 'room', 'skills', 'agents', 'metrics'].includes(this.panel);
   }
   elapsedClock() {
     const durationSeconds = () => {
@@ -1072,12 +1115,14 @@ export class TerminalChat {
     }
     const leftVariants = [
       { sessions: '  Open Sessions ▾', create: '   + New Session', alias: true },
+      { sessions: 'Sessions ▾', create: '+ New', alias: true },
+      { sessions: 'Sessions', create: '+ New', alias: true },
       { sessions: '  Open Sessions ▾', create: '   + New Session', alias: false },
       { sessions: ' Open Sessions ▾', create: '  + New Session', alias: false },
       { sessions: '  Open Sessions ▾', create: '   + New', alias: false },
       { sessions: 'Open Sessions ▾', create: '+ New', alias: false },
       { sessions: '  Open Sessions', create: '   + New', alias: false },
-      { sessions: 'Sessions', create: ' +', alias: false },
+      { sessions: 'Sessions', create: '+ New', alias: false },
     ];
     const alias = this.alias ? clip(this.alias, Math.max(1, Math.floor(width / 4))) : '';
     const relayOnline = this.ui.connectionStatus?.core === true && this.ui.connectionStatus?.relay === true;
@@ -1095,13 +1140,15 @@ export class TerminalChat {
     const selectedMetric = width >= 112 ? metric : tinyMetric;
     const actionsFull = [
       { text: ' Skills ', tone: palette.accent, bold: true, type: 'top-skills', surface: true },
+      { text: ' Agents ', tone: palette.accent, bold: true, type: 'top-agents', surface: true },
       { text: ' Metrics ', tone: palette.accent, bold: true, type: 'top-metrics', surface: true },
       { text: ' ⚙ Settings ', tone: palette.accent, bold: true, type: 'top-settings', surface: true },
     ];
     const actionsCompact = [
       { text: 'Skills', tone: palette.accent, bold: true, type: 'top-skills' },
+      { text: 'Agents', tone: palette.accent, bold: true, type: 'top-agents' },
       { text: 'Metrics', tone: palette.accent, bold: true, type: 'top-metrics' },
-      { text: '⚙', tone: palette.accent, bold: true, type: 'top-settings' },
+      { text: '⚙ Settings', tone: palette.accent, bold: true, type: 'top-settings' },
     ];
     const actionOptions = [actionsFull, actionsCompact];
     const withBalance = tokens => balance ? [tokens[0], balance, ...tokens.slice(1)] : tokens;
@@ -1115,15 +1162,19 @@ export class TerminalChat {
       ...actionOptions,
     ];
     let selected;
-    for (const rightTokens of rightVariants) {
-      const rightWidth = rightTokens.reduce((sum, token) => sum + cellWidth(token.text), 0) + Math.max(0, rightTokens.length - 1) * 2;
-      for (const variant of leftVariants) {
-        let left = variant.sessions + '  │ ' + variant.create;
-        if (variant.alias && alias) left += '  │ ' + alias;
-        if (cellWidth(left) + rightWidth + 1 <= width) {
-          selected = { ...variant, alias: variant.alias && alias, rightTokens, rightWidth, left };
-          break;
+    for (const preserveAlias of alias && width >= 100 ? [true, false] : [false]) {
+      for (const rightTokens of rightVariants) {
+        const rightWidth = rightTokens.reduce((sum, token) => sum + cellWidth(token.text), 0) + Math.max(0, rightTokens.length - 1) * 2;
+        for (const variant of leftVariants) {
+          if (preserveAlias && !variant.alias) continue;
+          let left = variant.sessions + '  │ ' + variant.create;
+          if (variant.alias && alias) left += '  │ ' + alias;
+          if (cellWidth(left) + rightWidth + 1 <= width) {
+            selected = { ...variant, alias: variant.alias && alias, rightTokens, rightWidth, left };
+            break;
+          }
         }
+        if (selected) break;
       }
       if (selected) break;
     }
@@ -1151,7 +1202,8 @@ export class TerminalChat {
       const size = cellWidth(token.text);
       if (token.type) this.hitTargets.push({ type: token.type, row: 1, left: offset + 1, right: offset + size });
       const active = token.type === 'top-skills' && this.panel === 'skills'
-        || token.type === 'top-metrics' && this.panel === 'metrics';
+        || token.type === 'top-metrics' && this.panel === 'metrics'
+        || token.type === 'top-agents' && this.panel === 'agents';
       right += token.surface
         ? fillSurface(token.text, size, this.theme, active ? palette.accent : palette.selection,
           active ? palette.background : token.tone, token.bold, surface)
@@ -1232,13 +1284,17 @@ export class TerminalChat {
 
     const composerTop = lines.length;
     const breathingRoom = height >= 18;
+    if (this.panel === 'agents' && this.promptDraft && this.question)
+      lines.push(color(clip('  ' + this.question, width), palette.accent));
     if (breathingRoom) lines.push('');
     const skillDirectoryInput = this.panel === 'skills' && this.ui.skillView === 'import';
     const skillDetail = this.panel === 'skills' && Boolean(this.ui.skillPreview || this.ui.skillHistoryState
       || this.ui.skillSyncDetails || this.ui.skillPromotionDraft);
-    const hasSubmit = (skillDirectoryInput || !['skills', 'metrics'].includes(this.panel))
+    const hasSubmit = (this.promptDraft || skillDirectoryInput || !['skills', 'agents', 'metrics'].includes(this.panel))
       && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
-    const prompt = this.panel === 'metrics' ? 'Metrics · no data yet'
+    const prompt = this.promptDraft && this.question ? this.question
+      : this.panel === 'agents' ? 'Agents · Esc returns to chat'
+      : this.panel === 'metrics' ? 'Metrics · no data yet'
       : skillDirectoryInput ? 'Codex skills directory'
       : skillDetail ? 'Skill · Esc goes back'
       : this.panel === 'skills' ? 'Library · Esc returns to chat'
@@ -1805,7 +1861,7 @@ export class TerminalChat {
     this.selectionHeight = bodyHeight;
     const contentWidth = width - 2;
     const roomLabels = this.panel === 'room' ? JSON.stringify([this.peers.map(peer => [peer.sessionId || peer.id, peer.namespace || peer.agent]), this.ui.tabs?.map(tab => [tab.id, tab.agent])]) : '';
-    const contentKey = `${this.panel === 'skills' ? Date.now() : ''}:${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
+    const contentKey = `${['skills', 'agents'].includes(this.panel) ? Date.now() : ''}:${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
     let body;
     if (!this.selection && this.panel !== 'settings' && this.bodyCache?.key === contentKey) {
       body = this.bodyCache.lines; this.contentHits = this.bodyCache.hits;
@@ -1834,6 +1890,15 @@ export class TerminalChat {
         this.skillEnsureFocus = false;
       }
     }
+    if (this.panel === 'agents' && !this.selection) {
+      if (this.agentTopRequested) { this.scroll = Math.max(0, body.length - bodyHeight); this.agentTopRequested = false; }
+      if (this.agentEnsureFocus) {
+        const start = Math.max(0, body.length - this.scroll - bodyHeight), focus = this.agentFocusRow || 0;
+        if (focus < start) this.scroll = Math.max(0, body.length - bodyHeight - focus);
+        else if (focus >= start + bodyHeight) this.scroll = Math.max(0, body.length - focus - 1);
+        this.agentEnsureFocus = false;
+      }
+    }
     this.scroll = Math.min(this.scroll, Math.max(0, body.length - bodyHeight));
     const end = this.selection ? Math.min(body.length, bodyHeight) : Math.max(0, body.length - this.scroll), start = Math.max(0, end - bodyHeight);
     const visibleBody = body.slice(start, end);
@@ -1846,7 +1911,7 @@ export class TerminalChat {
       if (cellWidth(line) > contentWidth) line = color(clip(line, contentWidth), palette.text);
       visibleBody[index] = line + ' '.repeat(Math.max(0, width - 1 - cellWidth(line))) + (this.selection || !maximum ? ' ' : index >= thumbOffset && index < thumbOffset + thumbHeight ? color('┃', palette.accent) : edge('│'));
     }
-    if (['chat', 'room', 'skills', 'settings'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
+    if (['chat', 'room', 'skills', 'agents', 'settings'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
     for (const hit of bottomHits) this.hitTargets.push({ ...hit, row: header.length + bodyHeight + hit.row + 1 });
     this.composerRow = header.length + bodyHeight + inputIndex + 1;
     this.composerOffset = composerOffset;

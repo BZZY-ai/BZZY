@@ -78,7 +78,10 @@ export function codexLaunch(provider, session, options = {}) {
   const effort = reasoningEffort(session, options);
   if (effort) override('model_reasoning_effort', effort);
   session.reasoningEffort = effort || 'provider default';
-  if (options.scopedAutonomy) override('agents.max_threads', 1);
+  if (options.scopedAutonomy) {
+    override('agents.max_threads', 1); override('agents.enabled', false);
+    override('features.multi_agent', false); override('features.multi_agent_v2', false);
+  }
   if (provider.auth === 'api-key') {
     env.BZZY_PROVIDER_API_KEY = apiKey(provider);
     const catalog = JSON.parse(fs.readFileSync(path.join(root, 'assets', 'model-template.json'), 'utf8'));
@@ -133,12 +136,12 @@ export class CodexEngine {
   async open() {
     if (this.rpc && !this.rpc.closed) return;
     this.closing = null;
-    if (this.options.toolHost && this.session.coreSkillsProtocol !== 3) {
+    if (this.options.toolHost && this.session.coreSkillsProtocol !== 4) {
       if (this.session.engineThreadId) {
         this.session.engineThreadId = null;
         this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
       }
-      this.session.coreSkillsProtocol = 3;
+      this.session.coreSkillsProtocol = 4;
     }
     const installed = version('codex');
     assertCodexVersion(installed);

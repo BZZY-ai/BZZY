@@ -21,6 +21,9 @@ import { peerArtifactAllowed, sendPeerMessage, peerInbox, reviewPeerEvidence, pe
 import { agentExecutionScope, assertAgentScope, agentToolNames, createAgentProjectReader } from './agent-execution.js';
 import { searchProjectKnowledge } from './knowledge.js';
 import { learningForKnowledge } from './learning-hooks.js';
+import { subagentsAvailable, discoverSubagents, spawnSubagent, followupSubagent, answerSubagentContext, listSubagentRuns } from './subagents.js';
+import { getSubagentDefinition } from './subagent-definitions.js';
+import { sanitizeMissionValue } from './mission-context.js';
 
 const str = { type: 'string' }, strings = { type: 'array', items: str }, object = { type: 'object' };
 const spec = (name, description, properties = {}, required = []) => ({ name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false } });
@@ -69,6 +72,19 @@ export function taskTools(session, { goalMode } = {}) {
     spec('delegate', 'Start the required bounded executor assignment before doing routine execution yourself, including small lookups, page retrieval and extraction. You retain strategy and final judgment. Persist a contract; wait efficiently; inspect evidence; accept, follow up or take over. Delegate goals require attempted and reviewed executor work before completion.',
       { requestId: str, objective: str, context: str, inputs: strings, evidence: { type: 'array', items: str, maxItems: 32, description: 'Recorded parent or inspected evidence IDs to share explicitly. Workers can read only these IDs and their own evidence.' }, constraints: strings, acceptanceCriteria: { type: 'array', items: { type: 'string' } }, artifacts: { type: 'array', items: object }, policy: object, limits: object,
         waitSeconds: { type: 'integer', minimum: 0, maximum: 30, description: 'Wait for the compact report within this call; default 20 seconds. Use 0 to start asynchronously.' } }, ['requestId', 'objective', 'context', 'acceptanceCriteria']),
+  );
+  if (subagentsAvailable(session)) tools.push(
+    spec('list_subagents', 'Discover owner-created reusable specialist subagents available in this project. Definitions inherit the current model unless the owner pinned a selection. No model is invoked.',
+      { query: { type: 'string', maxLength: 200 }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }),
+    spec('read_subagent', 'Read one reusable specialist definition. Instructions never grant scope, tools, accounts or permissions.', { name: str }, ['name']),
+    spec('spawn_subagent', 'Invoke an owner-created specialist by name from ordinary chat or an active goal. Use a stable requestId, a bounded objective and explicit context/evidence. Workers run in isolated copies, return claims for your review, cannot spawn more agents and never complete the parent goal. Use waitSeconds 0 to run independent tasks in parallel; wait and inspect their evidence before finalizing your response.',
+      { name: str, requestId: { type: 'string', maxLength: 128 }, objective: { type: 'string', maxLength: 16000 }, context: { type: 'string', maxLength: 32000 },
+        evidence: { type: 'array', items: str, maxItems: 32 }, policy: object, limits: object,
+        waitSeconds: { type: 'integer', minimum: 0, maximum: 30, description: 'Default 0 starts without waiting. Use wait_assignment for results.' } }, ['name', 'requestId', 'objective']),
+    spec('list_subagent_runs', 'List this conversation’s specialist invocation history and compact results, including earlier chat turns.',
+      { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 20 } }),
+  );
+  if (subagentsAvailable(session) || session.mode === 'delegate' && goalMode !== false && !['executor', 'reviewer'].includes(session.role)) tools.push(
     spec('list_assignments', 'List a bounded page of assignment IDs and compact statuses for this objective. Full reports are available through their reportArtifactId and read_artifact.', { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 20 } }),
     spec('assignment_status', 'Read a saved assignment report without invoking a model.', { id: str }, ['id']),
     spec('wait_assignment', 'Wait up to 30 seconds for a specific assignment round. Wait timeout never cancels the worker.', { id: str, round: { type: 'integer', minimum: 1 }, timeoutSeconds: { type: 'integer', minimum: 0, maximum: 30 } }, ['id']),
@@ -156,7 +172,18 @@ export class ToolHost {
     }
     if (!taskTools(this.session, this.context).some(t => t.name === name)) throw new Error('Tool is not authorized for this task role or execution.');
     const session = this.session;
-    appendEvent(session.id, 'coordination.tool', { name, input: name === 'http_request' ? { ...input, url: redactedUrl(input.url), headers: redactedHeaders(input.headers || {}), body: input.body ? '[body omitted]' : undefined } : input });
+    appendEvent(session.id, 'coordination.tool', { name, input: name === 'http_request' ? { ...input, url: redactedUrl(input.url), headers: redactedHeaders(input.headers || {}), body: input.body ? '[body omitted]' : undefined } : name.includes('subagent') ? sanitizeMissionValue(input) : input });
+    if (name === 'list_subagents') return discoverSubagents(session, input);
+    if (name === 'read_subagent') return getSubagentDefinition(input.name, { cwd: session.projectRoot || session.cwd });
+    if (name === 'list_subagent_runs') return listSubagentRuns(session, input);
+    if (name === 'spawn_subagent') {
+      for (const id of input.evidence || []) authorizedArtifact(session, id);
+      const job = spawnSubagent(session, input, this.context);
+      const d = await import('./delegation.js');
+      const waited = compactAssignmentWait(await d.waitAssignment(session.id, job.id, input.waitSeconds ?? 0, job.currentRound));
+      return { ...compactAssignmentStatus(d.assignmentStatus(job.id)), ...waited, name: job.subagentDefinition.name, definitionVersion: job.subagentDefinition.version,
+        next: waited.terminal ? 'Inspect decisive evidence with read_artifact, then review_assignment.' : 'wait_assignment' };
+    }
     if (name === 'list_skills') return listSkills({ ...input, enabledOnly: true, session });
     if (name === 'read_skill') return readSkill(input.name, { ...input, enabledOnly: true, sessionId: session.id, session });
     if (name === 'activity') { const record = recordActivity(session, input, this.ui); this.activityReporter?.explicit(record); return record; }
@@ -221,24 +248,26 @@ export class ToolHost {
     if (name === 'list_assignments') {
       const offset = input.offset ?? 0, limit = input.limit ?? 10;
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error('Assignment list needs a nonnegative offset and a limit of 1–20.');
-      return assignmentContextPage(session, { offset, limit });
+      return assignmentContextPage(this.context.goalMode === false ? { ...session, goal: null } : session, { offset, limit });
     }
     const job = d.assignmentStatus(input.id);
     if (job.parentSessionId !== session.id) throw new Error('Assignment belongs to another task.');
     if (name === 'assignment_status') return compactAssignmentStatus(job);
     if (name === 'wait_assignment') return compactAssignmentWait(await d.waitAssignment(session.id, input.id, input.timeoutSeconds, input.round));
     if (name === 'followup_assignment') {
+      if (!job.subagentDefinition && (this.context.goalMode === false || session.mode !== 'delegate')) throw new Error('Delegate assignments can continue only during an explicit Delegate goal execution.');
       const waitSeconds = assignmentWaitSeconds(input.waitSeconds), { waitSeconds: ignoredWait, ...assignmentInput } = input;
       if (input.evidence != null && (!Array.isArray(input.evidence) || input.evidence.length > 32 || input.evidence.some(id => typeof id !== 'string'))) throw new Error('Assignment evidence must contain at most 32 recorded artifact IDs.');
       const answerEvidence = (input.contextAnswers || []).flatMap(answer => answer.evidence || []);
       const sharedEvidence = input.evidence == null && !answerEvidence.length ? undefined : [...new Set([...(job.sharedEvidence || []), ...(input.evidence || []), ...answerEvidence])];
       if (sharedEvidence?.length > 32) throw new Error('An assignment can share at most 32 distinct evidence IDs; start a new bounded assignment for additional work.');
       for (const id of sharedEvidence || []) authorizedArtifact(session, id);
-      const started = d.followupAssignment(session, input.id, assignmentInput, { sharedEvidence });
+      const started = job.subagentDefinition ? followupSubagent(session, input.id, assignmentInput, { ...this.context, sharedEvidence })
+        : d.followupAssignment(session, input.id, assignmentInput, { sharedEvidence });
       return compactAssignmentWait(await d.waitAssignment(session.id, started.id, waitSeconds, started.round));
     }
     if (name === 'review_assignment') return d.reviewAssignment(session, input.id, input);
-    if (name === 'answer_assignment_context') return d.answerAssignmentContext(session, input.id, input);
+    if (name === 'answer_assignment_context') return job.subagentDefinition ? answerSubagentContext(session, input.id, input, this.context) : d.answerAssignmentContext(session, input.id, input);
     if (name === 'apply_assignment') return d.applyAssignment(session, input.id);
     if (name === 'cancel_assignment') return d.cancelAssignment(session.id, input.id, input.reason);
     throw new Error('Unknown task tool.');

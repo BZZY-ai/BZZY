@@ -152,6 +152,19 @@ upgraded public Relay, physical iPhone/APNs behavior, TestFlight distribution an
 native Linux/reboot service behavior still need their deployment checks.
 See [setup and operation](RELAY.md).
 
+## Specialist subagents
+
+`src/engine/subagent-definitions.js` owns revision-checked project/global
+specialist definitions and immutable content versions. `subagents.js` resolves a
+definition and model selection against the current execution and starts the
+existing bounded assignment worker. The shared tools expose discovery,
+invocation, status, waits, follow-ups, review and cancellation to ordinary chat
+and goal coordinators across providers. Terminal Agents is a frontend for this
+library and invocation history, separate from persistent iPhone Agent resources.
+Chat workers bind to an exact live run; definition instructions cannot grant
+scope or native tools, recursively spawn workers, or complete parent goals.
+See [specialist subagents](SUBAGENTS.md).
+
 ## Remaining Core work, in dependency order
 
 1. Extend and validate the implemented bounded persistent Agent execution path

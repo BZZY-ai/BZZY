@@ -42,6 +42,7 @@ import { backendCommand } from '@bzzy/core/engine/entry.js';
 import { activateCLIHost, coreHostStatus, stopCoreHost, restartCoreHost } from '@bzzy/core/engine/host-service.js';
 import { syncCodexSkills, skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
 import { knowledgeCLI } from './knowledge-command.js';
+import { subagentsCLI } from '@bzzy/core/engine/subagents-cli.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
@@ -53,6 +54,8 @@ Usage:
   bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
   bzzy skills sync                     Choose and import Codex skill folders
+  bzzy subagents list                  List reusable specialist subagents
+  bzzy subagents create FILE.json      Save a specialist definition for this project
   bzzy knowledge search TEXT           Search this engagement's knowledge and past chats
   bzzy knowledge review [SESSION]      Queue a bounded lesson review for an existing chat
   bzzy --delegate                       Choose brain and hands; chat normally or start /goal
@@ -143,7 +146,7 @@ Options:
   -v, --version         Show version
 
 Chat commands: /goal <objective>, /goal status|pause|resume|clear, /delegate, /debate, /solo,
-/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /default, /usage, /settings, /help, /exit
+/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /default, /usage, /settings, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
@@ -242,6 +245,7 @@ export function parseArgs(argv) {
     else if (raw === '--detailed') options.detailed = true;
     else if (['--help', '-h'].includes(raw)) options.help = true;
     else if (['--version', '-v'].includes(raw)) options.version = true;
+    else if (args[0] === 'subagents' && ['--global', '--revision'].includes(raw)) args.push(raw);
     else if (raw.startsWith('-')) throw new Error(`Unknown option ${raw}. Run bzzy --help.`);
     else args.push(raw);
   }
@@ -512,7 +516,7 @@ export async function main(argv) {
   options.cwd = fs.realpathSync(options.cwd);
   await retireTelegram();
   const launchCommand = args[0];
-  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge']);
+  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'subagents']);
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
@@ -525,6 +529,7 @@ export async function main(argv) {
   const launch = async () => {
     const [command, ...rest] = args;
     if (command === 'knowledge') return knowledgeCLI(rest, options, ui);
+    if (command === 'subagents') return subagentsCLI(rest, options, ui);
     if (command === 'skills') {
       if (rest.length !== 1 || rest[0] !== 'sync') throw new Error('Use bzzy skills sync, or open Skills in the terminal.');
       if (ui.interactive) { await terminalSkillsCommand('/skills sync', ui); return 0; }
