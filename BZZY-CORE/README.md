@@ -12,6 +12,14 @@ the same engine and private state.
 
 Implemented:
 
+- Encrypted Relay Library codes transfer skills, specialist agents, workflows
+  and saved goal templates between execution hosts. Concrete terminal review,
+  missing-only installation, optional enablement and durable import receipts
+  preserve existing definitions and owner choices. See [Library sharing](docs/LIBRARY-SHARING.md).
+- Full-session Relay imports retain a trusted-source journal: accepted retries
+  do not duplicate chats, and later snapshots append missing immutable history
+  without overwriting local sessions/goals. Source metadata versions and scoped
+  knowledge revision history remain historical. See [project sharing](docs/PROJECT-SHARING.md).
 - Local-owner saved-goal browsing over existing terminal goals and their durable
   replacement/clear history. The CLI's plain `/goal` picker deduplicates objectives
   and starts a fresh goal through normal input admission. Listing is read-only;

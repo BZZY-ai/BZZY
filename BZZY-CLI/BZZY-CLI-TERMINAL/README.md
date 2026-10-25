@@ -86,6 +86,16 @@ disabled; reviewed agent definitions are added without starting agents or models
 Private bindings, history and case/evidence packages are excluded from this
 portable format. Unsafe packages are blocked rather than silently stripped.
 
+For Mac-to-Linux transfer without moving ZIP files, use **Transfer Library via
+Relay** in either menu, or `/library`. It includes skills, specialist agents,
+workflows and saved goal text. `bzzy library share` generates an expiring
+`BZZY-LIBRARY-…` code; `bzzy library import` asks for hidden code entry on the
+receiving host. Compare fingerprints and approve the recipient on the sender.
+Review exact files, then install only missing entries, optionally enabling the
+reviewed skills/agents. Existing names and availability are never overwritten.
+The Relay must also be updated for Library codes. See
+[Library sharing](../../BZZY-CORE/docs/LIBRARY-SHARING.md).
+
 Use `/workflows` to choose one reusable goal pre-prompt, like the model picker.
 Choose **None** to turn it off; chat shows the selected workflow's name. Create,
 load, inspect and edit definitions through this list or its links in Skills and

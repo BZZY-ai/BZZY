@@ -8,7 +8,8 @@ import { chooseModel, assertModelIdle } from './models.js';
 import { chatHelp } from './terminal-commands.js';
 import { chooseSavedSession, promptSessionAlias, forgetDeletedConversation } from './session-browser.js';
 import { exportProject } from './project-bundle.js';
-import { shareTerminal, importTerminal, forgetPrivateImportInput } from './share-ui.js';
+import { shareTerminal, forgetPrivateImportInput } from './share-ui.js';
+import { shareLibrary, importRelayShare } from './library-ui.js';
 import { skillThat } from './skill-that.js';
 import { checkConnections } from './connection-check.js';
 import { enqueueGoalTurn, updateIdleGoal, setSessionModel, setSessionProvider, setSessionMode, assertSessionModeSwitch, executionRecord } from '@bzzy/core/engine/session-operations.js';
@@ -254,7 +255,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           finally { modalTask = false; }
           continue;
         }
-        if (text === '/update' || text === '/yolo' || /^\/(?:settings|skills|agents|subagents|metrics|session-action)(?:\s|$)/.test(text)) {
+        if (text === '/update' || text === '/yolo' || /^\/(?:settings|skills|agents|subagents|metrics|session-action|library)(?:\s|$)/.test(text)) {
           modalTask = true;
           try { await ui.settingsCommand(text); } finally { modalTask = false; }
           continue;
@@ -277,9 +278,10 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           modalTask = true;
           try {
             if (/^\/share(?:\s|$)/.test(text)) {
-              if (text !== '/share') throw new Error('Use /share without arguments.');
-              await shareTerminal(loadSession(sessionId), ui);
-            } else await importTerminal(text.replace(/^\/import\s*/, ''), loadSession(sessionId).cwd, ui);
+              if (text === '/share library') await shareLibrary(loadSession(sessionId).cwd, ui);
+              else if (text === '/share') await shareTerminal(loadSession(sessionId), ui);
+              else throw new Error('Use /share for a full session, or /share library for reusable Library entries.');
+            } else await importRelayShare(text.replace(/^\/import\s*/, ''), loadSession(sessionId).cwd, ui, { chooseDestination: true });
           } finally { modalTask = false; }
           continue;
         }

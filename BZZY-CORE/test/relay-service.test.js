@@ -63,3 +63,15 @@ test('connection errors remain sanitized and disabled service does not reconnect
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(attempts, 1);
 });
+
+test('Library share creation uses only the existing local owner service dispatch', async () => {
+  const gateway = new FixtureGateway(), input = { cwd: directory, expectedDigest: 'a'.repeat(64) };
+  gateway.createLibraryShare = value => { assert.deepEqual(value, input); return { shareId: 'fixture-library-share' }; };
+  const service = new CoreRelayService({ gatewayFactory: () => gateway });
+  await assert.rejects(service.request('POST', 'library-share-create', input), { code: 'GATEWAY_OFFLINE' });
+  try {
+    await service.connect();
+    assert.deepEqual(await service.request('POST', 'library-share-create', input), { shareId: 'fixture-library-share' });
+    await assert.rejects(service.request('GET', 'library-share-create', input), { code: 'INVALID_REQUEST' });
+  } finally { await service.close(); }
+});

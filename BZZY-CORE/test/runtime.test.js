@@ -109,7 +109,7 @@ test('Relay administration is local-owner-only and daemon startup stays offline 
   assert.equal(snapshot.status.managed, true);
   assert.equal(snapshot.status.enabled, false);
   const session = create(), grant = await core.grantSession({ sessionId: session.id, expiresInSeconds: 60 });
-  for (const [method, route, body] of [['GET', 'status'], ['POST', 'connect', {}], ['POST', 'init', {}]]) {
+  for (const [method, route, body] of [['GET', 'status'], ['POST', 'connect', {}], ['POST', 'init', {}], ['POST', 'library-share-create', {}]]) {
     const response = await fetch(`${info.url}/v1/relay/${route}`, { method,
       headers: { authorization: `Bearer ${grant.token}`, 'content-type': 'application/json' },
       ...(body ? { body: JSON.stringify(body) } : {}) });

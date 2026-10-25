@@ -130,6 +130,7 @@ export class CoreRelayService {
     }
     if (!this.#gateway) fail('GATEWAY_OFFLINE', 'Connect the Core gateway first.');
     if (action === 'share-create') return this.#gateway.createProjectShare(input);
+    if (action === 'library-share-create') return this.#gateway.createLibraryShare(input);
     if (action === 'share-status') { object(input, ['shareId']); return this.#gateway.projectShareStatus(input.shareId); }
     if (action === 'share-approve') return this.#gateway.approveProjectShare(input);
     if (action === 'share-revoke') { object(input, ['shareId']); return this.#gateway.revokeProjectShare(input.shareId); }

@@ -44,7 +44,7 @@ export function inviteSpec(input, limits = LIMITS) {
   record(input, ['kind', 'mode', 'resource', 'actions', 'ttlSeconds', 'grantTtlSeconds']);
   const { kind, resource, mode = kind === 'PAIR' ? 'pair' : 'portable', actions = mode === 'portable' ? ['import'] : ['observe'],
     ttlSeconds = limits.inviteTtlSeconds, grantTtlSeconds = mode === 'portable' ? 300 : 86400 } = input;
-  if (!['PAIR', 'AGENT', 'TERMINAL'].includes(kind) || (kind === 'PAIR' ? mode !== 'pair' : !['portable', 'live'].includes(mode))) fail('INVALID_PURPOSE');
+  if (!['PAIR', 'AGENT', 'TERMINAL', 'LIBRARY'].includes(kind) || (kind === 'PAIR' ? mode !== 'pair' : kind === 'LIBRARY' ? mode !== 'portable' : !['portable', 'live'].includes(mode))) fail('INVALID_PURPOSE');
   opaque(resource);
   const allowed = mode === 'portable' ? ['import'] : ['observe', 'claim', 'takeover', 'execute', 'answer', 'pause', 'cancel', 'steer'];
   if (!Array.isArray(actions) || !actions.length || actions.length > allowed.length || new Set(actions).size !== actions.length || actions.some(a => !allowed.includes(a)) || !actions.includes(mode === 'portable' ? 'import' : 'observe')) fail('INVALID_ACTIONS');
@@ -54,7 +54,7 @@ export function inviteSpec(input, limits = LIMITS) {
   return { kind, mode, resource, actions, ttlSeconds, grantTtlSeconds };
 }
 export function importCode(value) {
-  if (typeof value !== 'string' || !/^BZZY-(PAIR|AGENT|TERMINAL)-[A-Za-z0-9_-]{43}$/.test(value)) fail('INVALID_CODE');
+  if (typeof value !== 'string' || !/^BZZY-(PAIR|AGENT|TERMINAL|LIBRARY)-[A-Za-z0-9_-]{43}$/.test(value)) fail('INVALID_CODE');
   b64(value.split('-').slice(2).join('-'), 32);
   return value;
 }

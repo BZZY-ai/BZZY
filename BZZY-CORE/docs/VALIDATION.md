@@ -1,3 +1,65 @@
+# Relay Library sharing and incremental full-session copies (2026-10-25)
+
+Final Node.js 24/macOS suites: **707 Core tests passed, 2 skipped** (709 total),
+**677 CLI tests passed, 21 skipped** (698 total), and **39 Relay tests passed**,
+zero failures. All three syntax checks and whitespace checks pass. The final
+receiver labels/counts were rechecked with all **32 Library, switch, share and
+destination UI tests**. Fixtures use private temporary homes on the internal
+disk, isolated processes and local Relays, without live model requests or user
+session changes. Running installations and the deployed Relay were not updated.
+
+Library v2 manifests include skills/resources, specialist agents, workflows and
+objective-only goal templates. Tests verify exact byte inventories, complete
+Unicode text, scope remapping, inherited recipient model selection, skipped
+existing names/text, preserved owner enable/disable decisions, explicit enable
+choice, atomic registry/audit/receipt rollback and fresh-process receipt replay.
+Original goal outcomes, evidence, contracts, workflow authority, provider endpoints
+and private bindings cannot enter these definitions. v1 ZIP behavior remains
+compatible. Rehashed malicious packages with extra authority/model fields, unknown
+files and credential/account data in resource bytes or filenames are rejected.
+Blocked source goals require explicit, source-digest-pinned omission; their IDs
+and private text do not enter the archive.
+
+Real encrypted multi-chunk tests transfer all four kinds to independent recipient
+Core homes in child processes, with disabled and explicitly enabled imports and
+zero session/model executions. LIBRARY is strictly portable/import-only at the
+Relay, grant, transfer and ZIP boundaries. Local-owner route tests reject scoped
+session credentials; no phone administration command was added. Tests cover
+fingerprint mismatch, cancellation of pending review, revocation before commit,
+prepared-source cleanup, commit-before-completion acknowledgment and old-Relay
+update errors. Existing Agent/Terminal, pairing, rate-budget and runtime tests pass.
+
+Full-session tests cover accepted retry/restart without duplicate chats, stable
+identities after an actual process death between filesystem merge and SQL commit,
+missing event/file import, preserved local goal/model/messages, source-history
+fork rejection, changed-file conflict rollback, trusted sender separation, deleted
+chat handling and cancellation. New source BZZY metadata is versioned privately;
+recipient notes/checkpoints remain intact and evidence paths reference the proper
+historical copy. Original knowledge revision history remains readable with imported
+truth inconclusive. Private import journals/receipts cannot be exported as package
+authority or installed through raw archives. New merges require idle chats; an
+exact accepted receipt can be read while recipient work is active.
+
+Terminal tests verify private code/QR routing, hidden entry, code redaction on
+failure, source/destination context pins, no writes on cancel, explicit review,
+reachable long-file text pages, draft/cursor preservation and narrow/normal/wide
+Library controls. The destination wizard creates folders only after approval,
+rejects links/context changes, and removes only its own still-empty directories.
+Difference labels distinguish new entries from existing entries that will be skipped.
+Approved large transfers now survive their invitation code's earlier expiry;
+a regression reproduced the prior premature cancellation before the fix. Explicit
+`/cancel` revokes an unfinished approved transfer, while closing its view retains
+Core-owned work. The existing validation-command fixture now uses operator-stop
+before deleting its workspace: control-only shutdown intentionally retained its
+active review runners and caused an observed ENOTEMPTY teardown race. Its product
+assertions remain intact, with an added daemon-exit assertion and bounded removal
+retries. The final full CLI run passes with this teardown repair.
+
+A deployed Relay update is required for BZZY-LIBRARY codes. Production Relay
+rollout, an actual Mac-to-Linux VPS transfer and native Linux execution were not
+performed by this validation. These tests establish local protocol and storage
+behavior, not arbitrary secret detection or conflict-free bidirectional file sync.
+
 # Saved-goal picker and fresh reuse (2026-10-25)
 
 Full Node.js 24/macOS suites: **679 Core tests passed, 2 skipped** (681 total)

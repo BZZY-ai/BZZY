@@ -1,8 +1,13 @@
 import path from 'node:path';
+import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { home } from '@bzzy/core/engine/files.js';
+import { listRecords } from '@bzzy/core/engine/database.js';
 import { copyText } from './clipboard.js';
 
 const fingerprint = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const terminalCode = value => typeof value === 'string' && /^BZZY-TERMINAL-[A-Za-z0-9_-]{43}$/.test(value);
+const libraryCode = value => typeof value === 'string' && /^BZZY-LIBRARY-[A-Za-z0-9_-]{43}$/.test(value);
 const finished = state => ['complete', 'revoked', 'expired'].includes(state);
 
 export function relayImportArgument(value) { return typeof value === 'string' && /^BZZY(?:-|:)/i.test(value.trim()); }
@@ -10,7 +15,7 @@ export function relayImportArgument(value) { return typeof value === 'string' &&
 // Commands typed directly into the chat composer are private client actions.
 // Hidden /import entry is preferred; remove legacy/queued composer copies too.
 export function forgetPrivateImportInput(ui, value) {
-  if (!/^\/import(?:\s|$)/.test(String(value).trim())) return;
+  if (!/^\/(?:import|library\s+import)(?:\s|$)/.test(String(value).trim())) return;
   const tui = ui.tui;
   if (tui) {
     tui.history = (tui.history || []).filter(item => item !== value && item.trim() !== String(value).trim());
@@ -25,7 +30,7 @@ function privateTerminal(ui) {
   }
   ui.openTerminal?.();
 }
-function safeFailure(error) {
+function safeFailure(error, library = false) {
   const messages = {
     INVITE_EXPIRED: 'The import code expired. Ask the sender for a new one.',
     INVITE_UNAVAILABLE: 'The import code is unavailable or already used. Ask the sender for a new one.',
@@ -43,13 +48,20 @@ function safeFailure(error) {
     EXPORT_ACTIVE: 'Pause the project’s active executions before sharing a complete copy.',
     EXPORT_INVALID: 'The project could not pass the complete-context export checks.',
     IMPORT_CONFLICT: 'The destination has conflicting files. Choose an empty directory; nothing will be overwritten.',
+    IMPORT_ACTIVE: 'Pause the imported chat before merging newer history.',
+    IMPORT_CONTEXT_CHANGED: 'The terminal, project or Core host changed. Reopen /import before receiving a copy.',
+    IMPORT_DESTINATION: 'Choose a real destination directory without symbolic links or conflicting files.',
     IMPORT_INVALID: 'The received project failed archive, integrity or private-state validation.',
     PROVIDER_UNAVAILABLE: 'Configure the project’s provider on this host before importing. Sender account settings are not transferred.',
     CONFIRMATION_REQUIRED: 'Compare and confirm the complete fingerprint on the other device before approving.',
     SHARE_CONTEXT_INCOMPLETE: 'The selected project has incomplete saved context. Check it on the source host before sharing.',
+    LIBRARY_RELAY_UNSUPPORTED: 'This Relay does not support Library codes yet. Update BZZY Relay, then create a new code.',
+    RELAY_UPGRADE_REQUIRED: 'This Relay does not support Library codes yet. Update BZZY Relay, then create a new code.',
+    LIBRARY_IMPORT_INVALID: 'The received Library failed its package or integrity checks. Nothing was installed.',
+    STALE_REVIEW: 'The Library changed. Review it again before sharing or installing.',
   };
   return new Error(error?.name === 'AbortError' ? 'Terminal import cancelled; no execution was started.'
-    : messages[error?.code] || 'Terminal sharing failed. Check Core/Relay, source approval, destination conflicts and the project security checks.');
+    : messages[error?.code] || `${library ? 'Library' : 'Terminal'} sharing failed. Check Core/Relay, source approval, destination conflicts and the project security checks.`);
 }
 function changeView(ui, view, fields) {
   if (ui.privateView !== view) return;
@@ -73,49 +85,65 @@ function qrLines(value) {
   return lines.every(line => /^[ █▄▀]*$/.test(line.replace(/\x1b\[(?:0|30|37|40|47)m/g, ''))) ? lines : [];
 }
 
-export async function shareTerminal(session, ui, { relayLoader = () => import('@bzzy/core/relay'), copy = copyText } = {}) {
+export function shareTerminal(session, ui, options) { return sharePortable(session, ui, options); }
+
+export function shareLibraryBundle(cwd, review, ui, options = {}) {
+  return sharePortable({ cwd }, ui, { ...options, library: review });
+}
+
+async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/core/relay'), copy = copyText, library, assertContext = () => {} } = {}) {
   privateTerminal(ui);
+  assertContext();
+  const label = library ? 'Library' : 'terminal';
   if (ui.sessionMode === 'VIEW') throw new Error('Attach with control before sharing this terminal.');
-  if (!session?.id || !path.isAbsolute(session.cwd || '')) throw new Error('Choose an existing terminal session before sharing.');
-  let service, share, state;
+  if ((!library && !session?.id) || !path.isAbsolute(session.cwd || '')) throw new Error('Choose an existing terminal project before sharing.');
+  let service, share, state, cancelled = false;
   try {
-    return await privateView(ui, 'Share terminal', async view => {
+    return await privateView(ui, `Share ${label}`, async view => {
       changeView(ui, view, { lines: [
         `Project: ${session.cwd}`,
-        'Includes project files, full chats, .bzzy notes, memory and related execution/evidence context.',
+        library ? 'Reviewed skills, specialist agents, workflows and saved goal text.' : 'Includes project files, full chats, .bzzy notes, memory and related execution/evidence context.',
         'Credentials, account bindings, device identities and live permissions are excluded.',
-        'The recipient gets an independent paused copy and uses their own accounts.',
+        library ? 'The recipient installs missing entries only and uses their own accounts and models.' : 'The recipient gets an independent paused copy and uses their own accounts.',
       ] });
-      if (!/^share$/i.test((await ui.ask('Type SHARE to prepare this complete terminal copy · Esc cancels › '))?.trim() || '')) return null;
+      if (!library && !/^share$/i.test((await ui.ask('Type SHARE to prepare this complete terminal copy · Esc cancels › '))?.trim() || '')) return null;
       const module = await relayLoader();
+      assertContext();
       service = new module.CoreTerminalSharing();
       await service.start();
-      share = await service.createShare({ sessionId: session.id, ttlSeconds: 600 });
-      if (!terminalCode(share?.code) || !fingerprint(share?.senderFingerprint) || !Number.isSafeInteger(share?.expiresAt) || share.expiresAt <= Date.now()) {
+      assertContext();
+      share = library ? await service.createLibraryShare({ cwd: session.cwd, expectedDigest: library.sourceDigest,
+        ...(library.excludeGoalIds?.length ? { excludeGoalIds: library.excludeGoalIds } : {}), ttlSeconds: 600 })
+        : await service.createShare({ sessionId: session.id, ttlSeconds: 600 });
+      assertContext();
+      if (!(library ? libraryCode : terminalCode)(share?.code) || !fingerprint(share?.senderFingerprint) || !Number.isSafeInteger(share?.expiresAt) || share.expiresAt <= Date.now()) {
         throw new Error('Invalid private invitation');
       }
       let qr = qrLines(share.terminalQR || (typeof share.renderQR === 'function' ? await share.renderQR() : ''));
       let showQR = true, polling = false;
       const refresh = async () => {
+        assertContext();
         if (polling) return;
-        if (Date.now() >= share.expiresAt) {
-          state = { state: 'expired', pending: [] };
-          changeView(ui, view, { lines: ['This terminal share expired. Generate a new code to share again.'], qr: [] });
-          ui.reader?.close();
-          return;
-        }
         polling = true;
         try {
           state = await service.status(share.shareId);
+          // A consumed code and its approved transfer have separate deadlines.
+          // Large copies can outlive the invitation's ten-minute lifetime.
+          if (state.state !== 'approved' && !finished(state.state) && Date.now() >= share.expiresAt) {
+            state = { state: 'expired', pending: [] };
+            changeView(ui, view, { lines: [`This ${label} share expired. Generate a new code to share again.`], qr: [] });
+            ui.reader?.close(); return;
+          }
           const privateLines = [
             `Project: ${session.cwd}`,
             `Sender fingerprint: ${share.senderFingerprint}`,
-            `Expires: ${new Date(share.expiresAt).toLocaleTimeString()} · ${state.state}`,
+            state.state === 'approved' ? 'Recipient approved · encrypted transfer in progress'
+              : `Expires: ${new Date(share.expiresAt).toLocaleTimeString()} · ${state.state}`,
           ];
-          if (!finished(state.state)) privateLines.push(share.code);
+          if (!finished(state.state) && state.state !== 'approved') privateLines.push(share.code);
           if (state.pending?.length) privateLines.push('A recipient is waiting. Compare the full fingerprint on their device before approving.');
           for (const request of state.pending || []) if (fingerprint(request.fingerprint)) privateLines.push(`Requesting recipient: ${request.fingerprint}`);
-          changeView(ui, view, { lines: privateLines, qr: showQR && !finished(state.state) ? qr : [] });
+          changeView(ui, view, { lines: privateLines, qr: showQR && !finished(state.state) && state.state !== 'approved' ? qr : [] });
           if (finished(state.state)) ui.reader?.close();
         } finally { polling = false; }
       };
@@ -127,7 +155,9 @@ export async function shareTerminal(session, ui, { relayLoader = () => import('@
         try { action = (await ui.ask('Enter refresh · c copy code · q QR · a approve recipient · /cancel › '))?.trim().toLowerCase(); }
         finally { clearInterval(timer); }
         if (finished(state?.state)) break;
-        if (action == null || action === '/cancel') break;
+        if (action == null) break;
+        if (action === '/cancel') { cancelled = true; break; }
+        assertContext();
         if (action === 'c') { await copy(share.code); changeView(ui, view, { notice: 'Code copied. It expires automatically.' }); }
         else if (action === 'q') showQR = !showQR;
         else if (action === 'a') {
@@ -142,19 +172,75 @@ export async function shareTerminal(session, ui, { relayLoader = () => import('@
         await refresh();
       }
       qr = [];
-      return { state: state?.state || 'cancelled' };
+      return { state: cancelled ? 'cancelled' : state?.state || 'cancelled' };
     });
-  } catch (error) { throw safeFailure(error); }
+  } catch (error) { throw safeFailure(error, Boolean(library)); }
   finally {
-    if (service && share && !['approved', 'complete'].includes(state?.state)) await service.revokeShare(share.shareId).catch(() => {});
+    if (service && share && state?.state !== 'complete' && (cancelled || state?.state !== 'approved')) await service.revokeShare(share.shareId).catch(() => {});
     await Promise.resolve(service?.close()).catch(() => {});
   }
 }
 
-export async function importTerminal(value, cwd, ui, { relayLoader = () => import('@bzzy/core/relay') } = {}) {
+function destinationFailure() { throw Object.assign(new Error('The import destination is unavailable.'), { code: 'IMPORT_DESTINATION' }); }
+const directoryPin = directory => {
+  const stat = fs.lstatSync(directory, { bigint: true });
+  if (!stat.isDirectory() || stat.isSymbolicLink()) destinationFailure();
+  return { directory, dev: stat.dev, ino: stat.ino };
+};
+function sameDirectory(pin) {
+  try { const current = directoryPin(pin.directory); return current.dev === pin.dev && current.ino === pin.ino; }
+  catch { return false; }
+}
+function destinationChain(destination) {
+  const root = path.parse(destination).root, pins = [], missing = [];
+  let current = root, absent = false;
+  pins.push(directoryPin(root));
+  for (const part of path.relative(root, destination).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    if (!absent) {
+      try { pins.push(directoryPin(current)); continue; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; absent = true; }
+    }
+    missing.push(current);
+  }
+  return { pins, missing };
+}
+function createDestination(destination, created) {
+  const plan = destinationChain(destination);
+  for (const directory of plan.missing) {
+    if (!plan.pins.every(sameDirectory)) destinationFailure();
+    fs.mkdirSync(directory, { mode: 0o700 });
+    const pin = directoryPin(directory); created.push({ ...pin, parents: [...plan.pins] });
+    if (!plan.pins.every(sameDirectory)) destinationFailure();
+    plan.pins.push(pin);
+  }
+  if (!plan.pins.every(sameDirectory)) destinationFailure();
+  return fs.realpathSync(destination);
+}
+function importContext(cwd, ui) {
+  const original = path.resolve(cwd), source = fs.realpathSync(original), pin = directoryPin(source), coreHome = home();
+  const visible = [ui.sessionId, ui.activeTab, ui.nextSession?.id];
+  const check = () => {
+    if (home() !== coreHome || ui.closed || ui.coreLifecycleInterrupted || !sameDirectory(pin) || fs.realpathSync(original) !== source ||
+      [ui.sessionId, ui.activeTab, ui.nextSession?.id].some((value, index) => value !== visible[index])) {
+      throw Object.assign(new Error('The import context changed.'), { code: 'IMPORT_CONTEXT_CHANGED' });
+    }
+  };
+  const location = `${pin.dev}:${pin.ino}`;
+  // This journal is a local UI hint only; Core rechecks ownership and import
+  // identity before accepting an incremental update or writing project files.
+  const previous = ['project-import-source', 'project-import-pending'].some(kind => listRecords(kind).some(row => row.root === source && row.location === location));
+  const initialized = fs.existsSync(path.join(source, '.bzzy', 'project.json'));
+  return { check, source, suggested: initialized && !previous ? path.join(source, `imported-session-${Date.now()}-${randomUUID().slice(0, 8)}`) : source };
+}
+
+export async function importTerminal(value, cwd, ui, { relayLoader = () => import('@bzzy/core/relay'), chooseDestination = false } = {}) {
   privateTerminal(ui);
-  let code = String(value || '').trim();
+  let code = String(value || '').trim(), destination = path.resolve(cwd), context, completed = false;
+  const created = [];
   try {
+    if (chooseDestination) context = importContext(cwd, ui);
+    const check = () => context?.check();
     const result = await privateView(ui, 'Import terminal', async view => {
       changeView(ui, view, { lines: [
         `Destination: ${path.resolve(cwd)}`,
@@ -162,33 +248,62 @@ export async function importTerminal(value, cwd, ui, { relayLoader = () => impor
         'The copy stays paused. Scripts, hooks, goals and agents are not started by import.',
       ] });
       if (!code) code = (await ui.secret('BZZY-TERMINAL code · hidden · Esc cancels › '))?.trim() || '';
+      check();
       if (!code) return null;
       if (!terminalCode(code) && !code.startsWith('BZZY:INVITE:1:')) throw Object.assign(new Error(), { code: 'WRONG_PURPOSE' });
+      if (context) {
+        const selected = await ui.ask('Destination folder · new folder for first import; previous import folder for updates · Esc cancels › ', { initialValue: context.suggested });
+        check(); if (selected == null) return null;
+        const entered = selected.trim() || context.suggested;
+        if (entered.length > 4096 || /[\x00-\x1f\x7f-\x9f]/u.test(entered)) destinationFailure();
+        destination = path.resolve(context.source, entered);
+        destinationChain(destination);
+        changeView(ui, view, { lines: [`Destination: ${destination}`, 'New imports use this folder. Updates preserve existing local work and add missing history.', 'Nothing runs automatically; existing files are never overwritten.'] });
+      }
       const sender = (await ui.ask('Enter the full sender fingerprint from their BZZY share screen › '))?.trim();
+      check();
       if (!sender) return null;
       if (!fingerprint(sender)) throw Object.assign(new Error(), { code: 'HOST_MISMATCH' });
-      if (!/^import$/i.test((await ui.ask('Type IMPORT to receive this private project into the destination above › '))?.trim() || '')) return null;
+      const confirmed = await ui.ask('Type IMPORT to receive this private project into the destination above › ');
+      check(); if (!/^import$/i.test(confirmed?.trim() || '')) return null;
       const abort = new AbortController();
       view.onCancel = () => abort.abort();
       const module = await relayLoader();
-      return module.importTerminalShare({ code, cwd: path.resolve(cwd), expectedSenderFingerprint: sender, signal: abort.signal,
+      check(); abort.signal.throwIfAborted();
+      if (typeof module.importTerminalShare !== 'function') throw new Error('Terminal importer unavailable.');
+      if (context) destination = createDestination(destination, created);
+      const monitor = context ? setInterval(() => { try { check(); } catch { abort.abort(); } }, 50) : null;
+      monitor?.unref();
+      try { return await module.importTerminalShare({ code, cwd: destination, expectedSenderFingerprint: sender, signal: abort.signal,
         onIdentity: ({ recipientFingerprint }) => {
+          check();
           if (!fingerprint(recipientFingerprint)) { abort.abort(); return; }
-          changeView(ui, view, { lines: [`Destination: ${path.resolve(cwd)}`, `Verified sender: ${sender}`,
+          changeView(ui, view, { lines: [`Destination: ${destination}`, `Verified sender: ${sender}`,
             `Your recipient fingerprint: ${recipientFingerprint}`, 'Give this full fingerprint to the sender for approval. Waiting for the source host…', 'Esc cancels.'] });
         },
         onProgress: ({ received, total }) => {
+          check();
           if (Number.isSafeInteger(received) && Number.isSafeInteger(total) && received >= 0 && total >= received) {
             changeView(ui, view, { notice: `Receiving encrypted project: ${received} / ${total} bytes` });
           }
         },
-      });
+      }); } finally { clearInterval(monitor); }
     });
     if (result) {
+      completed = true;
       const id = result.primarySession?.id;
-      ui.event('info', { message: `Terminal imported into ${path.resolve(cwd)}. Execution remains paused.${id ? `\nAttach when ready: bzzy --attach ${id}` : ''}` });
+      const message = result.alreadyImported ? `Already imported into ${destination}. No duplicate history was created.`
+        : result.added && result.preserved > 0 ? `Terminal updated in ${destination}. Added ${result.added.sessions || 0} chats, ${result.added.events || 0} history events and ${result.added.records || 0} records. Existing local work was retained.`
+          : `Terminal imported into ${destination}. Execution remains paused.`;
+      ui.event('info', { message: `${message}${id ? `\nAttach when ready: bzzy --attach ${id}` : ''}` });
     }
     return result;
   } catch (error) { throw safeFailure(error); }
-  finally { code = ''; }
+  finally {
+    code = '';
+    if (!completed) for (const pin of created.reverse()) {
+      try { if (sameDirectory(pin) && pin.parents.every(sameDirectory) && fs.readdirSync(pin.directory).length === 0) fs.rmdirSync(pin.directory); }
+      catch { /* Keep changed directories or any data written during import. */ }
+    }
+  }
 }

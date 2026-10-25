@@ -1,5 +1,37 @@
 # Complete-context Agent and terminal sharing through Relay
 
+For reusable skills, specialist agents, workflows and saved goal text, use the
+separate [Library sharing](LIBRARY-SHARING.md) flow. Full-session sharing below
+copies the selected project and its history; it does not silently install the
+sender's global Library or private account bindings.
+
+## Repeated terminal imports
+
+Updated CLI `/import` asks for a destination folder. An already initialized BZZY
+project suggests a fresh child directory for a first copy; use the original
+import directory to merge a later snapshot. Existing files are never replaced.
+
+Terminal imports bind a private journal to the authenticated sender fingerprint,
+source project and receiving directory identity. An exact accepted archive retry
+returns its receipt without creating another chat, including after restart.
+Later snapshots reuse the original ID mapping and append only missing immutable
+events and records. Local messages, model selections, current goals and context
+records remain intact. Changed source records and newer source `.bzzy` metadata
+remain historical versions in private import context; original knowledge revision
+history is retained with imported truth marked inconclusive. Derived search indexes
+and summaries can be rebuilt from the original records and chat.
+
+New snapshot merges require the imported chats to be idle. An altered or truncated
+source event prefix, deleted destination chat, changed directory identity or
+conflicting ordinary project file stops the merge explicitly. Identical files
+are skipped; missing files are copied. This is an additive import, not an
+automatic bidirectional file sync. Credentials, live authorization, workflow
+admission receipts and import-journal authority never become package authority.
+An interrupted filesystem merge retains a private stable identity plan so an
+explicit retry can complete without duplicate chats or accidental model replay.
+
+## Complete-context copy
+
 Both execution hosts need Node.js 24+ and `python3` on Core's process PATH.
 Python's standard-library ZIP helper performs packaging and bounded extraction;
 no Python packages or separate runtime service are installed. The CLI installer
@@ -65,10 +97,13 @@ chunks per second. Codes expire in at most ten minutes; an approved portable
 transfer grant expires in at most one hour. Expiry, cancellation and Core
 shutdown remove the private prepared ZIP. Cancellation cannot recall a copy
 already received by an authorized recipient.
+An approved transfer keeps its separate deadline after the one-use code expires.
+Explicit `/cancel` revokes an unfinished share; closing its approved source view
+detaches while Core continues the transfer.
 
 Relay must be updated alongside Core for these transfer limits. The updated
 Relay permits a separate budget of 4,096 RPCs per minute only for an active
-`TERMINAL` or `AGENT`/`portable`/`import` grant's authenticated participants and only for
+`TERMINAL`, `AGENT` or `LIBRARY`/`portable`/`import` grant's authenticated participants and only for
 `grant.inspect`, `route.send` and valid `delivery.ack` operations. Authentication,
 invitation enumeration/claims, unrelated grants and guessed IDs keep their
 existing rate limits. Frame, connection, queue, concurrency and metadata quotas

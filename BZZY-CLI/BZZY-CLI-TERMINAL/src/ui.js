@@ -2,6 +2,8 @@ import { updateCommand } from './update-checker.js';
 import { skillsCommand } from './skills-ui.js';
 import { subagentsCommand } from './subagents-ui.js';
 import { openWorkflows, workflowAction } from './workflow-ui.js';
+import { libraryCommand } from './library-ui.js';
+import { loadSession } from '@bzzy/core/engine/store.js';
 import { knowledgeCommand } from './knowledge-ui.js';
 import readline from 'node:readline';
 import { TerminalChat } from './tui.js';
@@ -162,6 +164,11 @@ export class UI {
       return true;
     }
     if (input.trim() === '/update') { await updateCommand(this); return true; }
+    if (/^\/library(?:\s|$)/.test(input.trim())) {
+      try { await libraryCommand(input.trim().slice(8).trim(), (this.sessionId && loadSession(this.sessionId)?.cwd) || this.tui?.cwd || process.cwd(), this); }
+      catch (error) { this.event('error', { message: error.message }); }
+      return true;
+    }
     const workflow = /^\/workflows?(?:\s|$)/.exec(input.trim());
     if (workflow) {
       const action = input.trim().slice(workflow[0].length).trim();

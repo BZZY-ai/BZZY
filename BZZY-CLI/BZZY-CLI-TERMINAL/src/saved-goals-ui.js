@@ -45,7 +45,7 @@ export async function chooseSavedGoal(ui, { sessionId = ui.activeTab || ui.sessi
         { value: 'back', label: '← Back to chat', selected: true,
           description: `${pageLabel}\nReturn without starting or changing any goal.` },
         ...page.goals.map(goal => ({ value: goal.id, label: goal.objective.replace(/\s+/gu, ' ').trim(),
-          description: `${pageLabel}\n${goal.alias || 'Unnamed terminal'} · ${goal.cwd}\n${goal.objective}` })),
+          description: `${pageLabel}\n${goal.alias || 'Unnamed terminal'} · ${goal.cwd || 'BZZY Core Library'}\n${goal.objective}` })),
         ...(offset ? [{ value: 'newer', label: '← Newer saved goals', description: pageLabel }] : []),
         ...(page.nextOffset != null ? [{ value: 'older', label: 'Older saved goals →', description: pageLabel }] : []),
       ],

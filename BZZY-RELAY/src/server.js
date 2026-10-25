@@ -63,7 +63,7 @@ export async function startRelay({ store, audience, host = '127.0.0.1', port = 0
     if (!id) return null;
     try {
       const grant = store.activeGrant(id, state.cert.id);
-      const portable = ['AGENT', 'TERMINAL'].includes(grant.spec.kind) && grant.spec.mode === 'portable' && grant.spec.actions.length === 1 && grant.spec.actions[0] === 'import';
+      const portable = ['AGENT', 'TERMINAL', 'LIBRARY'].includes(grant.spec.kind) && grant.spec.mode === 'portable' && grant.spec.actions.length === 1 && grant.spec.actions[0] === 'import';
       // The Relay cannot inspect encrypted Core operations. An explicitly
       // approved live PAIR gets the same bounded data-plane budget; Core still
       // enforces separate command, telemetry and valid-ACK quotas after decrypt.

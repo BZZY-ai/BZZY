@@ -1,4 +1,5 @@
 import { database, transaction, digest } from './database.js';
+import { getGoalTemplate, goalTemplateEntry } from './goal-templates.js';
 
 // Private local-owner history projection. This module grants no runtime access
 // and is deliberately not exposed as a model tool or a scoped session endpoint.
@@ -56,13 +57,24 @@ const sources = `WITH terminals AS (
   SELECT * FROM source_versions WHERE sourceVersion=1
 )`;
 const columns = 'sessionId,cwd,alias,goalId,objective,createdAt,status';
-const order = 'createdTime DESC,sessionId COLLATE BINARY,goalId COLLATE BINARY';
-const library = `${sources}, library AS (
+const reusable = `${sources}, reusable_goals AS (
+  SELECT sessionId,cwd,alias,goalId,objective,createdAt,status,createdTime,NULL AS templateId FROM source_goals
+  UNION ALL
+  SELECT NULL,NULL,'Imported goal',NULL,json_extract(t.data,'$.objective'),json_extract(t.data,'$.createdAt'),NULL,
+    julianday(json_extract(t.data,'$.createdAt')),t.id
+  FROM records t WHERE t.kind='core.goal.template' AND json_extract(t.data,'$.id')=t.id
+    AND json_extract(t.data,'$.version')=t.id AND json_extract(t.data,'$.deletedAt') IS NULL
+    AND typeof(json_extract(t.data,'$.objective'))='text' AND length(json_extract(t.data,'$.objective'))>0
+    AND julianday(json_extract(t.data,'$.createdAt')) IS NOT NULL
+)`;
+const order = "createdTime DESC,coalesce(sessionId,'') COLLATE BINARY,coalesce(goalId,templateId) COLLATE BINARY";
+const library = `${reusable}, library AS (
   SELECT *,row_number() OVER (PARTITION BY objective COLLATE BINARY ORDER BY ${order}) AS occurrence
-  FROM source_goals
+  FROM reusable_goals
 )`;
 
 function entry(row) {
+  if (row.templateId) return goalTemplateEntry(getGoalTemplate(row.templateId));
   const { sessionId, goalId, objective, createdAt, cwd } = row;
   const alias = typeof row.alias === 'string' && row.alias.trim() ? row.alias.trim() : null;
   return { id: `${sessionId}:${goalId}`, revision: digest({ sessionId, goalId, objective, createdAt, cwd, alias }),
@@ -79,7 +91,7 @@ export function listSavedGoals(options = {}) {
   }
   return read(db => {
     const { total } = db.prepare(`${library} SELECT count(*) AS total FROM library WHERE occurrence=1`).get(whitespace);
-    const goals = db.prepare(`${library} SELECT ${columns} FROM library WHERE occurrence=1 ORDER BY ${order} LIMIT ? OFFSET ?`)
+    const goals = db.prepare(`${library} SELECT ${columns},templateId FROM library WHERE occurrence=1 ORDER BY ${order} LIMIT ? OFFSET ?`)
       .all(whitespace, limit, offset).map(entry);
     return { goals, total, nextOffset: offset + goals.length < total ? offset + goals.length : null };
   });
@@ -89,15 +101,28 @@ export function listSavedGoals(options = {}) {
 // elsewhere while the picker was open. A deleted source never falls back to it.
 export function getSavedGoal(id, options = {}) {
   const match = typeof id === 'string' && selectionID.exec(id);
-  if (!match || !options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'revision') ||
+  const template = typeof id === 'string' && /^template:([a-f0-9]{64})$/.exec(id);
+  if ((!match && !template) || !options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'revision') ||
       options.revision !== undefined && (typeof options.revision !== 'string' || !/^[a-f0-9]{64}$/.test(options.revision))) {
     fail('Choose a saved goal from the current list.');
   }
   return read(db => {
+    if (template) {
+      const goal = goalTemplateEntry(getGoalTemplate(template[1]));
+      if (options.revision !== undefined && goal.revision !== options.revision) fail('This saved goal changed. Reopen /goal before choosing it.', 'CONFLICT', 409);
+      return goal;
+    }
     const row = db.prepare(`${sources} SELECT ${columns} FROM source_goals WHERE sessionId=? AND goalId=?`).get(whitespace, match[1], match[2]);
     if (!row) fail('This saved goal is no longer available. Reopen /goal.', 'SAVED_GOAL_UNAVAILABLE', 404);
     const goal = entry(row);
     if (options.revision !== undefined && goal.revision !== options.revision) fail('This saved goal changed. Reopen /goal before choosing it.', 'CONFLICT', 409);
     return goal;
   });
+}
+
+// Private owner import deduplication. It does not restore a historical outcome
+// and is safe to call inside the same transaction as a reviewed import.
+export function hasSavedGoalObjective(objective) {
+  if (typeof objective !== 'string' || !objective.trim()) fail('Supply a saved goal objective.');
+  return read(db => Boolean(db.prepare(`${reusable} SELECT 1 FROM reusable_goals WHERE objective=? LIMIT 1`).get(whitespace, objective.trim())));
 }

@@ -40,7 +40,7 @@ it does not establish capacity on the intended 2 GB VPS.
 - Explicit peer key pinning, signed connection presence, encrypted routing binding,
   message expiration and bounded replay rejection across reconnects.
 - Versioned QR payloads, SVG/terminal QR rendering, and 256-bit random
-  `BZZY-PAIR-…`, `BZZY-AGENT-…` and `BZZY-TERMINAL-…` codes.
+  `BZZY-PAIR-…`, `BZZY-AGENT-…`, `BZZY-TERMINAL-…` and `BZZY-LIBRARY-…` codes.
 - Online-sender, single-use atomic claims, confirmation of the exact recipient,
   denial, expiry and revocation. PAIR and portable/live import purposes differ.
 - Persistent public device records, hashed code lookups and scoped transport
@@ -144,6 +144,13 @@ Portable shares use `kind: 'AGENT'` or `'TERMINAL'`, `mode: 'portable'` and only
 `mode: 'live'`, an identified opaque resource and explicit actions, defaulting to
 `['observe']`. Imported behavior stays inactive until the recipient's local
 review and authorization; account bindings remain local to that recipient.
+
+Library shares use `kind: 'LIBRARY'`, portable mode and the sole `import` action.
+Live mode, pairing and execution actions are rejected for this kind. Updated
+Core/CLI use the same encrypted chunk transport to review and install missing
+skills, specialist agents, workflows and saved goal text. The deployed Relay
+must be updated for Library codes; no owner credential or model execution is
+added here. See [Library sharing](../BZZY-CORE/docs/LIBRARY-SHARING.md).
 
 ## Existing CLI compatibility
 

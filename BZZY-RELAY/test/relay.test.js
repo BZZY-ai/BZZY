@@ -84,10 +84,10 @@ test('atomic single use, explicit denial, expiration, invitation revocation and 
   await assert.rejects(a.claim(offline.code), { code: 'HOST_OFFLINE' });
 });
 
-test('portable agent and terminal grants never create host/admin rights; tenants stay isolated', async t => {
+test('portable agent, terminal and Library grants never create host/admin rights; tenants stay isolated', async t => {
   const f = await fixture(t), host = await f.client({ host: true }), otherHost = await f.client({ host: true });
   const recipient = await f.client(), stranger = await f.client();
-  for (const kind of ['AGENT', 'TERMINAL']) {
+  for (const kind of ['AGENT', 'TERMINAL', 'LIBRARY']) {
     const { grant } = await pair(host, recipient, { kind, resource: 'opaque_resource' });
     assert.equal(grant.spec.mode, 'portable'); assert.deepEqual(grant.spec.actions, ['import']);
     await assert.rejects(recipient.createInvitation({ kind: 'PAIR', resource: 'x' }), { code: 'HOST_REQUIRED' });
@@ -98,6 +98,9 @@ test('portable agent and terminal grants never create host/admin rights; tenants
   await assert.rejects(host.createInvitation({ kind: 'AGENT', mode: 'portable', resource: 'x', actions: ['execute'] }), { code: 'INVALID_ACTIONS' });
   await assert.rejects(host.createInvitation({ kind: 'AGENT', mode: 'pair', resource: 'x' }), { code: 'INVALID_PURPOSE' });
   await assert.rejects(host.createInvitation({ kind: 'TERMINAL', mode: 'live', resource: 'x', actions: ['observe', 'execute'] }), { code: 'INVALID_ACTIONS' });
+  await assert.rejects(host.createInvitation({ kind: 'LIBRARY', mode: 'live', resource: 'x', actions: ['observe'] }), { code: 'INVALID_PURPOSE' });
+  await assert.rejects(host.createInvitation({ kind: 'LIBRARY', mode: 'pair', resource: 'x' }), { code: 'INVALID_PURPOSE' });
+  await assert.rejects(host.createInvitation({ kind: 'LIBRARY', resource: 'x', actions: ['import', 'execute'] }), { code: 'INVALID_ACTIONS' });
 });
 
 test('grant/peer revocation blocks later traffic and reconnect does not restore access', async t => {

@@ -5,13 +5,17 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { home, privateDir } from './files.js';
-import { database, getRecord, transaction, digest } from './database.js';
+import { database, getRecord, putRecord, transaction, digest, now } from './database.js';
 import { resolveProjectIdentity } from './project-identity.js';
-import { listSkills, inspectSkill, importSkill, skillStorageId } from './skills.js';
-import { listSubagentDefinitions, getSubagentDefinition, normalizeSubagentDefinition, saveSubagentDefinition } from './subagent-definitions.js';
+import { listSkills, inspectSkill, importSkill, skillStorageId, setSkillEnabled } from './skills.js';
+import { listSubagentDefinitions, getSubagentDefinition, normalizeSubagentDefinition, saveSubagentDefinition, setSubagentEnabled } from './subagent-definitions.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
+import { listWorkflows, getWorkflow, normalizeWorkflow, saveWorkflow } from './workflows.js';
+import { listSavedGoals, getSavedGoal, hasSavedGoalObjective } from './saved-goals.js';
+import { normalizeGoalTemplate, saveGoalTemplate } from './goal-templates.js';
 
 export const DEFINITION_BUNDLE_LIMITS = Object.freeze({ bytes: 64 * 1024 * 1024, fileBytes: 1024 * 1024, entries: 4096, definitions: 256 });
+export const LIBRARY_BUNDLE_LIMITS = Object.freeze({ ...DEFINITION_BUNDLE_LIMITS, definitions: 1024 });
 const payloadLimit = 60 * 1024 * 1024, reviews = new Map(), lifetime = 30 * 60 * 1000;
 const agentFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
 const fail = (message, code = 'DEFINITION_BUNDLE') => { throw Object.assign(new Error(message), { code }); };
@@ -43,7 +47,7 @@ function portable(data, context) {
   const text = data.toString('utf8'); assertShareText(text, sharedSecrets());
   if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text) ||
       /(?:\/Users\/|\/home\/|\/Volumes\/|\/~?\.bzzy\/|~\/(?:\.codex|\.claude|\.ssh)\/)/i.test(text) ||
-      [context.cwd, context.hostHome, os.homedir()].some(root => root.length > 3 && text.includes(root))) fail('Reusable definitions contain private account or host-path data. Parameterize it before exporting.');
+      [context.cwd, context.hostHome, os.homedir(), ...(context.privateRoots || [])].some(root => typeof root === 'string' && root.length > 3 && text.includes(root))) fail('Reusable definitions contain private account or host-path data. Parameterize it before exporting.');
   let json = false;
   try {
     const parsed = JSON.parse(text); json = true;
@@ -117,11 +121,11 @@ function outputAt(context, requested) {
   if (fs.existsSync(outputPath) || (() => { try { fs.lstatSync(outputPath); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } })()) fail('That export destination already exists. Choose another ZIP filename.', 'CONFLICT');
   return outputPath;
 }
-function pageAll(read, field) {
+function pageAll(read, field, maximum = DEFINITION_BUNDLE_LIMITS.definitions) {
   const rows = []; let offset = 0;
   do {
     const page = read(offset); rows.push(...page[field]);
-    if (rows.length > DEFINITION_BUNDLE_LIMITS.definitions) fail('The reusable-definition library exceeds this ZIP’s definition limit.');
+    if (rows.length > maximum) fail('The reusable-definition library exceeds this ZIP’s definition limit.');
     offset = page.nextOffset;
   } while (offset !== null);
   return rows;
@@ -144,10 +148,10 @@ function libraryPathSafe(target) {
   }
 }
 
-function collect(context) {
+function collect(context, { allowEmpty = false, inheritSelection = false, maximum = DEFINITION_BUNDLE_LIMITS.definitions } = {}) {
   const skills = [], agents = [], files = [], pins = [];
   for (const selected of ['global', 'project']) {
-    for (const item of pageAll(offset => listSkills({ projectRoot: context.projectRoot, projectId: context.projectId, scope: selected, offset, limit: 100 }), 'skills')) {
+    for (const item of pageAll(offset => listSkills({ projectRoot: context.projectRoot, projectId: context.projectId, scope: selected, offset, limit: 100 }), 'skills', maximum)) {
       const options = { scope: selected, projectId: context.projectId }, record = getRecord('core.skill', item.id || skillStorageId(item.name, options));
       if (!record || record.version !== item.version || !Array.isArray(record.files) || digest(record.files) !== record.version)
         fail('A skill inventory changed. Preview the definitions again.', 'STALE_REVIEW');
@@ -157,6 +161,7 @@ function collect(context) {
         const checked = importSkill(skillDirectory(record), { ...options, preview: true, expectedVersion: record.version });
         const resources = record.files.map(file => {
           if (!safePath(file.path)) fail('Unsafe reusable skill path.');
+          portable(Buffer.from(file.path), context);
           const data = regular(path.join(skillDirectory(record), file.path));
           if (data.length !== file.bytes || digest(data) !== file.sha256) fail('Immutable skill content changed.');
           portable(data, context); files.push({ path: `skills/${selected}/${record.name}/${file.path}`, data }); return { ...file };
@@ -166,18 +171,19 @@ function collect(context) {
         pins.push({ kind: 'skill', id: record.id || record.name, revision: record.revision, version: record.version });
       } catch { fail(`Skill “${item.name}” is not a safe, intact portable package. Review its resources before exporting.`); }
     }
-    for (const item of pageAll(offset => listSubagentDefinitions({ cwd: context.cwd, scope: selected, offset, limit: 100 }), 'subagents')) {
+    for (const item of pageAll(offset => listSubagentDefinitions({ cwd: context.cwd, scope: selected, offset, limit: 100 }), 'subagents', maximum)) {
       const record = getSubagentDefinition(item.name, { cwd: context.cwd, scope: selected });
-      const definition = normalizeSubagentDefinition(Object.fromEntries(agentFields.filter(key => Object.hasOwn(record, key)).map(key => [key, record[key]])));
+      const definition = normalizeSubagentDefinition(Object.fromEntries(agentFields.filter(key => Object.hasOwn(record, key) &&
+        (!inheritSelection || !['provider', 'model', 'effort'].includes(key))).map(key => [key, record[key]])));
       const data = Buffer.from(JSON.stringify(definition, null, 2) + '\n'); portable(data, context);
       const file = `agents/${selected}/${record.name}.json`, resource = inventoryFile(file, data);
       files.push({ path: file, data }); agents.push({ name: record.name, description: record.description, scope: selected, version: digest(definition), file, bytes: resource.bytes, sha256: resource.sha256 });
       pins.push({ kind: 'agent', id: record.id, revision: record.revision, version: record.version });
     }
   }
-  if (skills.length + agents.length > DEFINITION_BUNDLE_LIMITS.definitions) fail('The reusable-definition library exceeds this ZIP’s definition limit.');
+  if (skills.length + agents.length > maximum) fail('The reusable-definition library exceeds this ZIP’s definition limit.');
   const total = files.reduce((sum, item) => sum + item.data.length, 0);
-  if (!skills.length && !agents.length) fail('This project and Core library have no reusable skills or specialist agents to export.');
+  if (!allowEmpty && !skills.length && !agents.length) fail('This project and Core library have no reusable skills or specialist agents to export.');
   if (files.length + 1 > DEFINITION_BUNDLE_LIMITS.entries || total > payloadLimit) fail('The complete definitions exceed the bounded ZIP file or byte limit.');
   if (new Set(files.map(item => item.path.toLowerCase())).size !== files.length) fail('The definitions contain file names that collide on another supported filesystem.');
   return { skills, agents, files, pins };
@@ -231,14 +237,15 @@ export function exportDefinitionBundle(review, { cwd = process.cwd(), outputPath
   discardDefinitionBundleReview(review); return result;
 }
 
-function validateManifest(manifest, extracted, directory, context) {
+function validateManifest(manifest, extracted, directory, context, { allowEmpty = false, maximum = DEFINITION_BUNDLE_LIMITS.definitions } = {}) {
   object(manifest, ['format', 'version', 'createdAt', 'skills', 'agents']);
   if (manifest.format !== 'bzzy-definitions' || manifest.version !== 1 || typeof manifest.createdAt !== 'string' || manifest.createdAt.length > 40 || !Number.isFinite(Date.parse(manifest.createdAt)) ||
-      !Array.isArray(manifest.skills) || !Array.isArray(manifest.agents) || !manifest.skills.length && !manifest.agents.length || manifest.skills.length + manifest.agents.length > DEFINITION_BUNDLE_LIMITS.definitions) fail('Unsupported reusable-definitions manifest.');
+      !Array.isArray(manifest.skills) || !Array.isArray(manifest.agents) || !allowEmpty && !manifest.skills.length && !manifest.agents.length || manifest.skills.length + manifest.agents.length > maximum) fail('Unsupported reusable-definitions manifest.');
   const paths = new Map([['manifest.json', null]]), names = new Set(), entries = [];
   const add = file => {
     object(file, ['path', 'bytes', 'sha256']);
     if (!safePath(file.path, 360) || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > DEFINITION_BUNDLE_LIMITS.fileBytes || !hash(file.sha256) || paths.has(file.path.toLowerCase())) fail('Invalid or duplicate definition resource.');
+    portable(Buffer.from(file.path), context);
     const data = regular(path.join(directory, file.path)); portable(data, context);
     if (data.length !== file.bytes || digest(data) !== file.sha256) fail('A definition resource failed its exact manifest hash check.');
     paths.set(file.path.toLowerCase(), file); return data;
@@ -336,13 +343,16 @@ export function readDefinitionBundleFile(review, { cwd = process.cwd(), entryInd
       !Number.isSafeInteger(limit) || limit < 1 || limit > 32768) fail('Choose a reviewed definition file and bounded text page.');
   const resource = entry.files.find(item => item.path === file);
   if (!resource) fail('The file is not in the reviewed definition.');
-  if (saved.public.kind === 'definition-export') {
+  if (saved.public.kind === 'library-export') {
+    if (collectLibrary(saved.context, { excludeGoalIds: review.excludeGoalIds }).sourceDigest !== review.sourceDigest) fail('A source library entry changed. Preview the Library share again.', 'STALE_REVIEW');
+  } else if (saved.public.kind === 'definition-export') {
     for (const pin of saved.pins) {
       const current = getRecord(pin.kind === 'skill' ? 'core.skill' : 'core.subagent.definition', pin.id);
       if (!current || current.revision !== pin.revision || current.version !== pin.version) fail('A source definition changed. Preview the export again.', 'STALE_REVIEW');
     }
   } else if (digest(regular(saved.source, DEFINITION_BUNDLE_LIMITS.bytes)) !== saved.archiveSha256) fail('The selected ZIP changed. Preview it again.', 'STALE_REVIEW');
-  const relative = entry.kind === 'skill' ? `skills/${entry.scope}/${entry.name}/${file}` : `agents/${entry.scope}/${entry.name}.json`;
+  const relative = entry.kind === 'skill' ? `skills/${entry.scope}/${entry.name}/${file}` : entry.kind === 'agent' ? `agents/${entry.scope}/${entry.name}.json`
+    : entry.kind === 'workflow' ? `workflows/${entry.scope}/${entry.name}.json` : `goals/${entry.name}.json`;
   const data = regular(path.join(saved.payload || saved.directory, relative));
   if (data.length !== resource.bytes || digest(data) !== resource.sha256) fail('The reviewed definition file changed.', 'STALE_REVIEW');
   let text;
@@ -351,4 +361,224 @@ export function readDefinitionBundleFile(review, { cwd = process.cwd(), entryInd
   const consumed = Buffer.byteLength(text);
   if (!consumed && offset < data.length) fail('Increase the page size to include the next complete character.');
   return { file, text, binary: false, offset, size: data.length, bytes: data.length, sha256: resource.sha256, nextOffset: offset + consumed < data.length ? offset + consumed : null };
+}
+
+const goalName = definition => 'goal-' + digest(definition).slice(0, 48);
+const goalDescription = objective => [...objective.split(/\r?\n/u)[0]].slice(0, 160).join('');
+const goalReference = /^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|template:[a-f0-9]{64})$/;
+function goalExclusions(value) {
+  if (!Array.isArray(value) || value.length > LIBRARY_BUNDLE_LIMITS.definitions || new Set(value).size !== value.length || value.some(id => typeof id !== 'string' || !goalReference.test(id))) fail('Choose a bounded list of saved goals to exclude from this Library share.');
+  return [...value].sort();
+}
+function collectLibrary(context, { excludeGoalIds = [] } = {}) {
+  const exclusions = new Set(goalExclusions(excludeGoalIds)), excludedGoals = [], blockedGoals = [], found = new Set();
+  const content = collect(context, { allowEmpty: true, inheritSelection: true, maximum: LIBRARY_BUNDLE_LIMITS.definitions });
+  const workflows = [], goals = [];
+  const add = (kind, scope, definition, pin) => {
+    const data = Buffer.from(JSON.stringify(definition, null, 2) + '\n');
+    try { portable(data, { ...context, privateRoots: pin.cwd ? [pin.cwd] : [] }); }
+    catch { fail(`${kind === 'goal' ? 'Saved goal' : 'Workflow'} “${definition.name || goalName(definition)}” contains private credentials, account bindings or host paths. Nothing was shared. Parameterize the reusable text before sharing.`, 'LIBRARY_PRIVATE_CONTENT'); }
+    const name = definition.name || goalName(definition), file = kind === 'goal' ? `goals/${name}.json` : `workflows/${scope}/${name}.json`;
+    const resource = inventoryFile(file, data), item = { name, description: kind === 'goal' ? goalDescription(definition.objective) : definition.description,
+      scope, version: digest(definition), file, bytes: resource.bytes, sha256: resource.sha256 };
+    content.files.push({ path: file, data }); content.pins.push(pin);
+    (kind === 'goal' ? goals : workflows).push(item);
+  };
+  for (const scope of ['global', 'project']) {
+    for (const summary of pageAll(offset => listWorkflows({ cwd: context.cwd, scope, offset, limit: 100 }), 'workflows', LIBRARY_BUNDLE_LIMITS.definitions)) {
+      const record = getWorkflow(summary.name, { cwd: context.cwd, scope }), definition = normalizeWorkflow({ name: record.name, description: record.description, instructions: record.instructions });
+      if (record.version !== digest(definition)) fail('A workflow changed. Preview the Library share again.', 'STALE_REVIEW');
+      add('workflow', scope, definition, { kind: 'workflow', id: record.id, revision: record.revision, version: record.version });
+    }
+  }
+  for (const goal of pageAll(offset => listSavedGoals({ offset, limit: 100 }), 'goals', LIBRARY_BUNDLE_LIMITS.definitions)) {
+    found.add(goal.id);
+    let definition, reason;
+    try { definition = normalizeGoalTemplate({ objective: goal.objective }); portable(Buffer.from(JSON.stringify(definition)), { ...context, privateRoots: goal.cwd ? [goal.cwd] : [] }); }
+    catch { reason = 'Contains private credentials, account bindings, host paths or unsupported objective text.'; }
+    getSavedGoal(goal.id, { revision: goal.revision });
+    if (exclusions.has(goal.id)) {
+      excludedGoals.push({ id: goal.id, reason: reason || 'Explicitly excluded by the owner.' });
+      content.pins.push({ kind: 'excluded-goal', id: goal.id, revision: goal.revision }); continue;
+    }
+    if (reason) { blockedGoals.push({ id: goal.id, reason }); continue; }
+    add('goal', 'global', definition, { kind: 'goal', id: goal.id, revision: goal.revision, cwd: goal.cwd });
+  }
+  if ([...exclusions].some(id => !found.has(id))) fail('An excluded saved goal changed or is unavailable. Preview the Library again.', 'STALE_REVIEW');
+  if (blockedGoals.length) {
+    const error = Object.assign(new Error(`${blockedGoals.length} saved goal${blockedGoals.length === 1 ? '' : 's'} cannot be shared as portable text. Explicitly omit those goals or go back; nothing was shared.`),
+      { code: 'LIBRARY_BLOCKED_GOALS', blockedGoals });
+    throw error;
+  }
+  const total = content.skills.length + content.agents.length + workflows.length + goals.length;
+  if (!total) fail('No skills, specialist agents, workflows or saved goals are available to share.');
+  if (total > LIBRARY_BUNDLE_LIMITS.definitions || content.files.length + 1 > LIBRARY_BUNDLE_LIMITS.entries ||
+      content.files.reduce((sum, file) => sum + file.data.length, 0) > payloadLimit) fail('The complete Library exceeds its bounded definition, resource or byte limit. Nothing was omitted.');
+  return { ...content, workflows, goals, excludeGoalIds: [...exclusions].sort(), excludedGoals,
+    sourceDigest: digest([content.skills, content.agents, workflows, goals, content.pins, [...exclusions].sort()]) };
+}
+function libraryPayload(context, content, directory) {
+  const manifest = { format: 'bzzy-definitions', version: 2, createdAt: now(), skills: content.skills, agents: content.agents,
+    workflows: content.workflows, goals: content.goals };
+  const bytes = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
+  if (bytes.length > LIBRARY_BUNDLE_LIMITS.fileBytes) fail('The Library manifest exceeds its bounded size.');
+  writeFile(directory, 'manifest.json', bytes);
+  for (const file of content.files) writeFile(directory, file.path, file.data);
+  const entries = [...content.skills.map(item => contentEntry('skill', item))];
+  for (const [kind, items] of [['agent', content.agents], ['workflow', content.workflows], ['goal', content.goals]]) {
+    for (const item of items) entries.push(contentEntry(kind, { ...item, files: [{ path: 'definition.json', bytes: item.bytes, sha256: item.sha256 }] },
+      kind === 'agent' ? JSON.parse(content.files.find(file => file.path === item.file).data.toString('utf8')) : undefined));
+  }
+  const totals = { skills: content.skills.length, agents: content.agents.length, workflows: content.workflows.length,
+    goals: content.goals.length, files: content.files.length, bytes: content.files.reduce((sum, file) => sum + file.data.length, 0) };
+  return { manifest, entries, totals, inventory: [inventoryFile('manifest.json', bytes), ...content.files.map(file => inventoryFile(file.path, file.data))] };
+}
+
+export function previewLibraryExport({ cwd = process.cwd(), excludeGoalIds = [] } = {}) {
+  const context = capture(cwd), content = collectLibrary(context, { excludeGoalIds }), directory = stage();
+  try {
+    const payload = libraryPayload(context, content, directory);
+    return storeReview({ kind: 'library-export', version: 2, entries: payload.entries, totals: payload.totals, sourceDigest: content.sourceDigest,
+      excludeGoalIds: content.excludeGoalIds, excludedGoals: content.excludedGoals },
+      { context, directory, pins: content.pins, ...payload });
+  } catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
+}
+
+function privateLibraryOutput(context, destination) {
+  if (typeof destination !== 'string' || !path.isAbsolute(destination)) fail('Library transfer requires private host archive storage.');
+  const relative = path.relative(context.home, destination), parts = relative.split(path.sep);
+  if (parts.length !== 4 || parts[0] !== 'relay' || parts[1] !== 'shares' || !/^[a-f0-9-]{36}$/.test(parts[2]) || parts[3] !== 'project.zip') fail('Library archives belong in private Relay transfer storage.');
+  for (let current = path.dirname(destination); ; current = path.dirname(current)) {
+    const stat = fs.lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.mode & 0o077 || process.getuid && stat.uid !== process.getuid()) fail('Library transfer storage must be private and contain no links.');
+    if (current === context.home) break;
+    if (current === path.dirname(current)) fail('Invalid Library transfer storage.');
+  }
+  return realDirectory(path.dirname(destination));
+}
+export function buildLibraryArchive(destination, { cwd = process.cwd(), expectedDigest, excludeGoalIds = [] } = {}) {
+  if (!hash(expectedDigest)) fail('Preview the exact Library inventory before sharing.', 'STALE_REVIEW');
+  const context = capture(cwd), target = privateLibraryOutput(context, destination), content = collectLibrary(context, { excludeGoalIds });
+  if (content.sourceDigest !== expectedDigest) fail('The Library changed. Preview it again before sharing.', 'STALE_REVIEW');
+  const directory = stage();
+  try {
+    const payload = libraryPayload(context, content, directory);
+    const published = archive({ operation: 'create', cwd: target.cwd, fingerprint: target.fingerprint, name: path.basename(destination), source: directory, files: payload.inventory });
+    const { data, device, inode } = regular(destination, LIBRARY_BUNDLE_LIMITS.bytes, true);
+    if (published.sha256 !== digest(data) || published.bytes !== data.length || published.device !== device || published.inode !== inode) fail('The prepared Library archive changed.', 'STALE_REVIEW');
+    return { path: destination, ...payload.totals, sha256: digest(data), bytes: data.length,
+      payloadBytes: payload.totals.bytes, sourceDigest: content.sourceDigest };
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}
+
+function validateLibraryManifest(manifest, extracted, directory, context) {
+  object(manifest, ['format', 'version', 'createdAt', 'skills', 'agents', 'workflows', 'goals']);
+  if (manifest.format !== 'bzzy-definitions' || manifest.version !== 2 || !['skills', 'agents', 'workflows', 'goals'].every(key => Array.isArray(manifest[key])) ||
+      !['skills', 'agents', 'workflows', 'goals'].some(key => manifest[key].length) ||
+      ['skills', 'agents', 'workflows', 'goals'].reduce((sum, key) => sum + manifest[key].length, 0) > LIBRARY_BUNDLE_LIMITS.definitions) fail('Unsupported Library bundle manifest.');
+  const baseFiles = extracted.filter(file => file === 'manifest.json' || /^(?:skills|agents)\//.test(file));
+  const entries = validateManifest({ format: manifest.format, version: 1, createdAt: manifest.createdAt, skills: manifest.skills, agents: manifest.agents },
+    baseFiles, directory, context, { allowEmpty: true, maximum: LIBRARY_BUNDLE_LIMITS.definitions });
+  if (entries.some(entry => entry.kind === 'agent' && Object.keys(entry.selection || {}).length)) fail('Portable Library specialists must inherit the recipient model.');
+  const paths = new Set(baseFiles.map(file => file.toLowerCase())), names = new Set();
+  let total = entries.reduce((sum, entry) => sum + entry.files.reduce((bytes, file) => bytes + file.bytes, 0), 0);
+  for (const [kind, items] of [['workflow', manifest.workflows], ['goal', manifest.goals]]) for (const item of items) {
+    object(item, ['name', 'description', 'scope', 'version', 'file', 'bytes', 'sha256']);
+    const expectedFile = kind === 'workflow' ? `workflows/${item.scope}/${item.name}.json` : `goals/${item.name}.json`;
+    if (!name(item.name) || !scope(item.scope) || kind === 'goal' && item.scope !== 'global' || !hash(item.version) || !hash(item.sha256) ||
+        item.file !== expectedFile || !safePath(item.file) || !Number.isSafeInteger(item.bytes) || item.bytes < 1 || item.bytes > LIBRARY_BUNDLE_LIMITS.fileBytes ||
+        paths.has(item.file.toLowerCase()) || names.has(`${kind}:${item.scope}:${item.name}`)) fail('Invalid or duplicate Library text entry.');
+    paths.add(item.file.toLowerCase()); names.add(`${kind}:${item.scope}:${item.name}`);
+    const data = regular(path.join(directory, item.file)); portable(data, context); total += data.length;
+    if (data.length !== item.bytes || digest(data) !== item.sha256) fail('A Library text entry failed its exact hash check.');
+    let definition;
+    try { definition = JSON.parse(data.toString('utf8')); } catch { fail('A Library text entry is not valid JSON.'); }
+    const checked = kind === 'workflow' ? normalizeWorkflow(definition) : normalizeGoalTemplate(definition);
+    if (digest(checked) !== item.version || digest(checked) !== digest(definition) || (kind === 'workflow'
+      ? checked.name !== item.name || checked.description !== item.description
+      : item.name !== goalName(checked) || item.description !== goalDescription(checked.objective))) fail('Library metadata does not match its complete reviewed text.');
+    entries.push(contentEntry(kind, { ...item, files: [{ path: 'definition.json', bytes: item.bytes, sha256: item.sha256 }] }));
+  }
+  if (extracted.length !== paths.size || extracted.some(file => !paths.has(file.toLowerCase())) || paths.size > LIBRARY_BUNDLE_LIMITS.entries || total > payloadLimit) fail('The Library ZIP has missing, extra or excessive resources.');
+  return entries;
+}
+function libraryDestination(entry, context, directory) {
+  if (entry.kind === 'skill' || entry.kind === 'agent') return destination(entry, context);
+  if (entry.kind === 'workflow') {
+    const id = digest([entry.scope, entry.scope === 'project' ? context.cwd : null, entry.name]), existing = getRecord('core.workflow.definition', id);
+    return { kind: entry.kind, name: entry.name, scope: entry.scope, id, conflict: Boolean(existing), revision: existing?.revision || 0, version: existing?.version || null };
+  }
+  const definition = JSON.parse(regular(path.join(directory, 'goals', entry.name + '.json')).toString('utf8'));
+  return { kind: 'goal', name: entry.name, scope: 'global', id: digest(definition), conflict: hasSavedGoalObjective(definition.objective) };
+}
+
+export function previewLibraryImport(file, { cwd = process.cwd() } = {}) {
+  const context = capture(cwd), source = path.resolve(cwd, file), data = regular(source, LIBRARY_BUNDLE_LIMITS.bytes), directory = stage();
+  try {
+    const archiveSha256 = digest(data), archivePath = path.join(directory, 'input.zip'), payload = path.join(directory, 'payload');
+    fs.writeFileSync(archivePath, data, { mode: 0o600, flag: 'wx' }); privateDir(payload);
+    const extracted = archive({ operation: 'extract', source: archivePath, target: payload }).files;
+    let manifest; try { manifest = JSON.parse(regular(path.join(payload, 'manifest.json')).toString('utf8')); } catch { fail('The ZIP has no valid Library manifest.'); }
+    const entries = validateLibraryManifest(manifest, extracted, payload, context), destinations = entries.map(entry => libraryDestination(entry, context, payload));
+    const conflicts = destinations.filter(item => item.conflict).map(({ kind, name, scope }) => ({ kind, name, scope }));
+    const totals = { skills: manifest.skills.length, agents: manifest.agents.length, workflows: manifest.workflows.length, goals: manifest.goals.length,
+      files: entries.reduce((sum, entry) => sum + entry.files.length, 0), bytes: entries.reduce((sum, entry) => sum + entry.files.reduce((bytes, file) => bytes + file.bytes, 0), 0) };
+    return storeReview({ kind: 'library-import', version: 2, archiveSha256, entries, conflicts, totals }, { context, directory, source, archiveSha256, manifest, extracted, payload, destinations });
+  } catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
+}
+
+export function importLibraryBundle(review, { cwd = process.cwd(), enable = false } = {}) {
+  const saved = reviewed(review, 'library-import', cwd);
+  if (typeof enable !== 'boolean') fail('Choose whether to enable the reviewed imported skills and agents.');
+  if (digest(regular(saved.source, LIBRARY_BUNDLE_LIMITS.bytes)) !== saved.archiveSha256) fail('The downloaded Library changed. Preview it again.', 'STALE_REVIEW');
+  validateLibraryManifest(saved.manifest, saved.extracted, saved.payload, saved.context);
+  const receiptId = digest([saved.archiveSha256, saved.context.cwd, saved.context.projectId]), created = [];
+  let result;
+  try {
+    result = transaction(db => {
+      assertContext(saved.context, cwd);
+      const previous = getRecord('core.library.import', receiptId);
+      if (previous) {
+        if (previous.enable !== enable) fail('This Library archive was already imported with a different availability choice.', 'CONFLICT');
+        return structuredClone(previous.result);
+      }
+      const destinations = review.entries.map(entry => libraryDestination(entry, saved.context, saved.payload));
+      if (digest(destinations) !== digest(saved.destinations)) fail('A destination Library entry changed. Preview the import again.', 'STALE_REVIEW');
+      const imported = { skills: [], agents: [], workflows: [], goals: [], skipped: [], enabled: enable };
+      for (const [index, entry] of review.entries.entries()) {
+        if (entry.kind !== 'skill' || destinations[index].conflict) continue;
+        const target = skillDirectory({ ...entry, projectId: saved.context.projectId }); libraryPathSafe(target);
+        if (fs.existsSync(target)) {
+          const checked = importSkill(target, { scope: entry.scope, projectId: saved.context.projectId, preview: true, expectedVersion: entry.version });
+          if (checked.name !== entry.name || checked.description !== entry.description) fail('An existing immutable skill package does not match the reviewed Library import.');
+        }
+      }
+      for (const [index, entry] of review.entries.entries()) {
+        if (destinations[index].conflict) { imported.skipped.push({ kind: entry.kind, name: entry.name, scope: entry.scope }); continue; }
+        if (entry.kind === 'skill') {
+          const target = skillDirectory({ ...entry, projectId: saved.context.projectId }); libraryPathSafe(target);
+          if (!fs.existsSync(target)) created.push(target);
+          const record = importSkill(path.join(saved.payload, 'skills', entry.scope, entry.name), { scope: entry.scope, projectId: saved.context.projectId,
+            expectedRevision: 0, expectedVersion: entry.version, provenance: { kind: 'library-relay' } });
+          imported.skills.push(enable ? setSkillEnabled(record.id, true, record.revision, { scope: entry.scope, projectId: saved.context.projectId }) : record);
+        } else if (entry.kind === 'agent') {
+          const definition = JSON.parse(regular(path.join(saved.payload, 'agents', entry.scope, entry.name + '.json')).toString('utf8'));
+          let record = saveSubagentDefinition(definition, { cwd: saved.context.cwd, scope: entry.scope, expectedRevision: 0 });
+          if (!enable) record = setSubagentEnabled(record.name, false, { cwd: saved.context.cwd, scope: entry.scope, expectedRevision: record.revision });
+          imported.agents.push({ name: record.name, scope: record.scope, version: record.version, revision: record.revision, enabled: record.enabled !== false });
+        } else if (entry.kind === 'workflow') {
+          const definition = JSON.parse(regular(path.join(saved.payload, 'workflows', entry.scope, entry.name + '.json')).toString('utf8'));
+          const record = saveWorkflow(definition, { cwd: saved.context.cwd, scope: entry.scope, expectedRevision: 0 });
+          imported.workflows.push({ name: record.name, scope: record.scope, version: record.version, revision: record.revision });
+        } else {
+          const definition = JSON.parse(regular(path.join(saved.payload, 'goals', entry.name + '.json')).toString('utf8'));
+          const record = saveGoalTemplate(definition); imported.goals.push({ id: `template:${record.id}`, version: record.version });
+        }
+      }
+      putRecord('core.library.import', receiptId, { archiveSha256: saved.archiveSha256, cwd: saved.context.cwd,
+        projectId: saved.context.projectId, enable, result: imported, importedAt: now() }, db);
+      return imported;
+    });
+  } catch (error) { for (const directory of created.reverse()) fs.rmSync(directory, { recursive: true, force: true }); throw error; }
+  discardDefinitionBundleReview(review); return result;
 }

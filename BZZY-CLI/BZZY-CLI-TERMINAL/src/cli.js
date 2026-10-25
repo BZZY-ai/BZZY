@@ -6,7 +6,8 @@ import { chooseModel } from './models.js';
 import { home, findSession, sessions, loadSession, normalizeSessionAlias, setSessionAlias } from './store.js';
 import { chooseSavedSession, namedTerminalSessions, promptSessionAlias, queueSessionBrowser, sessionLabel } from './session-browser.js';
 import { exportProject, importProject } from './project-bundle.js';
-import { shareTerminal, importTerminal, relayImportArgument, forgetPrivateImportInput } from './share-ui.js';
+import { shareTerminal, relayImportArgument, forgetPrivateImportInput } from './share-ui.js';
+import { libraryCommand, shareLibrary, importRelayShare } from './library-ui.js';
 import { skillThat } from './skill-that.js';
 import { skillsCommand as terminalSkillsCommand } from './skills-ui.js';
 import { root } from './process.js';
@@ -62,6 +63,8 @@ Usage:
   bzzy workflows import FILE.txt --name NAME [--global]
   bzzy workflows use NAME --session ID --revision N [--workflow-revision N]
   bzzy workflows selection --session ID | clear --session ID --revision N
+  bzzy library share                  Share skills, agents, workflows and goals by Relay code
+  bzzy library import                 Install missing Library entries from a hidden code
   bzzy knowledge search TEXT           Search this engagement's knowledge and past chats
   bzzy knowledge review [SESSION]      Queue a bounded lesson review for an existing chat
   bzzy session-memory status [SESSION] Inspect this session's history index and background budget
@@ -437,10 +440,12 @@ async function chat(provider, options, ui, existingSession) {
       if (/^\/alias(?:\s|$)/.test(input)) { session = await promptSessionAlias(session.id, input.replace(/^\/alias\s*/, ''), ui); continue; }
       if (/^\/export(?:\s|$)/.test(input)) { await exportProject(session, input.replace(/^\/export\s*/, ''), ui); continue; }
       if (/^\/share(?:\s|$)/.test(input)) {
-        if (input !== '/share') throw new Error('Use /share without arguments.');
-        await shareTerminal(session, ui); continue;
+        if (input === '/share library') await shareLibrary(session.cwd, ui);
+        else if (input === '/share') await shareTerminal(session, ui);
+        else throw new Error('Use /share for a full session, or /share library for reusable Library entries.');
+        continue;
       }
-      if (/^\/import(?:\s|$)/.test(input)) { forgetPrivateImportInput(ui, input); await importTerminal(input.replace(/^\/import\s*/, ''), session.cwd, ui); continue; }
+      if (/^\/import(?:\s|$)/.test(input)) { forgetPrivateImportInput(ui, input); await importRelayShare(input.replace(/^\/import\s*/, ''), session.cwd, ui, { chooseDestination: true }); continue; }
       if (/^\/skill_that(?:\s|$)/.test(input)) { await skillThat(session, input.replace(/^\/skill_that\s*/, ''), ui); continue; }
       if (/^\/(?:validate|debate)(?:\s|$)/.test(input)) { await debateReply(input.replace(/^\/(?:validate|debate)\s*/, '')); if (ui.detached) return 0; continue; }
       if (input === '/new') {
@@ -552,7 +557,7 @@ export async function main(argv) {
   options.cwd = fs.realpathSync(options.cwd);
   await retireTelegram();
   const launchCommand = args[0];
-  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'subagents', 'workflows']);
+  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'subagents', 'workflows', 'library']);
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
@@ -568,6 +573,7 @@ export async function main(argv) {
     if (command === 'session-memory') return sessionMemoryCLI(rest, options, ui);
     if (command === 'subagents') return subagentsCLI(rest, options, ui);
     if (command === 'workflows') return workflowsCLI(rest, options, ui);
+    if (command === 'library') { await libraryCommand(rest.join(' '), options.cwd, ui); return 0; }
     if (command === 'skills') {
       if (rest.length !== 1 || rest[0] !== 'sync') throw new Error('Use bzzy skills sync, or open Skills in the terminal.');
       if (ui.interactive) { await terminalSkillsCommand('/skills sync', ui); return 0; }
@@ -590,7 +596,7 @@ export async function main(argv) {
       return 0;
     }
     if (options.importFile) {
-      if (relayImportArgument(options.importFile)) await importTerminal(options.importFile, options.cwd, ui);
+      if (relayImportArgument(options.importFile)) await importRelayShare(options.importFile, options.cwd, ui, { chooseDestination: true });
       else await importProject(options.importFile, options.cwd, ui);
       return 0;
     }

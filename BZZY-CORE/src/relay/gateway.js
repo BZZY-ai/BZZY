@@ -9,6 +9,7 @@ import { enqueueGoalTurn } from '../engine/session-operations.js';
 import { parseGoalCommand } from '../engine/goals.js';
 import { authorizedUpdateGrant as authorizedOwnPhone } from '../engine/update-access.js';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RelayConnectionHealth } from './connection-health.js';
@@ -430,6 +431,24 @@ export class RelayGateway extends EventEmitter {
     this.#check(); if (!this.#started) fail('GATEWAY_OFFLINE', 'Connect the host gateway first.');
     if (!terminalSession(loadSession(input?.sessionId))) fail('FORBIDDEN', 'Share an existing root terminal.', 403);
     return this.#transfers.createShare(input);
+  }
+  async createLibraryShare(input) {
+    this.#check(); if (!this.#started) fail('GATEWAY_OFFLINE', 'Connect the host gateway first.');
+    object(input, ['cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds']);
+    if (typeof input.cwd !== 'string' || !path.isAbsolute(input.cwd) || !/^[a-f0-9]{64}$/.test(input.expectedDigest || '')) fail('INVALID_REQUEST', 'Review the current Library before sharing.');
+    const cwd = fs.realpathSync(input.cwd), pin = fs.statSync(cwd);
+    const expectedDigest = input.expectedDigest, excludeGoalIds = input.excludeGoalIds ?? [];
+    if (!Array.isArray(excludeGoalIds) || excludeGoalIds.length > 1024 || new Set(excludeGoalIds).size !== excludeGoalIds.length || excludeGoalIds.some(value => typeof value !== 'string' ||
+      !/^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|template:[a-f0-9]{64})$/.test(value))) fail('INVALID_REQUEST', 'Review the exact saved goals excluded from this Library.');
+    const excluded = [...excludeGoalIds];
+    if (!pin.isDirectory()) fail('INVALID_REQUEST', 'Choose the current project directory.');
+    const authorize = () => {
+      this.#check();
+      const current = fs.lstatSync(cwd);
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== pin.dev || current.ino !== pin.ino || fs.realpathSync(input.cwd) !== cwd) fail('HOST_CONTEXT_CHANGED', 'The shared Library project changed. Review it again.', 409);
+    };
+    return this.#transfers.createShare({ ...input, cwd, expectedDigest, excludeGoalIds: excluded, kind: 'LIBRARY' }, { authorize,
+      exportArchive: async (_source, destination) => (await import('../engine/definition-bundle.js')).buildLibraryArchive(destination, { cwd, expectedDigest, excludeGoalIds: excluded }) });
   }
   projectShareStatus(shareId) { this.#check(); return this.#transfers.status(shareId); }
   approveProjectShare(input) { this.#check(); return this.#transfers.approveShare(input); }

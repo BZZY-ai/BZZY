@@ -162,6 +162,10 @@ independently approves both `agentAccess` and `shareAccess`; terminals require
 `shareAccess`. Sharing never implies execution or input ownership. Agent source
 and receive interfaces are in iPhone; CLI remains terminal-only.
 
+Library sharing uses a separate local-owner action and `LIBRARY` portable/import
+grant. It adds no phone `share.create` kind, owner token forwarding or encrypted
+host administration command. See [Library sharing](LIBRARY-SHARING.md).
+
 `goal`/`resumeGoal` default to false. Goals must already have been configured by
 the existing host workflow. Resume is an execution request, not a generic control
 action. Unsupported steering is rejected rather than simulated.

@@ -49,6 +49,12 @@ goal, earlier goals and the whole chat, including its workers and linked reviews
 Counts persist in Core; reopening a chat does not count as another invocation.
 See [usage metrics](BZZY-CORE/docs/METRICS.md).
 
+Transfer the [BZZY Library](BZZY-CORE/docs/LIBRARY-SHARING.md) between Mac and
+Linux with `bzzy library share` and `bzzy library import`. Expiring Relay codes
+carry skills, specialist agents, workflows and saved goal text; the receiver
+reviews and installs only missing entries. `/share` separately transfers a full
+terminal project and its saved context/history; later imports preserve existing chats.
+
 ## Install Core and CLI
 
 On macOS or Linux, run the bundled installer from the terminal package:

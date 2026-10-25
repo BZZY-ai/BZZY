@@ -31,10 +31,19 @@ test.beforeEach(() => {
 });
 test.afterEach(async () => {
   const info = runtimeInfo();
-  if (info && identityAlive(info.identity)) await runtimeRequest(info, 'POST', '/shutdown', {}).catch(() => {});
-  for (let count = 0; count < 100 && info && identityAlive(info.identity); count++) await new Promise(resolve => setTimeout(resolve, 20));
-  for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
-  fs.rmSync(directory, { recursive: true, force: true });
+  let stopped = false;
+  try {
+    // /shutdown deliberately retains independent runners. This fixture ends
+    // when validation starts, so stop and await its workers before removing
+    // their private workspace and logs.
+    if (info && identityAlive(info.identity)) await runtimeRequest(info, 'POST', '/operator-stop', { shutdown: true });
+    for (let count = 0; count < 100 && info && identityAlive(info.identity); count++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(Boolean(info && identityAlive(info.identity)), false, 'The private fixture Core must exit before its temporary directory is removed.');
+    stopped = true;
+  } finally {
+    for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    if (stopped) fs.rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 40 });
+  }
 });
 
 function achievedSession() {

@@ -53,3 +53,12 @@ test('PNG rendering preserves the invitation transport validation', async () => 
     sender: createIdentity().certificate, expiresAt: Date.now() + 60000 };
   await assert.rejects(renderInvitationQR(invitation, { format: 'png', allowInsecureLocal: true }), { code: 'TLS_REQUIRED' });
 });
+
+test('Library codes retain signed invitation identity and cannot become compact pairing codes', async () => {
+  const invitation = { relay: 'wss://relay.example.invalid/v1/socket', code: `BZZY-LIBRARY-${random()}`,
+    sender: createIdentity().certificate, expiresAt: Date.now() + 60000 };
+  const qr = encodeInvitation(invitation);
+  assert.deepEqual(decodeInvitation(qr), { v: 1, ...invitation });
+  assert.throws(() => encodePairingQR(invitation), { code: 'INVALID_INVITATION' });
+  assert.match(await renderInvitationQR(invitation), /^<svg\s/);
+});

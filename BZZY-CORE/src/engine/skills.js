@@ -381,7 +381,7 @@ export function setSkillEnabled(name, enabled, expectedRevision, options = {}) {
   if (typeof enabled !== 'boolean') fail('Invalid skill setting.');
   const selected = findSkill(name, options);
   if (enabled && needsScopeReview(selected)) fail('Review this legacy skill scope or sync Codex skills again before enabling it.');
-  return transaction(db => {
+  return atomic(db => {
     const record = getRecord(kind, idOf(selected));
     if (!record || record.revision !== expectedRevision) fail('Skill changed. Reload before enabling or disabling.');
     const changed = { ...record, enabled, revision: record.revision + 1, updatedAt: now() };

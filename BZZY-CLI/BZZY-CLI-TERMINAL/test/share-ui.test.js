@@ -106,6 +106,48 @@ test('cancelling an unclaimed share revokes it and transport exception text neve
   assert.equal(terminal.privateView, undefined);
 });
 
+test('an approved large transfer continues after its one-use invitation code expires', async () => {
+  const originalNow = Date.now; let now = originalNow(), approved = false, approvedReads = 0, revoked = 0;
+  Date.now = () => now;
+  try {
+    const terminal = ui(['SHARE', 'a', recipient, '']);
+    class Sharing {
+      async start() {}
+      async createShare() { return { shareId: 'long-transfer', code, senderFingerprint: sender, expiresAt: now + 60000 }; }
+      async status() {
+        return { state: approved ? ++approvedReads >= 2 ? 'complete' : 'approved' : 'pending',
+          pending: approved ? [] : [{ claimId: 'claim', fingerprint: recipient }] };
+      }
+      async approveShare() { approved = true; now += 61000; }
+      async revokeShare() { revoked++; }
+      async close() {}
+    }
+    const result = await shareTerminal({ id: randomUUID(), cwd: '/tmp/project' }, terminal,
+      { relayLoader: async () => ({ CoreTerminalSharing: Sharing }) });
+    assert.equal(result.state, 'complete', 'Code expiry must not shorten the approved transfer grant.');
+    assert.equal(approvedReads, 2); assert.equal(revoked, 0);
+    assert.equal(terminal.privateView, undefined);
+  } finally { Date.now = originalNow; }
+});
+
+test('explicit /cancel revokes an approved transfer while closing its view keeps Core-owned work alive', async () => {
+  for (const action of ['/cancel', null]) {
+    const terminal = ui(['SHARE', action]); let revoked = 0;
+    class Sharing {
+      async start() {}
+      async createShare() { return { shareId: 'approved-transfer', code, senderFingerprint: sender, expiresAt: Date.now() + 60000 }; }
+      async status() { return { state: 'approved', pending: [] }; }
+      async revokeShare() { revoked++; }
+      async close() {}
+    }
+    const result = await shareTerminal({ id: randomUUID(), cwd: '/tmp/project' }, terminal,
+      { relayLoader: async () => ({ CoreTerminalSharing: Sharing }) });
+    assert.equal(revoked, action === '/cancel' ? 1 : 0);
+    assert.equal(result.state, action === '/cancel' ? 'cancelled' : 'approved');
+    assert.equal(terminal.privateView, undefined);
+  }
+});
+
 test('private import commands and QR display never enter TUI history, chat entries or frame caches', async () => {
   const input = new PassThrough(); Object.assign(input, { isTTY: true, isRaw: false, setRawMode(value) { this.isRaw = value; } });
   const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 40, columns: 100 });

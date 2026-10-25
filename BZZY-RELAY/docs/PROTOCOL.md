@@ -56,13 +56,16 @@ local CLI/SSH with public certificates. Revoked identities cannot re-register.
 | `route.send` | `grantId`, `messageId`, `box` | Active participant, online peer; ciphertext only |
 | `delivery.ack` | `deliveryId` | That delivery's active recipient only |
 
-`spec` has `kind` (`PAIR`, `AGENT`, `TERMINAL`), `mode` (`pair`, `portable`,
+`spec` has `kind` (`PAIR`, `AGENT`, `TERMINAL`, `LIBRARY`), `mode` (`pair`, `portable`,
 `live`), opaque `resource`, `actions`, `ttlSeconds`, `grantTtlSeconds`. PAIR must
 use pair mode; imports must use portable/live. Portable allows only `import`.
 Pair/live defaults to `observe`; control actions require `claim`. These fields
 bound Relay routing records; **they are not trusted local runtime permissions**.
 An encrypted channel can carry arbitrary text, so a host gateway independently
 enforces locally approved scope on every subscription and command.
+
+`LIBRARY` supports portable mode with only `import`; it rejects live mode,
+pairing and execution. Its 256-bit token uses the `BZZY-LIBRARY-…` prefix.
 
 Portable grant lifetimes are bounded to one hour; their default remains five
 minutes. Code expiry and grant expiry are independent. Core project transfer
@@ -129,7 +132,7 @@ handshake quota. Authenticated limits remain per device across reconnects.
 The SDK caps pending RPCs at 64 and outbound frames/buffers to the same defaults.
 
 An additional bounded budget of 4,096 RPCs/minute per participant/grant applies
-only to active `AGENT`/`portable` or `TERMINAL`/`portable` grants with the sole action `import` or
+only to active `AGENT`/`portable`, `TERMINAL`/`portable` or `LIBRARY`/`portable` grants with the sole action `import` or
 explicitly approved `PAIR`/`pair` grants, and
 only to `grant.inspect`, `route.send`, or acknowledgment of that participant's
 actual pending delivery. Guessed/revoked/foreign grants, other kinds/modes,

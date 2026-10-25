@@ -1,0 +1,239 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { fork } from 'node:child_process';
+import { startRelay } from '@bzzy/relay/server';
+import { RelayClient, createIdentity } from '../src/relay/sdk.js';
+import { ProjectTransferService, importProjectShare, importTerminalShare, importLibraryShare, classifyProjectShareCode } from '../src/relay/project-transfer.js';
+
+const sdk = pathToFileURL(createRequire(import.meta.url).resolve('@bzzy/relay'));
+const { RelayStore } = await import(new URL('./store.js', sdk));
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(read) {
+  for (let i = 0; i < 400; i++) { const value = await read(); if (value) return value; await delay(10); }
+  assert.fail('Expected Library transfer state was not reached.');
+}
+async function fixture(t) {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-library-transfer-'))), previous = process.env.BZZY_HOME;
+  process.env.BZZY_HOME = path.join(directory, 'private'); fs.mkdirSync(process.env.BZZY_HOME, { mode: 0o700 });
+  const source = path.join(directory, 'source'), recipient = path.join(directory, 'recipient');
+  fs.mkdirSync(source); fs.mkdirSync(recipient);
+  const store = new RelayStore(), identity = createIdentity(), audit = [], wire = [], cleanup = [];
+  store.provisionHost(identity.certificate);
+  const relay = await startRelay({ store, allowInsecureLocal: true, audit: event => audit.push(event) });
+  const client = new RelayClient({ url: relay.audience, identity, allowInsecureLocal: true, autoReconnect: false });
+  await client.connect();
+  const send = client.ws.send.bind(client.ws); client.ws.send = (frame, ...args) => { wire.push(String(frame)); return send(frame, ...args); };
+  const service = new ProjectTransferService({ client });
+  client.on('invite.requested', data => service.handleClaim(data));
+  client.on('message', data => { void service.handleMessage(data); });
+  t.after(async () => {
+    for (const close of cleanup.reverse()) await close();
+    await service.close(); await client.close(); await relay.close(); store.close();
+    if (previous === undefined) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const input = { kind: 'LIBRARY', cwd: source, expectedDigest: 'a'.repeat(64) };
+  const payload = Buffer.concat([Buffer.from('PRIVATE_LIBRARY_TRANSFER_MARKER_739128\n'), randomBytes(40000)]);
+  const options = { authorize() {}, exportArchive(_source, file) { fs.writeFileSync(file, payload, { flag: 'wx', mode: 0o600 }); return {}; } };
+  return { directory, source, recipient, store, identity, relay, client, service, wire, audit, input, options, payload, cleanup: close => cleanup.push(close) };
+}
+async function approve(f, share, fingerprint) {
+  const pending = await until(() => f.service.status(share.shareId).pending[0]);
+  assert.equal(pending.fingerprint, fingerprint());
+  await assert.rejects(f.service.approveShare({ shareId: share.shareId, claimId: pending.claimId,
+    confirmedFingerprint: createIdentity().certificate.id }), { code: 'CONFIRMATION_REQUIRED' });
+  await f.service.approveShare({ shareId: share.shareId, claimId: pending.claimId, confirmedFingerprint: pending.fingerprint });
+}
+function receive(f, share, importArchive, extra = {}) {
+  return importProjectShare({ expectedKind: 'LIBRARY', code: share.code, cwd: f.recipient,
+    expectedSenderFingerprint: f.identity.certificate.id, url: f.relay.audience, allowInsecureLocal: true,
+    onIdentity: extra.onIdentity, importArchive, ...extra });
+}
+
+test('typed Library shares require trusted registries and cannot be received by terminal or unreviewed importers', async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.service.createShare(f.input), { code: 'OPERATION_DENIED' });
+  await assert.rejects(f.service.createShare(f.input, { authorize() {} }), { code: 'OPERATION_DENIED' });
+  const share = await f.service.createShare(f.input, f.options);
+  assert.match(share.code, /^BZZY-LIBRARY-/); assert.equal(share.kind, 'LIBRARY');
+  assert.equal(classifyProjectShareCode(share.code), 'LIBRARY');
+  assert.equal(classifyProjectShareCode(share.qr, { allowInsecureLocal: true }), 'LIBRARY');
+  assert.throws(() => classifyProjectShareCode(share.code + 'secret-input'), error => error.code === 'INVALID_REQUEST' && !error.message.includes('secret-input'));
+  assert.throws(() => classifyProjectShareCode(share.code.replace('LIBRARY', 'PAIR')), { code: 'INVALID_REQUEST' });
+  for (const excludeGoalIds of [['not-a-goal'], ['template:' + 'a'.repeat(64), 'template:' + 'a'.repeat(64)], Array(1025).fill('template:' + 'a'.repeat(64))]) {
+    await assert.rejects(f.service.createShare({ ...f.input, excludeGoalIds }, f.options), { code: 'INVALID_REQUEST' });
+  }
+  const input = { code: share.code, cwd: f.recipient, expectedSenderFingerprint: f.identity.certificate.id, onIdentity() {},
+    url: f.relay.audience, allowInsecureLocal: true };
+  await assert.rejects(importTerminalShare(input), { code: 'INVALID_REQUEST' });
+  await assert.rejects(importProjectShare({ ...input, expectedKind: 'LIBRARY' }), { code: 'INVALID_REQUEST' });
+  assert.throws(() => importLibraryShare(input), { code: 'CONFIRMATION_REQUIRED' });
+  assert.equal(f.service.status(share.shareId).state, 'open');
+  assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM grants').get().n, 0);
+});
+
+test('an actual encrypted multi-chunk Library transfer commits before completion without exposing plaintext or codes', async t => {
+  const f = await fixture(t), share = await f.service.createShare(f.input, f.options), progress = [];
+  let recipientFingerprint, committed = false;
+  const importing = receive(f, share, async (file, cwd, context) => {
+    assert.equal(cwd, f.recipient); assert.equal(context.sourceFingerprint, f.identity.certificate.id);
+    assert.equal(f.service.status(share.shareId).state, 'approved');
+    await context.authorize();
+    assert.deepEqual(fs.readFileSync(file), f.payload); committed = true;
+    return { imported: true };
+  }, { onIdentity: value => { recipientFingerprint = value.recipientFingerprint; }, onProgress: value => progress.push(value) });
+  await approve(f, share, () => recipientFingerprint);
+  assert.deepEqual(await importing, { imported: true }); assert.equal(committed, true);
+  assert.equal(f.service.status(share.shareId).state, 'complete');
+  assert.ok(progress.length > 2); assert.equal(progress.at(-1).received, f.payload.length);
+  assert.ok(!f.wire.join('').includes('PRIVATE_LIBRARY_TRANSFER_MARKER_739128'));
+  assert.ok(!JSON.stringify(f.audit).includes(share.code));
+  assert.ok(!JSON.stringify(f.store.db.prepare('SELECT * FROM invitations').all()).includes(share.code));
+  const storage = path.join(process.env.BZZY_HOME, 'relay', 'shares', share.shareId);
+  assert.equal(fs.existsSync(storage), false);
+});
+
+test('cancelled Library review revokes its grant and removes the source archive without completing the share', async t => {
+  const f = await fixture(t), share = await f.service.createShare(f.input, f.options);
+  let recipientFingerprint, called = 0;
+  const importing = receive(f, share, async () => { called++; throw Object.assign(new Error('Cancelled fixture review.'), { code: 'CANCELLED' }); },
+    { onIdentity: value => { recipientFingerprint = value.recipientFingerprint; } });
+  const rejected = assert.rejects(importing, { code: 'CANCELLED' });
+  await approve(f, share, () => recipientFingerprint); await rejected;
+  await until(() => f.service.status(share.shareId).state === 'revoked');
+  assert.equal(called, 1); assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'relay', 'shares', share.shareId)), false);
+  assert.ok(f.store.db.prepare('SELECT data FROM grants').all().every(row => JSON.parse(row.data).revokedAt));
+});
+
+test('revocation while Library review is open prevents the local commit', async t => {
+  const f = await fixture(t), share = await f.service.createShare(f.input, f.options);
+  let recipientFingerprint, committed = false;
+  const importing = receive(f, share, async (_file, _cwd, context) => {
+    await f.service.revokeShare(share.shareId);
+    await context.authorize(); committed = true;
+  }, { onIdentity: value => { recipientFingerprint = value.recipientFingerprint; } });
+  const rejected = assert.rejects(importing);
+  await approve(f, share, () => recipientFingerprint); await rejected;
+  assert.equal(committed, false); assert.equal(f.service.status(share.shareId).state, 'revoked');
+});
+
+test('a Relay without Library support reports an upgrade requirement and cleans its prepared archive', async t => {
+  const f = await fixture(t), original = f.client.createInvitation;
+  f.client.createInvitation = async () => { throw Object.assign(new Error('Old Relay rejects purpose.'), { code: 'INVALID_PURPOSE' }); };
+  await assert.rejects(f.service.createShare(f.input, f.options), { code: 'RELAY_UPGRADE_REQUIRED' });
+  f.client.createInvitation = original;
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'relay', 'shares')), []);
+});
+
+test('a mismatched inner transfer kind is rejected before any Library importer runs', async t => {
+  const f = await fixture(t), share = await f.service.createShare(f.input, f.options), send = f.client.send.bind(f.client);
+  f.client.send = (grantId, payload, options) => send(grantId, payload?.result?.format === 'bzzy-project-zip'
+    ? { ...payload, result: { ...payload.result, kind: 'TERMINAL' } } : payload, options);
+  let recipientFingerprint, called = false;
+  const importing = receive(f, share, async () => { called = true; }, { onIdentity: value => { recipientFingerprint = value.recipientFingerprint; } });
+  const rejected = assert.rejects(importing, { code: 'INVALID_REQUEST' });
+  await approve(f, share, () => recipientFingerprint); await rejected;
+  assert.equal(called, false);
+  await until(() => f.service.status(share.shareId).state === 'revoked');
+});
+
+for (const enable of [false, true, 'cancel']) test(`four-kind Library uses an independent recipient Core home (review ${enable})`, { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  await f.client.close();
+  const { RelayGateway } = await import('../src/relay/gateway.js');
+  const { importSkill } = await import('../src/engine/skills.js');
+  const { saveSubagentDefinition } = await import('../src/engine/subagent-definitions.js');
+  const { saveWorkflow } = await import('../src/engine/workflows.js');
+  const { createSession, saveSession } = await import('../src/engine/store.js');
+  const { newGoal } = await import('../src/engine/goals.js');
+  const { BUILTINS } = await import('../src/engine/providers.js');
+  const { previewLibraryExport, discardDefinitionBundleReview } = await import('../src/engine/definition-bundle.js');
+  const { runtimeInfo, runtimeRequest } = await import('../src/engine/runtime.js');
+  const { identityAlive } = await import('../src/engine/process-identity.js');
+  const packagePath = path.join(f.directory, 'skill-package'); fs.mkdirSync(packagePath);
+  fs.writeFileSync(path.join(packagePath, 'SKILL.md'), '---\nname: response-review\ndescription: Review synthetic response structure\n---\nInspect supplied synthetic responses.\n');
+  fs.writeFileSync(path.join(packagePath, 'sample.txt'), randomBytes(40000).toString('base64'));
+  importSkill(packagePath, { scope: 'global' });
+  saveSubagentDefinition({ name: 'response-auditor', description: 'Inspect synthetic responses', instructions: 'Review supplied response structure.',
+    provider: 'codex', model: 'source-only-model', effort: 'high' }, { cwd: f.source, scope: 'project' });
+  saveWorkflow({ name: 'response-workflow', description: 'Structured response review', instructions: 'Read the stated objective and inspect supplied response evidence.' }, { cwd: f.source, scope: 'project' });
+  const session = createSession(BUILTINS.codex, f.source, 'source-model');
+  session.goal = { ...newGoal('Review synthetic HTTP responses'), status: 'complete', evidence: ['old-source-only-evidence'] }; saveSession(session);
+  const review = previewLibraryExport({ cwd: f.source });
+  const gateway = new RelayGateway({ identity: f.identity, url: f.relay.audience, allowInsecureLocal: true, autoReconnect: false });
+  let child;
+  f.cleanup(async () => {
+    discardDefinitionBundleReview(review);
+    if (child && child.exitCode == null) child.kill('SIGKILL');
+    await gateway.close();
+    const info = runtimeInfo();
+    if (info && identityAlive(info.identity)) await runtimeRequest(info, 'POST', '/shutdown', {}).catch(() => {});
+    for (let i = 0; i < 100 && info && identityAlive(info.identity); i++) await delay(20);
+  });
+  await gateway.start();
+  const share = await gateway.createLibraryShare({ cwd: f.source, expectedDigest: review.sourceDigest });
+  const childFile = path.join(f.directory, 'receive.mjs');
+  const transportURL = new URL('../src/relay/project-transfer.js', import.meta.url).href;
+  const databaseURL = new URL('../src/engine/database.js', import.meta.url).href;
+  const savedURL = new URL('../src/engine/saved-goals.js', import.meta.url).href;
+  fs.writeFileSync(childFile, `
+    import { importLibraryShare } from ${JSON.stringify(transportURL)};
+    import { listRecords } from ${JSON.stringify(databaseURL)};
+    import { listSavedGoals } from ${JSON.stringify(savedURL)};
+    process.once('message', async input => {
+      const abort = new AbortController();
+      try {
+        const result = await importLibraryShare({ ...input, signal: abort.signal,
+          onIdentity: value => process.send({ type: 'identity', ...value }),
+          onReview: review => {
+            process.send({ type: 'review', totals: review.totals });
+            if (input.enable === 'cancel') { setTimeout(() => abort.abort(), 5); return new Promise(() => {}); }
+            return { approved: true, enable: input.enable };
+          }
+        });
+        process.send({ type: 'result', result, skills: listRecords('core.skill'), agents: listRecords('core.subagent.definition'),
+          workflows: listRecords('core.workflow.definition'), goals: listSavedGoals().goals,
+          executions: listRecords('execution').length, sessions: listRecords('session').length });
+        process.disconnect();
+      } catch (error) {
+        if (input.enable === 'cancel' && error.name === 'AbortError') {
+          process.send({ type: 'cancelled', skills: listRecords('core.skill').length, agents: listRecords('core.subagent.definition').length,
+            goals: listSavedGoals().total, executions: listRecords('execution').length }); process.disconnect();
+        } else { process.send({ type: 'error', code: error.code, message: error.message }); process.disconnect(); process.exitCode = 1; }
+      }
+    });
+  `);
+  child = fork(childFile, [], { execPath: process.execPath, env: { PATH: process.env.PATH, TMPDIR: os.tmpdir(),
+    BZZY_HOME: path.join(f.directory, 'recipient-private') }, silent: true });
+  const messages = [], received = Promise.withResolvers(); let stderr = '';
+  child.stderr.on('data', data => { stderr += data; });
+  child.on('message', value => { messages.push(value); if (['result', 'cancelled'].includes(value.type)) received.resolve(value); if (value.type === 'error') received.reject(new Error(JSON.stringify(value))); });
+  child.on('error', received.reject);
+  child.on('exit', code => { if (code !== 0) received.reject(new Error(`Recipient exited ${code}: ${stderr}`)); });
+  child.send({ code: share.code, cwd: f.recipient, expectedSenderFingerprint: f.identity.certificate.id,
+    url: f.relay.audience, allowInsecureLocal: true, enable });
+  const pending = await until(() => gateway.projectShareStatus(share.shareId).pending[0]);
+  assert.equal(pending.fingerprint, messages.find(value => value.type === 'identity')?.recipientFingerprint);
+  await gateway.approveProjectShare({ shareId: share.shareId, claimId: pending.claimId, confirmedFingerprint: pending.fingerprint });
+  const imported = await received.promise;
+  if (enable === 'cancel') {
+    assert.deepEqual(imported, { type: 'cancelled', skills: 0, agents: 0, goals: 0, executions: 0 });
+    await until(() => gateway.projectShareStatus(share.shareId).state === 'revoked');
+    assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'relay', 'shares', share.shareId)), false);
+    return;
+  }
+  assert.equal(imported.skills.length, 1); assert.equal(imported.agents.length, 1);
+  assert.equal(imported.skills[0].enabled, enable); assert.equal(imported.agents[0].enabled, enable);
+  assert.equal(imported.agents[0].provider, undefined); assert.equal(imported.agents[0].model, undefined);
+  assert.equal(imported.workflows.length, 1); assert.equal(imported.goals.length, 1);
+  assert.equal(imported.goals[0].objective, 'Review synthetic HTTP responses'); assert.equal(imported.goals[0].status, null);
+  assert.equal(imported.executions, 0); assert.equal(imported.sessions, 0);
+  assert.deepEqual(messages.find(value => value.type === 'review').totals.skills, 1);
+  assert.equal(gateway.projectShareStatus(share.shareId).state, 'complete');
+});

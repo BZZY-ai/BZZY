@@ -22,7 +22,9 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 --attach NAME      Open a saved session by alias or ID; --view NAME observes it.
 /export [FILE.zip] Export the complete project, sessions, history, notes and evidence.
 /share             Share this complete terminal through Relay with an expiring QR/code.
-/import [CODE]     Import a terminal copy here; omit CODE for hidden entry.
+/share library     Share skills, agents, workflows and saved goals through Relay.
+/library           Create a Library code or install missing entries from another host.
+/import [CODE]     Import a Library or full terminal copy; omit CODE for hidden entry.
 /skills            Browse shared workflows; /skills sync copies Codex skills for all models.
 /agents            Create and view reusable specialist subagents for any supported model.
 /workflows         Create, load and select complete instructions for future goals; /workflow is an alias.
@@ -65,6 +67,7 @@ export const chatCommands = [
   { command: '/sessions', description: 'Open a saved named terminal chat' },
   { command: '/export', description: 'Export the complete project and context as a ZIP' },
   { command: '/share', description: 'Share a complete paused terminal copy through Relay' },
+  { command: '/library', description: 'Share skills, agents, workflows and goals; install only missing entries by code' },
   { command: '/import', description: 'Import a terminal copy here using a hidden expiring code' },
   { command: '/skill_that', description: 'Turn a completed goal into a portable AI skill' },
   { command: '/usage', description: 'Show weekly quotas and the DeepSeek balance' },
@@ -90,4 +93,4 @@ export function commandSuggestions(value) {
   return chatCommands.filter(item => item.command.startsWith(value));
 }
 
-export function privateChatCommand(value) { return /^\/(?:import|session-action|yolo|workflows?)(?:\s|$)/.test(String(value).trim()); }
+export function privateChatCommand(value) { return /^\/(?:import|library|session-action|yolo|workflows?)(?:\s|$)/.test(String(value).trim()); }

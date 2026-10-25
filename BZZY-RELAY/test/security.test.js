@@ -143,12 +143,12 @@ test('approved live PAIR data has a separate bounded participant budget without 
   await assert.rejects(recipient.request('grant.inspect', { grantId: grant.id }), { code: 'RATE_LIMITED' });
 });
 
-test('portable AGENT grants have the same bounded participant data budget and one-hour ceiling as TERMINAL', async t => {
+for (const kind of ['AGENT', 'LIBRARY']) test(`portable ${kind} grants have the same bounded participant data budget and one-hour ceiling as TERMINAL`, async t => {
   const f = await fixture(t, { server: { limits: { requestsPerMinute: 8, transferRequestsPerMinute: 32 } } });
   const host = await f.client({ host: true }), recipient = await f.client();
-  await assert.rejects(host.createInvitation({ kind: 'AGENT', resource: 'too-long', grantTtlSeconds: 3601 }), { code: 'INVALID_LIMIT' });
-  const { grant } = await pair(host, recipient, { kind: 'AGENT', resource: 'agent-copy', grantTtlSeconds: 3600 });
-  assert.equal(grant.spec.kind, 'AGENT'); assert.deepEqual(grant.spec.actions, ['import']);
+  await assert.rejects(host.createInvitation({ kind, resource: 'too-long', grantTtlSeconds: 3601 }), { code: 'INVALID_LIMIT' });
+  const { grant } = await pair(host, recipient, { kind, resource: 'portable-copy', grantTtlSeconds: 3600 });
+  assert.equal(grant.spec.kind, kind); assert.deepEqual(grant.spec.actions, ['import']);
   for (let index = 0; index < 32; index++) await recipient.request('grant.inspect', { grantId: grant.id });
   await assert.rejects(recipient.request('grant.inspect', { grantId: grant.id }), { code: 'RATE_LIMITED' });
   for (let index = 0; index < 7; index++) await recipient.grants();

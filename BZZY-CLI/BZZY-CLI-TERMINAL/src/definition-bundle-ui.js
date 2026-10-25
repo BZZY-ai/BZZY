@@ -3,6 +3,7 @@ import path from 'node:path';
 import { home } from './files.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { resolveProjectIdentity } from '@bzzy/core/engine/project-identity.js';
+import { libraryCommand } from './library-ui.js';
 
 const changedMessage = 'The host or terminal project changed. Reopen the ZIP review before acting.';
 const hostKey = () => { const value = path.resolve(home()); return fs.existsSync(value) ? fs.realpathSync(value) : value; };
@@ -29,7 +30,8 @@ export function cancelDefinitionBundle(ui, panel) {
 
 export function bundleLibraryRows() {
   return [{ text: 'Export skills & agents ZIP', action: 'bundle-export' },
-    { text: 'Import skills & agents ZIP', action: 'bundle-import' }];
+    { text: 'Import skills & agents ZIP', action: 'bundle-import' },
+    { text: 'Transfer Library via Relay', action: 'bundle-relay' }];
 }
 
 export function returnFromDefinitionBundle(ui, panel) {
@@ -106,6 +108,11 @@ export function definitionBundleRows(ui, panel) {
 
 export async function definitionBundleAction(action, ui, panel, { api, loadApi = () => import('@bzzy/core/engine/definition-bundle.js') } = {}) {
   if (!action.startsWith('bundle-')) return false;
+  if (['bundle-relay', 'bundle-share-relay', 'bundle-import-relay'].includes(action)) {
+    const context = contextFor(ui); cancelDefinitionBundle(ui, panel);
+    await libraryCommand(action === 'bundle-relay' ? '' : action === 'bundle-share-relay' ? 'share' : 'import', context.cwd, ui);
+    checkContext(ui, context); refresh(ui); return true;
+  }
   const prompt = async (context, title, options) => {
     checkContext(ui, context); const result = await ui.ask(title, options); checkContext(ui, context); return result;
   };
