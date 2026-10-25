@@ -12,7 +12,6 @@ import { skillsCommand as terminalSkillsCommand } from './skills-ui.js';
 import { root } from './process.js';
 import { checkConnections } from './connection-check.js';
 import { UI } from './ui.js';
-import { canvasWorkspace } from './canvas-workspace.js';
 import { Pet } from './mascot.js';
 import { NotificationHub } from './notifications.js';
 import { executeManaged, submitManagedGoal, viewSession, attachSession, changeSessionModel, conversationModeCommand, controlSession } from './runtime-client.js';
@@ -102,7 +101,6 @@ Usage:
 
 Options:
   --minimal             Use the ultra-compact transcript-only layout
-  --canvas              Open the character canvas
   --provider NAME       Select a provider for a new session
   --model MODEL         Select a model (provider default otherwise)
   --cwd DIRECTORY       Working directory
@@ -133,7 +131,7 @@ Options:
   --whoami              Print the detailed architecture, storage and integration reference
   --update              Pull the latest source and reinstall bzzy
   --artifact FILE       Material to snapshot and validate
-  --rounds N            Validate round limit (default 5, maximum 5)
+  --rounds N            Legacy review-only challenge limit (default 5, maximum 5)
   --review-only         Skip independent investigation; validate a fixed snapshot
   --concurrency N       Maximum active workers
   --request-id ID       Idempotency key for a retried request
@@ -235,7 +233,7 @@ export function parseArgs(argv) {
     else if (raw === '--besties') { options.mode = 'besties'; options.bestiesSetup = true; }
     else if (raw === '--review-only') options.reviewOnly = true;
     else if (raw === '--minimal') options.minimal = true;
-    else if (raw === '--canvas') options.canvas = true;
+    else if (raw === '--canvas') throw new Error('The canvas interface was removed. Run bzzy for terminal chat.');
     else if (raw === '--settings') options.settingsRequested = true;
     else if (raw === '--yolo') options.yolo = true;
     else if (raw === '--json') options.json = true;
@@ -361,7 +359,6 @@ async function resume(session, options, ui, requireGoal = false) {
 }
 
 async function executeFromCommand(provider, session, options, ui, prompt, flags) {
-  if (ui.canvas && ui.interactive && !options.detach) return canvasWorkspace(options, ui, session, { prompt, flags });
   const code = await executeManaged(provider, session, options, ui, prompt, flags);
   if (ui.coreLifecycleInterrupted) return 0;
   if (ui.nextSession) { const selected = ui.nextSession; ui.nextSession = null; return await attachSession(selected, options, ui); }
@@ -373,7 +370,6 @@ async function executeFromCommand(provider, session, options, ui, prompt, flags)
 
 async function chat(provider, options, ui, existingSession) {
   if (!ui.interactive) throw new Error('Use bzzy run "task" or bzzy goal "objective" when stdin is not a terminal.');
-  if (ui.canvas) return canvasWorkspace(options, ui, existingSession);
   const pet = new Pet(ui, options.pet);
   let session = existingSession || createChatSession(provider, options);
   ui.setSession(session.id);
@@ -531,8 +527,7 @@ export async function main(argv) {
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
-  const ui = new UI({ ...options, canvas: Boolean(options.canvas) && !options.minimal && args[0] !== 'settings',
-    hostMetrics: true, updateHandoff });
+  const ui = new UI({ ...options, hostMetrics: true, updateHandoff });
   ui.accountStatusEnabled = ui.interactive;
   ui.onDebate = (id, focus) => debateConversation(loadSession(id), focus, ui.executionOptions(options, { id }), ui);
   ui.onProvider = (id, argument, connection) => changeConversationProvider(loadSession(id), argument, ui, connection);
@@ -709,7 +704,7 @@ export async function main(argv) {
         : options.delegationSelection && [options.delegationSelection.supervisor, options.delegationSelection.executor];
       if (selections) {
         const objective = await chooseParallelGoal(selections, ui, { name: options.mode[0].toUpperCase() + options.mode.slice(1),
-          description: options.mode === 'besties' ? 'The agents collaborate and review one another’s evidence.' : options.mode === 'debate' ? 'The main agent answers independent challenges.' : 'The brain assigns work and reviews the executor’s evidence.' });
+          description: options.mode === 'besties' ? 'The agents collaborate and review one another’s evidence.' : options.mode === 'debate' ? 'Independent checks are followed by a fresh evidence review when every agent supports the goal.' : 'The brain assigns work and reviews the executor’s evidence.' });
         if (!objective) return 0;
         options.goal = objective;
       }

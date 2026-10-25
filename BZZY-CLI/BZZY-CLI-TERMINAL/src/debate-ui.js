@@ -7,6 +7,44 @@ import { renderMessageContent } from './message-renderer.js';
 // Colors belong to participant slots, never to a provider or model name.
 const participantTones = [palette.agent, palette.goalSuccess, palette.warning, palette.accent, palette.goalActive, palette.yolo];
 export const debateParticipantTone = index => participantTones[index % participantTones.length];
+const phaseLabels = {
+  starting: 'Preparing validation', investigation: 'Independent check', independent_check: 'Independent check', independent_assessment: 'Independent check',
+  missing_evidence: 'Checking missing evidence', focused_followup: 'Checking missing evidence', focused_follow_up: 'Checking missing evidence',
+  targeted_followup: 'Checking missing evidence', final_review: 'Final review', final_reviewer: 'Final review', fresh_reviewer: 'Final review',
+  consensus: 'Consensus', finished: 'Finished', opening: 'Opening case', main_opening: 'Opening case', challenge: 'Challenge',
+  reviewer: 'Challenge', response: 'Response', main_agent: 'Response',
+};
+export function validationPhaseLabel(value) {
+  const key = clean(String(value || '')).toLowerCase().replace(/[\s-]+/g, '_');
+  return phaseLabels[key] || (key && !['true', 'false', 'null'].includes(key) ? key[0].toUpperCase() + key.slice(1).replaceAll('_', ' ') : 'Review');
+}
+
+function humanFields(value, depth = 0) {
+  if (depth > 4) return '';
+  if (typeof value === 'string') return /^(?:true|false|null)$/i.test(value.trim()) ? '' : value;
+  if (Array.isArray(value)) return value.map(item => humanFields(item, depth + 1)).filter(Boolean).join('\n');
+  if (!value || typeof value !== 'object') return '';
+  return ['summary', 'message', 'text', 'explanation', 'conclusion', 'claim', 'rationale', 'reason'].map(key => typeof value[key] === 'string' ? value[key] : '')
+    .filter(Boolean).filter((text, index, all) => all.indexOf(text) === index).join('\n');
+}
+
+// Internal assessments remain in durable events. Terminal discussion presents
+// their prose, including legacy JSON reports, without displaying control fields.
+export function validationSummary(value, fallback = 'The reviewer did not provide a readable summary.', depth = 0) {
+  if (depth > 4) return fallback;
+  const text = String(value ?? '').trim();
+  if (/^(?:true|false|null)$/i.test(text)) return fallback;
+  const json = text.replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, '$1');
+  if (/^[\[{]/.test(json)) {
+    try { const summary = humanFields(JSON.parse(json)); return summary ? validationSummary(summary, fallback, depth + 1) : fallback; }
+    catch { if (/\b(?:validationAssessment|goalAssessment|achieved)\b\s*["']?\s*:/.test(json)) return fallback; }
+  }
+  const prose = text.replace(/```(?:json)?\s*\n([\s\S]*?)\n```/gi, (block, content) => {
+    try { return humanFields(JSON.parse(content)); } catch { return block; }
+  }).trim();
+  return prose !== text ? validationSummary(prose, fallback, depth + 1) : prose || fallback;
+}
+const naturalItem = value => validationSummary(humanFields(value), '');
 
 export function recordDebateEvent(entries, type, data) {
   const id = data.debateId || data.reviewSessionId;
@@ -27,16 +65,17 @@ export function recordDebateEvent(entries, type, data) {
   } else if (type === 'debate.message') {
     const participant = messageParticipant(entry, data);
     const key = data.messageId || JSON.stringify([data.assignmentId || participant.id, data.phase || '', data.role || '', data.round || 0]);
-    const message = { key, participantId: participant.id, role: clean(data.role || data.phase || 'review'), round: Number.isSafeInteger(data.round) ? data.round : null,
+    const message = { key, participantId: participant.id, role: clean(data.role || data.phase || 'review'), phase: clean(data.phase || data.role || 'review'), round: Number.isSafeInteger(data.round) ? data.round : null,
       maxRounds: Number.isSafeInteger(data.maxRounds) ? data.maxRounds : null, text: String(data.text ?? ''), state: clean(data.state || '') };
+    message.displayText = validationSummary(data.summary || message.text);
     message.label = participantLabel({ ...participant, provider: clean(data.provider || participant.provider), model: clean(data.model || participant.model) });
-    message.copyEntry = { kind: 'assistant', text: message.text, label: message.label + ' · ' + message.role };
+    message.copyEntry = { kind: 'assistant', text: message.text, label: message.label + ' · ' + validationPhaseLabel(message.phase) };
     const previous = entry.messages.findIndex(item => item.key === key);
     if (previous < 0) entry.messages.push(message); else entry.messages[previous] = message;
-    entry.phase = message.role;
+    entry.phase = message.phase;
   } else if (type === 'debate.result') {
     entry.result = { ...data };
-    entry.result.copyEntry = { kind: 'assistant', text: resultBody(data), label: 'Validation consensus' };
+    entry.result.copyEntry = { kind: 'assistant', text: data.message ? String(data.message) : validationResultBody(data), label: 'Validation consensus' };
   }
   return { entry, created };
 }
@@ -72,25 +111,34 @@ function messageParticipant(entry, data) {
 
 const participantLabel = participant => `Agent ${participant.index + 1}${participant.label && participant.label !== `Agent ${participant.index + 1}` ? ' · ' + participant.label : ''}${participant.provider ? ' · ' + participant.provider : ''}${participant.model ? ' · ' + participant.model : ''}`;
 const resolvedResult = result => result?.status === 'complete' && !result.unresolvedDisagreement?.length && !result.decision?.remainingObjections?.length
-  && !['unsupported', 'inconclusive'].includes(result.goalSatisfaction);
+  && !result.decision?.nextVerificationSteps?.length && !['unsupported', 'inconclusive'].includes(result.goalSatisfaction)
+  && !['unsupported', 'inconclusive'].includes(result.decision?.goalSatisfaction);
 
-function resultBody(result) {
-  if (result.message) return String(result.message);
+export function validationResultStatus(result) {
+  if (resolvedResult(result)) return { label: 'Review complete', tone: palette.goalSuccess, complete: true };
+  if (result?.status === 'paused') return { label: 'Validation paused', tone: palette.muted };
+  if (result?.status === 'cancelled') return { label: 'Validation cancelled', tone: palette.muted };
+  return { label: 'Not validated ✗', tone: result?.goalSatisfaction === 'unsupported' || result?.reason === 'agent_dissent' || result?.stopReason === 'agent_dissent' ? palette.danger : palette.warning };
+}
+
+export function validationResultBody(result) {
+  if (result.message) return validationSummary(result.message, 'The validation did not return a readable conclusion.');
   const parts = [];
   for (const [key, label] of [['acceptedConclusions', 'Accepted conclusions'], ['rejectedClaims', 'Rejected claims'], ['corrections', 'Corrections'],
     ['remainingObjections', 'Remaining objections'], ['nextVerificationSteps', 'Next verification steps']]) {
     const values = result.decision?.[key];
-    if (Array.isArray(values) && values.length) parts.push(label + '\n' + values.map(item => '• ' + (typeof item === 'string' ? item : JSON.stringify(item))).join('\n'));
+    const prose = Array.isArray(values) ? values.map(naturalItem).filter(Boolean) : [];
+    if (prose.length) parts.push(label + '\n' + prose.map(item => '• ' + item).join('\n'));
   }
   if (Array.isArray(result.unresolvedDisagreement) && result.unresolvedDisagreement.length)
-    parts.push('Unresolved disagreement\n' + result.unresolvedDisagreement.map(item => '• ' + item).join('\n'));
+    parts.push('Unresolved disagreement\n' + result.unresolvedDisagreement.map(naturalItem).filter(Boolean).map(item => '• ' + item).join('\n'));
   return parts.join('\n\n') || 'The review returned no conclusion.';
 }
 
 export function debateEntryLayout(entry, width, theme) {
   const lines = [], hits = [], color = theme.color;
   const put = (text, tone = palette.text, bold = false) => lines.push(color(clip(text, width), tone, bold));
-  const state = entry.result ? resolvedResult(entry.result) ? 'finished' : 'needs review' : (entry.phase || 'starting').replaceAll('_', ' ');
+  const state = entry.result ? validationResultStatus(entry.result).label : validationPhaseLabel(entry.phase || 'starting');
   const caption = `${entry.expanded ? '▾' : '▸'} VALIDATE · ${entry.participants.length} agents · ${entry.messages.length} messages · ${state}`;
   hits.push({ type: 'debate-toggle', entry, row: lines.length, left: 3, right: width - 1 });
   put('  ╭─ ' + caption, palette.accent, true);
@@ -108,9 +156,10 @@ export function debateEntryLayout(entry, width, theme) {
     for (const message of entry.messages) {
       const participant = entry.participants.find(item => item.id === message.participantId);
       const tone = debateParticipantTone(participant?.index || 0);
-      const label = `${message.label || (participant ? participantLabel(participant) : 'Agent')} · ${message.role}${message.round ? ` · round ${message.round}${message.maxRounds ? '/' + message.maxRounds : ''}` : ''}`;
+      const legacyRound = !['independent_check', 'missing_evidence', 'final_review', 'consensus'].includes(message.phase) && message.round;
+      const label = `${message.label || (participant ? participantLabel(participant) : 'Agent')} · ${validationPhaseLabel(message.phase || message.role)}${legacyRound ? ` · round ${message.round}${message.maxRounds ? '/' + message.maxRounds : ''}` : ''}`;
       put('  │ ' + label, tone, true);
-      const projection = parseMessageBody(message.text);
+      const projection = parseMessageBody(message.displayText || validationSummary(message.text));
       const body = projection.isFormatted ? renderMessageContent(projection, { width: Math.max(1, width - 9), theme, background: palette.agentSurface }).lines
         : wrapProse(clean(projection.plainText), Math.max(1, width - 9));
       for (const line of body) {
@@ -123,17 +172,16 @@ export function debateEntryLayout(entry, width, theme) {
   }
   put('  ╰─ ' + (entry.expanded ? 'Click to collapse · Esc closes' : 'Click to expand') + ' · Ctrl+B latest validation', palette.muted);
   if (entry.result) {
-    const status = resolvedResult(entry.result) ? 'Review complete' : 'Needs review';
-    const satisfaction = ['supported', 'unsupported', 'inconclusive'].includes(entry.result.goalSatisfaction) ? ` · goal ${entry.result.goalSatisfaction}` : '';
-    put(''); put('  CONSENSUS · ' + status + satisfaction, resolvedResult(entry.result) ? palette.goalSuccess : palette.warning, true);
-    const body = resultBody(entry.result), projection = parseMessageBody(body);
+    const status = validationResultStatus(entry.result);
+    put(''); put('  CONSENSUS · ' + status.label, status.tone, true);
+    const body = validationResultBody(entry.result), projection = parseMessageBody(body);
     const rendered = projection.isFormatted ? renderMessageContent(projection, { width: Math.max(1, width - 7), theme, background: palette.agentSurface }).lines
       : wrapProse(clean(projection.plainText), Math.max(1, width - 7));
     for (const line of rendered) {
       hits.push({ type: 'response', entry: entry.result.copyEntry, row: lines.length, left: 3, right: width - 2 });
       lines.push(color('  ▎ ', palette.agent) + fillSurface(line, Math.max(1, width - 6), theme, palette.agentSurface, palette.text));
     }
-    const missingObjections = (entry.result.unresolvedDisagreement || []).filter(item => !projection.plainText.includes(String(item)));
+    const missingObjections = (entry.result.unresolvedDisagreement || []).map(naturalItem).filter(item => item && !projection.plainText.includes(item));
     if (missingObjections.length) {
       put('  Unresolved objections', palette.warning, true);
       for (const item of missingObjections) for (const line of wrapProse('• ' + clean(String(item)), Math.max(1, width - 5))) put('  ' + line);

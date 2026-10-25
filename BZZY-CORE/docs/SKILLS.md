@@ -51,6 +51,33 @@ owner-approved offline fixtures and require explicit version-pinned acceptance.
 Global promotion creates a separate generic text-only candidate, never a copy of
 the original evidence/resources. See [reviewed learning](KNOWLEDGE.md).
 
+### Move a portable project skill into BZZY Core
+
+Open a project skill and choose **Move to BZZY Core**. The review shows the exact
+package version, every file and size, and the change from **THIS CHAT / PROJECT**
+to **BZZY CORE / GLOBAL**. **Inspect package files** reads that pinned version;
+Back or cancellation leaves the package and chat draft unchanged. **Move to BZZY
+Core** publishes the reviewed package only when the source revision/version,
+current host/project and empty global destination still match.
+
+The entire portable package is retained, including scripts, references, assets
+and provider metadata. Existing global names are never overwritten, even when
+their content matches. Core archives the project registry entry and retains its
+immutable local packages and history. Original Codex and project source folders
+remain untouched. The new global skill starts disabled and needs a separate,
+explicit **Enable for all models** action.
+
+Packages with project-scope markers, evidence or run records cannot move directly
+into global scope. Use **Create a separate generic global candidate** to author a
+parameterized workflow while keeping those resources private. Both paths reject
+recognized credentials and unsafe files; neither runs scripts, invokes a model,
+adds tools or grants execution permissions.
+
+Trusted local host code can use `previewSkillGlobalMove` and
+`moveSkillToGlobal` from `engine/skills.js`. The move requires the exact returned
+review and `reviewed:true`; its source removal and destination publication share
+one SQLite transaction. These administration APIs are not model tools.
+
 ## Sync from Codex
 
 On Debian/Linux and macOS, sync discovers `SKILL.md` folders in these locations,

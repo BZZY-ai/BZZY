@@ -99,7 +99,24 @@ function resultFingerprint(result, review) {
   return digest({ reviewGoalId: review.goal?.id, assessment: result?.assessment, decision: result?.decision,
     goalSatisfaction: result?.goalSatisfaction, unresolvedDisagreement: result?.unresolvedDisagreement,
     objectionLedger: result?.objectionLedger, objectionReview: result?.objectionReview,
-    missionContext: result?.missionContext, sourceEvidenceCoverage: result?.sourceEvidenceCoverage, acceptanceId: review.acceptance?.id });
+    missionContext: result?.missionContext, protocol: result?.protocol, validationPolicy: result?.validationPolicy,
+    sourceEvidenceCoverage: result?.sourceEvidenceCoverage, acceptanceId: review.acceptance?.id });
+}
+function currentAdaptiveBindings(review, bindings, minimum = 2) {
+  return Array.isArray(bindings) && bindings.length >= minimum && bindings.length <= 3 && bindings.every(pin => {
+    const job = getRecord('assignment', pin.assignmentId), round = job && getRecord('round', `${job.id}:${job.currentRound}`), worker = job?.workerSessionId && rawSession(job.workerSessionId);
+    return job && worker && job.parentSessionId === review.id && job.goalId === review.goal.id && worker.parentSessionId === review.id &&
+      worker.assignmentId === job.id && job.workerSessionId === pin.workerSessionId && job.currentRound === pin.round && digest(round?.report || null) === pin.reportHash;
+  });
+}
+function currentAdaptiveReviewer(review, result) {
+  const pin = result.protocol?.finalReviewer, job = pin && getRecord('assignment', pin.assignmentId);
+  const worker = job?.workerSessionId && rawSession(job.workerSessionId), round = job && getRecord('round', `${job.id}:${job.currentRound}`);
+  return Boolean(pin && job && worker && job.parentSessionId === review.id && job.goalId === review.goal.id && worker.parentSessionId === review.id &&
+    worker.assignmentId === job.id && worker.assignmentRound === job.currentRound && job.role === 'reviewer' && job.contract?.policy?.mode === 'read-only' &&
+    job.currentRound === 1 && pin.round === 1 && pin.workerSessionId === worker.id && round?.state === 'awaiting_review' && digest(round.report) === pin.reportHash &&
+    result.assessment.defenderAssignmentId === job.id && result.assessment.defenderSessionId === worker.id &&
+    !(result.protocol.independentAssignments || []).some(item => item.workerSessionId === worker.id));
 }
 function scopedDecisionEvidence(review, result, entries) {
   const defender = getRecord('session', result.assessment.defenderSessionId), job = getRecord('assignment', result.assessment.defenderAssignmentId);
@@ -139,6 +156,17 @@ function classify(source, review, binding) {
   const result = getRecord('debate', review.id);
   if (binding.finalResultFingerprint && binding.finalResultFingerprint !== resultFingerprint(result, review)) return { state: 'stale', reason: 'checked_result_changed' };
   if (!finalEvent(review)) return { state: 'inconclusive', reason: 'review_final_missing' };
+  if (result?.validationPolicy?.outcome === 'rejected') {
+    const policy = getRecord('core.validation.policy', result.validationPolicy.receiptId);
+    if (policy?.passed === true && result.validationPolicy.receiptFingerprint === digest(policy) && policy.sessionId === review.id && policy.goalId === review.goal.id && policy.sourceGoalId === source.goal.id &&
+        policy.sourceRevision === binding.sourceRevision && policy.resultRevision === binding.resultRevision && policy.outcome === 'rejected' && policy.reason === 'agent_dissent' &&
+        Array.isArray(policy.evidence) && policy.evidence.length > 0 && policy.bindings?.every(pin => result.protocol?.finalAssignments?.some(item => digest(item) === digest(pin))) &&
+        currentAdaptiveBindings(review, policy.bindings, 1) && currentEvidence(manifest(policy.evidence))) {
+      return { state: 'not_validated', reason: 'agent_dissent', verificationLevel: 'independent-assessment-policy',
+        provenance: 'core-adaptive-validation-policy', semanticVerification: 'not-automated' };
+    }
+    return { state: 'inconclusive', reason: 'validation_receipt_invalid' };
+  }
   if (result?.goalSatisfaction === 'unsupported' || result?.decision?.goalSatisfaction === 'unsupported') return { state: 'not_validated', reason: 'original_goal_unsupported' };
   const receipt = review.acceptance?.id && getRecord('acceptance', review.acceptance.id);
   if (status !== 'complete' || result?.goalSatisfaction !== 'supported' || result?.assessment?.passed !== true ||
@@ -152,7 +180,13 @@ function classify(source, review, binding) {
   const decisive = manifest(result.assessment.inspectedEvidence || []);
   const copies = manifest(review.reviewSource.evidenceIds || []);
   const receiptEvidence = manifest([...(review.goal.evidence || []), ...(receipt.checks || []).map(item => item.evidence),
-    ...(receipt.artifacts || []).map(item => item.evidence), ...(receipt.requirements || []).flatMap(item => item.assessment?.evidence || [])].filter(Boolean));
+    ...(receipt.artifacts || []).map(item => item.evidence), ...(receipt.requirements || []).flatMap(item => item.assessment?.evidence || []),
+    ...(receipt.debate.independentEvidence || [])].filter(Boolean));
+  if (result.protocol?.version === 1 && (receipt.debate.protocol !== result.protocol.kind ||
+      digest(receipt.debate.independentBindings) !== digest(result.protocol.finalAssignments) || !currentAdaptiveBindings(review, receipt.debate.independentBindings) ||
+      !currentAdaptiveReviewer(review, result))) {
+    return { state: 'stale', reason: 'checked_result_changed' };
+  }
   if (!decisive?.length || !copies || copies.some(item => item.sessionId !== review.id) || !scopedDecisionEvidence(review, result, decisive) || !currentEvidence(decisive) || !currentEvidence(copies) ||
       !currentEvidence(receiptEvidence) || !currentMission(review, result.missionContext)) return { state: 'stale', reason: 'review_evidence_changed' };
   return { state: 'validated', reason: 'host_checks_passed', verificationLevel: receipt.level || 'evidence-and-supervisor-assessment',

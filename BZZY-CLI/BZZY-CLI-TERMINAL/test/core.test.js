@@ -20,7 +20,7 @@ test.afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); delete 
 test('yolo is opt-in on every invocation, including resume; malformed budgets fail early', () => {
   assert.equal(parseArgs(['--yolo', 'goal', 'finish']).options.yolo, true);
   assert.equal(parseArgs(['--minimal']).options.minimal, true);
-  assert.equal(parseArgs(['--canvas']).options.canvas, true);
+  assert.throws(() => parseArgs(['--canvas']), /canvas interface was removed.*bzzy/i);
   assert.equal(parseArgs(['--settings']).options.settingsRequested, true);
   assert.equal(parseArgs([]).options.minimal, undefined);
   assert.equal(parseArgs(['resume', 'a']).options.yolo, false);
@@ -125,7 +125,7 @@ test('backend permission mappings are explicit and subscription launch does not 
 
 test('debate investigation failures show their durable reason', () => {
   assert.equal(formatInvestigation({ state: 'failed', error: 'Claude could not start\nunder this account.' }),
-    'Investigation ended: failed. Evidence remains incomplete.\nReason: Claude could not start under this account.');
+    'The check could not finish. Evidence remains incomplete.\nReason: Claude could not start under this account.');
   assert.equal(formatInvestigation({ state: 'awaiting_review', report: { summary: 'Evidence was recorded.' } }), 'Evidence was recorded.');
 });
 

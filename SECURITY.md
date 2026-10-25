@@ -56,7 +56,7 @@ BZZY-CORE/docs/SESSION-MEMORY.md for bounds and provider billing limitations.
 
 Validate and Delegate now pin automatic mission context and source revisions.
 Missing-context reports stop workers and require explicit revision-pinned
-answers/follow-ups. Majority agreement cannot skip an evidence challenge; the
+answers/follow-ups. Agreement cannot replace a final evidence review; the
 original goal, criteria and claimed severity are assessed separately. Complete
 original-evidence inspection and declared contract checks gate Validate completion.
 Imported achieved goals remain historical and cannot authorize new verification

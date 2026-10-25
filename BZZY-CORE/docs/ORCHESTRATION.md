@@ -79,17 +79,37 @@ Imported achieved goals remain historical: start a locally scoped goal with
 reviewed verification before requesting a linked achieved-claim check. Imported
 history cannot authorize new commands or target access.
 
-1. Participants independently investigate the same material and mission.
-   Re-tests stay within the original declared scope and policy.
-2. The main reviewer opens a case from the reports and evidence.
-3. Challengers raise specific objections. The main reviewer responds, revises or
-   concedes, for at least one and at most five challenge/response rounds.
+1. Two or three participants independently investigate the same material and
+   original mission. Re-tests stay within the declared scope and policy. Each
+   report contains a natural-language explanation plus an internal assessment
+   of the exact objective and every original criterion: `true`, `false` or
+   `null`, with its own recorded evidence. Invalid, stale or incomplete reports
+   remain unknown; a legacy verdict is never coerced into a boolean.
+2. Any valid, evidence-backed `false` stops the review as **Not validated**.
+   Other participants cannot outvote it. This policy records disagreement;
+   disagreement alone does not prove the original goal false. If there is no
+   false assessment, only uncertain participants may receive one private
+   follow-up in their existing worker conversation. They see their own missing
+   evidence and report, without the other participants' conclusions. Original
+   permissions, token/runtime limits, context limits and retry limits still
+   apply; zero retries prevents this additional work. Unresolved uncertainty
+   ends with a human-readable inconclusive result.
+3. Only when every selected participant supports every criterion does Core
+   create one fresh, read-only final evidence reviewer. It checks the original
+   objective, evidence and requested severity in a separate conversation. It
+   does not repeat an opening, mandatory challenge and main response. Core
+   records this as a direct review with zero challenge rounds, binding the
+   independent assignments and final reviewer to their actual reports.
 
-Majority agreement is descriptive and cannot skip challenge. An append-only
-objection ledger preserves minority findings, uncertainty and changed claims.
+The internal assessments control this routing; clients display the explanations,
+not raw boolean payloads. Agreement is provisional and cannot award a validation
+badge. An append-only objection ledger preserves minority findings, uncertainty
+and changed claims.
 Every objection needs one exact disposition with rationale and scoped, intact,
 current evidence actually opened by the main reviewer. Unknown/duplicate
 dispositions, missing reports and unsupported resolutions remain unresolved.
+Explicit snapshot-only reviews and legacy saved investigation protocols retain
+their bounded challenge/response path.
 
 The final reviewer must completely inspect all original evidence bytes, with
 paginated read coverage. A one-byte read cannot claim full review of a large
@@ -102,6 +122,11 @@ satisfy High merely because several models call it real. Core rechecks reviewer
 identity, source revisions, objection/evidence coverage, required deliverables
 and declared verification before completion. Unsatisfied checks downgrade the
 result to `awaiting_review`/`inconclusive`, retaining the reported claim for audit.
+The final review must also return a consistent structured assessment of every
+original criterion. A supported natural-language decision cannot override its
+false or unknown assessment. Oversized review or private follow-up context is
+rejected before dispatch instead of silently truncating evidence or overrunning
+the selected model's context window and remaining token allowance.
 
 After those checks, the shared **Consensus & Compactor** model writes a bounded
 consensus explanation through the verified no-tools document runner. This
@@ -130,11 +155,12 @@ establish it. Multiple models agreeing is not independent ground truth.
 
 ## Validation
 
-Offline fixtures exercise misleading majorities, minority counterexamples,
-uninspected/changed evidence, wrong severity, source-instruction changes, missing
-context, paused follow-ups, missing parent deliverables and supported completion.
+Offline fixtures exercise direct review after unanimous supported checks, a
+single negative against a majority, private uncertainty follow-ups, zero retries,
+bounded dispatch, malformed claims and changed report/receipt bindings. They
+also cover minority counterexamples, uninspected/changed evidence, wrong
+severity, source-instruction changes, missing context, paused follow-ups, missing
+parent deliverables and supported completion.
 They drive real Core persistence, assignment/report/read/acceptance protocols with
 synthetic actors; they do not measure live-model accuracy. Native backend fixtures
 also exercise worker stop and durable recovery. See [validation](VALIDATION.md).
-
-The proposed character canvas remains a separate CLI frontend design.

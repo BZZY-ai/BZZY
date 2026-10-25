@@ -4,6 +4,7 @@ import { subagentsCommand } from './subagents-ui.js';
 import { knowledgeCommand } from './knowledge-ui.js';
 import readline from 'node:readline';
 import { TerminalChat } from './tui.js';
+import { validationPhaseLabel, validationSummary, validationResultStatus, validationResultBody } from './debate-ui.js';
 import { clean, cellWidth, clip } from './terminal-format.js';
 import { AccountStatusMonitor, accountStatusDetails, accountStatusLabels } from './account-status.js';
 import { ClientSettings } from './client-settings.js';
@@ -18,11 +19,10 @@ import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, minimal = false, canvas = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
+  constructor({ json = false, pet = true, minimal = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
     this.json = json;
     this.pet = pet;
     this.minimal = minimal;
-    this.canvas = canvas && !minimal;
     this.colorPalette = updateHandoff?.colorPalette || 'blue';
     this.input = input;
     this.output = output;
@@ -43,8 +43,6 @@ export class UI {
 
   openTerminal() {
     if (!this.interactive) return;
-    if (this.canvas && !this.canvasView && !this.sessionId) this.canvasView = { canvas: null, alias: '', focus: null, drawer: false,
-      bindings: new Map(), snapshots: new Map(), bubbles: new Map(), exchanges: new Map() };
     this.tui ||= new TerminalChat(this);
     if (this.connectionStatusEnabled && !this.connectionMonitor && !this.closed) {
       this.connectionMonitor = new ConnectionStatusMonitor(sample => { this.connectionStatus = sample; this.tui?.schedule(); }).start();
@@ -200,13 +198,10 @@ export class UI {
     else if (type === 'debate.message') {
       this.newline();
       const slot = Number.isSafeInteger(data.participantIndex) ? `Agent ${data.participantIndex + 1}` : clean(data.participant || 'Agent');
-      this.output.write(`\n${slot} · ${clean(data.role || 'review')}\n${clean(data.text)}\n`);
+      this.output.write(`\n${slot} · ${validationPhaseLabel(data.phase || data.role)}\n${clean(validationSummary(data.summary || data.text))}\n`);
     }
     else if (type === 'debate.result') {
-      const resolved = data.status === 'complete' && !data.unresolvedDisagreement?.length && !data.decision?.remainingObjections?.length
-        && !['unsupported', 'inconclusive'].includes(data.goalSatisfaction);
-      const satisfaction = ['supported', 'unsupported', 'inconclusive'].includes(data.goalSatisfaction) ? ` · goal ${data.goalSatisfaction}` : '';
-      this.output.write(`\nCONSENSUS · ${resolved ? 'Review complete' : 'Needs review'}${satisfaction}\n${clean(data.message || 'The review returned no conclusion.')}\n`);
+      this.output.write(`\nCONSENSUS · ${validationResultStatus(data).label}\n${clean(validationResultBody(data))}\n`);
     }
     else if (data.message) this.output.write(`${clean(data.message)}\n`);
     if (type === 'execution.finished') this.messageStreams.clear();
@@ -286,7 +281,6 @@ export class UI {
   ask(question, options = {}) {
     this.beforeOutput?.();
     if (!this.interactive) return Promise.resolve('');
-    if (this.canvas && !this.tui) this.openTerminal();
     const operation = this.promptQueue.then(() => {
       if (this.closed) return null;
       if (this.tui) return this.tui.ask(question, options);
@@ -326,7 +320,6 @@ export class UI {
 
   async secret(question) {
     if (!this.interactive || !this.input.setRawMode) throw new Error('Run authentication in a terminal, or set the provider API-key environment variable.');
-    if (this.canvas && !this.tui) this.openTerminal();
     if (this.tui) return this.tui.ask(question, { hidden: true });
     this.output.write(question);
     const wasRaw = this.input.isRaw;

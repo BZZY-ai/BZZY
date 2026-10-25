@@ -21,7 +21,7 @@ const safePath = value => typeof value === 'string' && value.length <= 240 && !v
 const validProjectId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
 const scopeOf = record => record.scope || 'global';
 const idOf = record => record.id || (scopeOf(record) === 'project' ? `project:${record.projectId}:${record.name}` : record.name);
-const privatePackage = files => files.some(file => file.path === 'project-scope.json' || /^(?:references\/)?(?:run-records\.jsonl|source-goal\.json|evidence(?:\/|\.json$))/.test(file.path));
+const privatePackage = files => files.some(file => /(?:^|\/)(?:project-scope\.json$|run-records\.jsonl$|source-goal\.json$|evidence(?:\/|\.json$))/i.test(file.path));
 const needsScopeReview = record => scopeOf(record) === 'global' && (privatePackage(record.files) ||
   !record.scope && Boolean(getRecord('core.skill.codex-sync', record.name)));
 const publicRecord = record => record && ({ id: idOf(record), name: record.name, description: record.description,
@@ -265,24 +265,34 @@ export function importSkill(source, options = {}) {
           return publicCandidate(existing);
         }
       }
-      let reclassified;
+      let reclassified, projectMove = false;
       if (options.reclassifyLegacy) {
         const requested = options.reclassifyLegacy;
         reclassified = getRecord(kind, requested.id);
         if (selected.scope !== 'project' || !reclassified || scopeOf(reclassified) !== 'global' ||
             reclassified.revision !== requested.expectedRevision || reclassified.version !== version) fail('Legacy skill changed before scope migration.');
       }
+      if (options.reclassifyProject) {
+        const requested = options.reclassifyProject;
+        reclassified = getRecord(kind, requested.id);
+        if (selected.scope !== 'global' || candidate || options.reclassifyLegacy || previous || !reclassified || scopeOf(reclassified) !== 'project'
+          || reclassified.projectId !== requested.projectId || reclassified.revision !== requested.expectedRevision || reclassified.version !== version
+          || id !== reclassified.name) fail('Project skill or global destination changed before moving. Reopen the review.');
+        if (fs.existsSync(target)) fail('Global skill storage already exists. It was kept; choose a separate generic promotion instead.');
+        projectMove = true;
+      }
       privateDir(path.dirname(target));
       if (!fs.existsSync(target)) fs.renameSync(payload, target);
       if (candidate) return saveCandidate(prepared, previous, options, db);
-      const record = { ...prepared, enabled: reclassified ? Boolean(previous ? previous.enabled : reclassified.enabled) : false, revision: expectedRevision + 1, updatedAt: now() };
+      const record = { ...prepared, enabled: reclassified && !projectMove ? Boolean(previous ? previous.enabled : reclassified.enabled) : false,
+        ...(projectMove ? { review: { reason: 'scope-move', reviewed: false, fromScope: 'project' } } : {}), revision: expectedRevision + 1, updatedAt: now() };
       if (reclassified) {
         rememberVersion(reclassified, db);
         const archiveId = digest([idOf(reclassified), reclassified.version, reclassified.revision, id]);
-        putRecord('core.skill.archived', archiveId, { ...reclassified, archivedAt: now(), movedTo: id, reason: 'project-scope-migration' }, db);
+        putRecord('core.skill.archived', archiveId, { ...reclassified, archivedAt: now(), movedTo: id, reason: projectMove ? 'global-scope-move' : 'project-scope-migration' }, db);
         db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, idOf(reclassified));
       }
-      putRecord(kind, id, record, db); audit(record, previous, 'import', db);
+      putRecord(kind, id, record, db); audit(record, previous, projectMove ? 'move-from-project' : 'import', db);
       return publicRecord(record);
     });
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
@@ -380,6 +390,40 @@ export function scopeSkillToProject(name, expectedRevision, options = {}) {
   return importSkill(location(current), { ...selected, expectedRevision: previous?.revision || 0, expectedVersion: current.version,
     provenance: { kind: 'scope-migration', sourceSkillId: idOf(current), sourceVersion: current.version },
     reclassifyLegacy: { id: idOf(current), expectedRevision } });
+}
+
+function globalMoveContext(options) {
+  if (typeof options?.projectRoot !== 'string' || options.session || options.scope && options.scope !== 'project') fail('Choose the current project directory before moving a skill.');
+  const project = context(options);
+  if (!project?.root) fail('The project directory is unavailable.');
+  return { project, scope: { projectRoot: project.root, projectId: project.id, scope: 'project' },
+    binding: { host: digest(home()), projectId: project.id, root: digest(project.root) } };
+}
+
+// Host-only preview: validate the complete portable package, including resources,
+// without publishing a destination or changing either library entry.
+export function previewSkillGlobalMove(name, options = {}) {
+  const { project, scope, binding } = globalMoveContext(options), source = findSkill(name, scope);
+  if (scopeOf(source) !== 'project' || source.projectId !== project.id) fail('Only a skill in this project can move to BZZY Core.');
+  if (privatePackage(source.files)) fail('This package contains private project scope, evidence or run records. Use the separate generic global promotion instead.');
+  if (getRecord(kind, source.name)) fail('BZZY Core already has a skill with this name. It was kept; moving never overwrites it.');
+  const prepared = importSkill(location(source), { scope: 'global', preview: true, expectedVersion: source.version });
+  if (prepared.name !== source.name || fs.existsSync(location({ ...source, id: source.name, scope: 'global' }))) fail('Global skill storage already exists. It was kept.');
+  const review = { version: 1, binding, sourceId: idOf(source), sourceProjectId: source.projectId, sourceRevision: source.revision,
+    sourceVersion: source.version, name: source.name, description: source.description, sourceEnabled: Boolean(source.enabled),
+    destinationId: source.name, destinationRevision: 0, files: prepared.files };
+  return { ...review, reviewHash: digest(review) };
+}
+
+export function moveSkillToGlobal(review, options = {}) {
+  const { reviewed, ...contextOptions } = options;
+  if (reviewed !== true || !review || typeof review !== 'object' || Array.isArray(review)) fail('Review the exact package and scope change before moving.');
+  const fresh = previewSkillGlobalMove(review.sourceId, contextOptions);
+  if (digest(fresh) !== digest(review)) fail('The host, project, source version or destination changed. Reopen the move review.');
+  const current = findSkill(fresh.sourceId, { ...contextOptions, scope: 'project' });
+  return importSkill(location(current), { scope: 'global', expectedRevision: fresh.destinationRevision, expectedVersion: fresh.sourceVersion,
+    provenance: { kind: 'scope-move', sourceProjectId: fresh.sourceProjectId, sourceSkillId: fresh.sourceId, sourceVersion: fresh.sourceVersion },
+    reclassifyProject: { id: fresh.sourceId, projectId: fresh.sourceProjectId, expectedRevision: fresh.sourceRevision } });
 }
 
 function publicCandidate(record) {

@@ -22,8 +22,8 @@ export function writeUpdateHandoff(ui, { coreStopped = false } = {}) {
   if (tui?.hidden || tui?.promptDraft || ui.privateView) throw new Error('Finish the private input before updating.');
   const drafts = new Map(tui?.drafts || []), selected = ui.activeTab || ui.sessionId;
   if (uuid(selected)) drafts.set(selected, tui?.settingsDraft || { value: tui?.value || '', cursor: tui?.cursor || 0 });
-  const value = validated({ v: 1, sessionId: uuid(ui.canvasRootId || ui.sessionId) ? ui.canvasRootId || ui.sessionId : null,
-    activeTab: ui.activeTab, mode: !ui.canvasRootId && ui.sessionMode && ui.sessionMode !== 'CONTROL' ? 'VIEW' : 'CONTROL', minimal: ui.minimal === true, colorPalette: ui.colorPalette, settingsOnly: Boolean(ui.settingsOnly), coreStopped, drafts: [...drafts] });
+  const value = validated({ v: 1, sessionId: uuid(ui.sessionId) ? ui.sessionId : null,
+    activeTab: ui.activeTab, mode: ui.sessionMode && ui.sessionMode !== 'CONTROL' ? 'VIEW' : 'CONTROL', minimal: ui.minimal === true, colorPalette: ui.colorPalette, settingsOnly: Boolean(ui.settingsOnly), coreStopped, drafts: [...drafts] });
   const body = JSON.stringify(value);
   if (Buffer.byteLength(body) > maximum) throw new Error('The unsent drafts are too large to preserve during this update.');
   fs.mkdirSync(folder(), { recursive: true, mode: 0o700 });

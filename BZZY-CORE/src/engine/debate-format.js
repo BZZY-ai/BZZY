@@ -1,21 +1,39 @@
 import fs from 'node:fs';
 import { getRecord, listRecords, digest } from './database.js';
 import { fileInfo, inside } from './evidence.js';
+import { naturalValidationSummary } from './validation-assessment.js';
 
 const describe = item => typeof item === 'string' ? item : item?.claim || item?.summary || item?.description || '';
 
 const concise = value => String(value || '').replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
 
 export function formatInvestigation(report) {
+  if (report?.protocol === 'tri-state-v1' || report?.report?.validationAssessment) return formatValidationAssessment(report);
   const summary = typeof report?.report?.summary === 'string' ? report.report.summary.trim() : '';
   const state = report?.state || 'incomplete';
   const failed = !['awaiting_review', 'complete'].includes(state);
   if (!failed && summary) return summary;
-  const message = summary
-    ? `${summary}\nInvestigation ended: ${state}.`
-    : `Investigation ended: ${state}. Evidence remains incomplete.`;
+  const explanation = assessmentStopReason(state);
+  const message = summary ? `${summary}\n${explanation}` : `${explanation} Evidence remains incomplete.`;
   const reason = concise(report?.error);
   return reason ? `${message}\nReason: ${reason}` : message;
+}
+
+function assessmentStopReason(state) {
+  if (state === 'paused') return 'The check is paused.';
+  if (state === 'cancelled') return 'The check was cancelled.';
+  if (state === 'timed_out' || state === 'budget_limited') return 'The check reached its time or usage limit.';
+  if (state === 'needs_context') return 'The check needs more context.';
+  if (state === 'running' || state === 'starting') return 'The check has not finished.';
+  if (state === 'awaiting_review' || state === 'complete') return 'The agent did not provide a usable explanation.';
+  return 'The check could not finish.';
+}
+
+export function formatValidationAssessment(entry) {
+  const summary = entry?.report?.summary;
+  if (naturalValidationSummary(summary)) return summary.trim();
+  const message = assessmentStopReason(entry?.state), reason = concise(entry?.error);
+  return reason ? `${message} ${reason}` : `${message} The available evidence needs review.`;
 }
 
 const text = value => typeof value === 'string' && value.trim() && value.length <= 8000 && !/[\x00-\x08\x0b-\x1f\x7f]/.test(value);

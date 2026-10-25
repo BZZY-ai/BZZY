@@ -21,6 +21,8 @@ import { conversationMessages } from '../src/conversation.js';
 import { initializeProject, writeProjectRecord } from '../src/project.js';
 import { suspendCoreHost, servicePlan } from '@bzzy/core/engine/host-service.js';
 import { beginCoreMaintenance } from '@bzzy/core/engine/maintenance.js';
+import { prepareChatDebate } from '../src/chat-debate.js';
+import { captureEvidence } from '../src/evidence.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 let dir, savedEnv;
@@ -455,21 +457,23 @@ test('declining a goal replacement preserves the active goal and starts no new e
   await finished(launched.executionId);
   assert.equal(getRecord('execution', launched.executionId).exitCode, 0, 'No must leave the original execution able to finish');
 });
-test('debate preserves independent assessments, fixed snapshots and unresolved disagreement', async () => {
+test('Validate gives uncertain checks one private followup and stops without a debate loop', async () => {
   const session = makeSession({ mode: 'debate' }), launched = await start(session, { artifact: 'source.txt', participants: ['codex', 'claude'], rounds: 3, runtimeSeconds: 30 });
   const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 2, job.error || JSON.stringify(loadSession(session.id).goal));
-  const result = getRecord('debate', session.id); assert.ok(result.transcript.length >= 2); assert.equal(result.stopReason, 'positions_stable');
-  assert.ok(result.unresolvedDisagreement.includes('missing-control'), JSON.stringify(result.investigation)); assert.equal(result.newVerificationPerformed, null); assert.equal(result.newVerificationDuringRounds, false);
+  const result = getRecord('debate', session.id); assert.deepEqual(result.transcript, []); assert.equal(result.stopReason, 'missing_evidence');
+  assert.equal(result.protocol.kind, 'targeted-followup'); assert.equal(result.protocol.followups.length, 3);
+  assert.equal(result.validationPolicy.outcome, 'inconclusive'); assert.ok(result.validationPolicy.receiptId);
+  assert.equal(result.newVerificationPerformed, null); assert.equal(result.newVerificationDuringRounds, false);
   assert.equal(result.outcome, 'unresolved'); assert.equal(loadSession(session.id).goal.status, 'awaiting_review');
-  assert.equal(result.investigation.reports.length, 3, 'main and challengers all assess independently before the opening case');
-  assert.ok(result.investigation.reports.every(report => report.artifacts.some(item => item.path?.startsWith('BZZY_INVESTIGATION_EVIDENCE/'))), JSON.stringify(result.investigation.reports));
+  assert.equal(result.investigation.reports.length, 3);
+  assert.ok(result.protocol.initialInvestigation.reports.every(report => report.artifacts.some(item => item.path?.startsWith('BZZY_INVESTIGATION_EVIDENCE/'))));
+  const assignments = listRecords('assignment').filter(item => item.parentSessionId === session.id);
+  assert.equal(assignments.length, 3); assert.ok(assignments.every(item => item.currentRound === 2));
   const history = (await new BzzyClient(launched.info).events(session.id, 0, 1000)).events;
-  const investigationDone = history.findIndex(event => event.type === 'debate.phase' && event.data.status === 'finished');
-  const opening = history.findIndex(event => event.type === 'debate.opening');
-  const firstDiscussion = history.findIndex(event => event.type === 'debate.message' && event.data.role === 'reviewer');
-  assert.ok(investigationDone >= 0 && opening > investigationDone && firstDiscussion > opening);
+  assert.ok(history.some(event => event.type === 'debate.phase' && event.data.phase === 'missing_evidence'));
+  assert.ok(!history.some(event => ['debate.opening', 'debate.round'].includes(event.type)));
   assert.ok(!history.some(event => event.type === 'info' && event.data.message.startsWith('/goal ')), 'phase headings do not duplicate the submitted goal');
-  assert.ok(history.some(event => event.type === 'debate.message' && event.data.role === 'main agent'));
+  assert.ok(!history.some(event => event.type === 'debate.message' && event.data.role === 'main agent'));
   assert.equal(fs.readFileSync(path.join(dir, 'source.txt'), 'utf8'), 'Supplied evidence');
 });
 test('review-only debate skips investigations and inherits disabled networking and read-only access', async () => {
@@ -493,32 +497,99 @@ test('review-only debate skips investigations and inherits disabled networking a
   }
   assert.equal(fs.readFileSync(path.join(dir, 'source.txt'), 'utf8'), 'Supplied evidence');
 });
-test('debate stops before an opening case when independent work yields no usable evidence', async () => {
+test('Validate remains not validated after bounded checks still cannot obtain evidence', async () => {
   process.env.BZZY_TEST_ADVANCED = 'debate-no-evidence';
   const session = makeSession({ mode: 'debate' }), launched = await start(session, { participants: ['codex', 'claude'], rounds: 5, runtimeSeconds: 30 });
   const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 2, job.error);
   const result = getRecord('debate', session.id);
-  assert.equal(result.stopReason, 'insufficient_investigation_evidence'); assert.equal(result.opening, null); assert.deepEqual(result.transcript, []);
-  assert.equal(result.investigationReadiness.usable, 0); assert.equal(result.investigationReadiness.required, 2);
+  assert.equal(result.stopReason, 'missing_evidence'); assert.equal(result.opening, null); assert.deepEqual(result.transcript, []);
+  assert.equal(result.validationPolicy.outcome, 'inconclusive'); assert.equal(result.protocol.followups.length, 3);
   const history = (await new BzzyClient(launched.info).events(session.id, 0, 1000)).events;
-  assert.ok(history.some(event => event.type === 'debate.phase' && event.data.phase === 'finished' && event.data.status === 'inconclusive'));
-  assert.ok(history.some(event => event.type === 'debate.result' && /insufficient evidence/.test(event.data.message)));
+  assert.ok(history.some(event => event.type === 'debate.phase' && event.data.phase === 'finished'));
+  assert.ok(history.some(event => event.type === 'debate.result' && /inconclusive|Not validated/i.test(event.data.message)));
   assert.ok(!history.some(event => ['debate.opening', 'debate.round'].includes(event.type)));
-  assert.equal(listRecords('assignment').filter(item => item.parentSessionId === session.id).length, 3, 'only the three independent investigations ran');
+  const assignments = listRecords('assignment').filter(item => item.parentSessionId === session.id);
+  assert.equal(assignments.length, 3); assert.ok(assignments.every(item => item.currentRound === 2));
 });
-test('debate challenges independent majority agreement and checks the original goal before completion', async () => {
+test('Validate sends unanimous supported checks directly to one fresh evidence reviewer', async () => {
   process.env.BZZY_TEST_ADVANCED = 'debate-agreement';
   const session = makeSession({ mode: 'debate' }), launched = await start(session, { participants: ['codex', 'claude'], rounds: 5, runtimeSeconds: 30 });
   const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 0, job.error);
   const result = getRecord('debate', session.id);
-  assert.equal(result.stopReason, 'issues_resolved'); assert.equal(result.transcript.length, 1); assert.ok(result.opening); assert.deepEqual(result.unresolvedDisagreement, []);
-  assert.equal(result.assessment.passed, true); assert.equal(result.assessment.challengeRounds, 1); assert.equal(result.goalSatisfaction, 'supported');
-  assert.equal(result.investigationConsensus.verdict, 'real'); assert.equal(result.investigationConsensus.counts.real, 3);
+  assert.equal(result.stopReason, 'direct_review_complete'); assert.deepEqual(result.transcript, []); assert.equal(result.opening, null); assert.deepEqual(result.unresolvedDisagreement, []);
+  assert.equal(result.assessment.passed, true); assert.equal(result.assessment.challengeRounds, 0); assert.equal(result.goalSatisfaction, 'supported');
+  assert.equal(result.protocol.kind, 'direct-review'); assert.equal(result.protocol.followups.length, 0);
+  assert.equal(result.protocol.independentAssignments.length, 3);
+  assert.ok(!result.protocol.independentAssignments.some(item => item.assignmentId === result.protocol.finalReviewer.assignmentId));
   assert.equal(result.outcome, 'assessed'); assert.equal(loadSession(session.id).goal.status, 'complete');
   const notification = listRecords('goal-event').find(event => event.sessionId === session.id && event.type === 'goal.completed');
-  assert.equal(notification.mode, 'debate'); assert.equal(notification.result.consensus.verdict, 'real');
-  assert.equal(notification.result.consensus.counts.real, 3); assert.equal(notification.reason, 'issues_resolved');
-  assert.equal(notification.usage.agents.length, 6);
+  assert.equal(notification.mode, 'debate'); assert.equal(notification.result.goalSatisfaction, 'supported');
+  assert.equal(notification.reason, 'direct_review_complete'); assert.equal(notification.usage.agents.length, 4);
+});
+test('Validate never outvotes one rejected goal or spends another round after a rejection', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'debate-false';
+  const session = makeSession({ mode: 'debate' }), launched = await start(session, { participants: ['codex', 'claude'], runtimeSeconds: 30 });
+  const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 2, job.error);
+  const result = getRecord('debate', session.id);
+  assert.equal(result.validationPolicy.outcome, 'rejected'); assert.equal(result.validationPolicy.reason, 'agent_dissent');
+  assert.equal(result.goalSatisfaction, 'inconclusive'); assert.equal(result.protocol.followups.length, 0); assert.equal(result.protocol.finalReviewer, undefined);
+  const checks = result.investigation.reports.map(item => item.report.validationAssessment.achieved);
+  assert.deepEqual(checks, [true, true, false]);
+  const assignments = listRecords('assignment').filter(item => item.parentSessionId === session.id);
+  assert.equal(assignments.length, 3); assert.ok(assignments.every(item => item.currentRound === 1));
+});
+test('Validate follows up only the uncertain agent privately before one final evidence review', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'debate-resolve-uncertain';
+  const session = makeSession({ mode: 'debate' }), launched = await start(session, { participants: ['claude'], runtimeSeconds: 30 });
+  const job = await finished(launched.executionId, 40000), result = getRecord('debate', session.id);
+  assert.equal(job.exitCode, 0, job.error || JSON.stringify({ stopReason: result.stopReason, assessment: result.assessment, remaining: result.unresolvedDisagreement,
+    reports: result.investigation?.reports.map(item => ({ provider: item.participant.provider, round: item.round, achieved: item.report?.validationAssessment?.achieved, error: item.error })) }));
+  assert.equal(result.protocol.kind, 'targeted-followup'); assert.equal(result.protocol.followups.length, 1);
+  assert.equal(result.protocol.followups[0].participantIndex, 1); assert.ok(result.protocol.finalReviewer);
+  assert.deepEqual(result.investigation.reports.map(item => item.report.validationAssessment.achieved), [true, true]);
+  const first = getRecord('assignment', result.protocol.independentAssignments[0].assignmentId);
+  const uncertain = getRecord('assignment', result.protocol.independentAssignments[1].assignmentId);
+  assert.equal(first.currentRound, 1); assert.equal(uncertain.currentRound, 2);
+  assert.equal(uncertain.selection.provider, 'claude'); assert.equal(result.assessment.challengeRounds, 0);
+});
+test('two supported checks cannot complete a goal when the final reviewer still requires evidence', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'debate-final-inconclusive';
+  const session = makeSession({ mode: 'debate' }), launched = await start(session, { participants: ['claude'], runtimeSeconds: 30 });
+  const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 2, job.error);
+  const result = getRecord('debate', session.id);
+  assert.deepEqual(result.investigation.reports.map(item => item.report.validationAssessment.achieved), [true, true]);
+  assert.ok(result.protocol.finalReviewer); assert.equal(result.assessment.passed, false);
+  assert.equal(result.goalSatisfaction, 'inconclusive'); assert.equal(loadSession(session.id).goal.status, 'awaiting_review');
+  assert.ok(result.decision.nextVerificationSteps.length);
+});
+test('the actual adaptive runner publishes the source goal validation badge only after accepted final review', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'debate-agreement';
+  const source = makeSession();
+  appendEvent(source.id, 'message.user', { text: source.goal.objective, kind: 'goal' });
+  source.goal.evidence = [captureEvidence(source, 'source.txt', 'original-control').id];
+  source.goal.status = 'complete'; saveSession(source);
+  appendEvent(source.id, 'text', { text: 'The supplied fixture controls satisfy the original goal.' });
+  const prepared = prepareChatDebate(source, '', ['claude'], { runtimeSeconds: 30 });
+  assert.equal(loadSession(source.id).goalValidation.state, 'pending');
+  const launched = await start(prepared.session, prepared.options), job = await finished(launched.executionId, 40000);
+  const result = getRecord('debate', prepared.session.id);
+  assert.equal(job.exitCode, 0, job.error || JSON.stringify(result.unresolvedDisagreement));
+  const badge = loadSession(source.id).goalValidation;
+  assert.equal(badge.state, 'validated'); assert.equal(badge.sourceGoalId, source.goal.id);
+  assert.equal(badge.reviewSessionId, prepared.session.id); assert.equal(loadSession(source.id).goal.status, 'complete');
+  assert.ok(events(source.id).some(event => event.type === 'goal.validation' && event.data.state === 'validated'));
+  fs.writeFileSync(path.join(dir, 'source.txt'), 'Changed source control');
+  assert.equal(loadSession(source.id).goalValidation.state, 'stale');
+});
+test('uncertain Validate checks honor an explicit zero-followup limit', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'debate-no-evidence';
+  const session = makeSession({ mode: 'debate', maxRetries: 0 });
+  const launched = await start(session, { participants: ['claude'], maxRetries: 0, runtimeSeconds: 30 });
+  const job = await finished(launched.executionId, 40000); assert.equal(job.exitCode, 2, job.error);
+  const result = getRecord('debate', session.id);
+  assert.equal(result.validationPolicy.outcome, 'inconclusive'); assert.equal(result.protocol.finalReviewer, undefined);
+  const assignments = listRecords('assignment').filter(item => item.parentSessionId === session.id);
+  assert.equal(assignments.length, 2); assert.ok(assignments.every(item => item.currentRound === 1));
 });
 test('parallel agents receive the same goal, independent sessions and attributed project ledgers', async () => {
   const session = makeSession({ mode: 'parallel' }), launched = await start(session, { agents: 'codex,claude,deepseek', concurrency: 3, runtimeSeconds: 30 });

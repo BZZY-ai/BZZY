@@ -63,10 +63,15 @@ test('stable validation events distinguish same-provider participants and mirror
   const observed = [];
   await runDebate(prepared.session, prepared.options, { event(type, data) { observed.push({ type, data }); } }, actors.dependencies);
   const typed = observed.filter(item => ['debate.started', 'debate.phase', 'debate.message', 'debate.result'].includes(item.type));
-  assert.ok(typed.length >= 7); assert.ok(typed.every(item => item.data.debateId === prepared.session.goal.id));
+  assert.ok(typed.length >= 5); assert.ok(typed.every(item => item.data.debateId === prepared.session.goal.id));
   const started = typed.find(item => item.type === 'debate.started').data;
   assert.equal(new Set(started.participants.map(item => item.id)).size, 3);
   for (const item of typed.filter(item => item.type === 'debate.message')) {
+    if (item.data.phase === 'final_review') {
+      assert.equal(item.data.participantId, `${prepared.session.goal.id}:final-review`);
+      assert.equal(item.data.participantIndex, agents.length); assert.equal(item.data.model, agents[0].model);
+      assert.equal(item.data.maxRounds, 0); continue;
+    }
     assert.equal(item.data.participantId, started.participants[item.data.participantIndex].id);
     assert.equal(item.data.provider, 'codex'); assert.equal(item.data.model, agents[item.data.participantIndex].model);
     assert.equal(item.data.maxRounds, 1); assert.ok(Number.isSafeInteger(item.data.round)); assert.ok(item.data.assignmentId);

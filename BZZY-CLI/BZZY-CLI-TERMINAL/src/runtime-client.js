@@ -528,7 +528,6 @@ export async function conversationInput(session, ui, connection) {
   return null;
 }
 export async function attachSession(session, options, ui) {
-  if (ui.canvas && ui.interactive) return (await import('./canvas-workspace.js')).canvasWorkspace({ ...options, cwd: session.cwd }, ui, session);
   options = { ...options, cwd: session.cwd, mode: session.mode || 'solo', provider: session.provider, model: session.model, effort: session.selectedEffort };
   const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
   let result, next;

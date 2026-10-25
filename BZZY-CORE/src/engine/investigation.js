@@ -1,10 +1,95 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { startAssignment, assignmentStatus, delay } from './delegation.js';
-import { getRecord, putRecord, digest, now } from './database.js';
+import { database, getRecord, putRecord, digest, now } from './database.js';
 import { fileInfo, artifact } from './evidence.js';
 import { formatInvestigation } from './debate-format.js';
 import { debateEventUI } from './debate-events.js';
+import { normalizeValidationAssessment, naturalValidationSummary, remapValidationAssessment } from './validation-assessment.js';
+import { missionContextCurrent, missionSourceRevision, missionResultRevision, missionEvidenceCurrent } from './mission-context.js';
+
+const selectionKey = choice => digest([choice?.provider, choice?.model || null, choice?.effort || 'default']);
+const reportClaim = report => ({ status: report?.status, summary: report?.summary, evidence: report?.evidence,
+  validationAssessment: report?.validationAssessment, objections: report?.objections || [], uncertainties: report?.uncertainties || [] });
+
+function currentOriginalSource(parent) {
+  const pin = parent.reviewSource;
+  if (!pin) return true;
+  const original = getRecord('session', pin.sessionId);
+  return Boolean(original && !getRecord('session-deletion', pin.sessionId) && original.goal?.id === pin.goalId &&
+    original.goal?.status === pin.claimedStatus && missionSourceRevision(original) === pin.sourceRevision &&
+    (!pin.resultRevision || missionResultRevision(original) === pin.resultRevision) && (!pin.missionContextId || missionContextCurrent(original, pin.missionContextId)));
+}
+
+function checkedValidationParticipant(entry, index, parent, { objective, criteria }) {
+  const value = { index, participant: entry?.participant || null, assignmentId: entry?.assignmentId || null, workerSessionId: null, round: null,
+    valid: false, achieved: null, reportedAchieved: null, objective, criteria: [], evidence: [], summary: entry?.report?.summary || '', invalidReasons: [] };
+  const invalid = reason => { value.invalidReasons.push(reason); return value; };
+  if (!parent || !entry || entry.state !== 'awaiting_review' || !entry.report?.validationAssessment || !naturalValidationSummary(entry.report.summary)) return invalid('Missing or incomplete structured original-goal assessment.');
+  const job = getRecord('assignment', entry.assignmentId), worker = job?.workerSessionId && getRecord('session', job.workerSessionId);
+  const round = job && getRecord('round', `${job.id}:${job.currentRound}`);
+  if (!job || !worker || getRecord('session-deletion', worker.id) || job.parentSessionId !== parent.id || job.goalId !== parent.goal?.id || job.closure !== 'open' ||
+      worker.parentSessionId !== parent.id || worker.assignmentId !== job.id || worker.assignmentRound !== job.currentRound ||
+      entry.round != null && entry.round !== job.currentRound || round?.state !== 'awaiting_review' || job.latestReport?.round !== job.currentRound ||
+      selectionKey(job.selection) !== selectionKey(entry.participant) || !missionContextCurrent(parent, job.missionContext)) return invalid('The worker, round or source mission is stale or outside this validation.');
+  value.workerSessionId = worker.id; value.round = job.currentRound;
+  const created = database().prepare("SELECT data FROM events WHERE session_id=? AND type='assignment.created' AND json_extract(data,'$.id')=? ORDER BY seq LIMIT 1").get(parent.id, job.id);
+  const initial = created && JSON.parse(created.data).missionContext;
+  if (initial?.brief?.independent !== true || !missionContextCurrent(parent, initial)) return invalid('The assessment has no current independent initial mission.');
+  const aliases = new Map(), originalEvidence = [];
+  if (!Array.isArray(job.latestReport.report?.evidence)) return invalid('The bound worker report has no valid evidence inventory.');
+  for (const id of job.latestReport.report?.evidence || []) {
+    const reference = entry.artifacts?.find(item => !item.omitted && (item.id === id || item.originalId === id));
+    const original = getRecord('artifact', id), copy = reference && getRecord('artifact', reference.id);
+    if (!reference || !original || original.sessionId !== worker.id || !copy || copy.sessionId !== parent.id || copy.sha256 !== original.sha256 ||
+        reference.sha256 !== copy.sha256 || copy.id !== original.id && (copy.importedFrom !== original.id || copy.importedSha256 !== original.sha256)) return invalid('A cited artifact was not preserved from this worker into the current evidence bundle.');
+    aliases.set(id, copy.id); aliases.set(copy.id, copy.id); originalEvidence.push(original, copy);
+  }
+  if (!missionEvidenceCurrent(originalEvidence)) return invalid('Assessment evidence is missing, changed or stale.');
+  try {
+    const stored = job.latestReport.report, canonical = report => {
+      const evidence = report.evidence.map(id => aliases.get(id) || id);
+      const assessment = remapValidationAssessment(report.validationAssessment, aliases);
+      return { ...reportClaim(report), evidence, validationAssessment: normalizeValidationAssessment(assessment, { objective, criteria, evidence }) };
+    };
+    const actual = canonical(entry.report), expected = canonical(stored);
+    if (digest(actual) !== digest(expected)) return invalid('The published assessment differs from its bound worker report.');
+    if (!Array.isArray(actual.objections) || !Array.isArray(actual.uncertainties)) return invalid('The assessment contains malformed concerns.');
+    value.valid = true; value.reportedAchieved = actual.validationAssessment.achieved;
+    value.achieved = actual.validationAssessment.achieved; value.criteria = actual.validationAssessment.criteria; value.evidence = actual.evidence;
+    if (value.achieved !== null && (stored.status !== 'complete' || originalEvidence.some(item => item.size < 1))) {
+      value.achieved = null; value.reason = 'The independent assessment is incomplete.';
+    }
+    if (value.achieved === true && (actual.objections.length || actual.uncertainties.length)) {
+      value.achieved = null; value.reason = 'The agent retained unresolved concerns.';
+    }
+    return value;
+  } catch { return invalid('The assessment does not match the exact original goal, criteria or canonical evidence IDs.'); }
+}
+
+// A routing decision over scoped worker claims, never verified goal completion.
+// Unknown/malformed/legacy reports stay null; vulnerability votes are not coerced.
+export function assessValidationAgreement(investigation, totalAgents, { sessionId, objective, criteria } = {}) {
+  if (!Number.isSafeInteger(totalAgents) || totalAgents < 2 || totalAgents > 3) throw new Error('Validation needs two or three independent assessments.');
+  const parent = sessionId && getRecord('session', sessionId);
+  objective ??= parent?.reviewSource?.objective || parent?.goal?.objective;
+  criteria ??= parent?.contract?.acceptanceCriteria;
+  const fresh = parent && !getRecord('session-deletion', parent.id) && !['paused', 'cancelled', 'failed'].includes(parent.executionState) && currentOriginalSource(parent) &&
+    investigation?.protocol === 'tri-state-v1' && investigation.sessionId === parent.id && investigation.goalId === parent.goal?.id && investigation.sourceRevision === missionSourceRevision(parent);
+  const participants = Array.from({ length: totalAgents }, (_, index) => checkedValidationParticipant(investigation?.reports?.[index], index, fresh ? parent : null, { objective, criteria }));
+  const identities = new Set();
+  for (const participant of participants) {
+    const identity = participant.workerSessionId;
+    if (identity && identities.has(identity)) { participant.valid = false; participant.achieved = null; participant.invalidReasons.push('A worker conversation cannot count as two independent assessments.'); }
+    if (identity) identities.add(identity);
+  }
+  const counts = { true: participants.filter(item => item.valid && item.achieved === true).length,
+    false: participants.filter(item => item.valid && item.achieved === false).length,
+    null: participants.filter(item => !item.valid || item.achieved === null).length, invalid: participants.filter(item => !item.valid).length };
+  return { version: 1, participants, assessments: participants, counts, usable: totalAgents - counts.invalid, total: totalAgents, required: 2,
+    agreeTrue: counts.true === totalAgents, agreeFalse: counts.false === totalAgents, hasFalse: counts.false > 0, hasNull: counts.null > 0,
+    disagreement: counts.true > 0 && counts.false > 0, assessmentOnly: true };
+}
 
 export function investigationReadiness(investigation, totalAgents, { sessionId } = {}) {
   const reports = investigation?.reports || [], required = Math.min(2, totalAgents);
@@ -57,7 +142,11 @@ export async function investigate(session, choices, snapshot, options, ui, coord
     while (next < choices.length && pending.size < concurrency) {
       const index = next++, selection = choices[index];
       const job = startAssignment(session, { requestId: `investigate-${session.id}-${index}`, objective: session.goal.objective,
-        context: `Independently investigate the ORIGINAL user goal, acceptance conditions, achieved-goal claim and ALL its original evidence in BZZY_SELECTED_MATERIAL.txt and the immutable mission brief. Read every original source evidence artifact with read_artifact, paginating until complete; identify missing ranges rather than silently substituting a summary. Start by locating and reading relevant workspace files. When the selected material contains only the goal, the workspace is supplied material; absence of --artifact is not missing context. Analyze the actual vulnerability and claimed impact/severity separately: a real low-impact issue does not satisfy a HIGH-severity goal. Run useful, bounded re-tests only when permitted by the inherited task policy and original declared scope. Do not contact unlisted targets, use unspecified accounts or inspect other agents' work during this independent phase. Preserve uncertainty: a failed test does not disprove a hypothesis. Save decisive files and test results using record_evidence. Use status complete when recorded evidence supports a real/false-positive classification, partial when it supports only part, and inconclusive when it cannot classify the claim. Set verdict real, false_positive or inconclusive; matching votes describe agreement and never replace adversarial challenge or original-goal verification. Return finish_assignment with status, verdict, summary, evidence, objections with stable IDs, conclusions, position and uncertainties. Do not start a debate or claim the parent objective is satisfied. Source edits stay in your isolated workspace.`,
+        context: `INDEPENDENT GOAL CHECK
+Assess whether the ORIGINAL user goal was achieved, using the exact original objective and EVERY original acceptance criterion in the immutable mission brief and BZZY_SELECTED_MATERIAL.txt. Return finish_assignment with validationAssessment:{objective:<exact original goal>,achieved:true|false|null,criteria:[{id:<each exact original criterion ID>,achieved:true|false|null,rationale,evidence:[artifact UUIDs]}]}. These fields are internal model claims, never permission or verified completion. For each known criterion outcome cite actual evidence; missing proof stays null. Overall true requires every original criterion supported; false needs a grounded failed original criterion. A failed request or missing control alone does not prove the goal false. For vulnerability goals distinguish actual required impact/severity from merely finding a real lower-impact issue. For ordinary fact goals state the actual corrected answer when known.
+Write report.summary as a concise natural-language explanation, usually 2–4 sentences. Explain the actual answer, evidence limits and any remaining uncertainty; do not print booleans, JSON, voting counts or protocol fields in the summary. Set status complete when the assessment is finished (including a supported negative conclusion), inconclusive/partial when evidence is missing, and preserve objections/uncertainties explicitly. An uncertain assessment is never forced into a yes/no answer.
+Read all original source evidence through read_artifact, paging until complete. Save decisive files/observations with record_evidence. In evidence arrays use only canonical artifact UUIDs returned by record_evidence or the importedEvidenceId returned by read_artifact, never filenames, criterion IDs, ledger IDs, labels or invented IDs. Nested criterion evidence must also appear in the report's top-level evidence array.
+Do not inspect other agents' reports during this independent check. Useful bounded tests are allowed only by the inherited task policy and original declared scope; never contact unlisted targets or use unspecified accounts. If selected material contains only the goal, the scoped workspace is supplied material. Source edits remain isolated. Return your assessment to the supervisor without starting more agents or claiming parent completion.`,
         acceptanceCriteria: ['Report actual analysis and permitted tests, cite recorded evidence, and identify what remains unverified.'],
         limits: { runtimeSeconds: Math.min(options.runtimeSeconds || 300, session.contract.limits.assignmentSeconds || 300) } },
       { executor: selection, snapshot, role: 'executor', allowDebate: true, independent: true, sharedEvidence: session.reviewSource?.evidenceIds || [] });
@@ -67,9 +156,9 @@ export async function investigate(session, choices, snapshot, options, ui, coord
     for (const [index, id] of pending) {
       const job = assignmentStatus(id);
       if (['starting', 'running'].includes(job.round.state)) continue;
-      const report = { participant: choices[index], assignmentId: id, state: job.round.state, error: job.round.error || job.latestReport?.stopReason || null, report: job.latestReport?.report || null, artifacts: job.latestReport?.artifacts || [], usage: job.latestReport?.usage || { available: false } };
+      const report = { protocol: 'tri-state-v1', participant: choices[index], assignmentId: id, round: job.currentRound, state: job.round.state, error: job.round.error || job.latestReport?.stopReason || null, report: job.latestReport?.report || null, artifacts: job.latestReport?.artifacts || [], usage: job.latestReport?.usage || { available: false } };
       reports[index] = report; pending.delete(index);
-      ui.event('debate.message', { participant: choices[index].provider, participantIndex: index, role: 'investigation', phase: 'investigation', round: 0, maxRounds: options.rounds || 5, assignmentId: id,
+      ui.event('debate.message', { participant: choices[index].provider, participantIndex: index, role: 'independent assessment', phase: 'independent_check', round: 0, maxRounds: options.rounds || 5, assignmentId: id,
         state: report.state, error: report.error, text: formatInvestigation(report) });
     }
     const agents = reports.filter(Boolean).map(report => ({ ...report.participant, role: 'investigation', assignmentId: report.assignmentId, tokens: report.usage.tokens ?? null, available: Boolean(report.usage.available) }));
@@ -97,13 +186,19 @@ export async function investigate(session, choices, snapshot, options, ui, coord
         ...(item.source ? { source: item.source, sourceWorkspace: item.sourceWorkspace, sourceSha256: item.sourceSha256 } : {}) }); putRecord('artifact', imported.id, imported);
       entry.artifacts.push({ id: imported.id, originalId: item.id, path: relative, sha256: item.sha256, label: item.label });
     }
+    if (entry.report?.validationAssessment) {
+      const aliases = new Map(entry.artifacts.filter(item => !item.omitted).map(item => [item.originalId || item.id, item.id]));
+      entry.report = { ...entry.report, evidence: entry.report.evidence.map(id => aliases.get(id) || id),
+        validationAssessment: remapValidationAssessment(entry.report.validationAssessment, aliases) };
+    }
     evidenceIndex.push(entry);
   }
   const indexPath = 'BZZY_INVESTIGATION_REPORTS.json', content = JSON.stringify(evidenceIndex, null, 2);
   fs.writeFileSync(path.join(snapshot.directory, indexPath), content, { mode: 0o600 });
   snapshot.manifest[indexPath] = { size: Buffer.byteLength(content), sha256: digest(content) };
   snapshot.manifestHash = digest(snapshot.manifest); putRecord('snapshot', snapshot.id, snapshot);
-  const result = { reports: evidenceIndex, snapshotHash: snapshot.manifestHash, createdAt: now(), independent: true, testsAreAgentReported: true };
+  const result = { protocol: 'tri-state-v1', sessionId: session.id, goalId: session.goal.id, sourceRevision: missionSourceRevision(session),
+    reports: evidenceIndex, snapshotHash: snapshot.manifestHash, createdAt: now(), independent: true, testsAreAgentReported: true };
   putRecord('debate-investigation', session.id, result);
   ui.event('debate.phase', { phase: 'investigation', status: 'finished', snapshotHash: snapshot.manifestHash });
   return reports.filter(Boolean).map(report => ({ ...report.participant, role: 'investigation', assignmentId: report.assignmentId, tokens: report.usage.tokens ?? null, available: Boolean(report.usage.available) }));

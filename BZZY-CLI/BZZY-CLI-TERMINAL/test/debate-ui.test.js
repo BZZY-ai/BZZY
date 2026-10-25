@@ -7,7 +7,8 @@ import { PassThrough } from 'node:stream';
 import { UI } from '../src/ui.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { createTerminalTheme } from '../src/terminal-theme.js';
-import { recordDebateEvent, debateEntryLayout, debateParticipantTone } from '../src/debate-ui.js';
+import { recordDebateEvent, debateEntryLayout, debateParticipantTone, validationResultStatus, validationSummary } from '../src/debate-ui.js';
+import { palette } from '../src/terminal-theme.js';
 
 const participants = debateId => Array.from({ length: 3 }, (_, index) => ({ id: `${debateId}:participant:${index}`, index, provider: 'same-provider', model: 'same-model' }));
 const started = (debateId = 'review-one') => ({ debateId, participants: participants(debateId) });
@@ -42,7 +43,7 @@ test('Validate is one collapsed block, with consensus and unresolved objections 
   assert.equal(tui.entries.filter(entry => entry.kind === 'assistant').length, 1, 'participant discussions stay inside their block');
   const body = tui.content(119).map(clean).join('\n');
   assert.match(body, /▸ VALIDATE.*3 agents.*3 messages/); assert.doesNotMatch(body, /Distinct private discussion/);
-  assert.match(body, /CONSENSUS · Needs review · goal inconclusive[\s\S]*The final conclusion[\s\S]*The account control is missing/);
+  assert.match(body, /CONSENSUS · Not validated ✗[\s\S]*The final conclusion[\s\S]*The account control is missing/);
   assert.ok(body.indexOf('CONSENSUS') > body.indexOf('Click to expand'));
   assert.equal(tui.lastFrame[0], header); assert.equal(tui.model, 'Chat model'); assert.equal(tui.value, 'keep this editable draft'); assert.equal(tui.cursor, 5);
 });
@@ -73,11 +74,11 @@ test('participant slots retain distinct colors across same-provider models, phas
   for (const name of ['blue', 'black', 'white']) for (const force of ['3', '1', '0']) {
     const theme = createTerminalTheme({ isTTY: true }, { FORCE_COLOR: force }, name), rows = debateEntryLayout(block, 119, theme).lines;
     for (const index of [0, 1, 2]) {
-      const row = rows.find(line => clean(line).includes(`Agent ${index + 1} · same-provider · same-model · investigation`)); assert.ok(row);
+      const row = rows.find(line => clean(line).includes(`Agent ${index + 1} · same-provider · same-model · Independent check`)); assert.ok(row);
       if (force !== '0') assert.ok(row.includes(theme.foreground(debateParticipantTone(index))));
     }
     if (force !== '0') assert.equal(new Set([0, 1, 2].map(index => theme.foreground(debateParticipantTone(index)))).size, 3);
-    assert.match(rows.map(clean).join('\n'), /Agent 2 · different-provider · different-model · reviewer · round 2/);
+    assert.match(rows.map(clean).join('\n'), /Agent 2 · different-provider · different-model · Challenge · round 2/);
   }
 });
 
@@ -111,7 +112,7 @@ test('expanded bodies wrap to terminal width, preserve rich message bodies for c
   const layout = tui.entryLayout(block, 119);
   assert.ok(layout.hits.some(hit => hit.type === 'response' && hit.entry.text === original));
   assert.doesNotMatch(layout.lines.map(clean).join('\n'), /<message|<p>|<b>/);
-  assert.match(layout.lines.map(clean).join('\n'), /CONSENSUS · Review complete · goal supported/);
+  assert.match(layout.lines.map(clean).join('\n'), /CONSENSUS · Review complete/);
 });
 
 test('legacy debate events remain readable and an inconsistent completion never hides objections', () => {
@@ -119,5 +120,48 @@ test('legacy debate events remain readable and an inconsistent completion never 
   recordDebateEvent(entries, 'debate.result', { status: 'complete', message: 'A conclusion', unresolvedDisagreement: ['An unresolved control'] });
   const block = entries[0], theme = createTerminalTheme({ isTTY: false }, {});
   assert.equal(block.messages[0].text, 'Legacy report');
-  assert.match(debateEntryLayout(block, 79, theme).lines.map(clean).join('\n'), /needs review[\s\S]*CONSENSUS · Needs review[\s\S]*An unresolved control/);
+  assert.match(debateEntryLayout(block, 79, theme).lines.map(clean).join('\n'), /Not validated ✗[\s\S]*CONSENSUS · Not validated ✗[\s\S]*An unresolved control/);
+});
+
+test('efficient validation phases display natural labels and summaries while retaining original bodies for copy', () => {
+  const entries = [], theme = createTerminalTheme({ isTTY: false }, {});
+  recordDebateEvent(entries, 'debate.started', started());
+  const original = JSON.stringify({ summary: 'The supplied answer matches the saved record.', validationAssessment: { objective: 'Check the answer', achieved: true, criteria: [] } });
+  recordDebateEvent(entries, 'debate.message', message(0, { phase: 'independent_check', role: 'independent assessment', round: 0, text: original }));
+  recordDebateEvent(entries, 'debate.message', message(1, { phase: 'missing_evidence', role: 'focused followup', round: 1, text: 'The missing account control was checked.' }));
+  recordDebateEvent(entries, 'debate.message', message(2, { phase: 'final_review', role: 'fresh reviewer', round: 1, text: 'The final review confirms the cited evidence.' }));
+  recordDebateEvent(entries, 'debate.phase', { debateId: 'review-one', phase: 'consensus' });
+  const block = entries[0]; block.expanded = true;
+  const body = debateEntryLayout(block, 119, theme).lines.map(clean).join('\n');
+  for (const label of ['Independent check', 'Checking missing evidence', 'Final review', 'Consensus']) assert.ok(body.includes(label));
+  assert.match(body, /The supplied answer matches the saved record/); assert.doesNotMatch(body, /validationAssessment|"achieved"|\btrue\b|\bfalse\b|\bnull\b|round 1/);
+  assert.equal(block.messages[0].copyEntry.text, original); assert.equal(block.messages.length, 3);
+});
+
+test('internal tri-state and structured fallback fields never become raw chat JSON', () => {
+  for (const literal of ['true', 'false', 'null', '{"validationAssessment":{"achieved":null}}'])
+    assert.equal(validationSummary(literal), 'The reviewer did not provide a readable summary.');
+  const entries = [], theme = createTerminalTheme({ isTTY: false }, {});
+  recordDebateEvent(entries, 'debate.result', result({ message: null, decision: {
+    validationAssessment: { achieved: false }, remainingObjections: [{ claim: 'A selected reviewer found a conflicting account result.', achieved: false }],
+  } }));
+  const body = debateEntryLayout(entries[0], 119, theme).lines.map(clean).join('\n');
+  assert.match(body, /Not validated ✗[\s\S]*A selected reviewer found a conflicting account result/);
+  assert.doesNotMatch(body, /"achieved"|validationAssessment|\btrue\b|\bfalse\b|\bnull\b|\[object Object\]/);
+  assert.equal(validationResultStatus(result({ reason: 'agent_dissent' })).tone, palette.danger);
+  assert.equal(validationResultStatus(result({ reason: 'missing_evidence' })).tone, palette.warning);
+  assert.equal(validationResultStatus(result({ status: 'complete', goalSatisfaction: 'supported', unresolvedDisagreement: [], decision: { nextVerificationSteps: ['Run the missing control.'] } })).label, 'Not validated ✗');
+});
+
+test('plain terminal output uses natural summaries without internal assessment objects', () => {
+  const input = new PassThrough(), output = new PassThrough(); let written = '';
+  output.on('data', chunk => { written += chunk; });
+  const ui = new UI({ input, output, error: output });
+  try {
+    ui.event('debate.message', message(0, { phase: 'independent_check', text: JSON.stringify({ summary: 'The answer matches the cited source.', validationAssessment: { achieved: true } }) }));
+    ui.event('debate.result', result({ reason: 'missing_evidence', message: 'One account control is still missing.', validationAssessment: { achieved: null } }));
+    assert.match(written, /Independent check[\s\S]*The answer matches the cited source/);
+    assert.match(written, /CONSENSUS · Not validated ✗[\s\S]*One account control is still missing/);
+    assert.doesNotMatch(written, /validationAssessment|"achieved"|\btrue\b|\bfalse\b|\bnull\b/);
+  } finally { ui.close(); }
 });

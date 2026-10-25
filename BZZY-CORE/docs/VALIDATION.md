@@ -1,3 +1,33 @@
+# Adaptive Validate, skill scope moves and terminal layout (2026-10-25)
+
+Final Node.js 24/macOS suites: **526 Core tests passed, 1 skipped** (527 total)
+and **562 CLI tests passed, 21 skipped** (583 total), zero failures. Both product
+syntax checks and `git diff --check` pass. No running installation was updated.
+
+Adaptive validation coverage checks strict internal assessments against the exact
+original objective and criteria, any supported false blocking a majority, and
+one private follow-up only for each uncertain agent. Unresolved evidence stays
+inconclusive; explicit zero retries, context limits, budgets and permissions
+remain enforced. Unanimous support requires a fresh final evidence reviewer and
+the existing host acceptance gate. Receipt/report tampering, missing workers and
+changed source or evidence cannot retain a validated badge.
+
+Native backend fixtures exercise the actual runner through independent checks,
+targeted follow-up, final review and linked source-goal validation events. Real
+PTY checks cover concise natural-language messages, collapsed/expanded review
+blocks, preserved chat drafts and the default terminal layout. The removed
+Canvas frontend and its dedicated tests are replaced by terminal regressions;
+Core's historical composition records and compatibility APIs remain supported.
+
+Skill move coverage preserves complete portable packages and immutable history,
+archives only the local registry entry, starts the global skill disabled and
+rejects destination conflicts, stale reviews, foreign projects, changed hosts,
+private evidence and credentials. Review, file inspection and Back/cancellation
+are covered through the CLI controls. No actual user skill was moved.
+
+All model interactions use offline fixtures. These checks establish protocol
+behavior and evidence boundaries, not live-model factual accuracy.
+
 # Default models, Back navigation and goal validation badges (2026-10-25)
 
 Final Node.js 24/macOS suites: **497 Core tests passed, 1 skipped** (498 total)

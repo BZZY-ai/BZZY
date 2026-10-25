@@ -65,11 +65,16 @@ export function debateEvaluationActors(parent, { scenario = 'complete', selected
     activity.waits++;
     const job = delegation.assignmentStatus(id);
     if (job.round.state === 'awaiting_review') return { terminal: true, round: job.round };
-    const child = getRecord('session', job.workerSessionId), isMain = activity.starts.find(item => item.id === id).requestId.startsWith('debate-main-');
+    const child = getRecord('session', job.workerSessionId), request = activity.starts.find(item => item.id === id)?.requestId || '';
+    const isFinal = request.startsWith('validation-final-'), isMain = request.startsWith('debate-main-') || isFinal;
     const own = captureEvidence(child, 'observations.json', 'synthetic offline participant record');
     const objection = { id: 'ownership-control', claim: 'The foreign-object disclosure must be compared with the owned negative control.', evidence: [own.id] };
     const report = { status: 'complete', summary: 'The supplied synthetic records were assessed without network access.', evidence: [own.id],
       objections: isMain ? [] : [objection], uncertainties: [], conclusions: ['The fixture is a synthetic ownership observation.'], position: 'Preserve the original goal and evidence.' };
+    const resolved = scenario === 'null' && !isMain || scenario === 'final_null' && isFinal ? null : scenario === 'final_false' && isFinal ? false : true;
+    report.validationAssessment = { objective: parent.reviewSource?.objective || parent.goal.objective, achieved: resolved,
+      criteria: parent.contract.acceptanceCriteria.map(item => ({ id: item.id, achieved: resolved, rationale: resolved === null ? 'The required control remains unavailable.' : 'The recorded positive and negative controls were compared.', evidence: [own.id] })) };
+    if (!isMain && job.role === 'executor') report.objections = [];
     if (isMain) {
       const ledger = getRecord('debate-objections', parent.id)?.entries || [], evidence = [selectedArtifact.id];
       const inspect = scenario !== 'unsupported_resolution';
@@ -94,10 +99,10 @@ export function debateEvaluationActors(parent, { scenario = 'complete', selected
             rationale: 'The synthetic observation demonstrates only a low-impact private field; the requested HIGH impact is unsupported.', evidence } } : {}) },
       };
       activity.decisions.push(report.decision);
-      if (scenario === 'stale_source' && job.currentRound > 1 && !activity.mutated) {
+      if (scenario === 'stale_source' && (job.currentRound > 1 || isFinal) && !activity.mutated) {
         fs.writeFileSync(path.join(parent.cwd, 'observations.json'), '{"scope":"changed after main-agent evidence inspection"}'); activity.mutated = true;
       }
-      if (scenario === 'changed_source_goal' && job.currentRound > 1 && !activity.mutated) {
+      if (scenario === 'changed_source_goal' && (job.currentRound > 1 || isFinal) && !activity.mutated) {
         const source = getRecord('session', parent.reviewSource.sessionId);
         source.contract.context += ' The owner supplied a new required control after the review began.';
         saveSession(source); activity.mutated = true;
@@ -120,8 +125,11 @@ export function debateEvaluationActors(parent, { scenario = 'complete', selected
       { executor: participant, snapshot, role: 'executor', allowDebate: true, independent: true, launch: noLaunch });
       const worker = childFor(job, snapshot), item = captureEvidence(worker, 'observations.json', `independent fixture observation ${index + 1}`);
       const report = { status: 'complete', verdict: scenario === 'minority' && !minority ? 'false_positive' : 'real',
-        summary: minority ? 'A minority counterexample preserves the real foreign-object disclosure despite two misleading votes.' : 'The offline observation was independently classified.',
+        summary: minority ? 'A minority counterexample preserves the real foreign-object disclosure despite two misleading votes.' : `Independent check ${index + 1} compared the supplied ownership controls.`,
         evidence: [item.id], uncertainties: [], objections: minority ? [{ id: 'minority-counterexample', claim: 'A foreign-object private field is disclosed in the counterexample.', evidence: [item.id] }] : [] };
+      const achieved = scenario === 'minority' && !minority || scenario === 'false' || scenario === 'one_false' && index === choices.length - 1 ? false : scenario === 'null' || scenario === 'null_resolved' && index === choices.length - 1 ? null : true;
+      report.validationAssessment = { objective: parent.reviewSource?.objective || parent.goal.objective, achieved,
+        criteria: parent.contract.acceptanceCriteria.map(criterion => ({ id: criterion.id, achieved, rationale: achieved === null ? 'A required control is missing.' : 'The controlled fixture observation was compared with the original criterion.', evidence: [item.id] })) };
       delegation.recordWorkerReport(worker, report);
       const result = { round: 1, state: 'awaiting_review', report, changes: [], artifacts: [item], usage: { tokens: 2, available: true } };
       putRecord('round', `${job.id}:1`, { ...getRecord('round', `${job.id}:1`), ...result });
@@ -133,7 +141,9 @@ export function debateEvaluationActors(parent, { scenario = 'complete', selected
     });
     // The selected material is part of the same permitted evidence set.
     for (const report of reports) report.artifacts.push({ id: selectedArtifact.id, originalId: selectedArtifact.id, sha256: selectedArtifact.sha256 });
-    putRecord('debate-investigation', parent.id, { reports, snapshotHash: snapshot.manifestHash, independent: true, testsAreAgentReported: true, createdAt: now() });
+    putRecord('debate-investigation', parent.id, { protocol: 'tri-state-v1', sessionId: parent.id, goalId: parent.goal.id,
+      sourceRevision: (await import('../../src/engine/mission-context.js')).missionSourceRevision(parent),
+      reports, snapshotHash: snapshot.manifestHash, independent: true, testsAreAgentReported: true, createdAt: now() });
     return reports.map(item => ({ ...item.participant, tokens: 2, available: true }));
   }
 

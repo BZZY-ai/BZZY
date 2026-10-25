@@ -86,12 +86,10 @@ When the active terminal model uses the DeepSeek API key, the top bar also shows
 the current USD balance; click it for freshness/source details. Subscription
 providers do not show an account balance control.
 
-`bzzy --canvas` retains the character workspace: insert model/effort characters,
-set goals, and connect them for Delegate, Validate, Besties or Parallel.
-Right-click or F10 opens the context menu; Enter opens the conversation drawer
-and Esc returns to the canvas. Links pause affected work before reconfiguration.
-`bzzy --minimal` keeps the ultra-compact transcript. See
-[canvas controls and limits](docs/CANVAS.md).
+`bzzy` opens terminal chat. The character workspace, graph links and drawers have
+been removed from the CLI. Saved chats remain available through Sessions;
+Delegate, Validate, Besties and Parallel retain their terminal commands and
+default-model settings. `bzzy --minimal` keeps the ultra-compact transcript.
 
 In a minimal solo, Delegate or Validate chat, pause with `/pause` or `/goal pause`,
 then use `/delegate`, `/validate` or `/solo` (`/singular` is an alias). Delegate and
@@ -115,8 +113,13 @@ checks support the exact original goal. Unsuccessful reviews show **Not validate
 ✗** or an explicit inconclusive/stale/stopped state. An older review or a positive
 consensus paragraph cannot award the check. Changed goals or evidence invalidate
 it. See [validation gates](../../BZZY-CORE/docs/GOAL-VALIDATION.md).
-Validate requires challenge/response, preserves minority objections and checks the
-original criteria and requested severity. Delegate automatically passes a pinned
+Validate collects independent structured assessments while displaying short
+natural-language explanations. Any supported rejection prevents validation;
+an uncertain agent gets one focused follow-up within its limits. Only unanimous
+support proceeds to a fresh final evidence reviewer. Core still checks every
+original criterion, requested severity, scoped evidence and unresolved objection.
+The legacy review-only mode retains its bounded challenge/response flow.
+Delegate automatically passes a pinned
 mission brief and can request missing context without guessing or silently
 resuming. See [orchestration](../../BZZY-CORE/docs/ORCHESTRATION.md).
 Delegate keeps **BRAIN · model · effort** and **HANDS · model · effort** pinned
@@ -275,7 +278,7 @@ update.
 
 Use `/color blue`, `/color black` or `/color white` to switch the full palette
 instantly: chat roles, surfaces, buttons, selections, borders and status colors.
-Black uses a pitch-black canvas with neutral controls; white uses a white canvas
+Black uses a pitch-black background with neutral controls; white uses a white background
 with dark text and readable accents. Blue is the default on every new launch.
 The selection belongs to this CLI only, works in minimal mode, and is retained
 when that same terminal reloads after an update. No provider request is sent.
@@ -307,6 +310,11 @@ workflows for every model. A skill uses the same package shape as Codex: one
 directory per skill with a required `SKILL.md` plus optional `scripts/`,
 `references/`, `assets/`, and `agents/openai.yaml`, per the
 [official skill-building guide](https://learn.chatgpt.com/docs/build-skills).
+
+Open a project skill and choose **Move to BZZY Core** to review its exact files
+and move the portable package into the global library. Existing global skills
+are never overwritten, and the moved skill stays disabled until you enable it.
+Packages containing private project evidence need a separate generic candidate.
 
 Choose **Sync skills from Codex into BZZY**, type `/skills sync`, or run `bzzy
 skills sync` in a terminal to enter a Codex skills directory. BZZY lists every

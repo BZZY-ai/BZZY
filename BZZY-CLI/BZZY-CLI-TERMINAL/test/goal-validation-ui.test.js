@@ -90,3 +90,18 @@ test('out-of-order revisions, replaced reviews and same-revision stale projectio
   ui.updateSession({ ...session, goalValidation: { ...pending, state: 'validated' } }); assert.equal(tui.goalValidation.state, 'stale');
   ui.event('goal.validation', initial); assert.notEqual(tui.goalValidation?.state, 'validated', 'historical green events are rechecked against current Core records');
 });
+
+test('reviewer dissent or missing evidence keeps the goal achieved while validation remains unconfirmed', t => {
+  const { ui, tui, session } = terminal(t);
+  ui.updateSession({ ...session, goalValidation: projection('not_validated', { reason: 'agent_dissent' }) });
+  ui.event('debate.result', { debateId: randomUUID(), status: 'awaiting_review', goalSatisfaction: 'inconclusive', reason: 'agent_dissent',
+    validationAssessment: { achieved: false }, message: 'One reviewer found a conflicting account result, so validation stopped.' });
+  assert.match(clean(tui.goalBadgeLayout(79).line), /Goal achieved ✓.*Not validated ✗/);
+  assert.match(tui.goalBadgeLayout(79).extra.map(clean).join('\n'), /A reviewer found a conflicting result/);
+  ui.updateSession({ ...session, goalValidation: projection('inconclusive', { revision: 3, reason: 'missing_evidence' }) });
+  ui.event('debate.result', { debateId: randomUUID(), status: 'awaiting_review', goalSatisfaction: 'supported', assessments: [true, true],
+    message: 'The selected reviewers agree, but required final verification is missing.' });
+  assert.equal(goalValidationIndicator(tui.goal, tui.goalValidation).tone, palette.warning);
+  assert.match(tui.goalBadgeLayout(79).extra.map(clean).join('\n'), /The available evidence did not settle the question/);
+  assert.equal(tui.goal.status, 'complete');
+});

@@ -2,12 +2,86 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { artifact, captureEvidence, inside, fileInfo, artifactsFor, inspectWorkspace, workspaceManifest } from './evidence.js';
 import { schemaErrors } from './contracts.js';
-import { putRecord, getRecord, listRecords, appendEvent, now } from './database.js';
+import { putRecord, getRecord, listRecords, appendEvent, now, digest } from './database.js';
 import { spawnBounded, stopProcess } from './policy.js';
 import { assignmentsFor } from './delegation-usage.js';
 import { pendingAssignmentContext } from './delegation.js';
 import { missionSourceRevision, missionResultRevision, missionContextCurrent, missionEvidenceCurrent } from './mission-context.js';
 import { assessDebateGoal, assessObjectionDispositions, assessDebateEvidenceCoverage } from './debate-format.js';
+import { assessValidationAgreement } from './investigation.js';
+import { remapValidationAssessment, normalizeValidationAssessment } from './validation-assessment.js';
+
+function canonicalValidationReport(report, artifacts) {
+  const aliases = new Map((artifacts || []).filter(item => !item.omitted).flatMap(item => [[item.originalId || item.id, item.id], [item.id, item.id]]));
+  return report ? { ...report, evidence: report.evidence?.map(id => aliases.get(id) || id),
+    ...(report.validationAssessment ? { validationAssessment: remapValidationAssessment(report.validationAssessment, aliases) } : {}) } : null;
+}
+
+export function assessAdaptiveValidationProtocol(session, record, { requireTrue = true } = {}) {
+  const protocol = record?.protocol, reasons = [], initial = protocol?.initialInvestigation;
+  const count = protocol?.selectedCount;
+  if (!protocol || protocol.version !== 1 || !['direct-review', 'targeted-followup'].includes(protocol.kind) || ![2, 3].includes(count) ||
+      initial?.protocol !== 'tri-state-v1' || initial.reports?.length !== count || protocol.independentAssignments?.length !== count ||
+      protocol.finalAssignments?.length !== count || protocol.followups?.length > count) return { passed: false, reasons: ['The adaptive validation protocol is incomplete.'] };
+  const agreement = assessValidationAgreement(record.investigation, count, { sessionId: session.id,
+    objective: session.reviewSource?.objective || session.goal.objective, criteria: session.contract.acceptanceCriteria });
+  const workers = new Set();
+  for (const [index, pin] of protocol.independentAssignments.entries()) {
+    if (!requireTrue && !agreement.participants[index]?.valid) continue;
+    const job = getRecord('assignment', pin.assignmentId), round = getRecord('round', `${pin.assignmentId}:${pin.round}`);
+    const mission = getRecord('core.mission.context', pin.missionContextId), worker = job?.workerSessionId && getRecord('session', job.workerSessionId);
+    if (!job || !worker || job.parentSessionId !== session.id || job.goalId !== session.goal.id || worker.parentSessionId !== session.id ||
+        worker.assignmentId !== job.id || pin.workerSessionId !== worker.id || workers.has(worker.id) || pin.round !== 1 || round?.state !== 'awaiting_review' ||
+        digest(round.report) !== pin.reportHash || digest(canonicalValidationReport(initial.reports[index]?.report, initial.reports[index]?.artifacts)) !==
+          digest(canonicalValidationReport(round.report, initial.reports[index]?.artifacts)) ||
+        initial.reports[index]?.assignmentId !== job.id || mission?.brief?.independent !== true || !missionContextCurrent(session, mission)) reasons.push('An independent check is missing, altered, stale or not independently bound to this goal.');
+    workers.add(worker?.id);
+  }
+  for (const pin of protocol.finalAssignments) {
+    if (!requireTrue && !agreement.participants.some(item => item.valid && item.assignmentId === pin.assignmentId)) continue;
+    const job = getRecord('assignment', pin.assignmentId), round = job && getRecord('round', `${job.id}:${job.currentRound}`);
+    if (!job || job.parentSessionId !== session.id || job.goalId !== session.goal.id || job.currentRound !== pin.round || job.workerSessionId !== pin.workerSessionId ||
+        round?.state !== 'awaiting_review' || digest(round.report) !== pin.reportHash || !protocol.independentAssignments.some(item => item.assignmentId === job.id)) reasons.push('The latest independent report changed after the adaptive decision.');
+  }
+  if (requireTrue && !agreement.agreeTrue) reasons.push('Every selected independent check must support the original goal before final evidence review.');
+  if (requireTrue) {
+    const pin = protocol.finalReviewer, job = pin && getRecord('assignment', pin.assignmentId), worker = job?.workerSessionId && getRecord('session', job.workerSessionId);
+    const round = job && getRecord('round', `${job.id}:${job.currentRound}`);
+    if (!pin || !job || !worker || job.parentSessionId !== session.id || job.goalId !== session.goal.id || worker.parentSessionId !== session.id ||
+        job.role !== 'reviewer' || job.contract?.policy?.mode !== 'read-only' || job.currentRound !== 1 || pin.round !== 1 ||
+        workers.has(worker.id) || pin.workerSessionId !== worker.id || round?.state !== 'awaiting_review' || digest(round.report) !== pin.reportHash ||
+        record.assessment?.defenderAssignmentId !== job.id || record.assessment?.defenderSessionId !== worker.id ||
+        digest(round.report?.decision) !== digest(record.decision) || record.assessment?.challengeRounds !== 0 || record.transcript?.length) reasons.push('The final evidence reviewer is not a fresh, scoped direct-review assignment.');
+    try {
+      const finalAssessment = normalizeValidationAssessment(round?.report?.validationAssessment, {
+        objective: session.reviewSource?.objective || session.goal.objective, criteria: session.contract.acceptanceCriteria, evidence: round?.report?.evidence });
+      if (round?.report?.status !== 'complete' || finalAssessment.achieved !== true) reasons.push('The final evidence reviewer did not support every original criterion.');
+    } catch { reasons.push('The final evidence reviewer did not return a valid assessment of every original criterion.'); }
+  }
+  const evidence = [...new Set(agreement.participants.filter(item => item.valid && (requireTrue || item.achieved === false)).flatMap(item => item.evidence || []))];
+  return { passed: reasons.length === 0, reasons, agreement, evidence,
+    bindings: protocol.finalAssignments, protocol: protocol.kind, semanticVerification: 'not-automated' };
+}
+
+export function recordAdaptiveValidationPolicy(session, record) {
+  if (!record?.validationPolicy) return null;
+  const checked = assessAdaptiveValidationProtocol(session, record, { requireTrue: false });
+  const source = session.reviewSource && getRecord('session', session.reviewSource.sessionId);
+  const sourceCurrent = !session.reviewSource || source && (source.goal?.id || null) === session.reviewSource.goalId &&
+    missionSourceRevision(source) === session.reviewSource.sourceRevision && missionResultRevision(source) === session.reviewSource.resultRevision;
+  const rejected = checked.passed && sourceCurrent && checked.agreement.hasFalse;
+  const bindings = rejected ? checked.bindings.filter(pin => checked.agreement.participants.some(item => item.valid && item.achieved === false && item.assignmentId === pin.assignmentId)) : checked.bindings || [];
+  const id = digest({ sessionId: session.id, goalId: session.goal.id, bindings, outcome: rejected ? 'rejected' : 'inconclusive' });
+  const receipt = { id, sessionId: session.id, goalId: session.goal.id, sourceGoalId: session.reviewSource?.goalId || session.goal.id,
+    sourceRevision: session.reviewSource?.sourceRevision || missionSourceRevision(session), resultRevision: session.reviewSource?.resultRevision || null,
+    outcome: rejected ? 'rejected' : 'inconclusive', reason: rejected ? 'agent_dissent' : 'missing_evidence',
+    protocol: checked.protocol || record.protocol?.kind, bindings, evidence: checked.evidence || [],
+    passed: checked.passed && Boolean(sourceCurrent), semanticVerification: 'not-automated', createdAt: now() };
+  putRecord('core.validation.policy', id, receipt);
+  record.validationPolicy.receiptId = id; record.validationPolicy.receiptFingerprint = digest(receipt);
+  record.validationPolicy.outcome = receipt.outcome; record.validationPolicy.reason = receipt.reason;
+  return receipt;
+}
 
 export function assessRequirement(session, input, role = 'supervisor') {
   if (role === 'executor' || role === 'reviewer') throw new Error('Only the supervisor can accept parent requirements.');
@@ -125,7 +199,11 @@ export async function assessDebateCompletion(session, record, { signal } = {}) {
     ...(record?.investigation?.reports || []).map(report => report.assignmentId),
     ...(record?.transcript || []).flatMap(round => (round.assessments || []).map(report => report.assignmentId))].filter(Boolean));
   const jobs = [...ids].map(id => getRecord('assignment', id));
-  if (assessment.passed !== true || actualChallengeRounds < 1 || assessment.challengeRounds !== actualChallengeRounds || record.goalSatisfaction !== 'supported') reasons.push('The original goal has no complete supported challenge-and-response assessment.');
+  const adaptive = record?.protocol?.version === 1 ? assessAdaptiveValidationProtocol(session, record) : null;
+  if (assessment.passed !== true || record.goalSatisfaction !== 'supported' || (adaptive ? !adaptive.passed : actualChallengeRounds < 1 || assessment.challengeRounds !== actualChallengeRounds)) {
+    reasons.push(...(adaptive?.reasons || ['The original goal has no complete supported challenge-and-response assessment.']));
+    if (!reasons.length) reasons.push('The final evidence review did not support the original goal.');
+  }
   if (!defender || !defenderJob || defender.parentSessionId !== session.id || defenderJob.parentSessionId !== session.id || defenderJob.goalId !== session.goal?.id ||
     defenderJob.workerSessionId !== defender.id || defender.assignmentId !== defenderJob.id || defender.assignmentRound !== defenderJob.currentRound) reasons.push('The final reviewer is not bound to this goal.');
   if (jobs.some(job => !job || job.parentSessionId !== session.id || job.goalId !== session.goal?.id || getRecord('round', `${job.id}:${job.currentRound}`)?.state !== 'awaiting_review')) reasons.push('A debate participant is missing, still running or belongs to another goal.');
@@ -168,7 +246,8 @@ export async function assessDebateCompletion(session, record, { signal } = {}) {
   }
   const result = await assessCompletion(session, { signal, prerequisite: reasons.length === 0, settledAssignmentIds: [...ids] });
   Object.assign(result, { debate: { passed: reasons.length === 0, reasons, sourceGoalId: session.reviewSource?.goalId || session.goal?.id,
-    goalSatisfaction: goalReview.goalSatisfaction, evidenceCoverage: coverage, semanticVerification: 'not-automated' } });
+    goalSatisfaction: goalReview.goalSatisfaction, evidenceCoverage: coverage,
+    ...(adaptive ? { protocol: adaptive.protocol, independentBindings: adaptive.bindings, independentEvidence: adaptive.evidence } : {}), semanticVerification: 'not-automated' } });
   putRecord('acceptance', result.id, result);
   return result;
 }

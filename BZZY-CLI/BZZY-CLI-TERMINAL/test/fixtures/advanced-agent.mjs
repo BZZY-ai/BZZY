@@ -100,6 +100,9 @@ async function work() {
     await call('read_artifact', { id: evidence.id });
     await call('review_assignment', { id: job.id, outcome: 'accepted', rationale: 'Inspected recorded evidence and verified the requested output.', evidence: [evidence.id] });
     await call('apply_assignment', { id: job.id });
+  } else if (has('finish_assignment') && /INDEPENDENT GOAL CHECK|FINAL GOAL REVIEW/.test(context.contract?.context || '')) {
+    const { runValidationWorker } = await import('./validation-worker.mjs');
+    await runValidationWorker({ call, context, claude, prompt: currentPrompt });
   } else if (process.env.BZZY_TEST_ADVANCED === 'debate-no-evidence' && has('finish_assignment') && !has('peer_status')) {
     await call('finish_assignment', { status: 'inconclusive', verdict: 'inconclusive', summary: 'The supplied material could not be validated with the available evidence.', evidence: [],
       objections: [], conclusions: [], position: 'Inconclusive' });

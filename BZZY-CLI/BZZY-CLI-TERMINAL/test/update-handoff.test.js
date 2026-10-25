@@ -59,14 +59,13 @@ test('updating keeps the TUI open, locks installation controls and saves drafts 
   assert.equal(fs.existsSync(file), false, 'Recovery is consumed once');
   assert.equal(f.ui.closed, undefined, 'The update command never closes the terminal UI');
 });
-test('canvas update recovery reopens the workspace root and preserves the worker draft separately', t => {
+test('terminal update recovery preserves read-only state and the selected agent draft', t => {
   const { ui } = fixture(t);
-  ui.canvasRootId = '11111111-2222-3333-4444-555555555555';
-  ui.sessionMode = 'VIEW'; // A read-only worker history drawer, inside an owner canvas.
+  ui.sessionMode = 'VIEW';
   const workerId = ui.sessionId;
   const recovery = readUpdateHandoff(writeUpdateHandoff(ui));
-  assert.equal(recovery.sessionId, ui.canvasRootId);
-  assert.equal(recovery.mode, 'CONTROL');
+  assert.equal(recovery.sessionId, workerId);
+  assert.equal(recovery.mode, 'VIEW');
   assert.equal(recovery.drafts.find(([id]) => id === workerId)[1].value, 'Keep this unsent draft 🐝');
 });
 test('failed installation keeps the TUI and draft, reports failure and never schedules a reload', async t => {

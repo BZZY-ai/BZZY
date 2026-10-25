@@ -27,9 +27,15 @@ belonging to the review session and review goal. A completed worker reply, a
 majority vote, matching model text or a persuasive consensus paragraph cannot
 create this receipt or award the badge.
 
+Independent checks use internal `true`, `false` or `null` per original criterion;
+chat displays their natural-language explanations. Any valid rejection stops
+normal validation. Only uncertain agents receive one private targeted follow-up,
+and unresolved uncertainty remains not validated. Unanimous supported reports
+proceed to a separate final evidence reviewer; agreement itself awards no badge.
+
 The review must support every original acceptance condition, including requested
 severity or impact. A real lower-impact vulnerability does not satisfy a HIGH
-severity objective. Required challenge rounds, evidence inspection, objection
+severity objective. The declared review protocol, evidence inspection, objection
 dispositions, declared artifacts and verification checks remain enforced. Any
 unresolved objection or required next verification prevents a green badge.
 

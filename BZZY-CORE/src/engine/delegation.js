@@ -16,6 +16,7 @@ import { compactAssignmentRound } from './assignment-views.js';
 import { createMissionContext, missionSourceRevision, missionContextCurrent } from './mission-context.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 import { assertSubagentDefinitionPin } from './subagent-definitions.js';
+import { normalizeValidationAssessment, naturalValidationSummary } from './validation-assessment.js';
 
 const contextKind = 'assignment-context';
 const contextText = (value, limit, label) => {
@@ -52,12 +53,14 @@ export function recordWorkerReport(session, input) {
   if (input.evidence.some(id => getRecord('artifact', id)?.sessionId !== session.id)) throw new Error('Report evidence must belong to this worker session.');
   if (!session.assignmentId) {
     if (input.status === 'needs_context') throw new Error('Context requests need a current bounded assignment.');
+    input = validationReport(input, session.missionContext?.brief || { goal: { objective: session.contract?.objective }, acceptanceCriteria: session.contract?.acceptanceCriteria });
     const report = { ...input, sessionId: session.id, reportedAt: now(), provenance: 'worker-claim' };
     putRecord('worker-report', session.id, report); return { recorded: true, requiresSupervisorReview: true };
   }
   const job = getRecord('assignment', session.assignmentId), saved = loadSession(session.id);
   if (!job || job.workerSessionId !== session.id || saved?.assignmentId !== job.id || saved.assignmentRound !== session.assignmentRound || job.currentRound !== session.assignmentRound || job.closure !== 'open' || !['starting', 'running'].includes(getRecord('round', `${job.id}:${job.currentRound}`)?.state)) throw new Error('This worker no longer owns the active assignment round.');
   const parent = currentSource(loadSession(job.parentSessionId), job);
+  input = validationReport(input, job.missionContext?.brief);
   if (parentStopped(parent, job)) throw new Error('The parent conversation is paused. No new worker result was published.');
   const previous = assignmentContextRequest(job);
   if (previous?.state === 'pending' && input.status !== 'needs_context') throw new Error('Outstanding context questions must be answered by the supervisor before another completion claim.');
@@ -93,6 +96,14 @@ export function recordWorkerReport(session, input) {
       putRecord('worker-report', session.id, report, db); appendEvent(parent.id, 'assignment.needs_context', compactContext(request), db);
       return { recorded: true, requiresSupervisorReview: true, contextRequest: compactContext(request) };
     });
+}
+
+function validationReport(input, brief) {
+  if (input.validationAssessment === undefined) return input;
+  if (!naturalValidationSummary(input.summary)) throw Object.assign(new Error('Validation needs a concise natural-language explanation, not raw booleans or JSON.'), { code: 'INVALID_VALIDATION_ASSESSMENT' });
+  return { ...input, validationAssessment: normalizeValidationAssessment(input.validationAssessment, {
+    objective: brief?.reviewSource?.objective || brief?.goal?.objective, criteria: brief?.acceptanceCriteria, evidence: input.evidence,
+  }) };
 }
 
 export function answerAssignmentContext(parent, id, input, { chatRunId } = {}) {

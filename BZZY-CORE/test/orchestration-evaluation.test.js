@@ -142,20 +142,21 @@ async function evaluateDebate(scenario, { objective, budget, missingDeliverable 
   return { session: loadSession(session.id), code, activity: actors.activity, result: getRecord('debate', session.id) };
 }
 
-test('a misleading majority cannot skip a challenge or erase a real minority counterexample', async () => {
+test('any evidence-backed false assessment stops validation without erasing a contrary counterexample', async () => {
   const run = await evaluateDebate('minority');
   assert.notEqual(run.session.goal.status, 'complete');
-  assert.ok(run.activity.followups.length >= 1, 'a main response follows the actual challenge');
-  assert.ok(run.result.transcript.length >= 1);
-  assert.ok(run.result.objectionLedger.some(item => item.kind === 'minority'));
+  assert.equal(run.activity.followups.length, 0); assert.equal(run.activity.starts.length, 0);
+  assert.equal(run.result.assessment.challengeRounds, 0); assert.equal(run.result.transcript.length, 0);
+  assert.equal(run.result.validationPolicy.reason, 'agent_dissent'); assert.equal(run.result.goalSatisfaction, 'inconclusive');
+  assert.ok(run.result.objectionLedger.some(item => item.kind === 'assessment_dissent'));
   assert.match(JSON.stringify(run.result), /foreign-object private field|minority counterexample/);
   assert.ok(run.result.unresolvedDisagreement.length > 0); assert.equal(run.result.assessment.passed, false);
 });
 
-test('a claimed resolution without inspected evidence remains unresolved even after all actors respond', async () => {
+test('a fresh final reviewer cannot accept a claimed resolution without inspecting evidence', async () => {
   const run = await evaluateDebate('unsupported_resolution');
-  assert.ok(run.activity.followups.length >= 1); assert.notEqual(run.session.goal.status, 'complete');
-  assert.equal(run.result.assessment.passed, false); assert.equal(run.result.objectionReview.evidenceValidated, false);
+  assert.equal(run.activity.followups.length, 0); assert.equal(run.activity.starts.length, 1); assert.notEqual(run.session.goal.status, 'complete');
+  assert.equal(run.result.assessment.passed, false); assert.equal(run.result.goalReview.passed, false);
   assert.match(JSON.stringify(run.result.unresolvedDisagreement), /evidence|disposition/);
 });
 
@@ -200,7 +201,8 @@ test('current inspected evidence can complete a supported bounded assessment wit
   const run = await evaluateDebate('complete');
   assert.equal(run.session.goal.status, 'complete'); assert.equal(run.code, 0);
   assert.equal(run.result.assessment.passed, true); assert.equal(run.result.goalSatisfaction, 'supported');
-  assert.equal(run.session.acceptance.passed, true); assert.ok(run.result.assessment.challengeRounds >= 1);
+  assert.equal(run.session.acceptance.passed, true); assert.equal(run.result.assessment.challengeRounds, 0);
+  assert.equal(run.result.protocol.kind, 'direct-review'); assert.equal(run.activity.followups.length, 0); assert.equal(run.activity.starts.length, 1);
   assert.equal(run.result.assessment.semanticVerification, 'not-automated');
 });
 
@@ -225,7 +227,7 @@ test('Debate still checks the parent deliverables and stops within its declared 
   assert.notEqual(missing.session.goal.status, 'complete'); assert.equal(missing.session.acceptance?.passed, false);
   assert.ok(missing.session.acceptance.artifacts.some(item => item.path === 'required-proof.json' && !item.passed));
   assert.ok(missing.result.transcript.length <= 1);
-  const bounded = await evaluateDebate('minority', { budget: 7 });
+  const bounded = await evaluateDebate('complete', { budget: 5 });
   assert.notEqual(bounded.session.goal.status, 'complete');
   assert.ok(bounded.activity.starts.length <= 3); assert.ok(bounded.activity.waits <= 4);
   assert.match(JSON.stringify(bounded.activity.finishes), /token_limit|budget_limited/);

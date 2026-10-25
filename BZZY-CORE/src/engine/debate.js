@@ -14,6 +14,8 @@ import { debateEventUI, debateIdentity, debateParticipants } from './debate-even
 import { sessionMemoryEligible } from './session-memory.js';
 import { queueSessionCompaction } from './session-compactor.js';
 import { synthesizeDebateConsensus, consensusTokenBudget } from './debate-consensus.js';
+import { runAdaptiveValidationReview } from './adaptive-validation.js';
+import { recordAdaptiveValidationPolicy } from './verification.js';
 
 export async function runDebate(session, options, ui, dependencies = {}) {
   // Runtime/model options are never executable adapter overrides.
@@ -46,7 +48,6 @@ export async function runDebate(session, options, ui, dependencies = {}) {
     applyDebateSelection(session, selectedAgents); saveSession(session);
     const [supervisor, ...choices] = selectedAgents;
     const reviewPolicy = { ...session.policy, mode: 'read-only', writablePaths: [] };
-    session.contract.limits.maxRetries = Math.max(session.contract.limits.maxRetries || 0, rounds);
     session.contract.limits.concurrency = Math.min(options.concurrency || session.contract.limits.concurrency || selectedAgents.length, 8);
     const missionContext = createMissionContext(session, { purpose: 'debate', independent: true, evidenceIds: [material.id, ...(selected ? [selected.id] : [])] });
     if (!options.reviewOnly) investigationUsage = await investigate(session, selectedAgents, snapshot, options, ui, coordinator);
@@ -57,6 +58,14 @@ export async function runDebate(session, options, ui, dependencies = {}) {
     const updateUsage = () => { usage.agents = [...investigationUsage, ...agents.filter(Boolean)]; usage.totalTokens = usage.agents.reduce((sum, a) => sum + (a.tokens || 0), 0); usage.complete = usage.agents.every(a => a.available); coordinator.checkBudget(usage.totalTokens); };
     updateUsage();
     const consensus = options.reviewOnly ? null : investigationConsensus(investigation, selectedAgents.length);
+    if (!options.reviewOnly && investigation?.protocol === 'tri-state-v1') {
+      const result = await runAdaptiveValidationReview({ session, options, ui, coordinator, selectedAgents, snapshot, material, missionContext,
+        investigation, sourceEvidenceIds, commonEvidence, usage, startAssignment, followupAssignment, waitAssignment, assignmentStatus });
+      decision = result.decision; objectionLedger = result.objectionLedger;
+      if (result.validationPolicy) recordAdaptiveValidationPolicy(session, result);
+      return await finishValidation(session, options, ui, coordinator, result, usage, missionContext, synthesizeConsensus);
+    }
+    session.contract.limits.maxRetries = Math.max(session.contract.limits.maxRetries || 0, rounds);
     const persistLedger = () => putRecord('debate-objections', session.id, { version: 1, goalId: session.goal.id, snapshotHash: snapshot.manifestHash, entries: objectionLedger, updatedAt: now() });
     if (!options.reviewOnly) {
       objectionLedger = accumulateDebateObjections(objectionLedger, investigation?.reports || [], { phase: 'investigation', consensus }); persistLedger();
@@ -193,45 +202,7 @@ PRIOR MAIN CASE:\n${JSON.stringify(currentCase)}\nCHALLENGER REPORTS:\n${JSON.st
       defenderSessionId: defender.workerSessionId, defenderAssignmentId: defenderJob, missionCurrent, semanticVerification: 'not-automated' };
     const unresolved = !result.assessment.passed;
     result.outcome = unresolved ? 'unresolved' : 'assessed';
-    putRecord('debate', session.id, result);
-    const afterAssessment = async (checkedResult, checkedStatus) => {
-      ui.event('debate.phase', { phase: 'consensus', status: 'started' });
-      const remainingTokens = session.goal.tokenBudget == null ? consensusTokenBudget : Math.max(0, session.goal.tokenBudget - (coordinator.tokenOffset || 0) - usage.totalTokens);
-      const maximumRuntime = Math.min(options.runtimeSeconds ?? Infinity, session.contract.limits.runtimeSeconds ?? Infinity);
-      const elapsed = coordinator.started ? (Date.now() - coordinator.started) / 1000 : 0;
-      const remainingSeconds = Math.min(45, Math.max(0, maximumRuntime - (session.goal.runtimeUsedSeconds || 0) - elapsed));
-      result.consensus = await synthesizeConsensus(session, checkedResult, { signal: coordinator.abort.signal, tokenBudget: remainingTokens, runtimeSeconds: remainingSeconds, checkedStatus });
-      const charged = result.consensus.chargedTokens || 0;
-      if (result.consensus.selection && (charged || result.consensus.usageAvailable)) {
-        usage.agents.push({ ...result.consensus.selection, role: 'consensus', tokens: result.consensus.tokens ?? null,
-          available: result.consensus.usageAvailable === true, chargedTokens: charged });
-        usage.totalTokens += charged; usage.complete &&= result.consensus.usageAvailable === true;
-        coordinator.checkBudget(usage.totalTokens);
-      }
-      const decisive = (checkedResult.assessment?.inspectedEvidence || []).map(id => getRecord('artifact', id));
-      if (!chatReviewSourceCurrent(session) || !missionContextCurrent(getRecord('session', session.id) || session, missionContext) ||
-          decisive.some(item => !item) || !missionEvidenceCurrent(decisive)) {
-        const reason = 'The original goal, source instructions or inspected evidence changed during Core consensus.';
-        checkedResult.reportedGoalSatisfaction ||= checkedResult.goalSatisfaction;
-        checkedResult.goalSatisfaction = 'inconclusive'; checkedResult.outcome = 'unresolved';
-        checkedResult.assessment = { ...checkedResult.assessment, passed: false, postConsensusCurrent: false };
-        checkedResult.unresolvedDisagreement = [...new Set([...(checkedResult.unresolvedDisagreement || []), reason])];
-        if (checkedResult.decision) checkedResult.decision = { ...checkedResult.decision, goalSatisfaction: 'inconclusive' };
-        session.acceptance = { ...session.acceptance, passed: false, debate: { ...session.acceptance?.debate, passed: false,
-          reasons: [...(session.acceptance?.debate?.reasons || []), reason] } };
-        checkedResult.acceptance = session.acceptance;
-        const { text, ...invalidated } = checkedResult.consensus;
-        checkedResult.consensus = { ...invalidated, state: 'unavailable', reason: 'source_changed' };
-        return { status: 'awaiting_review' };
-      }
-    };
-    const code = await coordinator.finish(unresolved ? 'awaiting_review' : 'complete', result, usage, { afterAssessment });
-    putRecord('debate', session.id, result);
-    ui.event('debate.phase', { phase: 'finished', status: session.goal.status });
-    ui.event('debate.result', { sessionId: session.id, status: session.goal.status, decision: result.decision, consensus: result.consensus || consensus, goalSatisfaction: result.goalSatisfaction,
-      unresolvedDisagreement: result.unresolvedDisagreement, evidence: session.goal.evidence,
-      message: `Validation ${session.goal.status === 'complete' ? 'finished' : session.goal.status === 'awaiting_review' ? 'finished · unresolved' : session.goal.status}\n${result.consensus?.state === 'ready' ? `Core consensus · ${result.consensus.selection.provider}${result.consensus.selection.model ? ' · ' + result.consensus.selection.model : ''}\n${result.consensus.text}\n\n` : ''}${formatDecision(result.decision, result.unresolvedDisagreement)}` });
-    return code;
+    return await finishValidation(session, options, ui, coordinator, result, usage, missionContext, synthesizeConsensus, consensus);
   } catch (error) {
     ui.event('error', { message: error.message });
     const partial = { version: 1, debateId: debateIdentity(session), transcript, decision, objectionLedger, outcome: 'unresolved', goalSatisfaction: 'inconclusive',
@@ -248,4 +219,47 @@ PRIOR MAIN CASE:\n${JSON.stringify(currentCase)}\nCHALLENGER REPORTS:\n${JSON.st
       try { queueSessionCompaction(session); } catch { /* Derived memory cannot change the review outcome. */ }
     }
   }
+}
+
+
+async function finishValidation(session, options, ui, coordinator, result, usage, missionContext, synthesizeConsensus, consensus = null) {
+  putRecord('debate', session.id, result);
+  const afterAssessment = async (checkedResult, checkedStatus) => {
+    ui.event('debate.phase', { phase: 'consensus', status: 'started' });
+    const remainingTokens = session.goal.tokenBudget == null ? consensusTokenBudget : Math.max(0, session.goal.tokenBudget - (coordinator.tokenOffset || 0) - usage.totalTokens);
+    const maximumRuntime = Math.min(options.runtimeSeconds ?? Infinity, session.contract.limits.runtimeSeconds ?? Infinity);
+    const elapsed = coordinator.started ? (Date.now() - coordinator.started) / 1000 : 0;
+    const remainingSeconds = Math.min(45, Math.max(0, maximumRuntime - (session.goal.runtimeUsedSeconds || 0) - elapsed));
+    result.consensus = await synthesizeConsensus(session, checkedResult, { signal: coordinator.abort.signal, tokenBudget: remainingTokens, runtimeSeconds: remainingSeconds, checkedStatus });
+    const charged = result.consensus.chargedTokens || 0;
+    if (result.consensus.selection && (charged || result.consensus.usageAvailable)) {
+      usage.agents.push({ ...result.consensus.selection, role: 'consensus', tokens: result.consensus.tokens ?? null,
+        available: result.consensus.usageAvailable === true, chargedTokens: charged });
+      usage.totalTokens += charged; usage.complete &&= result.consensus.usageAvailable === true;
+      coordinator.checkBudget(usage.totalTokens);
+    }
+    const decisive = (checkedResult.assessment?.inspectedEvidence || []).map(id => getRecord('artifact', id));
+    if (!chatReviewSourceCurrent(session) || !missionContextCurrent(getRecord('session', session.id) || session, missionContext) ||
+        decisive.some(item => !item) || !missionEvidenceCurrent(decisive)) {
+      const reason = 'The original goal, source instructions or inspected evidence changed during Core consensus.';
+      checkedResult.reportedGoalSatisfaction ||= checkedResult.goalSatisfaction;
+      checkedResult.goalSatisfaction = 'inconclusive'; checkedResult.outcome = 'unresolved';
+      checkedResult.assessment = { ...checkedResult.assessment, passed: false, postConsensusCurrent: false };
+      checkedResult.unresolvedDisagreement = [...new Set([...(checkedResult.unresolvedDisagreement || []), reason])];
+      if (checkedResult.decision) checkedResult.decision = { ...checkedResult.decision, goalSatisfaction: 'inconclusive' };
+      session.acceptance = { ...session.acceptance, passed: false, debate: { ...session.acceptance?.debate, passed: false,
+        reasons: [...(session.acceptance?.debate?.reasons || []), reason] } };
+      checkedResult.acceptance = session.acceptance;
+      const { text, ...invalidated } = checkedResult.consensus;
+      checkedResult.consensus = { ...invalidated, state: 'unavailable', reason: 'source_changed' };
+      return { status: 'awaiting_review' };
+    }
+  };
+  const code = await coordinator.finish(result.assessment?.passed ? 'complete' : 'awaiting_review', result, usage, { afterAssessment });
+  putRecord('debate', session.id, result);
+  ui.event('debate.phase', { phase: 'finished', status: session.goal.status });
+  ui.event('debate.result', { sessionId: session.id, status: session.goal.status, decision: result.decision, consensus: result.consensus || consensus, goalSatisfaction: result.goalSatisfaction,
+    unresolvedDisagreement: result.unresolvedDisagreement, evidence: session.goal.evidence, stopReason: result.stopReason,
+    message: `Validation ${session.goal.status === 'complete' ? 'finished' : session.goal.status === 'awaiting_review' ? 'finished · unresolved' : session.goal.status}\n${result.consensus?.state === 'ready' ? `Core consensus · ${result.consensus.selection.provider}${result.consensus.selection.model ? ' · ' + result.consensus.selection.model : ''}\n${result.consensus.text}\n\n` : ''}${result.validationPolicy?.message || formatDecision(result.decision, result.unresolvedDisagreement)}` });
+  return code;
 }

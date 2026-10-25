@@ -69,6 +69,14 @@ export function taskTools(session, { goalMode } = {}) {
       questions: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'object', additionalProperties: false,
         properties: { id: { type: 'string', maxLength: 64 }, question: { type: 'string', maxLength: 1000 }, reason: { type: 'string', maxLength: 500 } }, required: ['id', 'question'] } },
       verdict: { type: 'string', enum: ['real', 'false_positive', 'inconclusive'] }, nextSteps: strings, uncertainties: strings,
+      validationAssessment: { type: 'object', additionalProperties: false, required: ['objective', 'achieved', 'criteria'], properties: {
+        objective: { type: 'string', maxLength: 16000, description: 'Copy the exact original goal from the immutable mission brief.' },
+        achieved: { enum: [true, false, null], description: 'Internal goal assessment: true only when every original criterion is supported; false needs a grounded failed criterion; null means unresolved.' },
+        criteria: { type: 'array', minItems: 1, maxItems: 128, items: { type: 'object', additionalProperties: false, required: ['id', 'achieved', 'rationale', 'evidence'], properties: {
+          id: { type: 'string', maxLength: 64 }, achieved: { enum: [true, false, null] }, rationale: { type: 'string', maxLength: 2000 },
+          evidence: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 36 }, description: 'Canonical artifact IDs also listed in this report’s evidence.' },
+        } } },
+      } },
       objections: { type: 'array', items: object }, conclusions: strings, position: str, changedBecause: str, decision: object }, ['status', 'summary', 'evidence']));
   if (session.goal && goalMode !== false && !['executor', 'reviewer'].includes(session.role)) tools.push(
     spec('get_goal', 'Read the current persistent goal and usage.'),

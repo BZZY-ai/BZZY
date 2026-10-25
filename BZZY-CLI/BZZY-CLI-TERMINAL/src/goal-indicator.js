@@ -9,6 +9,8 @@ const validationReasons = {
   review_budget_limited: 'Validation stopped at its budget limit.', review_final_missing: 'The final validation record is missing.',
   review_not_completed: 'The validation did not finish.', review_not_recorded: 'The validation is not recorded.',
   review_paused: 'Validation is paused.', review_cancelled: 'Validation was cancelled.',
+  agent_dissent: 'A reviewer found a conflicting result. The goal has not been validated.',
+  missing_evidence: 'The available evidence did not settle the question.',
 };
 export function goalIndicator(goal, frame = 0) {
   if (!goal) return null;

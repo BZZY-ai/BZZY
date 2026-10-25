@@ -23,7 +23,7 @@ function terminal(t) {
 function click(input, hit) { assert.ok(hit, 'visible Back control'); input.write(`\x1b[<0;${hit.left};${hit.row}M`); }
 function back(tui, input) {
   tui.render();
-  const hit = tui.hitTargets.find(hit => hit.type === 'back') || tui.hitTargets.find(hit => ['cancel', 'canvas-close', 'private-cancel'].includes(hit.type)
+  const hit = tui.hitTargets.find(hit => hit.type === 'back') || tui.hitTargets.find(hit => ['cancel', 'private-cancel'].includes(hit.type)
     && clean(tui.lastFrame[hit.row - 1] || '').includes('← Back'));
   click(input, hit);
 }

@@ -1,4 +1,5 @@
-import { listSkills, inspectSkill, readSkill, importSkill, createSkill, setSkillEnabled, skillHistory, rollbackSkill, promoteSkill, scopeSkillToProject, skillMetadata } from '@bzzy/core/engine/skills.js';
+import { listSkills, inspectSkill, readSkill, importSkill, createSkill, setSkillEnabled, skillHistory, rollbackSkill, promoteSkill, scopeSkillToProject, skillMetadata,
+  previewSkillGlobalMove, moveSkillToGlobal } from '@bzzy/core/engine/skills.js';
 import { skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { projectIdentityForSession, resolveProjectIdentity } from '@bzzy/core/engine/project-identity.js';
@@ -20,17 +21,18 @@ const currentContext = ui => {
   const session = sessionFor(ui); return session ? { session } : { projectRoot: projectFor(ui).root };
 };
 const writeContext = ui => ui.skillScope === 'global' ? { scope: 'global' } : { projectRoot: projectFor(ui).root, scope: 'project' };
-const contextKey = ui => JSON.stringify([ui.sessionId || null, ui.tui?.cwd || null, ui.skillScope || 'current']);
+const contextKey = ui => JSON.stringify([home(), ui.sessionId || null, ui.tui?.cwd || null, ui.skillScope || 'current']);
 async function prompt(ui, method, ...arguments_) {
   const original = contextKey(ui), answer = await ui[method](...arguments_);
   if (contextKey(ui) !== original) throw new Error('Conversation changed. Reopen Skills for this project before acting.');
   return answer;
 }
 const preview = (ui, id, options = {}) => {
-  ui.skillPreview = { ...readSkill(id, { ...currentContext(ui), ...options, enabledOnly: false }), historical: Boolean(options.historical) };
+  const selected = { ...currentContext(ui), ...options };
+  ui.skillPreview = { ...inspectSkill(id, selected), ...readSkill(id, { ...selected, enabledOnly: false }), historical: Boolean(options.historical) };
   ui.skillPreviewContext = contextKey(ui);
 };
-const resetViews = ui => { ui.skillCreatorDraft = null; ui.skillPreview = null; ui.skillHistoryState = null; ui.skillPromotionDraft = null; ui.skillSyncDetails = false; ui.knowledgeView = null; };
+const resetViews = ui => { ui.skillCreatorDraft = null; ui.skillMoveDraft = null; ui.skillPreview = null; ui.skillHistoryState = null; ui.skillPromotionDraft = null; ui.skillSyncDetails = false; ui.knowledgeView = null; };
 const preferencesFile = () => path.join(home(), 'cli-preferences.json');
 const savedImportDirectory = () => {
   try {
@@ -60,8 +62,9 @@ const setSkillView = (ui, view) => {
   }
 };
 export function returnToSkillLibrary(ui) {
-  const fromDetail = Boolean(ui.skillCreatorDraft || ui.skillPreview || ui.skillHistoryState || ui.skillSyncDetails || ui.skillPromotionDraft);
-  if (ui.skillPreview && ui.skillHistoryState) ui.skillPreview = null;
+  const fromDetail = Boolean(ui.skillCreatorDraft || ui.skillMoveDraft || ui.skillPreview || ui.skillHistoryState || ui.skillSyncDetails || ui.skillPromotionDraft);
+  if (ui.skillMoveDraft?.filePreview) ui.skillMoveDraft.filePreview = null;
+  else if (ui.skillPreview && ui.skillHistoryState) ui.skillPreview = null;
   else resetViews(ui);
   setSkillView(ui, 'library');
   if (ui.tui) {
@@ -283,6 +286,25 @@ export function skillRows(ui) {
   if (ui.skillAdminContext && ui.skillAdminContext !== contextKey(ui)) resetViews(ui);
   const creator = creatorRows(ui, 'skill');
   if (creator) return creator;
+  if (ui.skillMoveDraft) {
+    const draft = ui.skillMoveDraft;
+    if (draft.context !== contextKey(ui)) {
+      ui.skillMoveDraft = null;
+      return [{ text: 'The host or conversation changed. Reopen the skill to review its move.', tone: 'warning' }, { text: '← Back to library', action: 'library' }];
+    }
+    if (draft.filePreview) return [{ text: '← Back to move review', action: 'move-review' },
+      { text: draft.filePreview.file + ' · ' + draft.review.sourceVersion.slice(0, 8), tone: 'accent' }, { text: draft.filePreview.text },
+      ...(draft.filePreview.nextOffset != null ? [{ text: 'Read next page', action: 'move-read-next' }] : [])];
+    return [{ text: '← Back to library', action: 'library' }, { text: `Move ${draft.review.name} to BZZY Core`, tone: 'accent' },
+      { text: 'THIS CHAT / PROJECT → BZZY CORE / GLOBAL', tone: 'accent' },
+      { text: `Exact package ${draft.review.sourceVersion.slice(0, 12)} · ${draft.review.files.length} files · source revision ${draft.review.sourceRevision}` },
+      { text: draft.review.description }, { text: '' },
+      ...draft.review.files.map(file => ({ text: `${file.path} · ${file.bytes.toLocaleString()} bytes` })), { text: '' },
+      { text: 'The project library entry is archived. Original folders, immutable versions and history stay intact.', tone: 'muted' },
+      { text: 'The global skill starts disabled. Review it and explicitly Enable it when ready.', tone: 'muted' },
+      { text: 'Inspect package files', action: 'move-files' }, { text: 'Move to BZZY Core', action: 'move-confirm', tone: 'accent' },
+      { text: 'Cancel move', action: 'library' }];
+  }
   if (ui.skillPromotionDraft) {
     const { definition } = ui.skillPromotionDraft;
     return [{ text: 'Review a separate global workflow', tone: 'accent' }, { text: definition.name }, { text: definition.description }, { text: definition.instructions },
@@ -319,6 +341,8 @@ export function skillRows(ui) {
       { text: `${page.name}/${page.file} · ${page.scope} · ${page.version.slice(0, 8)}${page.historical ? ' · historical' : ''}`, tone: 'accent' }, { text: page.text },
       ...(page.nextOffset != null ? [{ text: 'Read next page', action: 'read-next' }] : []), { text: 'Supporting files', action: 'files' },
       { text: page.enabled ? 'Disable for all models' : 'Enable for all models', action: `toggle:${page.id}` },
+      ...(page.scope === 'project' && !page.historical ? [{ text: 'Move to BZZY Core', action: `move-global:${page.id}`, tone: 'accent' },
+        { text: 'Create a separate generic global candidate', action: `promote:${page.id}` }] : []),
       ...(ui.skillHistoryState ? [{ text: 'Back to library', action: 'library' }] : [])];
   }
   const tabs = {
@@ -383,6 +407,7 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
   const action = text.slice(7).trim();
   if (!action.startsWith('knowledge:')) ui.knowledgeView = null;
   if (!action.startsWith('promote:') && action !== 'promote-confirm') ui.skillPromotionDraft = null;
+  if (!action.startsWith('move-') && !action.startsWith('move-global:') && action !== 'library') ui.skillMoveDraft = null;
   try {
     if (action.startsWith('knowledge:')) await knowledgeAction(action.slice(10), ui);
     else if (!action) resetViews(ui);
@@ -465,6 +490,22 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
       if (await prompt(ui, 'chooseOne', `Restore ${version.slice(0, 8)}? It will need review before enabling.`, [{ value: 'cancel', label: 'Cancel', selected: true }, { value: 'restore', label: 'Restore for review' }]) === 'restore') {
         rollbackSkill(id, version, Number(revision), currentContext(ui)); ui.skillHistoryState = skillHistory(id, currentContext(ui)); ui.skillPreview = null;
       }
+    } else if (action.startsWith('move-global:')) {
+      const review = previewSkillGlobalMove(action.slice(12), { projectRoot: projectFor(ui).root });
+      ui.skillPreview = null; ui.skillHistoryState = null; ui.skillMoveDraft = { review, context: contextKey(ui) };
+    } else if (action === 'move-review' && ui.skillMoveDraft) ui.skillMoveDraft.filePreview = null;
+    else if (action === 'move-confirm' && ui.skillMoveDraft) {
+      const draft = ui.skillMoveDraft;
+      if (draft.context !== contextKey(ui)) throw new Error('The host or conversation changed. Reopen the move review.');
+      const moved = moveSkillToGlobal(draft.review, { projectRoot: projectFor(ui).root, reviewed: true });
+      resetViews(ui); ui.skillScope = 'global'; setSkillView(ui, 'library'); preview(ui, moved.id);
+      ui.event('info', { message: `Moved ${moved.name} to BZZY Core. It is disabled until you explicitly Enable it.` });
+    } else if (action === 'move-files' && ui.skillMoveDraft) {
+      const draft = ui.skillMoveDraft, selected = await prompt(ui, 'chooseOne', 'Inspect the exact package before moving', draft.review.files.map(file => ({ value: file.path, label: file.path })));
+      if (selected) draft.filePreview = readSkill(draft.review.sourceId, { projectRoot: projectFor(ui).root, scope: 'project', enabledOnly: false, version: draft.review.sourceVersion, file: selected });
+    } else if (action === 'move-read-next' && ui.skillMoveDraft?.filePreview?.nextOffset != null) {
+      const draft = ui.skillMoveDraft, page = draft.filePreview;
+      draft.filePreview = readSkill(draft.review.sourceId, { projectRoot: projectFor(ui).root, scope: 'project', enabledOnly: false, version: draft.review.sourceVersion, file: page.file, offset: page.nextOffset });
     } else if (action.startsWith('scope-project:')) {
       const skill = inspectSkill(action.slice(14), currentContext(ui));
       if (await prompt(ui, 'chooseOne', `Keep ${skill.name} only in this engagement? The original is archived.`, [{ value: 'cancel', label: 'Cancel', selected: true }, { value: 'scope', label: 'Use project scope' }]) === 'scope') {

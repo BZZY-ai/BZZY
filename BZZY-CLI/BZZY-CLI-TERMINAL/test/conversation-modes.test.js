@@ -189,13 +189,13 @@ finally:
   assert.equal(events(sessions()[0].id).filter(event => event.type === 'mode.changed').length, 3);
 });
 
-test('explicit --canvas opens the character canvas, enters chat and returns with Esc without inference', { timeout: 20000 }, () => {
-  saveDefaultSelection({ provider: 'codex', model: 'fixture-canvas', selectedEffort: 'high' });
+test('plain CLI opens terminal chat and returns from Settings with Esc without inference', { timeout: 20000 }, () => {
+  saveDefaultSelection({ provider: 'codex', model: 'fixture-terminal', selectedEffort: 'high' });
   const code = String.raw`
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
-child = subprocess.Popen([sys.argv[1], sys.argv[2], '--canvas', '--no-pet'], stdin=slave, stdout=slave, stderr=slave, cwd=sys.argv[3], env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
+child = subprocess.Popen([sys.argv[1], sys.argv[2], '--no-pet'], stdin=slave, stdout=slave, stderr=slave, cwd=sys.argv[3], env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
 os.close(slave)
 output = b''
 def until(check):
@@ -208,13 +208,14 @@ def until(check):
         if check(): return
     raise AssertionError(output[-2500:].decode(errors='replace'))
 try:
-    until(lambda: b'Right-click / F10' in output and b'fixture-canvas' in output)
-    os.write(master, b'\r')
-    until(lambda: b'Esc returns to the canvas' in output)
+    until(lambda: b'fixture-terminal' in output and b'Skills' in output and b'Agents' in output)
+    os.write(master, b'/settings\r')
+    until(lambda: b'Default models' in output and b'Pair iPhone' in output)
     output = b''
     os.write(master, b'\x1b')
-    until(lambda: b'Right-click / F10' in output)
-    os.write(master, b'\x04')
+    until(lambda: b'fixture-terminal' in output and b'Ask BZZY to do anything' in output)
+    assert b'Right-click / F10' not in output and b'\x1b_G' not in output
+    os.write(master, b'/exit\r')
     until(lambda: child.poll() is not None)
     assert child.returncode == 0
 finally:
