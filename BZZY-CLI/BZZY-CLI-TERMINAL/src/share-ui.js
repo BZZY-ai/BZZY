@@ -113,6 +113,8 @@ async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/co
       await service.start();
       assertContext();
       share = library ? await service.createLibraryShare({ cwd: session.cwd, expectedDigest: library.sourceDigest,
+        ...(library.kinds ? { kinds: library.kinds } : {}),
+        ...(library.excludeEntries?.length ? { excludeEntries: library.excludeEntries } : {}),
         ...(library.excludeGoalIds?.length ? { excludeGoalIds: library.excludeGoalIds } : {}), ttlSeconds: 600 })
         : await service.createShare({ sessionId: session.id, ttlSeconds: 600 });
       assertContext();

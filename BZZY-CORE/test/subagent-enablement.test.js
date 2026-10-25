@@ -90,7 +90,7 @@ test('disabled local overrides stay visible to the owner and never fall back to 
   assert.equal((await host.call('list_subagents', {})).subagents[0].id, local.id);
 });
 
-for (const providerId of ['codex', 'claude', 'deepseek', 'abliteration', 'orcarouter']) {
+for (const providerId of ['codex', 'claude', 'deepseek', 'abliteration', 'orcarouter', 'experiential']) {
   test(`the current ${providerId} model cannot bypass an off specialist, and can invoke it after re-enable`, async () => {
     const created = define(), disabled = toggle(created, false), provider = getProvider(providerId);
     parent = createSession(provider, parent.cwd, provider.model || 'offline-model');

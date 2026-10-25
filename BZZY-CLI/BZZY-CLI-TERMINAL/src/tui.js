@@ -1020,7 +1020,7 @@ export class TerminalChat {
       for (const line of warning) put('  ' + line, palette.warning);
       const focused = picker.choices[picker.focus];
       const effortDetail = picker.selectEffort ? focused?.efforts?.length ? `Effort: ${picker.efforts.get(focused.value)}${focused.defaultEffort ? ` · provider default: ${focused.defaultEffort}` : ''}. ` : focused?.supportsEffort === false ? 'This model has no effort setting. ' : '' : '';
-      const details = picker.single ? effortDetail + (focused?.description || picker.description || '') : 'Every participant reviews the same fixed reply independently.';
+      const details = picker.single ? effortDetail + (focused?.description || picker.description || '') : picker.description || 'Every participant reviews the same fixed reply independently.';
       const detailLines = details ? wrap(details, width - 5, compact ? 1 : picker.descriptionRows || 2) : [];
       const available = Math.max(1, (this.selectionHeight || 16) - lines.length - detailLines.length - 1 - (compact ? 0 : 1) - (picker.error ? 1 : 0));
       const offset = Math.max(0, Math.min(picker.focus - Math.floor(available / 2), picker.choices.length - available));

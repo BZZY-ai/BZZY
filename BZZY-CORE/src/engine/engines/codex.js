@@ -96,11 +96,21 @@ export function codexLaunch(provider, session, options = {}) {
       model_messages: { instructions_template: fs.readFileSync(path.join(root, 'assets', 'agent-instructions.md'), 'utf8') },
     });
     const capabilities = providerModelCapabilities(provider, session.model, session.modelCapabilities);
+    if (provider.catalogFormat === 'experiential') {
+      // A gateway slug does not inherit the template model's capabilities.
+      // Unknown context uses a local planning budget, not an upstream claim.
+      catalog.context_window = catalog.max_context_window = 32768;
+      catalog.input_modalities = ['text'];
+      catalog.default_reasoning_level = null; catalog.supported_reasoning_levels = [];
+      catalog.supports_reasoning_summary_parameter = false; catalog.supports_reasoning_summaries = false;
+    }
     if (capabilities?.defaultEffort) catalog.default_reasoning_level = capabilities.defaultEffort;
     const supported = capabilities?.supportedEfforts || provider.supportedEfforts;
-    if (supported?.length) {
+    if (capabilities?.supportsEffort === false && provider.catalogFormat === 'experiential') {
+      catalog.default_reasoning_level = null; catalog.supported_reasoning_levels = [];
+    } else if (supported?.length) {
       catalog.supported_reasoning_levels = supported.map(effort => ({ effort, description: effort }));
-      if (!supported.includes(catalog.default_reasoning_level)) catalog.default_reasoning_level = supported[0];
+      if (!supported.includes(catalog.default_reasoning_level) && !(provider.catalogFormat === 'experiential' && catalog.default_reasoning_level == null)) catalog.default_reasoning_level = supported[0];
     }
     if (Number.isSafeInteger(capabilities?.contextWindow) && capabilities.contextWindow > 0) catalog.context_window = catalog.max_context_window = capabilities.contextWindow;
     if (capabilities?.inputModalities?.length) catalog.input_modalities = capabilities.inputModalities;

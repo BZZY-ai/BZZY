@@ -23,10 +23,11 @@ import { prepareTask } from '../src/task.js';
 let directory, previous;
 test.beforeEach(() => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-models-'));
-  previous = Object.fromEntries(['BZZY_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_MODEL_MODE', 'BZZY_TEST_LOG', 'BZZY_FIXTURE_MODELS_KEY', 'DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY'].map(key => [key, process.env[key]]));
+  previous = Object.fromEntries(['BZZY_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_MODEL_MODE', 'BZZY_TEST_LOG', 'BZZY_FIXTURE_MODELS_KEY', 'DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY', 'EXPLABS_API_KEY'].map(key => [key, process.env[key]]));
   delete process.env.DEEPSEEK_API_KEY;
   delete process.env.ABLITERATION_API_KEY;
   delete process.env.ORCAROUTER_API_KEY;
+  delete process.env.EXPLABS_API_KEY;
   Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_BIN: path.join(root, 'test/fixtures/models.mjs'), BZZY_CLAUDE_BIN: path.join(root, 'test/fixtures/models.mjs'), BZZY_TEST_LOG: path.join(directory, 'backend.jsonl') });
 });
 test.afterEach(async () => {
@@ -143,7 +144,7 @@ test('provider selection prompts once for a missing DeepSeek key and keeps crede
   let prompts = 0, choices;
   const ui = { interactive: true, event() {}, async secret() { prompts++; return 'fixture-deepseek-key'; }, async chooseOne(_title, items) { choices = items; return 'deepseek'; } };
   assert.equal((await chooseProvider('codex', '', ui)).id, 'deepseek');
-  assert.deepEqual(choices.map(choice => choice.value), ['codex', 'claude', 'deepseek', 'abliteration', 'orcarouter']);
+  assert.deepEqual(choices.map(choice => choice.value), ['codex', 'claude', 'deepseek', 'abliteration', 'orcarouter', 'experiential']);
   assert.equal(prompts, 1); assert.equal(apiKey(BUILTINS.deepseek), 'fixture-deepseek-key');
   assert.doesNotMatch(JSON.stringify(choices), /fixture-deepseek-key/);
   assert.equal(fs.statSync(path.join(directory, 'private', 'credentials.json')).mode & 0o777, 0o600);
@@ -152,7 +153,7 @@ test('provider selection prompts once for a missing DeepSeek key and keeps crede
   assert.equal(reasoningEffort(session('deepseek'), { goalMode: true }), undefined);
   assert.throws(() => reasoningEffort(session('deepseek'), { effort: 'medium' }), /does not support/);
 });
-for (const [id, model] of [['abliteration', 'abliterated-model'], ['orcarouter', 'orca/orcacyber-zero-1.5']]) test(`${id} appears in the existing provider picker and uses hidden key setup`, async () => {
+for (const id of ['abliteration', 'orcarouter', 'experiential']) test(`${id} appears in the existing provider picker and uses hidden key setup`, async () => {
   let prompts = 0, choices;
   const ui = { interactive: true, event() {}, async secret() { prompts++; return 'synthetic-provider-key'; },
     async chooseOne(_title, items) { choices = items; return id; } };
@@ -160,7 +161,7 @@ for (const [id, model] of [['abliteration', 'abliterated-model'], ['orcarouter',
   assert.equal(provider.id, id); assert.ok(choices.some(choice => choice.value === provider.id));
   assert.equal(prompts, 1); assert.equal(apiKey(provider), 'synthetic-provider-key');
   assert.doesNotMatch(JSON.stringify(choices), /synthetic-provider-key/);
-  assert.equal((await chooseModel({ ...session(id) }, 'default', ui)).model, model);
+  assert.equal((await chooseModel({ ...session(id) }, 'default', ui)).model, BUILTINS[id].model);
   await ensureApiKey(provider, ui); assert.equal(prompts, 1);
 });
 test('model effort choices retain the current setting, reject unsupported levels and configure both execution backends', async () => {

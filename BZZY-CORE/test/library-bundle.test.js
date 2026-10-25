@@ -242,7 +242,7 @@ test('resource path metadata cannot carry private account identifiers in source 
   for (const [index, privateName] of privateNames.entries()) {
     process.env.BZZY_HOME = path.join(directory, 'private-path-source-' + index);
     skill('unsafe-metadata', 'global', { [privateName]: 'Benign resource bytes.\n' });
-    assert.throws(() => previewLibraryExport({ cwd }), /safe, intact portable package/);
+    assert.throws(() => previewLibraryExport({ cwd }), { code: 'LIBRARY_BLOCKED_ENTRIES' });
   }
   const target = recipient();
   for (const privateName of privateNames) {

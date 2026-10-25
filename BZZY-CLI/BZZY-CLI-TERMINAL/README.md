@@ -93,6 +93,10 @@ workflows and saved goal text. `bzzy library share` generates an expiring
 receiving host. Compare fingerprints and approve the recipient on the sender.
 Review exact files, then install only missing entries, optionally enabling the
 reviewed skills/agents. Existing names and availability are never overwritten.
+Choose Library types before review, or run `bzzy library share agents skills`
+to share only those types. A blocked entry shows its safe reason and file/line,
+with an explicit option to omit that whole entry and share the rest. No content
+is silently stripped, and unselected types are not scanned.
 The Relay must also be updated for Library codes. See
 [Library sharing](../../BZZY-CORE/docs/LIBRARY-SHARING.md).
 
@@ -210,6 +214,12 @@ then choose it from the model dropdown or use
 `bzzy --provider orcarouter --model orca/orcacyber-zero-1.5`.
 Cyber models appear when the key's workspace has the upstream access grant;
 see [OrcaRouter setup](../../BZZY-CORE/docs/ORCAROUTER.md).
+
+Experiential Labs is built in. Run `bzzy auth experiential`, then choose it in
+`/providers` or launch `bzzy --provider experiential`. Its default is
+`gpt-5.6-sol`; Core discovers other chat models and their capabilities from the
+authenticated catalog. `EXPLABS_API_KEY` is the alternative host environment
+setting. See [Experiential setup](../../BZZY-CORE/docs/EXPERIENTIAL.md).
 
 CLI stays terminal-oriented; persistent Agent management lives in iPhone.
 The terminal header shows Core host CPU and used/total RAM, refreshed roughly
@@ -438,8 +448,8 @@ Each execution receives allowlisted caller configuration and locally declared pr
 The existing runtime supports expiring session credentials with explicit control permissions and revocation. `bzzy service token SESSION` remains read-only; `bzzy service grants` lists grants and `bzzy service revoke GRANT_ID` revokes one. See the [integration guide](docs/INTEGRATION.md) for scoped clients and reconnect semantics. Full-project `/export` bundles remain private owner backups and can contain secrets; `/share` uses the separate credential-filtered portable policy.
 
 Open **Settings** from the top-right gear, use `/settings`, run `bzzy settings`,
-or launch `bzzy --settings` directly. It includes hidden DeepSeek, Abliteration
-and OrcaRouter API-key save/replacement and device
+or launch `bzzy --settings` directly. It includes hidden API-key save/replacement
+for Core's API-key providers, including Experiential Labs, and device
 pairing using the bundled Core Relay gateway. The main menu has four entries:
 **API keys**, **Default BZZY folder**, **Pair iPhone**, and **BZZY Core**.
 Open BZZY Core for status, Start, Stop, Restart and its independent model/effort

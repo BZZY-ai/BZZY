@@ -24,6 +24,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /share             Share this complete terminal through Relay with an expiring QR/code.
 /share library     Share skills, agents, workflows and saved goals through Relay.
 /library           Create a Library code or install missing entries from another host.
+/library share agents skills  Share only agents and skills; omit types for a checkbox picker.
 /import [CODE]     Import a Library or full terminal copy; omit CODE for hidden entry.
 /skills            Browse shared workflows; /skills sync copies Codex skills for all models.
 /agents            Create and view reusable specialist subagents for any supported model.

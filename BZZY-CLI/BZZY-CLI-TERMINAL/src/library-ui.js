@@ -7,6 +7,12 @@ import { wrap } from './terminal-format.js';
 const codePattern = /^BZZY-LIBRARY-[A-Za-z0-9_-]{43}$/;
 const fingerprint = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const names = { skill: 'Skill', agent: 'Specialist agent', workflow: 'Workflow', goal: 'Goal' };
+const shareTypes = { skill: 'Skills', agent: 'Agents', workflow: 'Workflows', goal: 'Goals' };
+const typeAliases = { skill: 'skill', skills: 'skill', agent: 'agent', agents: 'agent', workflow: 'workflow', workflows: 'workflow', goal: 'goal', goals: 'goal' };
+function shareKinds(values) {
+  if (!Array.isArray(values) || !values.length || values.some(value => !Object.hasOwn(shareTypes, value))) throw new Error('Choose at least one of skills, agents, workflows or goals.');
+  return [...new Set(values)].sort();
+}
 const count = value => Array.isArray(value) ? value.length : Number.isSafeInteger(value) && value >= 0 ? value : 0;
 const summary = totals => ['skills', 'agents', 'workflows', 'goals'].map(kind => `${count(totals?.[kind])} ${kind}`).join(' · ');
 const safeImportErrors = {
@@ -47,6 +53,24 @@ function check(ui, before) {
 }
 async function checked(ui, before, operation) { check(ui, before); const result = await operation(); check(ui, before); return result; }
 
+const blockedDetails = entry => `${entry.file || 'Package'}${entry.line ? ':' + entry.line : ''}\n${entry.reason}`;
+async function inspectBlockedEntry(ui, before, entry) {
+  let page = 0;
+  while (true) {
+    const lines = wrap(blockedDetails(entry), Math.max(1, (ui.output?.columns || 80) - 14));
+    page = Math.min(page, lines.length - 1);
+    const action = await checked(ui, before, () => ui.chooseOne(`Blocked · ${entry.name} · ${page + 1}/${lines.length}`, {
+      description: lines[page], descriptionRows: 1,
+      choices: [{ value: 'back', label: '← Back to blocked entries', selected: true },
+        ...(page + 1 < lines.length ? [{ value: 'next', label: 'Read next diagnostic line' }] : []),
+        ...(page ? [{ value: 'previous', label: 'Read previous diagnostic line' }] : [])],
+    }));
+    if (!action || action === 'back') return;
+    if (action === 'next' && page + 1 < lines.length) page++;
+    else if (action === 'previous' && page) page--;
+  }
+}
+
 async function inspectEntry(ui, before, backend, review, index) {
   const entry = review.entries[index];
   let fileIndex = 0, offset = 0, screenStart = 0;
@@ -83,7 +107,7 @@ export async function reviewLibrary(ui, before, backend, review, { importing = f
     const existing = new Set(conflicts.map(entry => JSON.stringify([entry.kind, entry.scope || 'global', entry.name])));
     const missing = review.entries.length - conflicts.length;
     const choice = await checked(ui, before, () => ui.chooseOne(importing ? 'Install missing Library entries' : 'Share BZZY Library', {
-      description: `${summary(review.totals)}\n${importing ? `${missing} missing entries · ${conflicts.length} entries already exist and will be skipped. Existing names and availability stay unchanged.` : `Current project and global Library, plus saved goal text.${review.excludedGoals?.length ? ` ${review.excludedGoals.length} blocked goals explicitly omitted.` : ''} Review the exact files below.`}\nProject definitions use this terminal’s directory. No credentials, chat history, permissions or verified outcomes are included.`,
+      description: `${summary(review.totals)}\n${importing ? `${missing} missing entries · ${conflicts.length} entries already exist and will be skipped. Existing names and availability stay unchanged.` : `Selected types: ${(review.kinds || Object.keys(shareTypes)).map(kind => shareTypes[kind]).join(', ')}.${review.excludedEntries?.length ? ` ${review.excludedEntries.length} blocked entries explicitly omitted.` : ''}${review.excludedGoals?.length ? ` ${review.excludedGoals.length} blocked goals explicitly omitted.` : ''} Review the exact files below.`}\nProject definitions use this terminal’s directory. No credentials, chat history, permissions or verified outcomes are included.`,
       descriptionRows: 7,
       choices: [{ value: 'back', label: '← Back without changes', selected: true },
         ...(importing ? [{ value: 'enable', label: 'Install missing & enable reviewed skills/agents', description: 'No scripts, agents or models start. Workflows stay unselected; goals remain saved text.' },
@@ -102,12 +126,38 @@ export async function reviewLibrary(ui, before, backend, review, { importing = f
   }
 }
 
-export async function shareLibrary(cwd, ui, { loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), ...options } = {}) {
-  terminal(ui); const before = context(ui, cwd), backend = await checked(ui, before, loadBundle);
-  let review, excludeGoalIds = [];
+export async function shareLibrary(cwd, ui, { loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), kinds, ...options } = {}) {
+  terminal(ui); const before = context(ui, cwd);
+  if (kinds === undefined) {
+    kinds = await checked(ui, before, () => ui.chooseMany('What do you want to share?', Object.entries(shareTypes).map(([value, label]) => ({ value, label, selected: true })),
+      { scope: 'library-types', hint: 'Space toggles · ↑/↓ moves · Enter reviews · Esc goes back', description: 'Only the selected Library types enter the review and expiring Relay code.' }));
+    if (!kinds?.length) return null;
+  }
+  const selectedKinds = shareKinds(kinds), backend = await checked(ui, before, loadBundle);
+  let review, excludeGoalIds = [], excludeEntries = [];
   while (!review) {
-    try { review = await checked(ui, before, () => backend.previewLibraryExport({ cwd: before.root, excludeGoalIds })); }
+    try { review = await checked(ui, before, () => backend.previewLibraryExport({ cwd: before.root, kinds: selectedKinds, excludeEntries, excludeGoalIds })); }
     catch (error) {
+      if (error?.code === 'LIBRARY_BLOCKED_ENTRIES' && Array.isArray(error.blockedEntries) && error.blockedEntries.length) {
+        const blocked = error.blockedEntries;
+        let action;
+        while (true) {
+          action = await checked(ui, before, () => ui.chooseOne('Some selected entries cannot be shared', {
+            description: `${blocked.length} blocked entries. Select an entry to read its complete safe diagnostic.`,
+            choices: [{ value: 'back', label: '← Back without sharing', selected: true },
+              { value: 'omit', label: `Omit these ${blocked.length} blocked entries and review the rest` },
+              ...blocked.map((entry, index) => ({ value: `blocked:${index}`, label: `${names[entry.kind]} · ${entry.name} · ${entry.scope}`,
+                description: blockedDetails(entry) }))],
+          }));
+          const index = /^blocked:(\d+)$/.exec(action);
+          if (!index || !blocked[Number(index[1])]) break;
+          await inspectBlockedEntry(ui, before, blocked[Number(index[1])]);
+        }
+        if (action !== 'omit') return null;
+        const pins = blocked.map(entry => Object.fromEntries(['kind', 'scope', 'name', 'id', 'revision', 'version'].map(key => [key, entry[key]])));
+        excludeEntries = [...new Map([...excludeEntries, ...pins].map(entry => [JSON.stringify(entry), entry])).values()];
+        continue;
+      }
       if (error?.code !== 'LIBRARY_BLOCKED_GOALS' || !Array.isArray(error.blockedGoals) || !error.blockedGoals.length) throw error;
       const blocked = error.blockedGoals;
       const action = await checked(ui, before, () => ui.chooseOne('Some saved goals cannot be shared', {
@@ -121,6 +171,7 @@ export async function shareLibrary(cwd, ui, { loadBundle = () => import('@bzzy/c
     }
   }
   try {
+    if (!Array.isArray(review.kinds) || JSON.stringify([...review.kinds].sort()) !== JSON.stringify(selectedKinds)) throw new Error('Update BZZY Core and CLI together to share selected Library types.');
     if (!await reviewLibrary(ui, before, backend, review)) return null;
     check(ui, before);
     return await shareLibraryBundle(before.root, review, ui, { ...options, assertContext: () => check(ui, before) });
@@ -194,7 +245,12 @@ export async function libraryCommand(argument, cwd, ui, options = {}) {
   }));
   check(ui, before);
   if (!action || action === 'back') return;
-  if (action === 'share') return shareLibrary(cwd, ui, options);
+  if (/^share(?:\s|$)/.test(action)) {
+    const requested = action.slice(5).trim();
+    if (!requested) return shareLibrary(cwd, ui, options);
+    const values = requested.toLowerCase().split(/[\s,]+/).map(value => typeAliases[value]);
+    return shareLibrary(cwd, ui, { ...options, kinds: shareKinds(values) });
+  }
   if (/^import(?:\s|$)/.test(action)) {
     const input = '/library ' + action; forgetPrivateImportInput(ui, input);
     return importLibrary(action.slice(6).trim(), cwd, ui, options);

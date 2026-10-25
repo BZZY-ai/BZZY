@@ -64,6 +64,7 @@ Usage:
   bzzy workflows use NAME --session ID --revision N [--workflow-revision N]
   bzzy workflows selection --session ID | clear --session ID --revision N
   bzzy library share                  Share skills, agents, workflows and goals by Relay code
+  bzzy library share agents skills    Share only the named Library types
   bzzy library import                 Install missing Library entries from a hidden code
   bzzy knowledge search TEXT           Search this engagement's knowledge and past chats
   bzzy knowledge review [SESSION]      Queue a bounded lesson review for an existing chat
@@ -157,7 +158,7 @@ Options:
 
 Chat commands: /goal (saved goals), /goal <objective>, /goal status|pause|resume|clear, /delegate, /validate, /solo,
 /new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /workflows, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /effort, /default, /usage, /settings, /help, /exit
-/providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
+/providers chooses a provider; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
 /default saves a separate preset for normal chat, delegate, validate, besties or parallel.

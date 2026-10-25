@@ -19,6 +19,34 @@ const bindingMatches = (a, b) => !b || a?.grantId === b.grantId && a?.resource =
 const fingerprint = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const excludedGoals = values => Array.isArray(values) && values.length <= 1024 && new Set(values).size === values.length && values.every(value =>
   typeof value === 'string' && /^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|template:[a-f0-9]{64})$/.test(value));
+const libraryKinds = ['skill', 'agent', 'workflow', 'goal'];
+
+// Validate and detach the local owner's reviewed selection before any await.
+// These fields are inventory pins, never transport or execution permissions.
+export function libraryShareSelection(input) {
+  const kinds = input.kinds === undefined ? libraryKinds : input.kinds,
+    excludeGoalIds = input.excludeGoalIds === undefined ? [] : input.excludeGoalIds,
+    excludeEntries = input.excludeEntries === undefined ? [] : input.excludeEntries;
+  if (!Array.isArray(kinds) || !kinds.length || kinds.length > libraryKinds.length || new Set(kinds).size !== kinds.length ||
+      [...kinds].some(kind => !libraryKinds.includes(kind))) fail('INVALID_REQUEST', 'Choose distinct Library resource types.');
+  if (!excludedGoals(excludeGoalIds) || [...excludeGoalIds].some(value => typeof value !== 'string') ||
+      excludeGoalIds.length && !kinds.includes('goal')) fail('INVALID_REQUEST', 'Review the exact saved goals excluded from this Library.');
+  if (!Array.isArray(excludeEntries) || excludeEntries.length > 1024) fail('INVALID_REQUEST', 'Review the exact entries excluded from this Library.');
+  const seen = new Set(), detached = [];
+  for (const entry of excludeEntries) {
+    object(entry, ['kind', 'scope', 'name', 'id', 'revision', 'version']);
+    if (Object.keys(entry).length !== 6 || !['skill', 'agent', 'workflow'].includes(entry.kind) || !kinds.includes(entry.kind) || !['project', 'global'].includes(entry.scope) ||
+        typeof entry.name !== 'string' || entry.name.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.name) ||
+        typeof entry.id !== 'string' || !entry.id.length || entry.id.length > 240 || /[\x00-\x1f\x7f-\x9f]/u.test(entry.id) ||
+        !Number.isSafeInteger(entry.revision) || entry.revision < 1 || typeof entry.version !== 'string' || !/^[a-f0-9]{64}$/.test(entry.version)) {
+      fail('INVALID_REQUEST', 'Review the exact entries excluded from this Library.');
+    }
+    const key = canonical([entry.kind, entry.scope, entry.name]);
+    if (seen.has(key)) fail('INVALID_REQUEST', 'Exclude each Library entry only once.');
+    seen.add(key); detached.push({ ...entry });
+  }
+  return { kinds: [...kinds].sort(), excludeGoalIds: [...excludeGoalIds], excludeEntries: detached };
+}
 const hashFile = async file => {
   const hash = createHash('sha256');
   for await (const bytes of fs.createReadStream(file)) hash.update(bytes);
@@ -61,17 +89,18 @@ export class ProjectTransferService {
     }
   }
   async createShare(input, { binding, authorize, exportArchive } = {}) {
-    object(input, ['sessionId', 'ttlSeconds', 'kind', 'cwd', 'expectedDigest', 'excludeGoalIds']);
+    object(input, ['sessionId', 'ttlSeconds', 'kind', 'cwd', 'expectedDigest', 'excludeGoalIds', 'kinds', 'excludeEntries']);
     const kind = input.kind ?? 'TERMINAL';
     if (!['AGENT', 'TERMINAL', 'LIBRARY'].includes(kind)) fail('INVALID_REQUEST', 'Choose an Agent, Terminal or Library share.');
     if (kind === 'LIBRARY') {
-      object(input, ['kind', 'cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds']);
-      if (typeof input.cwd !== 'string' || !path.isAbsolute(input.cwd) || !/^[a-f0-9]{64}$/.test(input.expectedDigest || '') || !excludedGoals(input.excludeGoalIds ?? [])) fail('INVALID_REQUEST', 'Review the current Library before sharing it.');
+      object(input, ['kind', 'cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries']);
+      if (typeof input.cwd !== 'string' || !path.isAbsolute(input.cwd) || !/^[a-f0-9]{64}$/.test(input.expectedDigest || '')) fail('INVALID_REQUEST', 'Review the current Library before sharing it.');
+      input = { ...input, ...libraryShareSelection(input) };
     } else { object(input, ['sessionId', 'ttlSeconds', 'kind']); uuid(input.sessionId); }
     // Only trusted Core Agent registry code may supply both callbacks. Purpose
     // strings in a session or remote request never authorize an Agent export.
     if (['AGENT', 'LIBRARY'].includes(kind) && (typeof authorize !== 'function' || typeof exportArchive !== 'function')) fail('OPERATION_DENIED', 'This sharing kind requires its trusted host registry.', 403);
-    const session = kind === 'LIBRARY' ? { cwd: input.cwd } : loadSession(input.sessionId);
+    const session = kind === 'LIBRARY' ? { cwd: input.cwd, expectedDigest: input.expectedDigest, ...libraryShareSelection(input) } : loadSession(input.sessionId);
     const checkAuthorization = () => {
       authorize?.();
       if (kind === 'LIBRARY') return;
@@ -251,7 +280,14 @@ export class CoreTerminalSharing {
   async #request(action, body) { this.#info ||= await ensureRuntime(); return runtimeRequest(this.#info, 'POST', `/v1/relay/${action}`, body); }
   async start() { await this.#request('connect', {}); return { ready: true }; }
   async createShare(input) { const result = await this.#request('share-create', input); return { ...result, renderQR: async () => result.terminalQR }; }
-  async createLibraryShare(input) { const result = await this.#request('library-share-create', input); return { ...result, renderQR: async () => result.terminalQR }; }
+  async createLibraryShare(input) {
+    object(input, ['cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries']);
+    if (typeof input.cwd !== 'string' || !path.isAbsolute(input.cwd) || !/^[a-f0-9]{64}$/.test(input.expectedDigest || '')) fail('INVALID_REQUEST', 'Review the current Library before sharing it.');
+    if (input.ttlSeconds !== undefined && (!Number.isSafeInteger(input.ttlSeconds) || input.ttlSeconds < 1 || input.ttlSeconds > TRANSFER_LIMITS.codeSeconds)) fail('INVALID_REQUEST', 'Choose a share-code lifetime of 1–600 seconds.');
+    const selected = { ...input, ...libraryShareSelection(input) };
+    const result = await this.#request('library-share-create', selected);
+    return { ...result, renderQR: async () => result.terminalQR };
+  }
   status(shareId) { return this.#request('share-status', { shareId }); }
   approveShare(input) { return this.#request('share-approve', input); }
   revokeShare(shareId) { return this.#request('share-revoke', { shareId }); }

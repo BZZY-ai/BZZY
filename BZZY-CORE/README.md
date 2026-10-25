@@ -101,6 +101,10 @@ Implemented:
   dynamic model discovery and model-specific effort/context metadata. See
   [Abliteration setup](docs/ABLITERATION.md).
 
+- Built-in Experiential Labs support through the Responses adapter, private
+  API-key setup and authenticated model/capability discovery. See
+  [Experiential setup](docs/EXPERIENTIAL.md).
+
 - Central session input admission for CLI and iOS, with authenticated handoff,
   durable request deduplication and uninterrupted reply observation. Clients
   submit explicit input without preclaiming a lease; see [shared input](docs/SESSION-INPUT.md).

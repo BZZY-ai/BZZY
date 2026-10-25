@@ -18,7 +18,14 @@ On the Mac, from the source project:
 bzzy library share
 ```
 
-Review the bundle and select **Create expiring Relay code**. The private screen
+Choose the types to include using Space and Enter, then review the bundle and
+select **Create expiring Relay code**. To share only agents and skills directly:
+
+```sh
+bzzy library share agents skills
+```
+
+The private screen
 shows a `BZZY-LIBRARY-…` code, source fingerprint, expiry and recipient requests.
 Keep the Mac online. `c` copies the code; `a` approves the exact recipient after
 comparing its full fingerprint with the receiving terminal.
@@ -44,7 +51,7 @@ as protocol text; no invitation URL is created.
 
 ## Contents and difference rules
 
-The source includes current-project and global skill, specialist-agent and
+The source includes the selected types of current-project and global skill, specialist-agent and
 workflow definitions, with complete skill resources. Goals include the owner's
 retained terminal objectives and imported goal templates, deduplicated by exact
 trimmed text. They carry no chat, source path, outcome, evidence, contract,
@@ -58,9 +65,12 @@ map to the receiving directory; global entries remain global. Specialist agents
 inherit the receiving chat's provider/model/effort.
 
 Credentials, account bindings, host paths and private case/evidence resources
-cannot enter portable definitions. Unsafe saved goals are reported using safe
-IDs; the sender can explicitly omit them and review the remaining bundle.
-Nothing is silently stripped. Other unsafe packages block sharing until fixed.
+cannot enter portable definitions. Blocked skills, agents and workflows show a
+safe reason and resource file/line when available, without exposing matched
+values. The sender can explicitly omit those whole entries and review the rest.
+Their exact identities, revisions and versions are pinned through archive creation.
+Unsafe goals retain the separate explicit omission flow using safe IDs. Nothing
+is silently stripped; unselected types are never scanned or copied.
 Use the full-session flow for the selected project's private history.
 
 ## Integrity, retry and limits

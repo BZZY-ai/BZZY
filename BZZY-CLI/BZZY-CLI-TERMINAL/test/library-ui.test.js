@@ -15,6 +15,7 @@ import { listRecords } from '@bzzy/core/engine/database.js';
 const code = 'BZZY-LIBRARY-' + 'L'.repeat(43), terminalCode = 'BZZY-TERMINAL-' + 'T'.repeat(43);
 const sender = 's'.repeat(43), recipient = 'r'.repeat(43), sourceDigest = 'e'.repeat(64);
 const blockedId = 'template:' + 'a'.repeat(64);
+const allKinds = ['agent', 'goal', 'skill', 'workflow'];
 let directory, cwd, previousHome;
 test.beforeEach(() => {
   previousHome = process.env.BZZY_HOME;
@@ -26,14 +27,19 @@ test.afterEach(() => {
   if (previousHome === undefined) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previousHome;
   fs.rmSync(directory, { recursive: true, force: true });
 });
-function mockUI({ answers = [], choices = [], secret = code } = {}) {
+function mockUI({ answers = [], choices = [], typeChoices = [], secret = code } = {}) {
   const ui = { interactive: true, json: false, input: { isTTY: true }, output: { isTTY: true },
-    events: [], prompts: [], frames: [], menus: [],
+    events: [], prompts: [], frames: [], menus: [], typeMenus: [],
     ask: async question => { ui.prompts.push(question); const answer = answers.shift(); return typeof answer === 'function' ? answer() : answer; },
     secret: async question => { ui.prompts.push(question); ui.usedHiddenInput = true; return secret; },
     chooseOne: async (title, offered) => {
       const content = await offered; ui.menus.push({ title, content, privateView: ui.privateView });
       const answer = choices.shift(); return typeof answer === 'function' ? answer(title, content) : answer;
+    },
+    chooseMany: async (title, choices, options) => {
+      ui.typeMenus.push({ title, choices, options });
+      const answer = typeChoices.length ? typeChoices.shift() : choices.filter(choice => choice.selected).map(choice => choice.value);
+      return typeof answer === 'function' ? answer(title, choices, options) : answer;
     },
     event(type, data) { ui.events.push({ type, ...data }); },
     tui: { value: 'Unsent draft', cursor: 5, schedule() { if (ui.privateView) ui.frames.push(JSON.stringify(ui.privateView)); }, notice() {} },
@@ -41,14 +47,20 @@ function mockUI({ answers = [], choices = [], secret = code } = {}) {
   return ui;
 }
 function review() {
-  return { id: 'reviewed-library', kind: 'library-export', sourceDigest, excludeGoalIds: [], excludedGoals: [], conflicts: [],
+  return { id: 'reviewed-library', kind: 'library-export', sourceDigest, kinds: [...allKinds], excludeEntries: [], excludedEntries: [], excludeGoalIds: [], excludedGoals: [], conflicts: [],
     entries: ['skill', 'agent', 'workflow', 'goal'].map(kind => ({ kind, name: 'reviewed-' + kind, scope: kind === 'agent' ? 'project' : 'global', description: 'Inspect the complete reviewed fixture.', files: [{ path: kind === 'skill' ? 'SKILL.md' : 'definition.json', bytes: 40, sha256: 'a'.repeat(64) }] })),
     totals: { skills: 1, agents: 1, workflows: 1, goals: 1, files: 4, bytes: 160 } };
+}
+function selectedReview(input, value = review()) {
+  const kinds = [...input.kinds].sort(), entries = value.entries.filter(entry => kinds.includes(entry.kind)
+    && !input.excludeEntries.some(pin => pin.kind === entry.kind && pin.scope === entry.scope && pin.name === entry.name));
+  return { ...value, kinds, entries, excludeEntries: [...input.excludeEntries], excludeGoalIds: [...input.excludeGoalIds],
+    totals: { ...Object.fromEntries(['skill', 'agent', 'workflow', 'goal'].map(kind => [kind + 's', entries.filter(entry => entry.kind === kind).length])), files: entries.length, bytes: entries.length * 40 } };
 }
 function backend(value = review()) {
   const calls = [];
   return { calls,
-    previewLibraryExport(input) { calls.push({ operation: 'preview', input }); return { ...value, excludeGoalIds: [...input.excludeGoalIds] }; },
+    previewLibraryExport(input) { calls.push({ operation: 'preview', input }); return selectedReview(input, value); },
     readDefinitionBundleFile(_review, input) { calls.push({ operation: 'read', input }); return { text: 'Complete reviewed fixture body.', sha256: 'a'.repeat(64), nextOffset: null }; },
     discardDefinitionBundleReview(item) { calls.push({ operation: 'discard', id: item.id }); },
   };
@@ -70,11 +82,147 @@ test('source code creation requires concrete four-kind review and forwards exact
   bundle.previewLibraryExport = input => { bundle.calls.push({ operation: 'preview', input }); return value; };
   assert.deepEqual(await shareLibrary(cwd, ui, { loadBundle: async () => bundle, relayLoader: async () => sourceTransport(transport) }), { state: 'complete' });
   assert.equal(ui.menus[0].title, 'Share BZZY Library');
+  assert.equal(ui.typeMenus.length, 1); assert.ok(ui.typeMenus[0].choices.every(choice => choice.selected));
   assert.equal(ui.menus[0].content.choices[0].value, 'back'); assert.equal(ui.menus[0].content.choices[0].selected, true);
   for (const kind of ['skills', 'agents', 'workflows', 'goals']) assert.ok(ui.menus[0].content.description.includes(`1 ${kind}`));
-  assert.deepEqual(transport.find(call => call.operation === 'create').input, { cwd, expectedDigest: sourceDigest, excludeGoalIds: [blockedId], ttlSeconds: 600 });
+  assert.deepEqual(transport.find(call => call.operation === 'create').input, { cwd, expectedDigest: sourceDigest, kinds: allKinds, excludeGoalIds: [blockedId], ttlSeconds: 600 });
   assert.equal(bundle.calls.at(-1).operation, 'discard');
   assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.events.length, 0);
+});
+
+test('selecting agents and skills limits the reviewed files and Relay source request to those types', async () => {
+  const ui = mockUI({ typeChoices: [['skill', 'agent']], choices: ['entry:0', 'back', 'entry:1', 'back', 'share'] });
+  const bundle = backend(), transport = [];
+  await shareLibrary(cwd, ui, { loadBundle: async () => bundle, relayLoader: async () => sourceTransport(transport) });
+  assert.deepEqual(bundle.calls.find(call => call.operation === 'preview').input, { cwd, kinds: ['agent', 'skill'], excludeEntries: [], excludeGoalIds: [] });
+  assert.deepEqual(transport.find(call => call.operation === 'create').input, { cwd, expectedDigest: sourceDigest, kinds: ['agent', 'skill'], ttlSeconds: 600 });
+  const menus = ui.menus.filter(menu => menu.title === 'Share BZZY Library');
+  assert.ok(menus.every(menu => menu.content.description.includes('0 workflows · 0 goals')));
+  assert.deepEqual(menus[0].content.choices.filter(row => row.value.startsWith('entry:')).map(row => row.label), [
+    'Skill · reviewed-skill · global', 'Specialist agent · reviewed-agent · project',
+  ]);
+  assert.deepEqual(bundle.calls.filter(call => call.operation === 'read').map(call => call.input.entryIndex), [0, 1]);
+  assert.ok(!JSON.stringify(ui.menus).includes('reviewed-workflow')); assert.ok(!JSON.stringify(ui.menus).includes('reviewed-goal'));
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('share agents skills shortcut skips the type picker and passes only the canonical requested types', async () => {
+  const ui = mockUI({ choices: ['share'] }), bundle = backend(), transport = [];
+  await libraryCommand('share agents skills', cwd, ui, { loadBundle: async () => bundle, relayLoader: async () => sourceTransport(transport) });
+  assert.equal(ui.typeMenus.length, 0);
+  assert.deepEqual(bundle.calls[0].input.kinds, ['agent', 'skill']);
+  assert.deepEqual(transport.find(call => call.operation === 'create').input, { cwd, expectedDigest: sourceDigest, kinds: ['agent', 'skill'], ttlSeconds: 600 });
+});
+
+test('cancelled or empty type selection touches neither Library packages nor Relay', async () => {
+  for (const selected of [null, []]) {
+    const ui = mockUI({ typeChoices: [selected] }); let packageLoads = 0, transportLoads = 0;
+    assert.equal(await shareLibrary(cwd, ui, { loadBundle: async () => { packageLoads++; }, relayLoader: async () => { transportLoads++; } }), null);
+    assert.equal(packageLoads, 0); assert.equal(transportLoads, 0); assert.equal(ui.menus.length, 0);
+    assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.events.length, 0);
+  }
+  const ui = mockUI(); let loads = 0;
+  await assert.rejects(libraryCommand('share anything', cwd, ui, { loadBundle: async () => { loads++; } }), /Choose at least one/);
+  await assert.rejects(shareLibrary(cwd, ui, { kinds: [], loadBundle: async () => { loads++; } }), /Choose at least one/);
+  assert.equal(loads, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('changing terminal while the type picker is open rejects before preview or Relay creation', async () => {
+  let resolveTypes, packageLoads = 0, transportLoads = 0;
+  const ui = mockUI({ typeChoices: [() => new Promise(resolve => { resolveTypes = resolve; })] });
+  const task = shareLibrary(cwd, ui, { loadBundle: async () => { packageLoads++; }, relayLoader: async () => { transportLoads++; } });
+  assert.equal(typeof resolveTypes, 'function'); ui.nextSession = { id: randomUUID() }; resolveTypes(['skill', 'agent']);
+  await assert.rejects(task, /host or terminal changed/);
+  assert.equal(packageLoads, 0); assert.equal(transportLoads, 0); assert.equal(ui.menus.length, 0);
+});
+
+test('blocked skill diagnostics offer explicit omission, redact matched values, and forward only exact version pins', async () => {
+  const pin = { kind: 'skill', scope: 'global', name: 'reviewed-skill', id: 'skill:reviewed-skill', revision: 2, version: 'b'.repeat(64) };
+  const matchedValue = 'private-fixture-binding@example.invalid';
+  const diagnostic = { ...pin, reasonCode: 'FIXED_ACCOUNT_BINDING', reason: 'Fixed account binding must be replaced with a recipient-owned account.', file: 'scripts/check.py', line: 27,
+    matchedValue };
+  const transport = [], bundle = backend();
+  bundle.previewLibraryExport = input => {
+    bundle.calls.push({ operation: 'preview', input });
+    if (!input.excludeEntries.length) throw Object.assign(new Error('A selected skill contains a fixed account binding.'), { code: 'LIBRARY_BLOCKED_ENTRIES', blockedEntries: [diagnostic] });
+    assert.deepEqual(input.excludeEntries, [pin]);
+    return { ...selectedReview(input), excludedEntries: [{ ...pin, reasonCode: diagnostic.reasonCode, reason: diagnostic.reason, file: diagnostic.file, line: diagnostic.line }] };
+  };
+  const ui = mockUI({ choices: [(_title, content) => {
+    assert.equal(transport.length, 0); assert.equal(bundle.calls.length, 1);
+    const row = content.choices.find(choice => choice.value === 'blocked:0');
+    assert.match(row.description, /scripts\/check\.py:27/); assert.ok(row.description.includes(diagnostic.reason));
+    assert.match(row.label, /reviewed-skill · global/); assert.ok(!JSON.stringify(content).includes(matchedValue));
+    assert.equal(content.choices[0].value, 'back'); assert.equal(content.choices[0].selected, true);
+    return 'omit';
+  }, (_title, content) => {
+    assert.equal(transport.length, 0, 'no code or archive is created before the remaining Library is reviewed');
+    assert.match(content.description, /1 blocked entries explicitly omitted/); assert.ok(!JSON.stringify(content).includes('reviewed-skill'));
+    return 'share';
+  }] });
+  await shareLibrary(cwd, ui, { loadBundle: async () => bundle, relayLoader: async () => sourceTransport(transport) });
+  assert.deepEqual(bundle.calls.filter(call => call.operation === 'preview').map(call => call.input.excludeEntries), [[], [pin]]);
+  assert.deepEqual(transport.find(call => call.operation === 'create').input, { cwd, expectedDigest: sourceDigest, kinds: allKinds, excludeEntries: [pin], ttlSeconds: 600 });
+  assert.ok(!JSON.stringify({ menus: ui.menus, events: ui.events, transport }).includes(matchedValue));
+  assert.equal(bundle.calls.at(-1).operation, 'discard'); assert.equal(listRecords('execution').length, 0);
+});
+
+test('Back from blocked package diagnostics preserves Library state and creates no source archive or Relay code', async () => {
+  const pin = { kind: 'skill', scope: 'global', name: 'reviewed-skill', id: 'skill:reviewed-skill', revision: 2, version: 'b'.repeat(64) };
+  const bundle = backend(), ui = mockUI({ choices: ['back'] }); let transportLoads = 0;
+  bundle.previewLibraryExport = input => {
+    bundle.calls.push({ operation: 'preview', input });
+    throw Object.assign(new Error('Cannot share selected package.'), { code: 'LIBRARY_BLOCKED_ENTRIES', blockedEntries: [{ ...pin, reason: 'Fixed account binding.', reasonCode: 'FIXED_ACCOUNT_BINDING', file: 'SKILL.md', line: 10 }] });
+  };
+  assert.equal(await shareLibrary(cwd, ui, { loadBundle: async () => bundle, relayLoader: async () => { transportLoads++; } }), null);
+  assert.equal(transportLoads, 0); assert.equal(bundle.calls.length, 1);
+  assert.deepEqual(bundle.calls[0].input.excludeEntries, []); assert.equal(ui.menus.length, 1);
+  assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.events.length, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('every blocked package has reachable complete diagnostic pages at normal and compact terminal sizes', async () => {
+  const blocked = Array.from({ length: 8 }, (_, index) => ({ kind: 'skill', scope: index % 2 ? 'project' : 'global', name: 'blocked-' + index,
+    id: 'skill:blocked-' + index, revision: 1, version: 'b'.repeat(64), reasonCode: 'PRIVATE_ACCOUNT',
+    reason: `Safe reason ${index}. Parameterize the reusable account configuration before sharing this package.`,
+    file: `scripts/${'resource-'.repeat(6)}${index}.py`, line: index + 10 }));
+  for (const [columns, rows] of [[100, 30], [50, 20]]) {
+    const ui = mockUI(), bundle = backend(), seen = new Map(blocked.map(entry => [entry.name, new Map()]));
+    Object.assign(ui.output, { columns, rows }); let nextEntry = 0, transportLoads = 0, pages = 0;
+    bundle.previewLibraryExport = input => {
+      bundle.calls.push({ operation: 'preview', input });
+      throw Object.assign(new Error('Selected packages cannot be shared.'), { code: 'LIBRARY_BLOCKED_ENTRIES', blockedEntries: blocked });
+    };
+    ui.chooseOne = async (title, content) => {
+      if (title === 'Some selected entries cannot be shared') {
+        assert.equal(content.choices[0].value, 'back'); assert.equal(content.choices[0].selected, true);
+        assert.equal(content.choices.filter(choice => choice.value.startsWith('blocked:')).length, blocked.length);
+        for (const entry of blocked) assert.ok(content.choices.some(choice => choice.label.includes(`${entry.name} · ${entry.scope}`)
+          && choice.description.includes(`${entry.file}:${entry.line}`) && choice.description.includes(entry.reason)));
+        return nextEntry < blocked.length ? `blocked:${nextEntry++}` : 'back';
+      }
+      const match = /^Blocked · (blocked-\d+) · (\d+)\/(\d+)$/.exec(title); assert.ok(match);
+      const [, name, page, total] = match; pages++;
+      assert.equal(content.descriptionRows, 1); assert.ok(!content.description.includes('\n'));
+      assert.ok(content.description.length <= columns - 14, 'one diagnostic page must fit the compact detail line');
+      seen.get(name).set(Number(page), content.description);
+      assert.equal(content.choices[0].value, 'back'); assert.equal(content.choices[0].selected, true);
+      if (Number(page) > 1) assert.ok(content.choices.some(choice => choice.value === 'previous'));
+      if (Number(page) < Number(total)) { assert.ok(content.choices.some(choice => choice.value === 'next')); return 'next'; }
+      return 'back';
+    };
+    assert.equal(await shareLibrary(cwd, ui, { loadBundle: async () => bundle, relayLoader: async () => { transportLoads++; } }), null);
+    for (const entry of blocked) assert.equal([...seen.get(entry.name).entries()].sort((a, b) => a[0] - b[0]).map(([, line]) => line).join(''), `${entry.file}:${entry.line}${entry.reason}`);
+    assert.ok(pages > blocked.length * 2); assert.equal(transportLoads, 0); assert.equal(bundle.calls.length, 1);
+  }
+});
+
+test('a Core that does not confirm selected types cannot create a share code', async () => {
+  for (const echoedKinds of [undefined, allKinds]) {
+    const ui = mockUI({ typeChoices: [['skill', 'agent']], choices: ['share'] }), bundle = backend(); let transportLoads = 0;
+    bundle.previewLibraryExport = () => ({ ...review(), kinds: echoedKinds });
+    await assert.rejects(shareLibrary(cwd, ui, { loadBundle: async () => bundle, relayLoader: async () => { transportLoads++; } }), /Update BZZY Core and CLI together/);
+    assert.equal(transportLoads, 0); assert.equal(ui.menus.length, 0); assert.equal(bundle.calls.at(-1).operation, 'discard');
+  }
 });
 
 test('Back and inspection navigate exact package text without loading or creating a Relay transfer', async () => {
@@ -208,6 +356,65 @@ test('actual terminal review accepts arrows/Enter after private transport releas
     ui.tui.drafts.set(session.id, { value: '/library import ' + code, cursor: 10 }); forgetPrivateImportInput(ui, '/library import ' + code);
     assert.equal(ui.tui.drafts.get(session.id).value, ''); assert.ok(!JSON.stringify(ui.tui.entries).includes(code));
   } finally { ui.reader?.close(); ui.tui.finishSelection(null); await task?.catch(() => {}); ui.close(); input.destroy(); output.destroy(); }
+});
+
+test('actual terminal type checkboxes use Space and Enter to review only agents and skills', async () => {
+  const session = createSession({ id: 'codex', backend: 'codex' }, cwd, 'offline-checkbox-fixture');
+  const input = new PassThrough(); Object.assign(input, { isTTY: true, isRaw: false, setRawMode(value) { this.isRaw = value; } });
+  const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 36, columns: 110 }); output.on('data', () => {});
+  const ui = new UI({ input, output, error: output, pet: false }); ui.setSession(session.id);
+  Object.assign(ui.tui, { value: 'Unsent draft', cursor: 5 }); const bundle = backend(); let transportLoads = 0, task;
+  const until = async check => { for (let attempt = 0; attempt < 500; attempt++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 2)); } assert.fail('Expected interactive type selection did not appear'); };
+  try {
+    task = shareLibrary(cwd, ui, { loadBundle: async () => bundle, relayLoader: async () => { transportLoads++; } });
+    await until(() => ui.tui.selection?.scope === 'library-types');
+    const rendered = ui.tui.content(100).join('\n');
+    assert.match(rendered, /Space toggles.*Enter reviews.*Esc goes back/);
+    assert.match(rendered, /Only the selected Library types enter the review and expiring Relay code\./);
+    assert.ok(!rendered.includes('Every participant reviews')); assert.ok(!rendered.includes('Enter starts'));
+    assert.deepEqual([...ui.tui.selection.selected].sort(), allKinds); assert.equal(bundle.calls.length, 0);
+    ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' });
+    ui.tui.key('', { name: 'down' }); ui.tui.key(' ', { name: 'space' });
+    assert.deepEqual([...ui.tui.selection.selected].sort(), ['agent', 'skill']); ui.tui.key('', { name: 'return' });
+    await until(() => ui.tui.selection?.title === 'Share BZZY Library' && !ui.tui.selection.loading);
+    assert.deepEqual(bundle.calls[0].input.kinds, ['agent', 'skill']);
+    assert.deepEqual(ui.tui.selection.choices.filter(choice => choice.value.startsWith('entry:')).map(choice => choice.value), ['entry:0', 'entry:1']);
+    assert.match(ui.tui.selection.description, /Selected types: Agents, Skills/);
+    ui.tui.key('', { name: 'escape' }); assert.equal(await task, null);
+    assert.equal(transportLoads, 0); assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.cursor, 5);
+    assert.equal(listRecords('execution').length, 0);
+  } finally { ui.reader?.close(); ui.tui.finishSelection(null); await task?.catch(() => {}); ui.close(); input.destroy(); output.destroy(); }
+});
+
+test('actual compact terminal can open and read every safe diagnostic line before returning without sharing', async () => {
+  const session = createSession({ id: 'codex', backend: 'codex' }, cwd, 'offline-diagnostic-fixture');
+  const input = new PassThrough(); Object.assign(input, { isTTY: true, isRaw: false, setRawMode(value) { this.isRaw = value; } });
+  const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 20, columns: 50 }); output.on('data', () => {});
+  const ui = new UI({ input, output, error: output, pet: false }); ui.setSession(session.id);
+  const bundle = backend(), reason = 'An account address is embedded. Parameterize it in the reusable text.', file = 'scripts/long-fixture-diagnostic-resource.py';
+  let task, transportLoads = 0; const visible = [];
+  const until = async check => { for (let attempt = 0; attempt < 500; attempt++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 2)); } assert.fail('Expected compact diagnostic state did not appear'); };
+  bundle.previewLibraryExport = () => { throw Object.assign(new Error('Selected skill cannot be shared.'), { code: 'LIBRARY_BLOCKED_ENTRIES', blockedEntries: [{
+    kind: 'skill', scope: 'global', name: 'fixture-skill', id: 'skill:fixture-skill', revision: 1, version: 'b'.repeat(64), reason, file, line: 27,
+  }] }); };
+  try {
+    task = shareLibrary(cwd, ui, { kinds: ['skill'], loadBundle: async () => bundle, relayLoader: async () => { transportLoads++; } });
+    await until(() => ui.tui.selection?.title === 'Some selected entries cannot be shared' && !ui.tui.selection.loading);
+    ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'return' });
+    await until(() => ui.tui.selection?.title.startsWith('Blocked ·') && !ui.tui.selection.loading);
+    while (true) {
+      const picker = ui.tui.selection; ui.tui.selectionHeight = 7;
+      assert.ok(ui.tui.content(48).join('\n').includes(picker.description), 'the whole diagnostic page is visible in the compact picker');
+      visible.push(picker.description);
+      if (!picker.choices.some(choice => choice.value === 'next')) { ui.tui.key('', { name: 'escape' }); break; }
+      ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'return' });
+      await until(() => ui.tui.selection?.title.startsWith('Blocked ·') && ui.tui.selection.title !== picker.title && !ui.tui.selection.loading);
+    }
+    assert.equal(visible.join(''), `${file}:27${reason}`);
+    await until(() => ui.tui.selection?.title === 'Some selected entries cannot be shared' && !ui.tui.selection.loading);
+    ui.tui.key('', { name: 'escape' }); assert.equal(await task, null); assert.equal(transportLoads, 0);
+    assert.equal(listRecords('execution').length, 0);
+  } finally { ui.close(); await task?.catch(() => {}); input.destroy(); output.destroy(); }
 });
 
 test('library menu Back returns without starting inference, transport or package operations', async () => {

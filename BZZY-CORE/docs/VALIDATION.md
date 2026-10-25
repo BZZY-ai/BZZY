@@ -1,3 +1,46 @@
+# Selective Library sharing and Experiential Labs (2026-10-25)
+
+Final Node.js 24/macOS suites: **725 Core tests passed, 2 skipped** (727 total)
+and **690 CLI tests passed, 21 skipped** (711 total), zero failures. Core/CLI
+syntax and whitespace checks pass. Fixtures use synthetic credentials, private
+temporary homes on the internal disk, local HTTP catalogs and isolated Relays.
+Running installations, private Library definitions and the deployed Relay were
+not changed. No live inference or production share invitation was created.
+
+Library sharing now selects resource types before inspection, including the
+direct `bzzy library share agents skills` route. Tests verify unselected types
+are not scanned or exported; malformed, empty and sparse selectors fail closed.
+Blocked packages expose constant reason text and safe resource file/line metadata
+without matched account values, secrets, raw causes or private filenames. Whole
+entries require explicit omission with exact identity, scope, revision and version
+pins. Changed or missing exclusions and source-digest mismatches fail before an
+invitation is created. Encrypted subset-transfer fixtures verify these selections
+through the local-owner facade, gateway and archive builder. Portability checks
+and v1 ZIP behavior remain intact; unsafe bytes are never silently stripped.
+
+Terminal coverage includes real keyboard type selection, cancellation and stale
+context, exact omission forwarding, and complete blocked-entry diagnostic paging
+on compact terminals. The multi-choice picker now honors its own description
+and hint instead of showing participant-validation instructions for Library types.
+
+Experiential Labs is discovered through Core's provider registry and the existing
+API-key submenu, including hidden replacement and environment override handling.
+Authenticated catalog fixtures cover model slugs, organization models, bounded
+pagination, repeated/incomplete pages, context/modalities, incompatible routes,
+reasoning intersections and default-only reasoning when the intersection is empty.
+Credential tests verify private storage, sanitized failures, redirect rejection,
+subscription/tool environment exclusion and injection only into the selected API
+backend. Skills and specialist-agent availability and independent coordinator /
+consensus-compactor selections use the existing execution paths.
+
+Launch tests cover the exact documented default, discovered models, non-reasoning
+models and unknown manual IDs without inheriting the template ChatGPT model's
+capabilities. Installed Codex 0.163.0 additionally accepted the conservative
+unknown-model catalog through initialization and model listing in an empty
+temporary home, without a thread, turn, inference or real authentication.
+Live paid inference/tool-call behavior and native Linux execution remain
+unverified. See [Experiential setup](EXPERIENTIAL.md) for upstream contract limits.
+
 # Relay Library sharing and incremental full-session copies (2026-10-25)
 
 Final Node.js 24/macOS suites: **707 Core tests passed, 2 skipped** (709 total),

@@ -20,7 +20,7 @@ test('one durable library exposes the same enabled workflow to every provider', 
  assert.throws(() => readSkill(skill.name), /disabled/);
  skill = setSkillEnabled(skill.name, true, skill.revision);
  assert.throws(() => setSkillEnabled(skill.name, false, 1), /changed/);
- for (const provider of ['codex', 'claude', 'deepseek', 'abliteration', 'orcarouter']) {
+ for (const provider of ['codex', 'claude', 'deepseek', 'abliteration', 'orcarouter', 'experiential']) {
   const session = createSession(getProvider(provider), directory), host = new ToolHost(session, { event() {} });
   assert.ok(taskTools(session).some(tool => tool.name === 'read_skill'));
   assert.equal((await host.call('list_skills', {})).skills[0].name, skill.name);

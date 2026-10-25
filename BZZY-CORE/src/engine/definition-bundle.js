@@ -19,6 +19,10 @@ export const LIBRARY_BUNDLE_LIMITS = Object.freeze({ ...DEFINITION_BUNDLE_LIMITS
 const payloadLimit = 60 * 1024 * 1024, reviews = new Map(), lifetime = 30 * 60 * 1000;
 const agentFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
 const fail = (message, code = 'DEFINITION_BUNDLE') => { throw Object.assign(new Error(message), { code }); };
+const portabilityFailure = (message, reasonCode, line) => {
+  throw Object.assign(new Error(message), { code: 'DEFINITION_BUNDLE', reasonCode,
+    ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}) });
+};
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const name = value => typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value.length <= 64;
 const scope = value => ['global', 'project'].includes(value);
@@ -36,6 +40,7 @@ const privateResource = value => value.split('/').some(part => /^(?:auth|credent
   /\.(?:pem|key|p12|pfx|keychain|sqlite|db)$/i.test(part));
 const placeholder = value => !value || /^(?:\$[A-Z_][A-Z0-9_]*|\$\{[^}]+\}|<[^>]+>|\[redacted\])$/i.test(value);
 const credentialField = /^(?:api[_-]?key|(?:access|refresh|auth|oauth)[_-]?token|token|password|passwd|secret|cookie|authorization|account[_-]?id|email)$/i;
+const lineAt = (text, offset) => text.slice(0, offset).split('\n').length;
 function credentialSchema(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   if (Object.keys(value).length === 1 && typeof value.$ref === 'string' && /^#\/[a-zA-Z0-9_/-]+$/.test(value.$ref)) return true;
@@ -44,17 +49,23 @@ function credentialSchema(value) {
     ['minLength', 'maxLength'].every(key => value[key] === undefined || Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 1048576);
 }
 function portable(data, context) {
-  const text = data.toString('utf8'); assertShareText(text, sharedSecrets());
-  if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text) ||
-      /(?:\/Users\/|\/home\/|\/Volumes\/|\/~?\.bzzy\/|~\/(?:\.codex|\.claude|\.ssh)\/)/i.test(text) ||
-      [context.cwd, context.hostHome, os.homedir(), ...(context.privateRoots || [])].some(root => typeof root === 'string' && root.length > 3 && text.includes(root))) fail('Reusable definitions contain private account or host-path data. Parameterize it before exporting.');
+  const text = data.toString('utf8');
+  try { assertShareText(text, sharedSecrets()); }
+  catch (error) { throw Object.assign(error, { reasonCode: 'CREDENTIAL' }); }
+  const account = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.exec(text);
+  if (account) portabilityFailure('Reusable definitions contain private account or host-path data. Parameterize it before exporting.', 'PRIVATE_ACCOUNT', lineAt(text, account.index));
+  const hostPath = /(?:\/Users\/|\/home\/|\/Volumes\/|\/~?\.bzzy\/|~\/(?:\.codex|\.claude|\.ssh)\/)/i.exec(text);
+  const privateOffsets = [context.cwd, context.hostHome, os.homedir(), ...(context.privateRoots || [])]
+    .filter(root => typeof root === 'string' && root.length > 3).map(root => text.indexOf(root)).filter(offset => offset >= 0);
+  if (hostPath) privateOffsets.push(hostPath.index);
+  if (privateOffsets.length) portabilityFailure('Reusable definitions contain private account or host-path data. Parameterize it before exporting.', 'PRIVATE_HOST_PATH', lineAt(text, Math.min(...privateOffsets)));
   let json = false;
   try {
     const parsed = JSON.parse(text); json = true;
     const visit = value => {
       if (!value || typeof value !== 'object') return;
       for (const [key, item] of Object.entries(value)) {
-        if (credentialField.test(key) && item !== null && !(typeof item === 'string' && placeholder(item)) && !credentialSchema(item)) fail('Reusable definitions contain a literal credential or account binding.');
+        if (credentialField.test(key) && item !== null && !(typeof item === 'string' && placeholder(item)) && !credentialSchema(item)) portabilityFailure('Reusable definitions contain a literal credential or account binding.', 'CREDENTIAL_LITERAL');
         visit(item);
       }
     };
@@ -65,7 +76,7 @@ function portable(data, context) {
     const literal = match[1] ?? match[2], value = literal ?? match[3];
     const expression = literal === undefined && (/^(?:null|None|undefined|str|string|number|integer|boolean|object|array|true|false)$/.test(value) ||
       json && /^[{[]/.test(value) || /^(?:process\.env|os\.environ|config[.[]|bindings?[.[]|credentials?[.[])/.test(value));
-    if (!placeholder(value) && !expression) fail('Reusable definitions contain a literal credential or account binding.');
+    if (!placeholder(value) && !expression) portabilityFailure('Reusable definitions contain a literal credential or account binding.', 'CREDENTIAL_LITERAL', lineAt(text, match.index + (match[0].match(/^\s*/u)?.[0].length || 0)));
   }
 }
 function regular(file, maximum = DEFINITION_BUNDLE_LIMITS.fileBytes, identity = false) {
@@ -148,37 +159,115 @@ function libraryPathSafe(target) {
   }
 }
 
-function collect(context, { allowEmpty = false, inheritSelection = false, maximum = DEFINITION_BUNDLE_LIMITS.definitions } = {}) {
+const libraryKinds = ['skill', 'agent', 'workflow', 'goal'];
+const excludedEntryFields = ['kind', 'scope', 'name', 'id', 'revision', 'version'];
+const entryKey = entry => JSON.stringify([entry.kind, entry.scope, entry.name]);
+function chosenKinds(value = libraryKinds) {
+  if (!Array.isArray(value) || !value.length || value.length > libraryKinds.length || new Set(value).size !== value.length || [...value].some(kind => !libraryKinds.includes(kind))) {
+    fail('Choose one or more Library kinds: skill, agent, workflow or goal.');
+  }
+  return [...value].sort();
+}
+function definitionExclusions(value = [], kinds) {
+  if (!Array.isArray(value) || value.length > LIBRARY_BUNDLE_LIMITS.definitions) fail('Choose a bounded list of exact Library entries to exclude.');
+  const seen = new Set();
+  return [...value].map(entry => {
+    object(entry, excludedEntryFields);
+    if (Object.keys(entry).length !== excludedEntryFields.length || !['skill', 'agent', 'workflow'].includes(entry.kind) || !kinds.includes(entry.kind) ||
+      !scope(entry.scope) || !name(entry.name) || typeof entry.id !== 'string' || !entry.id || entry.id.length > 240 || /[\x00-\x1f\x7f-\x9f]/u.test(entry.id) ||
+      !Number.isSafeInteger(entry.revision) || entry.revision < 1 || !hash(entry.version) || seen.has(entryKey(entry))) fail('Exclude only exact, revision-pinned entries from the selected Library kinds.');
+    seen.add(entryKey(entry));
+    return Object.fromEntries(excludedEntryFields.map(field => [field, entry[field]]));
+  }).sort((a, b) => entryKey(a).localeCompare(entryKey(b)));
+}
+const definitionPin = (kind, scope, record) => ({ kind, scope, name: record.name, id: record.id || record.name,
+  revision: record.revision, version: record.version });
+function omitDefinition(pin, state, pins) {
+  const excluded = state?.exclusions.get(entryKey(pin));
+  if (!excluded) return false;
+  if (digest(excluded) !== digest(pin)) fail('An excluded Library entry changed. Review its current version before omitting it.', 'STALE_REVIEW');
+  state.found.add(entryKey(pin)); state.excludedEntries.push({ ...pin, reason: 'Explicitly excluded by the owner.' });
+  pins.push({ ...pin, kind: 'excluded-' + pin.kind }); return true;
+}
+const blockedReasons = Object.freeze({
+  CREDENTIAL: 'A configured credential or recognizable secret pattern was detected.',
+  CREDENTIAL_LITERAL: 'A literal credential or account value is embedded. Use an environment reference or placeholder.',
+  PRIVATE_ACCOUNT: 'An account address is embedded. Parameterize it in the reusable text.',
+  PRIVATE_HOST_PATH: 'A private host path is embedded. Parameterize it in the reusable text.',
+  PRIVATE_RESOURCE: 'The package contains private case, evidence, binding or runtime resources.',
+  RESOURCE_PATH: 'The package contains an unsafe resource path.',
+  RESOURCE_TYPE: 'A resource is linked, oversized or is not a regular file.',
+  RESOURCE_IO: 'A resource is missing or cannot be read safely.',
+  CONTENT_CHANGED: 'The resource bytes no longer match the saved immutable version.',
+  METADATA: 'SKILL.md metadata does not match the registered package.',
+  PACKAGE_INVALID: 'The package failed its inventory, metadata or integrity validation.',
+});
+function blockedDefinition(pin, error, fallback = 'PACKAGE_INVALID', file) {
+  let reasonCode = error?.reasonCode;
+  if (!Object.hasOwn(blockedReasons, reasonCode)) {
+    const message = error?.message || '';
+    if (['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR'].includes(error?.code)) reasonCode = 'RESOURCE_IO';
+    else if (error?.code === 'ELOOP' || /^(?:Skill import does not accept symbolic|Skill files must be bounded)/.test(message)) reasonCode = 'RESOURCE_TYPE';
+    else if (error?.code === 'WORKFLOW_PIN_INVALID' || message === 'Skill source changed. Run sync again.') reasonCode = 'CONTENT_CHANGED';
+    else if (message === 'Skill contains an unsafe, hidden or authentication path.') reasonCode = 'RESOURCE_PATH';
+    else if (/^(?:SKILL\.md|Invalid quoted skill metadata|Use a lowercase hyphenated name)/.test(message)) reasonCode = 'METADATA';
+    else if (/^(?:Sharing blocked: selected context contains a credential\.|Workflows cannot contain credentials|Workflow text contains credential-like)/.test(message)) reasonCode = 'CREDENTIAL';
+    else if (/^(?:Reusable subagents cannot contain credentials|Workflows cannot embed credentials)/.test(message)) reasonCode = 'CREDENTIAL_LITERAL';
+    else reasonCode = fallback;
+  }
+  return { ...pin, reasonCode, reason: blockedReasons[reasonCode], ...(file ? { file } : {}),
+    ...(Number.isSafeInteger(error?.line) && error.line > 0 ? { line: error.line } : {}) };
+}
+
+function collect(context, { allowEmpty = false, inheritSelection = false, maximum = DEFINITION_BUNDLE_LIMITS.definitions,
+  kinds = ['skill', 'agent'], selection } = {}) {
   const skills = [], agents = [], files = [], pins = [];
   for (const selected of ['global', 'project']) {
-    for (const item of pageAll(offset => listSkills({ projectRoot: context.projectRoot, projectId: context.projectId, scope: selected, offset, limit: 100 }), 'skills', maximum)) {
+    if (kinds.includes('skill')) for (const item of pageAll(offset => listSkills({ projectRoot: context.projectRoot, projectId: context.projectId, scope: selected, offset, limit: 100 }), 'skills', maximum)) {
       const options = { scope: selected, projectId: context.projectId }, record = getRecord('core.skill', item.id || skillStorageId(item.name, options));
-      if (!record || record.version !== item.version || !Array.isArray(record.files) || digest(record.files) !== record.version)
+      if (!record || record.version !== item.version || !selection && (!Array.isArray(record.files) || digest(record.files) !== record.version))
         fail('A skill inventory changed. Preview the definitions again.', 'STALE_REVIEW');
-      inspectSkill(record.id || record.name, options);
-      if (record.files.some(file => privateResource(file.path))) fail(`Skill “${item.name}” contains private case, evidence, binding or runtime resources and cannot be exported as reusable behavior.`);
+      const pin = definitionPin('skill', selected, record);
+      if (omitDefinition(pin, selection, pins)) continue;
+      let resourceFile, phase = 'PACKAGE_INVALID';
       try {
+        if (!Array.isArray(record.files) || digest(record.files) !== record.version) portabilityFailure('The skill inventory no longer matches its immutable version.', 'CONTENT_CHANGED');
+        inspectSkill(record.id || record.name, options);
+        if (record.files.some(file => privateResource(file.path))) portabilityFailure(`Skill “${item.name}” contains private case, evidence, binding or runtime resources and cannot be exported as reusable behavior.`, 'PRIVATE_RESOURCE');
         const checked = importSkill(skillDirectory(record), { ...options, preview: true, expectedVersion: record.version });
+        const candidateFiles = [];
         const resources = record.files.map(file => {
-          if (!safePath(file.path)) fail('Unsafe reusable skill path.');
+          resourceFile = undefined; phase = 'RESOURCE_PATH';
+          if (!safePath(file.path)) portabilityFailure('Unsafe reusable skill path.', 'RESOURCE_PATH');
           portable(Buffer.from(file.path), context);
+          resourceFile = file.path; phase = 'RESOURCE_TYPE';
           const data = regular(path.join(skillDirectory(record), file.path));
-          if (data.length !== file.bytes || digest(data) !== file.sha256) fail('Immutable skill content changed.');
-          portable(data, context); files.push({ path: `skills/${selected}/${record.name}/${file.path}`, data }); return { ...file };
+          if (data.length !== file.bytes || digest(data) !== file.sha256) portabilityFailure('Immutable skill content changed.', 'CONTENT_CHANGED');
+          portable(data, context); candidateFiles.push({ path: `skills/${selected}/${record.name}/${file.path}`, data }); return { ...file };
         });
-        if (checked.name !== record.name || checked.description !== record.description) fail('Skill metadata changed.');
+        resourceFile = 'SKILL.md'; phase = 'METADATA';
+        if (checked.name !== record.name || checked.description !== record.description) portabilityFailure('Skill metadata changed.', 'METADATA');
+        files.push(...candidateFiles);
         skills.push({ name: record.name, description: record.description, scope: selected, version: record.version, files: resources });
         pins.push({ kind: 'skill', id: record.id || record.name, revision: record.revision, version: record.version });
-      } catch { fail(`Skill “${item.name}” is not a safe, intact portable package. Review its resources before exporting.`); }
+      } catch (error) {
+        if (selection) selection.blockedEntries.push(blockedDefinition(pin, error, phase, resourceFile));
+        else if (error.reasonCode === 'PRIVATE_RESOURCE') throw error;
+        else fail(`Skill “${item.name}” is not a safe, intact portable package. Review its resources before exporting.`);
+      }
     }
-    for (const item of pageAll(offset => listSubagentDefinitions({ cwd: context.cwd, scope: selected, offset, limit: 100 }), 'subagents', maximum)) {
+    if (kinds.includes('agent')) for (const item of pageAll(offset => listSubagentDefinitions({ cwd: context.cwd, scope: selected, offset, limit: 100 }), 'subagents', maximum)) {
       const record = getSubagentDefinition(item.name, { cwd: context.cwd, scope: selected });
-      const definition = normalizeSubagentDefinition(Object.fromEntries(agentFields.filter(key => Object.hasOwn(record, key) &&
-        (!inheritSelection || !['provider', 'model', 'effort'].includes(key))).map(key => [key, record[key]])));
-      const data = Buffer.from(JSON.stringify(definition, null, 2) + '\n'); portable(data, context);
-      const file = `agents/${selected}/${record.name}.json`, resource = inventoryFile(file, data);
-      files.push({ path: file, data }); agents.push({ name: record.name, description: record.description, scope: selected, version: digest(definition), file, bytes: resource.bytes, sha256: resource.sha256 });
-      pins.push({ kind: 'agent', id: record.id, revision: record.revision, version: record.version });
+      const pin = definitionPin('agent', selected, record);
+      if (omitDefinition(pin, selection, pins)) continue;
+      try {
+        const definition = normalizeSubagentDefinition(Object.fromEntries(agentFields.filter(key => Object.hasOwn(record, key) &&
+          (!inheritSelection || !['provider', 'model', 'effort'].includes(key))).map(key => [key, record[key]])));
+        const data = Buffer.from(JSON.stringify(definition, null, 2) + '\n'); portable(data, context);
+        const file = `agents/${selected}/${record.name}.json`, resource = inventoryFile(file, data);
+        files.push({ path: file, data }); agents.push({ name: record.name, description: record.description, scope: selected, version: digest(definition), file, bytes: resource.bytes, sha256: resource.sha256 });
+        pins.push({ kind: 'agent', id: record.id, revision: record.revision, version: record.version });
+      } catch (error) { if (selection) selection.blockedEntries.push(blockedDefinition(pin, error)); else throw error; }
     }
   }
   if (skills.length + agents.length > maximum) fail('The reusable-definition library exceeds this ZIP’s definition limit.');
@@ -344,7 +433,7 @@ export function readDefinitionBundleFile(review, { cwd = process.cwd(), entryInd
   const resource = entry.files.find(item => item.path === file);
   if (!resource) fail('The file is not in the reviewed definition.');
   if (saved.public.kind === 'library-export') {
-    if (collectLibrary(saved.context, { excludeGoalIds: review.excludeGoalIds }).sourceDigest !== review.sourceDigest) fail('A source library entry changed. Preview the Library share again.', 'STALE_REVIEW');
+    if (collectLibrary(saved.context, { excludeGoalIds: review.excludeGoalIds, kinds: review.kinds, excludeEntries: review.excludeEntries }).sourceDigest !== review.sourceDigest) fail('A source library entry changed. Preview the Library share again.', 'STALE_REVIEW');
   } else if (saved.public.kind === 'definition-export') {
     for (const pin of saved.pins) {
       const current = getRecord(pin.kind === 'skill' ? 'core.skill' : 'core.subagent.definition', pin.id);
@@ -367,31 +456,43 @@ const goalName = definition => 'goal-' + digest(definition).slice(0, 48);
 const goalDescription = objective => [...objective.split(/\r?\n/u)[0]].slice(0, 160).join('');
 const goalReference = /^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|template:[a-f0-9]{64})$/;
 function goalExclusions(value) {
-  if (!Array.isArray(value) || value.length > LIBRARY_BUNDLE_LIMITS.definitions || new Set(value).size !== value.length || value.some(id => typeof id !== 'string' || !goalReference.test(id))) fail('Choose a bounded list of saved goals to exclude from this Library share.');
+  if (!Array.isArray(value) || value.length > LIBRARY_BUNDLE_LIMITS.definitions || new Set(value).size !== value.length || [...value].some(id => typeof id !== 'string' || !goalReference.test(id))) fail('Choose a bounded list of saved goals to exclude from this Library share.');
   return [...value].sort();
 }
-function collectLibrary(context, { excludeGoalIds = [] } = {}) {
+function collectLibrary(context, { excludeGoalIds = [], kinds, excludeEntries = [] } = {}) {
+  kinds = chosenKinds(kinds);
+  const selectedExclusions = definitionExclusions(excludeEntries, kinds);
+  const selection = { exclusions: new Map(selectedExclusions.map(entry => [entryKey(entry), entry])), found: new Set(), excludedEntries: [], blockedEntries: [] };
   const exclusions = new Set(goalExclusions(excludeGoalIds)), excludedGoals = [], blockedGoals = [], found = new Set();
-  const content = collect(context, { allowEmpty: true, inheritSelection: true, maximum: LIBRARY_BUNDLE_LIMITS.definitions });
+  if (!kinds.includes('goal') && exclusions.size) fail('Saved-goal exclusions require the goal Library kind.');
+  const content = collect(context, { allowEmpty: true, inheritSelection: true, maximum: LIBRARY_BUNDLE_LIMITS.definitions, kinds, selection });
   const workflows = [], goals = [];
   const add = (kind, scope, definition, pin) => {
     const data = Buffer.from(JSON.stringify(definition, null, 2) + '\n');
-    try { portable(data, { ...context, privateRoots: pin.cwd ? [pin.cwd] : [] }); }
-    catch { fail(`${kind === 'goal' ? 'Saved goal' : 'Workflow'} “${definition.name || goalName(definition)}” contains private credentials, account bindings or host paths. Nothing was shared. Parameterize the reusable text before sharing.`, 'LIBRARY_PRIVATE_CONTENT'); }
+    portable(data, { ...context, privateRoots: pin.cwd ? [pin.cwd] : [] });
     const name = definition.name || goalName(definition), file = kind === 'goal' ? `goals/${name}.json` : `workflows/${scope}/${name}.json`;
     const resource = inventoryFile(file, data), item = { name, description: kind === 'goal' ? goalDescription(definition.objective) : definition.description,
       scope, version: digest(definition), file, bytes: resource.bytes, sha256: resource.sha256 };
     content.files.push({ path: file, data }); content.pins.push(pin);
     (kind === 'goal' ? goals : workflows).push(item);
   };
-  for (const scope of ['global', 'project']) {
+  if (kinds.includes('workflow')) for (const scope of ['global', 'project']) {
     for (const summary of pageAll(offset => listWorkflows({ cwd: context.cwd, scope, offset, limit: 100 }), 'workflows', LIBRARY_BUNDLE_LIMITS.definitions)) {
-      const record = getWorkflow(summary.name, { cwd: context.cwd, scope }), definition = normalizeWorkflow({ name: record.name, description: record.description, instructions: record.instructions });
-      if (record.version !== digest(definition)) fail('A workflow changed. Preview the Library share again.', 'STALE_REVIEW');
-      add('workflow', scope, definition, { kind: 'workflow', id: record.id, revision: record.revision, version: record.version });
+      const pin = definitionPin('workflow', scope, summary);
+      if (omitDefinition(pin, selection, content.pins)) continue;
+      try {
+        const record = getWorkflow(summary.name, { cwd: context.cwd, scope });
+        if (digest(definitionPin('workflow', scope, record)) !== digest(pin)) fail('A workflow changed. Preview the Library share again.', 'STALE_REVIEW');
+        const definition = normalizeWorkflow({ name: record.name, description: record.description, instructions: record.instructions });
+        if (record.version !== digest(definition)) fail('A workflow changed. Preview the Library share again.', 'STALE_REVIEW');
+        add('workflow', scope, definition, { kind: 'workflow', id: record.id, revision: record.revision, version: record.version });
+      } catch (error) {
+        if (error?.code === 'STALE_REVIEW') throw error;
+        selection.blockedEntries.push(blockedDefinition(pin, error));
+      }
     }
   }
-  for (const goal of pageAll(offset => listSavedGoals({ offset, limit: 100 }), 'goals', LIBRARY_BUNDLE_LIMITS.definitions)) {
+  if (kinds.includes('goal')) for (const goal of pageAll(offset => listSavedGoals({ offset, limit: 100 }), 'goals', LIBRARY_BUNDLE_LIMITS.definitions)) {
     found.add(goal.id);
     let definition, reason;
     try { definition = normalizeGoalTemplate({ objective: goal.objective }); portable(Buffer.from(JSON.stringify(definition)), { ...context, privateRoots: goal.cwd ? [goal.cwd] : [] }); }
@@ -404,6 +505,13 @@ function collectLibrary(context, { excludeGoalIds = [] } = {}) {
     if (reason) { blockedGoals.push({ id: goal.id, reason }); continue; }
     add('goal', 'global', definition, { kind: 'goal', id: goal.id, revision: goal.revision, cwd: goal.cwd });
   }
+  if ([...selection.exclusions.keys()].some(key => !selection.found.has(key))) fail('An excluded Library entry is unavailable. Review the Library again.', 'STALE_REVIEW');
+  if (selection.blockedEntries.length) {
+    if (selection.blockedEntries.length > LIBRARY_BUNDLE_LIMITS.definitions) fail('Too many blocked Library entries. Select fewer kinds before sharing.');
+    const first = selection.blockedEntries[0];
+    throw Object.assign(new Error(`${selection.blockedEntries.length} selected Library entr${selection.blockedEntries.length === 1 ? 'y cannot' : 'ies cannot'} be shared. ${first.kind === 'skill' ? 'Skill' : first.kind === 'agent' ? 'Agent' : 'Workflow'} “${first.name}”: ${first.reason} Review the blocked entries or omit them explicitly.`),
+      { code: 'LIBRARY_BLOCKED_ENTRIES', blockedEntries: selection.blockedEntries });
+  }
   if ([...exclusions].some(id => !found.has(id))) fail('An excluded saved goal changed or is unavailable. Preview the Library again.', 'STALE_REVIEW');
   if (blockedGoals.length) {
     const error = Object.assign(new Error(`${blockedGoals.length} saved goal${blockedGoals.length === 1 ? '' : 's'} cannot be shared as portable text. Explicitly omit those goals or go back; nothing was shared.`),
@@ -414,8 +522,9 @@ function collectLibrary(context, { excludeGoalIds = [] } = {}) {
   if (!total) fail('No skills, specialist agents, workflows or saved goals are available to share.');
   if (total > LIBRARY_BUNDLE_LIMITS.definitions || content.files.length + 1 > LIBRARY_BUNDLE_LIMITS.entries ||
       content.files.reduce((sum, file) => sum + file.data.length, 0) > payloadLimit) fail('The complete Library exceeds its bounded definition, resource or byte limit. Nothing was omitted.');
-  return { ...content, workflows, goals, excludeGoalIds: [...exclusions].sort(), excludedGoals,
-    sourceDigest: digest([content.skills, content.agents, workflows, goals, content.pins, [...exclusions].sort()]) };
+  return { ...content, workflows, goals, kinds, excludeEntries: selectedExclusions, excludedEntries: selection.excludedEntries,
+    excludeGoalIds: [...exclusions].sort(), excludedGoals,
+    sourceDigest: digest([content.skills, content.agents, workflows, goals, content.pins, kinds, selectedExclusions, [...exclusions].sort()]) };
 }
 function libraryPayload(context, content, directory) {
   const manifest = { format: 'bzzy-definitions', version: 2, createdAt: now(), skills: content.skills, agents: content.agents,
@@ -434,11 +543,12 @@ function libraryPayload(context, content, directory) {
   return { manifest, entries, totals, inventory: [inventoryFile('manifest.json', bytes), ...content.files.map(file => inventoryFile(file.path, file.data))] };
 }
 
-export function previewLibraryExport({ cwd = process.cwd(), excludeGoalIds = [] } = {}) {
-  const context = capture(cwd), content = collectLibrary(context, { excludeGoalIds }), directory = stage();
+export function previewLibraryExport({ cwd = process.cwd(), excludeGoalIds = [], kinds, excludeEntries = [] } = {}) {
+  const context = capture(cwd), content = collectLibrary(context, { excludeGoalIds, kinds, excludeEntries }), directory = stage();
   try {
     const payload = libraryPayload(context, content, directory);
     return storeReview({ kind: 'library-export', version: 2, entries: payload.entries, totals: payload.totals, sourceDigest: content.sourceDigest,
+      kinds: content.kinds, excludeEntries: content.excludeEntries, excludedEntries: content.excludedEntries,
       excludeGoalIds: content.excludeGoalIds, excludedGoals: content.excludedGoals },
       { context, directory, pins: content.pins, ...payload });
   } catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
@@ -456,9 +566,9 @@ function privateLibraryOutput(context, destination) {
   }
   return realDirectory(path.dirname(destination));
 }
-export function buildLibraryArchive(destination, { cwd = process.cwd(), expectedDigest, excludeGoalIds = [] } = {}) {
+export function buildLibraryArchive(destination, { cwd = process.cwd(), expectedDigest, excludeGoalIds = [], kinds, excludeEntries = [] } = {}) {
   if (!hash(expectedDigest)) fail('Preview the exact Library inventory before sharing.', 'STALE_REVIEW');
-  const context = capture(cwd), target = privateLibraryOutput(context, destination), content = collectLibrary(context, { excludeGoalIds });
+  const context = capture(cwd), target = privateLibraryOutput(context, destination), content = collectLibrary(context, { excludeGoalIds, kinds, excludeEntries });
   if (content.sourceDigest !== expectedDigest) fail('The Library changed. Preview it again before sharing.', 'STALE_REVIEW');
   const directory = stage();
   try {

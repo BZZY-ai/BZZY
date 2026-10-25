@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { terminalSession } from '@bzzy/core';
 import { sessionPermissions } from '@bzzy/core/engine/session-access.js';
 import { CoreWorkspaces } from '@bzzy/core/workspaces';
-import { getProvider, saveKey, credentialStatus } from './providers.js';
+import { providers, getProvider, saveKey, credentialStatus } from './providers.js';
 import { sessions, loadSession } from './store.js';
 import { copyText } from './clipboard.js';
 import { PairingQRImage } from './pairing-qr-image.js';
@@ -82,6 +82,10 @@ export class ClientSettings {
       return credentialStatus(id);
     } catch { return { unavailable: true }; }
   }
+  keyProviders() {
+    try { return Object.values(providers()).filter(provider => provider.auth === 'api-key'); }
+    catch { return null; }
+  }
   pending() { return this.gateway?.pendingPairings() || []; }
   grants() { return (this.gateway?.grants() || []).filter(grant => !grant.revokedAt && grant.expiresAt > Date.now()); }
   back() {
@@ -99,9 +103,11 @@ export class ClientSettings {
     const rows = [], put = (text = '', tone = 'text', action) => rows.push({ text, tone, action });
     if (this.page === 'default-models') return [...this.defaults.rows(), { text: '← Back', action: 'back', tone: 'muted' }];
     if (this.page === 'main') {
-      const key = this.keyStatus();
+      const keyProviders = this.keyProviders(), statuses = keyProviders?.map(provider => this.keyStatus(provider.id));
+      const configured = statuses?.filter(status => status.saved || status.environment).length;
       rows.push({ text: 'API keys', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
-        detail: 'DeepSeek · Abliteration · OrcaRouter · ' + (key.unavailable ? 'Unavailable' : key.environment ? 'Environment key · click to replace' : key.saved ? 'Configured · stored privately' : 'Add your key securely') });
+        detail: !keyProviders ? 'Provider catalog unavailable' : keyProviders.map(provider => provider.name).join(' · ') + ' · ' +
+          (statuses.some(status => status.unavailable) ? 'Key status unavailable' : configured ? `${configured}/${keyProviders.length} configured · replace securely` : 'Add your key securely') });
       let folder; try { folder = this.workspaces.settings().root?.path || 'Choose a folder'; } catch { folder = 'Unavailable'; }
       rows.push({ text: 'Default BZZY folder', action: 'workspace-root', icon: '▱', card: true, tone: 'accent', detail: folder });
       rows.push({ text: 'Pair iPhone', action: 'pair', icon: '⌁', card: true, tone: 'accent',
@@ -111,9 +117,11 @@ export class ClientSettings {
       return rows;
     }
     if (this.page === 'keys') {
-      for (const id of ['deepseek', 'abliteration', 'orcarouter']) {
-        const provider = getProvider(id), status = this.keyStatus(id);
-        rows.push({ text: provider.name + ' API key', action: 'key:' + id, card: true, icon: '⌘',
+      const keyProviders = this.keyProviders();
+      if (!keyProviders) put('Provider catalog unavailable', 'warning');
+      for (const provider of keyProviders || []) {
+        const status = this.keyStatus(provider.id);
+        rows.push({ text: provider.name + ' API key', action: 'key:' + provider.id, card: true, icon: '⌘',
           detail: status.unavailable ? 'Unavailable' : status.environment ? 'Environment key · replace securely' : status.saved ? 'Configured · replace securely' : 'Add your key securely' });
       }
       put('← Back', 'muted', 'back'); return rows;

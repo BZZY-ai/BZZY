@@ -16,21 +16,22 @@ import { PairingQRImage } from '../src/pairing-qr-image.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { palette, createTerminalTheme } from '../src/terminal-theme.js';
 import { createSession } from '../src/store.js';
-import { BUILTINS, defaultSelection } from '../src/providers.js';
+import { BUILTINS, providers, addProvider, defaultSelection } from '../src/providers.js';
 import { home, readJson, writeJson } from '../src/files.js';
 import { listRecords, getRecord, putRecord, digest } from '../src/database.js';
 import { runtimeInfo, runtimeRequest } from '../src/runtime.js';
 import { identityAlive } from '../src/process-identity.js';
 
 let directory, previous;
-const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'DEEPSEEK_API_KEY', 'BZZY_FIXTURE_CORE_SETTINGS_KEY'];
+const providerKeys = ['DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY', 'EXPLABS_API_KEY'];
+const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_FIXTURE_CORE_SETTINGS_KEY', ...providerKeys];
 const terminals = [];
 const mainSettingsActions = ['deepseek', 'workspace-root', 'pair', 'default-models', 'core'];
 test.beforeEach(() => {
   previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   directory = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/private/tmp' : os.tmpdir(), 'bzzy-settings-')));
   Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_HOME: path.join(directory, 'native'), BZZY_CODEX_BIN: new URL('./fixtures/codex.mjs', import.meta.url).pathname });
-  delete process.env.DEEPSEEK_API_KEY;
+  for (const key of providerKeys) delete process.env[key];
   delete process.env.BZZY_FIXTURE_CORE_SETTINGS_KEY;
   fs.mkdirSync(home(), { mode: 0o700 }); fs.mkdirSync(path.join(directory, 'workspace'));
 });
@@ -596,8 +597,24 @@ test('the iOS palette uses exact RGB where supported and readable terminal fallb
   }
 });
 
-for (const id of ['abliteration', 'orcarouter']) test(`${id} Settings key replacement uses hidden private storage`, async () => {
+test('API key cards discover Core API-key providers and custom providers without changing the main Settings choices', async () => {
+  addProvider('settings-fixture', { baseUrl: 'https://fixture.invalid/v1', envKey: 'BZZY_FIXTURE_CORE_SETTINGS_KEY', model: 'fixture-model' });
+  process.env.BZZY_FIXTURE_CORE_SETTINGS_KEY = 'fixture-settings-environment-key';
+  const { ui } = terminal(); ui.openSettings();
+  const expected = Object.values(providers()).filter(provider => provider.auth === 'api-key');
+  const card = ui.settings.rows().find(row => row.action === 'deepseek');
+  for (const provider of expected) assert.ok(card.detail.includes(provider.name));
+  assert.ok(card.detail.includes('Experiential Labs')); assert.doesNotMatch(card.detail, /ChatGPT|Claude subscription/);
+  assert.ok(card.detail.includes(`1/${expected.length} configured`)); assert.ok(!card.detail.includes(process.env.BZZY_FIXTURE_CORE_SETTINGS_KEY));
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), mainSettingsActions);
+  await ui.settings.run('deepseek');
+  assert.deepEqual(ui.settings.rows().filter(row => row.action?.startsWith('key:')).map(row => row.action), expected.map(provider => 'key:' + provider.id));
+  assert.equal(listRecords('execution').length, 0);
+});
+
+for (const id of ['abliteration', 'orcarouter', 'experiential']) test(`${id} Settings key replacement uses hidden private storage`, async () => {
   const term = terminal(), { ui } = term; ui.openSettings();
+  process.env[BUILTINS[id].envKey] = `fixture-${id}-environment`;
   await ui.settings.run('deepseek');
   assert.equal(ui.settings.page, 'keys');
   const secret = `fixture-${id}-replacement`;
@@ -606,6 +623,8 @@ for (const id of ['abliteration', 'orcarouter']) test(`${id} Settings key replac
   ui.tui.key('', { name: 'return' }); await save;
   const file = path.join(home(), 'credentials.json');
   assert.equal(readJson(file)[id], secret); assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(process.env[BUILTINS[id].envKey], undefined);
+  assert.ok(!term.written.includes(`fixture-${id}-environment`));
   assert.ok(!JSON.stringify([ui.tui.entries, ui.tui.history, listRecords('outbox')]).includes(secret));
 });
 

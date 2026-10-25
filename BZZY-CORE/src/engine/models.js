@@ -103,24 +103,77 @@ async function claudeModels(session, signal) {
   }
 }
 
-async function apiModels(provider, signal) {
-  const response = await fetch(provider.baseUrl.replace(/\/$/, '') + '/models', { headers: { Authorization: `Bearer ${apiKey(provider)}` }, redirect: 'error', signal });
+async function apiCatalogPage(provider, url, signal, maximumBytes = 1024 * 1024) {
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey(provider)}` }, redirect: 'error', signal });
   if (!response.ok) {
     await response.body?.cancel();
     throw Object.assign(new Error('Model catalog unavailable.'), { code: response.status === 401 ? 'MODEL_AUTH' : response.status === 403 ? 'MODEL_ACCESS' : 'MODEL_LIST' });
   }
   const chunks = []; let size = 0;
   for await (const chunk of response.body) {
-    size += chunk.length; if (size > 1024 * 1024) throw new Error('Model catalog is too large.');
+    size += chunk.length; if (size > maximumBytes) throw new Error('Model catalog is too large.');
     chunks.push(chunk);
   }
-  const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  return { value: JSON.parse(Buffer.concat(chunks).toString('utf8')), bytes: size };
+}
+
+function experientialModel(entry) {
+  const model = entry?.model;
+  if (!model || !validId(model.slug) || model.status && model.status !== 'active' ||
+      Array.isArray(model.output_modalities) && !model.output_modalities.includes('text') || model.supported_params?.tools === false) return null;
+  const providers = Array.isArray(entry.providers) ? entry.providers : [];
+  const defaults = Array.isArray(entry.default_provider_ids) && entry.default_provider_ids.length ? new Set(entry.default_provider_ids) : null;
+  const routes = providers.filter(route => route && (!defaults || defaults.has(route.id)) && (!route.status || route.status === 'active') &&
+    route.routable !== false && route.available_to_org !== false);
+  if (providers.length && !routes.length || routes.length && routes.every(route => route.capabilities?.supports_tools === false || route.capabilities?.supports_streaming === false)) return null;
+  const capable = routes.filter(route => route.capabilities?.supports_tools !== false && route.capabilities?.supports_streaming !== false);
+  const reasoners = capable.map(route => route.capabilities || {});
+  const noReasoning = model.supported_params?.reasoning === false || reasoners.length > 0 && reasoners.every(value => value.supports_reasoning === false);
+  const efforts = !noReasoning && reasoners.length && reasoners.every(value => Array.isArray(value.supported_reasoning_efforts) && value.supported_reasoning_efforts.length)
+    ? reasoners[0].supported_reasoning_efforts.filter(level => reasoners.every(value => value.supported_reasoning_efforts.includes(level))) : undefined;
+  const defaultEffort = efforts?.length && reasoners.every(value => value.reasoning_default_effort === reasoners[0].reasoning_default_effort)
+    && efforts.includes(reasoners[0].reasoning_default_effort) ? reasoners[0].reasoning_default_effort : undefined;
+  return { id: model.slug, display_name: model.display_name, description: model.description, context_window: model.context_window,
+    input_modalities: model.input_modalities,
+    ...(noReasoning || efforts && !efforts.length ? { supportsEffort: false } : {}),
+    ...(efforts ? { effort: { supported_levels: efforts, default_level: defaultEffort } } : {}) };
+}
+
+async function experientialModels(provider, signal) {
+  // The authenticated rich catalog includes the organization's own models.
+  // Slugs, not row UUIDs or upstream provider IDs, are inference model IDs.
+  // Every page stays on the configured gateway origin; catalog URLs are data.
+  const models = [], seen = new Set(); let total, offset = 0, bytes = 0;
+  for (let page = 0; page < 40; page++) {
+    const url = new URL('/api/models', provider.baseUrl);
+    url.searchParams.set('limit', '50'); url.searchParams.set('offset', String(offset));
+    const result = await apiCatalogPage(provider, url, signal, 4 * 1024 * 1024);
+    bytes += result.bytes;
+    const value = result.value;
+    if (!value || !Array.isArray(value.models) || value.models.length > 50 || !Number.isSafeInteger(value.total) || value.total < 0 || value.total > 2000 ||
+        total !== undefined && total !== value.total || value.offset !== undefined && value.offset !== offset || bytes > 16 * 1024 * 1024) throw new Error('Invalid model catalog page.');
+    total = value.total;
+    if (!value.models.length && offset < total || offset + value.models.length > total) throw new Error('Incomplete model catalog.');
+    for (const entry of value.models) if (validId(entry?.model?.slug)) {
+      if (seen.has(entry.model.slug)) throw new Error('Model catalog repeated an entry.');
+      seen.add(entry.model.slug);
+    }
+    models.push(...value.models.map(experientialModel).filter(Boolean)); offset += value.models.length;
+    if (offset === total) return models;
+  }
+  throw new Error('Model catalog is too large.');
+}
+
+async function apiModels(provider, signal) {
+  const result = provider.catalogFormat === 'experiential' ? { data: await experientialModels(provider, signal) }
+    : (await apiCatalogPage(provider, provider.baseUrl.replace(/\/$/, '') + '/models', signal)).value;
   if (!Array.isArray(result.data)) throw new Error('No model catalog returned.');
   return result.data.filter(model => compatibleCatalogEntry(provider, model)).map(model => {
     const context = model.context_window ?? model.context_length;
     const modalities = model.input_modalities ?? model.architecture?.input_modalities;
     const cyber = provider.catalogFocus === 'cyber' && (/^orca\/orcacyber[-/]/i.test(model.id) || model.required_tier === 'sec-uncensored' || model.category === 'cyber');
     const capabilities = providerModelCapabilities(provider, model.id, {
+      ...(provider.catalogFormat === 'experiential' && typeof model.supportsEffort === 'boolean' ? { supportsEffort: model.supportsEffort } : {}),
       supportedEfforts: Array.isArray(model.effort?.supported_levels) ? model.effort.supported_levels : undefined,
       defaultEffort: typeof model.effort?.default_level === 'string' ? model.effort.default_level : undefined,
       contextWindow: Number.isSafeInteger(context) && context > 0 ? context : undefined,
@@ -147,6 +200,7 @@ export async function availableModels(session, { signal, timeoutMs = 8000 } = {}
     if (!unique.size) throw new Error('Model catalog is empty.');
     const ordered = provider.catalogFocus === 'cyber' ? sortModelCatalog([...unique.values()], provider) : [...unique.values()];
     return { models: ordered, source: provider.auth === 'api-key' ? 'provider' : 'installed backend',
+      ...(provider.catalogFormat === 'experiential' ? { description: 'Gateway catalog. Access, region and route capabilities are checked by Experiential Labs on each request.' } : {}),
       ...(provider.catalogFocus === 'cyber' ? { description: ordered.some(model => model.capabilities.category === 'cyber')
         ? 'Cyber models first. OrcaRouter checks workspace and key access on every call.'
         : 'No Cyber models were listed for this key. Check Security Research access at https://www.orcarouter.ai/research. Other available chat models are listed.' } : {}) };

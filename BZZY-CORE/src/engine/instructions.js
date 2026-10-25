@@ -12,7 +12,8 @@ export function structuredWork(session, options = {}) {
   return Boolean(options.goalMode || options.contract || ['executor', 'reviewer'].includes(session.role));
 }
 export function reasoningEffort(session, options = {}) {
-  const capabilities = providerModelCapabilities(providers()[session.provider] || {}, session.model, session.modelCapabilities);
+  const provider = providers()[session.provider] || {};
+  const capabilities = providerModelCapabilities(provider, session.model, session.modelCapabilities);
   const supported = capabilities.supportedEfforts;
   if (session.selectedEffort === 'default') return undefined;
   const selected = session.selectedEffort || options.effort;
@@ -21,6 +22,7 @@ export function reasoningEffort(session, options = {}) {
     return selected;
   }
   if (structuredWork(session, options) || session.modelCapabilities?.supportsEffort === false) return undefined;
+  if (provider.catalogFormat === 'experiential' && !supported?.length) return undefined;
   return supported?.length && !supported.includes('medium') ? supported.includes('low') ? 'low' : undefined : 'medium';
 }
 export function agentInstructions(session, options = {}) {

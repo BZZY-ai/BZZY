@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { fork } from 'node:child_process';
 import { startRelay } from '@bzzy/relay/server';
 import { RelayClient, createIdentity } from '../src/relay/sdk.js';
-import { ProjectTransferService, importProjectShare, importTerminalShare, importLibraryShare, classifyProjectShareCode } from '../src/relay/project-transfer.js';
+import { CoreTerminalSharing, ProjectTransferService, libraryShareSelection, importProjectShare, importTerminalShare, importLibraryShare, classifyProjectShareCode } from '../src/relay/project-transfer.js';
 
 const sdk = pathToFileURL(createRequire(import.meta.url).resolve('@bzzy/relay'));
 const { RelayStore } = await import(new URL('./store.js', sdk));
@@ -76,6 +76,124 @@ test('typed Library shares require trusted registries and cannot be received by 
   assert.throws(() => importLibraryShare(input), { code: 'CONFIRMATION_REQUIRED' });
   assert.equal(f.service.status(share.shareId).state, 'open');
   assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM grants').get().n, 0);
+});
+
+test('local Library selection rejects malformed pins before runtime, export or invitation creation', async t => {
+  const f = await fixture(t), facade = new CoreTerminalSharing();
+  const entry = { kind: 'skill', scope: 'global', name: 'response-review', id: 'response-review', revision: 1, version: 'b'.repeat(64) };
+  const marker = 'PRIVATE_INVALID_SELECTION_738164';
+  const invalid = [
+    { kinds: null }, { kinds: [] }, { kinds: ['agent', 'agent'] }, { kinds: [marker] }, { kinds: Array(1) },
+    { excludeGoalIds: null }, { excludeGoalIds: Array(1) }, { kinds: ['agent'], excludeGoalIds: ['template:' + 'a'.repeat(64)] },
+    { excludeEntries: null }, { excludeEntries: Array(1) }, { excludeEntries: Array(1025).fill(entry) },
+    { excludeEntries: [{ ...entry, revision: 0 }] }, { excludeEntries: [{ ...entry, version: marker }] },
+    { excludeEntries: [{ ...entry, id: 'control\u0085character' }] },
+    { excludeEntries: [{ ...entry, reason: marker }] }, { excludeEntries: [{ ...entry, name: undefined }] },
+    { excludeEntries: [entry, { ...entry, id: 'different-id' }] },
+    { kinds: ['agent'], excludeEntries: [entry] }, { [marker]: true },
+  ];
+  let exported = 0;
+  for (const selected of invalid) {
+    const reject = error => error.code === 'INVALID_REQUEST' && !error.message.includes(marker);
+    await assert.rejects(f.service.createShare({ ...f.input, ...selected }, { ...f.options, exportArchive() { exported++; } }), reject);
+    const { kind: _kind, ...input } = f.input;
+    await assert.rejects(facade.createLibraryShare({ ...input, ...selected }), reject);
+  }
+  await assert.rejects(facade.createLibraryShare({ cwd: marker, expectedDigest: 'a'.repeat(64) }), { code: 'INVALID_REQUEST' });
+  await assert.rejects(facade.createLibraryShare({ cwd: f.source, expectedDigest: marker }), { code: 'INVALID_REQUEST' });
+  await assert.rejects(facade.createLibraryShare({ cwd: f.source, expectedDigest: 'a'.repeat(64), ttlSeconds: 0 }), { code: 'INVALID_REQUEST' });
+  assert.equal(exported, 0); assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM invitations').get().n, 0);
+  assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'relay', 'shares')), false);
+});
+
+test('Library selection detaches owner arrays and entry pins from the prepared source context', async t => {
+  const f = await fixture(t);
+  const selected = { kinds: ['skill', 'agent', 'goal'], excludeGoalIds: ['template:' + 'a'.repeat(64)],
+    excludeEntries: [{ kind: 'skill', scope: 'global', name: 'response-review', id: 'response-review', revision: 1, version: 'b'.repeat(64) }] };
+  const expected = structuredClone(selected); expected.kinds.sort();
+  assert.deepEqual(libraryShareSelection(selected), expected);
+  const entered = Promise.withResolvers(), resume = Promise.withResolvers();
+  const sharing = f.service.createShare({ ...f.input, ...selected }, { ...f.options, async exportArchive(source, file) {
+    entered.resolve(); await resume.promise;
+    assert.equal(source.cwd, f.source); assert.equal(source.expectedDigest, f.input.expectedDigest);
+    assert.deepEqual({ kinds: source.kinds, excludeGoalIds: source.excludeGoalIds, excludeEntries: source.excludeEntries }, expected);
+    return f.options.exportArchive(source, file);
+  } });
+  await entered.promise;
+  selected.kinds.push('workflow'); selected.excludeGoalIds.length = 0;
+  selected.excludeEntries[0].revision = 2; selected.excludeEntries.push({ ...selected.excludeEntries[0], name: 'other-skill' });
+  resume.resolve();
+  const share = await sharing;
+  assert.equal(share.kind, 'LIBRARY');
+  assert.deepEqual(f.store.db.prepare('SELECT data FROM invitations').all().map(row => JSON.parse(row.data).spec.actions), [['import']]);
+  assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM grants').get().n, 0);
+});
+
+test('gateway shares only reviewed kinds and exact exclusions, rejecting stale selections before a code exists', { timeout: 30000 }, async t => {
+  const f = await fixture(t); await f.client.close();
+  const { RelayGateway } = await import('../src/relay/gateway.js');
+  const { importSkill, setSkillEnabled } = await import('../src/engine/skills.js');
+  const { saveSubagentDefinition } = await import('../src/engine/subagent-definitions.js');
+  const { previewLibraryExport, previewLibraryImport, discardDefinitionBundleReview } = await import('../src/engine/definition-bundle.js');
+  const { runtimeInfo, runtimeRequest } = await import('../src/engine/runtime.js');
+  const { identityAlive } = await import('../src/engine/process-identity.js');
+  const reviews = [], preview = input => { const review = previewLibraryExport(input); reviews.push(review); return review; };
+  const packagePath = path.join(f.directory, 'skill-package'); fs.mkdirSync(packagePath);
+  fs.writeFileSync(path.join(packagePath, 'SKILL.md'), '---\nname: response-review\ndescription: Review synthetic response structure\n---\nInspect supplied synthetic responses.\n');
+  fs.writeFileSync(path.join(packagePath, 'sample.txt'), 'Synthetic response sample.\n');
+  const installed = importSkill(packagePath, { scope: 'global' });
+  saveSubagentDefinition({ name: 'response-auditor', description: 'Inspect synthetic responses', instructions: 'Review supplied response structure.' }, { cwd: f.source, scope: 'project' });
+  const original = preview({ cwd: f.source });
+  const gateway = new RelayGateway({ identity: f.identity, url: f.relay.audience, allowInsecureLocal: true, autoReconnect: false });
+  f.cleanup(async () => {
+    for (const review of reviews) discardDefinitionBundleReview(review);
+    await gateway.close();
+    const info = runtimeInfo();
+    if (info && identityAlive(info.identity)) await runtimeRequest(info, 'POST', '/shutdown', {}).catch(() => {});
+    for (let i = 0; i < 100 && info && identityAlive(info.identity); i++) await delay(20);
+  });
+  await gateway.start();
+  const invitations = () => f.store.db.prepare('SELECT count(*) AS n FROM invitations').get().n;
+  await assert.rejects(gateway.createLibraryShare({ cwd: f.source, kinds: ['agent'], expectedDigest: original.sourceDigest }), { code: 'STALE_REVIEW' });
+  assert.equal(invitations(), 0);
+  // Synthetic corruption must block skill export, while an Agent-only review
+  // must neither read nor bundle that unrelated immutable resource.
+  fs.writeFileSync(path.join(process.env.BZZY_HOME, 'skills', installed.name, installed.version, 'sample.txt'), 'Changed synthetic sample.\n');
+  let blocked;
+  assert.throws(() => previewLibraryExport({ cwd: f.source }), error => {
+    blocked = error.blockedEntries?.[0]; return error.code === 'LIBRARY_BLOCKED_ENTRIES' && blocked?.kind === 'skill';
+  });
+  const pin = Object.fromEntries(['kind', 'scope', 'name', 'id', 'revision', 'version'].map(field => [field, blocked[field]]));
+  const omitted = preview({ cwd: f.source, kinds: ['agent', 'skill'], excludeEntries: [pin] });
+  for (const change of [{ revision: pin.revision + 1 }, { version: '0'.repeat(64) }, { id: 'unrelated-skill' }]) {
+    await assert.rejects(gateway.createLibraryShare({ cwd: f.source, kinds: omitted.kinds, excludeEntries: [{ ...pin, ...change }], expectedDigest: omitted.sourceDigest }), { code: 'STALE_REVIEW' });
+  }
+  await assert.rejects(gateway.createLibraryShare({ cwd: f.source, kinds: ['agent'], excludeEntries: [pin], expectedDigest: omitted.sourceDigest }), { code: 'INVALID_REQUEST' });
+  assert.equal(invitations(), 0);
+  const receiveAgent = async input => {
+    const share = await gateway.createLibraryShare({ cwd: f.source, ...input });
+    let fingerprint;
+    const importing = receive(f, share, async file => {
+      const review = previewLibraryImport(file, { cwd: f.recipient }); reviews.push(review);
+      assert.deepEqual({ skills: review.totals.skills, agents: review.totals.agents, workflows: review.totals.workflows, goals: review.totals.goals },
+        { skills: 0, agents: 1, workflows: 0, goals: 0 });
+      assert.deepEqual(review.entries.map(entry => [entry.kind, entry.name]), [['agent', 'response-auditor']]);
+      return { reviewed: true };
+    }, { onIdentity: value => { fingerprint = value.recipientFingerprint; } });
+    const pending = await until(() => gateway.projectShareStatus(share.shareId).pending[0]);
+    assert.equal(pending.fingerprint, fingerprint);
+    await gateway.approveProjectShare({ shareId: share.shareId, claimId: pending.claimId, confirmedFingerprint: fingerprint });
+    assert.deepEqual(await importing, { reviewed: true });
+    assert.equal(gateway.projectShareStatus(share.shareId).state, 'complete');
+  };
+  const agentOnly = preview({ cwd: f.source, kinds: ['agent'] });
+  await receiveAgent({ kinds: agentOnly.kinds, expectedDigest: agentOnly.sourceDigest });
+  await receiveAgent({ kinds: omitted.kinds, excludeEntries: [pin], expectedDigest: omitted.sourceDigest });
+  const count = invitations();
+  setSkillEnabled(installed.id, !installed.enabled, installed.revision, { scope: 'global' });
+  await assert.rejects(gateway.createLibraryShare({ cwd: f.source, kinds: omitted.kinds, excludeEntries: [pin], expectedDigest: omitted.sourceDigest }), { code: 'STALE_REVIEW' });
+  assert.equal(invitations(), count);
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'relay', 'shares')), []);
 });
 
 test('an actual encrypted multi-chunk Library transfer commits before completion without exposing plaintext or codes', async t => {

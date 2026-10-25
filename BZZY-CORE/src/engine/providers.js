@@ -41,6 +41,17 @@ export const BUILTINS = {
         supportedEfforts: ['low', 'medium', 'high'] },
     },
   },
+  experiential: {
+    id: 'experiential', name: 'Experiential Labs', backend: 'codex', auth: 'api-key',
+    baseUrl: 'https://api.experientiallabs.ai/v1', envKey: 'EXPLABS_API_KEY',
+    model: 'gpt-5.6-sol', catalogFormat: 'experiential',
+    // Documented Codex example. Other slugs obtain their own live metadata.
+    // Efforts are the intersection of this model's current default routes.
+    modelCapabilities: {
+      'gpt-5.6-sol': { contextWindow: 1050000, inputModalities: ['text', 'image'],
+        supportedEfforts: ['none', 'low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
+    },
+  },
 };
 
 export function providerModelCapabilities(provider, model, discovered) {

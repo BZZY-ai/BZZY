@@ -24,7 +24,7 @@ import { registerDeviceNotifications, updateDeviceNotifications, revokeDeviceNot
 import { RelayClient, verifyCertificate, encodeInvitation, renderInvitationQR } from './sdk.js';
 import { DEFAULT_RELAY_URL, loadRelayIdentity, privateRelayDirectory } from './identity.js';
 import { revokeLocalRelayGrant } from './revocation.js';
-import { ProjectTransferService } from './project-transfer.js';
+import { ProjectTransferService, libraryShareSelection } from './project-transfer.js';
 import { PROTOCOL, VERSION, LIMITS, COMMANDS, OPERATIONS, validateRequest, permissionFor,
   boundedInteger, boundedPayload, sanitize, response, errorResponse } from './protocol.js';
 
@@ -434,21 +434,18 @@ export class RelayGateway extends EventEmitter {
   }
   async createLibraryShare(input) {
     this.#check(); if (!this.#started) fail('GATEWAY_OFFLINE', 'Connect the host gateway first.');
-    object(input, ['cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds']);
+    object(input, ['cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries']);
     if (typeof input.cwd !== 'string' || !path.isAbsolute(input.cwd) || !/^[a-f0-9]{64}$/.test(input.expectedDigest || '')) fail('INVALID_REQUEST', 'Review the current Library before sharing.');
-    const cwd = fs.realpathSync(input.cwd), pin = fs.statSync(cwd);
-    const expectedDigest = input.expectedDigest, excludeGoalIds = input.excludeGoalIds ?? [];
-    if (!Array.isArray(excludeGoalIds) || excludeGoalIds.length > 1024 || new Set(excludeGoalIds).size !== excludeGoalIds.length || excludeGoalIds.some(value => typeof value !== 'string' ||
-      !/^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|template:[a-f0-9]{64})$/.test(value))) fail('INVALID_REQUEST', 'Review the exact saved goals excluded from this Library.');
-    const excluded = [...excludeGoalIds];
+    const requestedCwd = input.cwd, cwd = fs.realpathSync(requestedCwd), pin = fs.statSync(cwd);
+    const expectedDigest = input.expectedDigest, selection = libraryShareSelection(input);
     if (!pin.isDirectory()) fail('INVALID_REQUEST', 'Choose the current project directory.');
     const authorize = () => {
       this.#check();
       const current = fs.lstatSync(cwd);
-      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== pin.dev || current.ino !== pin.ino || fs.realpathSync(input.cwd) !== cwd) fail('HOST_CONTEXT_CHANGED', 'The shared Library project changed. Review it again.', 409);
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== pin.dev || current.ino !== pin.ino || fs.realpathSync(requestedCwd) !== cwd) fail('HOST_CONTEXT_CHANGED', 'The shared Library project changed. Review it again.', 409);
     };
-    return this.#transfers.createShare({ ...input, cwd, expectedDigest, excludeGoalIds: excluded, kind: 'LIBRARY' }, { authorize,
-      exportArchive: async (_source, destination) => (await import('../engine/definition-bundle.js')).buildLibraryArchive(destination, { cwd, expectedDigest, excludeGoalIds: excluded }) });
+    return this.#transfers.createShare({ ...input, cwd, expectedDigest, ...selection, kind: 'LIBRARY' }, { authorize,
+      exportArchive: async (_source, destination) => (await import('../engine/definition-bundle.js')).buildLibraryArchive(destination, { cwd, expectedDigest, ...selection }) });
   }
   projectShareStatus(shareId) { this.#check(); return this.#transfers.status(shareId); }
   approveProjectShare(input) { this.#check(); return this.#transfers.approveShare(input); }
