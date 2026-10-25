@@ -90,7 +90,8 @@ test('Codex directory import lists every skill, shows checkboxes, and imports on
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /3 skills found/); assert.match(frame, /Save directory.*Refresh/);
       assert.match(frame, /\[ \] picker-alpha/); assert.match(frame, /\[ \] picker-beta/);
-      assert.match(frame, /\[ \] picker_under_score .*picker-under-score/);
+      assert.match(frame, /\[ \] picker_under_score/);
+      assert.doesNotMatch(frame, /Fixture picker|SKILL\s+IMPORT NAME/);
       assert.match(frame, /Import selected/);
       await skillsCommand('/skills codex-toggle:0', ui);
       await skillsCommand('/skills codex-toggle:2', ui);
@@ -106,6 +107,7 @@ test('Codex directory import lists every skill, shows checkboxes, and imports on
       const library = skillRows(ui).map(row => row.text).join('\n');
       assert.match(library, /THIS CHAT \/ PROJECT/); assert.match(library, /BZZY CORE \/ GLOBAL/);
       assert.match(library, /picker-alpha[\s\S]*picker-under-score/);
+      assert.doesNotMatch(library, /Fixture picker/);
       ui.tui.key('', { name: 'escape' });
       assert.equal(ui.tui.value, 'Keep my chat draft');
       assert.equal(listRecords('execution').length, 0);

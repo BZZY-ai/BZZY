@@ -326,11 +326,9 @@ export function skillRows(ui) {
       { text: '' }];
     if (ui.skillImportMessage) rows.push({ text: '  ' + ui.skillImportMessage,
       tone: /found|imported|updated|unchanged/i.test(ui.skillImportMessage) ? 'accent' : 'warning' });
-    rows.push({ text: '  [x] SKILL                         IMPORT NAME', tone: 'muted' });
     for (const [index, item] of ui.skillImportCandidates.entries()) {
-      const checked = ui.skillImportSelected.has(item.source), name = item.rename ? `${item.rawName} → ${item.rename}` : item.rawName;
-      rows.push({ text: `  [${checked ? 'x' : ' '}] ${name}`, action: `codex-toggle:${index}`, tone: checked ? 'accent' : 'text' });
-      rows.push({ text: '      ' + item.description, tone: 'muted' });
+      const checked = ui.skillImportSelected.has(item.source);
+      rows.push({ text: `  [${checked ? 'x' : ' '}] ${item.rawName}`, action: `codex-toggle:${index}`, tone: checked ? 'accent' : 'text' });
     }
     if (!ui.skillImportCandidates.length) rows.push({ text: '  No discovered skills. Save the directory or press Refresh.', tone: 'muted' });
     rows.push({ text: '' }, { text: `  [ Import selected · ${ui.skillImportSelected.size} ]`, action: 'codex-import', tone: 'accent' });
@@ -343,7 +341,6 @@ export function skillRows(ui) {
   const appendSkill = skill => {
     const id = skill.id || skill.name;
     rows.push({ text: `  ${skill.enabled ? '●' : '○'} ${skill.name}`, action: `view:${id}`, tone: skill.enabled ? 'accent' : 'text' });
-    rows.push({ text: '      ' + skill.description, tone: 'muted' });
   };
   rows.push({ text: 'THIS CHAT / PROJECT', tone: 'accent' });
   if (projectSkills.length) for (const skill of projectSkills) appendSkill(skill);
