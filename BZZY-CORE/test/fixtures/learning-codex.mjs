@@ -11,6 +11,10 @@ const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const notify = (method, params) => send({ method, params: { threadId: 'learning-thread', ...params } });
 for await (const line of readline.createInterface({ input: process.stdin })) {
   const request = JSON.parse(line); log(request);
+  if (process.env.BZZY_TEST_LEARNING_STARTUP_FAILURE && request.method === process.env.BZZY_TEST_LEARNING_STARTUP_FAILURE) {
+    send({ id: request.id, error: { code: -32602, message: 'Fixture startup failed: SYNTHETIC_PRIVATE_STARTUP_DETAIL.' } });
+    continue;
+  }
   if (request.id === 900 && !request.method) {
     notify('item/agentMessage/delta', { itemId: 'review', delta: '{"lessons":[],"skills":[],"profiles":[]}' });
     notify('thread/tokenUsage/updated', { tokenUsage: { total: { totalTokens: 75 } } });

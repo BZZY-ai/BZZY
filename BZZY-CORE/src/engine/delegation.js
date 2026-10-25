@@ -17,6 +17,7 @@ import { createMissionContext, missionSourceRevision, missionContextCurrent } fr
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 import { assertSubagentDefinitionPin } from './subagent-definitions.js';
 import { normalizeValidationAssessment, naturalValidationSummary } from './validation-assessment.js';
+import { finalValidationReportProtocol, normalizeValidationDecision } from './validation-decision.js';
 
 const contextKind = 'assignment-context';
 const contextText = (value, limit, label) => {
@@ -60,7 +61,7 @@ export function recordWorkerReport(session, input) {
   const job = getRecord('assignment', session.assignmentId), saved = loadSession(session.id);
   if (!job || job.workerSessionId !== session.id || saved?.assignmentId !== job.id || saved.assignmentRound !== session.assignmentRound || job.currentRound !== session.assignmentRound || job.closure !== 'open' || !['starting', 'running'].includes(getRecord('round', `${job.id}:${job.currentRound}`)?.state)) throw new Error('This worker no longer owns the active assignment round.');
   const parent = currentSource(loadSession(job.parentSessionId), job);
-  input = validationReport(input, job.missionContext?.brief);
+  input = validationReport(input, job.missionContext?.brief, job.reportProtocol);
   if (parentStopped(parent, job)) throw new Error('The parent conversation is paused. No new worker result was published.');
   const previous = assignmentContextRequest(job);
   if (previous?.state === 'pending' && input.status !== 'needs_context') throw new Error('Outstanding context questions must be answered by the supervisor before another completion claim.');
@@ -98,12 +99,19 @@ export function recordWorkerReport(session, input) {
     });
 }
 
-function validationReport(input, brief) {
+function validationReport(input, brief, reportProtocol) {
+  const finalReview = reportProtocol === finalValidationReportProtocol;
+  const required = finalReview && !['blocked', 'needs_context'].includes(input.status);
+  if (required && (input.validationAssessment === undefined || input.decision === undefined) || finalReview && input.decision !== undefined && input.validationAssessment === undefined) {
+    throw Object.assign(new Error('Final review: finish_assignment requires both validationAssessment and decision for complete, partial or inconclusive reports. Use blocked or needs_context for an unavailable check. Correct the report and submit again; no final report was saved.'), { code: 'INVALID_VALIDATION_DECISION' });
+  }
   if (input.validationAssessment === undefined) return input;
   if (!naturalValidationSummary(input.summary)) throw Object.assign(new Error('Validation needs a concise natural-language explanation, not raw booleans or JSON.'), { code: 'INVALID_VALIDATION_ASSESSMENT' });
-  return { ...input, validationAssessment: normalizeValidationAssessment(input.validationAssessment, {
-    objective: brief?.reviewSource?.objective || brief?.goal?.objective, criteria: brief?.acceptanceCriteria, evidence: input.evidence,
-  }) };
+  const context = { objective: brief?.reviewSource?.objective || brief?.goal?.objective, criteria: brief?.acceptanceCriteria, evidence: input.evidence };
+  const validationAssessment = normalizeValidationAssessment(input.validationAssessment, context);
+  return { ...input, validationAssessment, ...(finalReview && input.decision !== undefined ? {
+    decision: normalizeValidationDecision(input.decision, { ...context, validationAssessment }),
+  } : {}) };
 }
 
 export function answerAssignmentContext(parent, id, input, { chatRunId } = {}) {
@@ -178,7 +186,7 @@ function checkLimits(parent, subagent) {
   if (subagent && database().prepare("SELECT count(*) AS n FROM records WHERE kind='round' AND json_extract(data,'$.state') IN ('starting','running')").get().n >= 16) throw new Error('Host worker concurrency limit reached.');
   if (parent.contract?.limits.maxAssignments != null && total >= parent.contract.limits.maxAssignments) throw new Error('Assignment count limit reached.');
 }
-export function startAssignment(parent, input, { executor, snapshot, role = 'executor', allowDebate = false, sharedEvidence = [], launch = launchAssignment, independent = false, subagent } = {}) {
+export function startAssignment(parent, input, { executor, snapshot, role = 'executor', allowDebate = false, sharedEvidence = [], launch = launchAssignment, independent = false, subagent, reportProtocol } = {}) {
   const source = currentSource(parent);
   if (subagent) {
     assertSubagentDefinitionPin(subagent.definition);
@@ -190,6 +198,8 @@ export function startAssignment(parent, input, { executor, snapshot, role = 'exe
   if (!selection) throw new Error('Choose an executor provider/model.');
   const provider = getProvider(selection.provider);
   const policy = childPolicy(parent.policy || parent.contract?.policy, input.policy);
+  if (reportProtocol !== undefined && (reportProtocol !== finalValidationReportProtocol || !allowDebate || parent.mode !== 'debate' || role !== 'reviewer' ||
+      policy.mode !== 'read-only' || independent || subagent)) throw new Error('The final validation report protocol requires a host-created read-only Validate reviewer.');
   const contract = normalizeContract({ ...input, policy, scope: parent.contract?.scope || {}, constraints: [...new Set([...(parent.contract?.constraints || []), ...(input.constraints || [])])],
     limits: { runtimeSeconds: Math.min(input.limits?.runtimeSeconds || 1200, parent.contract?.limits.assignmentSeconds || (subagent ? 3600 : 1200)),
       maxRetries: 0, ...(input.limits?.tokenBudget ? { tokenBudget: input.limits.tokenBudget } : {}) } }, input.objective);
@@ -198,7 +208,7 @@ export function startAssignment(parent, input, { executor, snapshot, role = 'exe
   for (const job of activeAssignmentsFor(usageScope)) assignmentStatus(job.id);
   const id = randomUUID(), requestId = input.requestId || randomUUID();
   const missionContext = createMissionContext(source, { purpose: subagent ? 'subagent' : allowDebate ? 'debate' : 'delegate', independent, evidenceIds: sharedEvidence, taskContext: subagent?.taskContext });
-  const result = reserveRequest(`assignment:${parent.id}:${subagent?.chatRunId || parent.goal?.id || 'chat'}`, requestId, { input, selection, role, snapshot: snapshot?.id, sourceGoalRevision: missionContext.sourceRevision, sharedEvidence, ...(subagent ? { subagent } : {}) }, db => {
+  const result = reserveRequest(`assignment:${parent.id}:${subagent?.chatRunId || parent.goal?.id || 'chat'}`, requestId, { input, selection, role, snapshot: snapshot?.id, sourceGoalRevision: missionContext.sourceRevision, sharedEvidence, ...(reportProtocol ? { reportProtocol } : {}), ...(subagent ? { subagent } : {}) }, db => {
     if (parentStopped(loadSession(parent.id), subagent)) throw new Error('The parent conversation stopped before dispatch.');
     checkLimits(parent, subagent);
     const remaining = subagent?.chatRunId || parent.goal?.tokenBudget == null ? null : parent.goal.tokenBudget - budgetUsage(parent);
@@ -211,6 +221,7 @@ export function startAssignment(parent, input, { executor, snapshot, role = 'exe
       contract.limits.tokenBudget = Math.min(contract.limits.tokenBudget, available);
     }
     const job = { id, parentSessionId: parent.id, goalId: subagent?.chatRunId ? null : parent.goal?.id || null, missionContext, selection, contract, role, closure: 'open', currentRound: 1, createdAt: now(), snapshotId: snapshot?.id || null, workspace: null, sharedEvidence, captureNetwork: Boolean(parent.captureNetwork),
+      ...(reportProtocol ? { reportProtocol } : {}),
       ...(subagent ? { subagentDefinition: subagent.definition, chatRunId: subagent.chatRunId || null, sourceGoalId: parent.goal?.id || null, subagentTaskContext: subagent.taskContext } : {}) };
     putRecord('assignment', id, job, db);
     if (subagent?.invocation) putRecord('subagent-invocation', subagent.invocation.id, { ...subagent.invocation, assignmentId: id }, db);
@@ -425,6 +436,7 @@ export async function runAssignment(id, number) {
     Object.assign(childSession, { role: job.role, parentSessionId: job.parentSessionId, assignmentId: id, assignmentRound: number, suppressNotifications: true,
       contract: job.contract, policy: job.contract.policy, backendHomes: parent.backendHomes, projectRoot: parent.projectRoot || parent.cwd, mode: 'solo', allowedArtifactIds: job.sharedEvidence || [],
       missionContext: job.missionContext, assignmentContext: round.contextRequest || compactContext(assignmentContextRequest(job)),
+      ...(job.reportProtocol ? { reportProtocol: job.reportProtocol } : {}),
       ...(job.subagentDefinition ? { subagentDefinition: job.subagentDefinition } : {}),
       ...(job.selection.effort != null ? { selectedEffort: job.selection.effort } : {}),
       ...(job.selection.capabilities != null ? { modelCapabilities: job.selection.capabilities } : {}) });

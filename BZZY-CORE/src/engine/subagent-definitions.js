@@ -3,6 +3,7 @@ import path from 'node:path';
 import { database, transaction, getRecord, putRecord, digest, now } from './database.js';
 import { getProvider } from './providers.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
+import { recordLibraryCreation } from './library-notifications.js';
 
 // Local-owner administration only. Models discover definitions but cannot edit
 // the reusable instructions or make their own durable permission grants.
@@ -156,7 +157,9 @@ export function saveSubagentDefinition(input, options = {}) {
       if (database().prepare('SELECT count(*) AS total FROM records WHERE kind=?').get(versionKind).total >= 4096) fail('The host subagent definition version limit was reached.', 'CAPACITY');
       putRecord(versionKind, versionId, record, db);
     }
-    putRecord(kind, id, record, db); return clone(record);
+    putRecord(kind, id, record, db);
+    if (!active(previous)) recordLibraryCreation('specialist', id, { sourceSessionId: options.session?.id }, db);
+    return clone(record);
   });
 }
 

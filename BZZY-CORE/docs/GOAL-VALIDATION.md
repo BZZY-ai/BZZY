@@ -41,6 +41,17 @@ objections still block support. Every caveat remains in the persistent ledger
 for explicit final-review disposition; neither the criteria rule nor the UI
 grants broader scope or network permissions.
 
+The final review has a host-pinned report contract. Its tool schema and prompt
+specify the same decision fields: `goalSatisfaction` uses `supported`,
+`unsupported` or `inconclusive`; each objection disposition uses `status` with
+`accepted`, `resolved`, `rejected` or `unresolved`. The host checks this structure
+against the original objective, criteria and the worker's evidence before saving
+the report. A formatting error returns actionable tool feedback while the same
+worker can still correct it within its existing limits. It cannot seal an invalid
+completion or turn prose agreement into proof. Valid structured independent
+reports may omit an empty objection list; their informational caveats remain
+explicit final-review obligations.
+
 The review must support every original acceptance condition, including requested
 severity or impact. A real lower-impact vulnerability does not satisfy a HIGH
 severity objective. The declared review protocol, evidence inspection, objection

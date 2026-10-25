@@ -15,6 +15,7 @@ import { codexQuota } from '../account-status.js';
 import { ActivityReporter } from '../live-activity.js';
 import { agentPermissionProfile, isolatedAgentCodexHome, tomlValue } from '../agent-execution.js';
 import { learningPermissionProfile, learningDisabledFeatures, learningCodexHome } from '../learning-backend.js';
+import { markBackendStartupFailure } from '../backend-startup.js';
 
 export { codexHome } from '../auth.js';
 
@@ -135,65 +136,77 @@ export class CodexEngine {
 
   async open() {
     if (this.rpc && !this.rpc.closed) return;
-    this.closing = null;
-    if (this.options.toolHost && this.session.coreSkillsProtocol !== 5) {
+    let startupStage = 'configuration';
+    try {
+      this.closing = null;
+      if (this.options.toolHost && this.session.coreSkillsProtocol !== 5) {
+        if (this.session.engineThreadId) {
+          this.session.engineThreadId = null;
+          this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
+        }
+        this.session.coreSkillsProtocol = 5;
+      }
+      startupStage = 'version';
+      const installed = version('codex');
+      assertCodexVersion(installed);
+      startupStage = 'configuration';
+      const launchConfig = codexLaunch(this.provider, this.session, this.options);
+      if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { directory: launchConfig.env.CODEX_HOME }).available) throw new Error(`Codex / ChatGPT subscription authentication is unavailable in ${launchConfig.env.CODEX_HOME}. Run bzzy auth codex with the same BZZY_CODEX_HOME to sign in.`);
+      startupStage = 'process_spawn';
+      this.rpc = new Rpc(launch('codex', launchConfig.args, { env: launchConfig.env, cwd: this.session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
+        canonicalExecutable: Boolean(this.options.agentScope || this.options.learningReview),
+        isolation: !this.options.agentScope && this.options.strictPolicy ? backendIsolation('codex', launchConfig.env, this.session.cwd, this.options.policy) : null }), (method, params) => this.request(method, params));
+      this.session.backendProcess = processIdentity(this.rpc.child.pid); saveSession(this.session);
+      this.rpc.on('notification', (method, params) => this.notification(method, params));
+      this.rpc.on('failure', error => this.operation?.reject(error));
+      startupStage = 'initialize';
+      await this.rpc.request('initialize', { clientInfo: { name: 'bzzy', title: 'bzzy', version: '0.2.0' }, capabilities: { experimentalApi: true } });
+      this.rpc.notify('initialized');
+      if (this.options.agentScope || this.options.learningReview) {
+        startupStage = 'permission_profile';
+        const profileId = this.options.learningReview ? learningPermissionProfile : agentPermissionProfile;
+        const profiles = await this.rpc.request('permissionProfile/list', {});
+        if (!profiles.data?.some(profile => profile.id === profileId && profile.allowed === true)) throw new Error('This Codex backend cannot enforce the required isolated permission profile. No unrestricted fallback was started.');
+      }
+      const policy = this.options.learningReview ? { approvalPolicy: 'never', permissions: learningPermissionProfile }
+        : this.options.agentScope ? { approvalPolicy: 'never', permissions: agentPermissionProfile }
+        : { approvalPolicy: this.options.yolo || this.options.scopedAutonomy ? 'never' : 'on-request', sandbox: codexSandboxMode(this.options) };
+      const params = { cwd: this.session.cwd, ...policy,
+        developerInstructions: agentInstructions(this.session, this.options) };
+      if (this.options.learningReview) { params.dynamicTools = []; params.ephemeral = true; }
+      const effort = reasoningEffort(this.session, this.options);
+      if (effort) params.config = { model_reasoning_effort: effort };
+      if (this.session.model) params.model = this.session.model;
+      if (this.provider.auth === 'api-key') params.modelProvider = 'bzzy_api';
       if (this.session.engineThreadId) {
-        this.session.engineThreadId = null;
-        this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
+        startupStage = 'thread_resume';
+        this.threadId = this.session.engineThreadId;
+        const snapshot = await this.rpc.request('thread/goal/get', { threadId: this.threadId });
+        if (snapshot.goal?.status === 'active') {
+          await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'automatic' });
+        }
+        const result = await this.rpc.request('thread/resume', { threadId: this.threadId, ...params });
+        startupStage = 'permission_activation';
+        this.assertAgentPermissions(result);
+        this.session.resolvedModel = result.model || this.session.model;
+        if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
+        saveSession(this.session);
+      } else {
+        // Native threads retain their initial tool schemas on resume. Reserve the
+        // delegation tools even when the first turn is chat; ToolHost still denies
+        // using them until an explicit goal execution authorizes them.
+        if (this.options.toolHost) params.dynamicTools = taskTools(this.session, { goalMode: this.session.mode === 'delegate' ? true : this.options.goalMode }).filter(t => !['get_goal', 'update_goal'].includes(t.name)).map(t => ({ type: 'function', name: t.name, description: t.name === 'delegate' ? t.description + ' Available only during an explicit /goal; ordinary chat cannot launch assignments.' : t.description, inputSchema: t.inputSchema }));
+        startupStage = 'thread_start';
+        const result = await this.rpc.request('thread/start', params);
+        startupStage = 'permission_activation';
+        this.assertAgentPermissions(result);
+        this.threadId = result.thread.id;
+        this.session.engineThreadId = this.threadId;
+        this.session.resolvedModel = result.model || this.session.model;
+        if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
+        saveSession(this.session);
       }
-      this.session.coreSkillsProtocol = 5;
-    }
-    const installed = version('codex');
-    assertCodexVersion(installed);
-    const launchConfig = codexLaunch(this.provider, this.session, this.options);
-    if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { directory: launchConfig.env.CODEX_HOME }).available) throw new Error(`Codex / ChatGPT subscription authentication is unavailable in ${launchConfig.env.CODEX_HOME}. Run bzzy auth codex with the same BZZY_CODEX_HOME to sign in.`);
-    this.rpc = new Rpc(launch('codex', launchConfig.args, { env: launchConfig.env, cwd: this.session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
-      canonicalExecutable: Boolean(this.options.agentScope || this.options.learningReview),
-      isolation: !this.options.agentScope && this.options.strictPolicy ? backendIsolation('codex', launchConfig.env, this.session.cwd, this.options.policy) : null }), (method, params) => this.request(method, params));
-    this.session.backendProcess = processIdentity(this.rpc.child.pid); saveSession(this.session);
-    this.rpc.on('notification', (method, params) => this.notification(method, params));
-    this.rpc.on('failure', error => this.operation?.reject(error));
-    await this.rpc.request('initialize', { clientInfo: { name: 'bzzy', title: 'bzzy', version: '0.2.0' }, capabilities: { experimentalApi: true } });
-    this.rpc.notify('initialized');
-    if (this.options.agentScope || this.options.learningReview) {
-      const profileId = this.options.learningReview ? learningPermissionProfile : agentPermissionProfile;
-      const profiles = await this.rpc.request('permissionProfile/list', {});
-      if (!profiles.data?.some(profile => profile.id === profileId && profile.allowed === true)) throw new Error('This Codex backend cannot enforce the required isolated permission profile. No unrestricted fallback was started.');
-    }
-    const policy = this.options.learningReview ? { approvalPolicy: 'never', permissions: learningPermissionProfile }
-      : this.options.agentScope ? { approvalPolicy: 'never', permissions: agentPermissionProfile }
-      : { approvalPolicy: this.options.yolo || this.options.scopedAutonomy ? 'never' : 'on-request', sandbox: codexSandboxMode(this.options) };
-    const params = { cwd: this.session.cwd, ...policy,
-      developerInstructions: agentInstructions(this.session, this.options) };
-    if (this.options.learningReview) { params.dynamicTools = []; params.ephemeral = true; }
-    const effort = reasoningEffort(this.session, this.options);
-    if (effort) params.config = { model_reasoning_effort: effort };
-    if (this.session.model) params.model = this.session.model;
-    if (this.provider.auth === 'api-key') params.modelProvider = 'bzzy_api';
-    if (this.session.engineThreadId) {
-      this.threadId = this.session.engineThreadId;
-      const snapshot = await this.rpc.request('thread/goal/get', { threadId: this.threadId });
-      if (snapshot.goal?.status === 'active') {
-        await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'automatic' });
-      }
-      const result = await this.rpc.request('thread/resume', { threadId: this.threadId, ...params });
-      this.assertAgentPermissions(result);
-      this.session.resolvedModel = result.model || this.session.model;
-      if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
-      saveSession(this.session);
-    } else {
-      // Native threads retain their initial tool schemas on resume. Reserve the
-      // delegation tools even when the first turn is chat; ToolHost still denies
-      // using them until an explicit goal execution authorizes them.
-      if (this.options.toolHost) params.dynamicTools = taskTools(this.session, { goalMode: this.session.mode === 'delegate' ? true : this.options.goalMode }).filter(t => !['get_goal', 'update_goal'].includes(t.name)).map(t => ({ type: 'function', name: t.name, description: t.name === 'delegate' ? t.description + ' Available only during an explicit /goal; ordinary chat cannot launch assignments.' : t.description, inputSchema: t.inputSchema }));
-      const result = await this.rpc.request('thread/start', params);
-      this.assertAgentPermissions(result);
-      this.threadId = result.thread.id;
-      this.session.engineThreadId = this.threadId;
-      this.session.resolvedModel = result.model || this.session.model;
-      if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
-      saveSession(this.session);
-    }
+    } catch (error) { throw markBackendStartupFailure(error, startupStage); }
   }
 
   assertAgentPermissions(result) {

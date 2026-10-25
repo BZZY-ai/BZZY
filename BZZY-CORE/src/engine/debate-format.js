@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import { getRecord, listRecords, digest } from './database.js';
 import { fileInfo, inside } from './evidence.js';
-import { naturalValidationSummary } from './validation-assessment.js';
+import { naturalValidationSummary, normalizeValidationAssessment } from './validation-assessment.js';
+import { requestedValidationSeverity } from './validation-decision.js';
 
 const describe = item => typeof item === 'string' ? item : item?.claim || item?.summary || item?.description || '';
 
@@ -64,12 +65,25 @@ export function accumulateDebateObjections(previous = [], reports = [], { phase 
   };
   for (const [index, entry] of reports.entries()) {
     const report = entry.report;
-    if (!report || !Array.isArray(report.objections) || !Array.isArray(report.uncertainties || [])) {
+    const structured = entry.protocol === 'tri-state-v1' || report?.validationAssessment !== undefined;
+    let structuredValid = false;
+    if (structured && naturalValidationSummary(report?.summary)) {
+      try {
+        // This checks claim shape only. The independent-agreement gate still
+        // verifies the original mission, worker binding and evidence provenance.
+        normalizeValidationAssessment(report.validationAssessment, { objective: report.validationAssessment?.objective,
+          criteria: report.validationAssessment?.criteria, evidence: report.evidence });
+        structuredValid = true;
+      } catch { /* Preserve malformed structured claims as review obligations. */ }
+    }
+    const objections = structuredValid && report.objections === undefined ? [] : report?.objections;
+    const uncertainties = report?.uncertainties === undefined ? [] : report.uncertainties;
+    if (!report || structured && !structuredValid || !Array.isArray(objections) || !Array.isArray(uncertainties)) {
       add(entry, { claim: 'Missing or malformed participant assessment.' }, index, 'malformed'); continue;
     }
-    for (const objection of report.objections) add(entry, objection, index);
-    for (const uncertainty of report.uncertainties || []) add(entry, uncertainty, index, 'uncertainty');
-    if (['partial', 'inconclusive'].includes(report.status) && !report.objections.length && !(report.uncertainties || []).length) {
+    for (const objection of objections) add(entry, objection, index);
+    for (const uncertainty of uncertainties) add(entry, uncertainty, index, 'uncertainty');
+    if (['partial', 'inconclusive'].includes(report.status) && !objections.length && !uncertainties.length) {
       add(entry, { claim: `Participant explicitly returned ${report.status}: ${report.summary || 'The assessment is incomplete.'}`, evidence: report.evidence }, index, 'uncertainty');
     }
     if (phase === 'investigation' && consensus?.reached && report.verdict && report.verdict !== consensus.verdict) {
@@ -127,7 +141,7 @@ export function assessDebateGoal(session, decision, evidenceContext = {}) {
     const matches = criteria.filter(item => item?.id === requirement.id), item = matches[0];
     if (matches.length !== 1 || item.status !== 'supported' || !text(item.rationale) || !validEvidence(item.evidence)) reasons.push(`Original acceptance criterion ${requirement.id} is not supported by inspected evidence.`);
   }
-  const requestedSeverity = /\b(critical|high|medium|low)\b(?=[\s\S]{0,48}\b(?:severity|vulnerabilit\w*|finding|security\s+issue|impact)\b)/i.exec(objective || '')?.[1]?.toLowerCase();
+  const requestedSeverity = requestedValidationSeverity(objective);
   if (requestedSeverity) {
     const severity = assessment?.severity, ranks = { low: 1, medium: 2, high: 3, critical: 4 };
     if (!severity || typeof severity.requested !== 'string' || severity.requested.toLowerCase() !== requestedSeverity || typeof severity.assessed !== 'string' || !(ranks[severity.assessed.toLowerCase()] >= ranks[requestedSeverity]) ||

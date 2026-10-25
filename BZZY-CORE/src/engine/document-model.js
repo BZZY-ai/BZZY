@@ -6,6 +6,7 @@ import { getProvider, selectionFromSession } from './providers.js';
 import { CodexEngine } from './engines/codex.js';
 import { ClaudeEngine } from './engines/claude.js';
 import { learningWorkingDirectory } from './learning-backend.js';
+import { backendStartupFailure } from './backend-startup.js';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const stopped = () => readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
@@ -87,6 +88,10 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
     if (tokens > tokenBudget) throw Object.assign(fail('DOCUMENT_BUDGET', 'Document generation token limit reached.'),
       usageAvailable ? { tokens, usageAvailable: true } : {});
     return { text, tokens, usageAvailable, resolvedModel: draft.resolvedModel || chosen.model || null };
+  } catch (error) {
+    const failure = backendStartupFailure(error);
+    if (failure) draft.backendFailure = failure;
+    throw error;
   } finally {
     clearTimeout(deadline); clearInterval(monitor);
     signal?.removeEventListener('abort', externalAbort);

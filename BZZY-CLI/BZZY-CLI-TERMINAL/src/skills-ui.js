@@ -1,5 +1,5 @@
 import { listSkills, inspectSkill, readSkill, importSkill, createSkill, setSkillEnabled, skillHistory, rollbackSkill, promoteSkill, scopeSkillToProject, skillMetadata,
-  previewSkillGlobalMove, moveSkillToGlobal } from '@bzzy/core/engine/skills.js';
+  previewSkillGlobalMove, moveSkillToGlobal, deleteSkill } from '@bzzy/core/engine/skills.js';
 import { skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { projectIdentityForSession, resolveProjectIdentity } from '@bzzy/core/engine/project-identity.js';
@@ -33,6 +33,12 @@ const preview = (ui, id, options = {}) => {
   ui.skillPreview = { ...inspectSkill(id, selected), ...readSkill(id, { ...selected, enabledOnly: false }), historical: Boolean(options.historical) };
   ui.skillPreviewContext = contextKey(ui);
 };
+const scopeForSkill = (ui, skill) => skill.scope === 'global' ? { scope: 'global' } : { scope: 'project', projectRoot: projectFor(ui).root };
+const sourceRows = skill => skill.provenance?.kind === 'learning' ? [
+  { text: 'Learned automatically · available to all models when enabled', tone: 'accent' },
+  ...(skill.provenance.jobId ? [{ text: `Learning job ${skill.provenance.jobId.slice(0, 12)}`, tone: 'muted' }] : []),
+  ...(skill.provenance.sourceSessionId ? [{ text: `Source conversation ${skill.provenance.sourceSessionId.slice(0, 12)}`, tone: 'muted' }] : []),
+] : [];
 const resetViews = ui => { cancelDefinitionBundle(ui, 'skills'); ui.skillCreatorDraft = null; ui.skillMoveDraft = null; ui.skillPreview = null; ui.skillHistoryState = null; ui.skillPromotionDraft = null; ui.skillSyncDetails = false; ui.knowledgeView = null; };
 const preferencesFile = () => path.join(home(), 'cli-preferences.json');
 const savedImportDirectory = () => {
@@ -74,6 +80,16 @@ export function returnToSkillLibrary(ui) {
     ui.tui.skillTopRequested = true; ui.tui.bodyCache = null; ui.tui.schedule();
   }
   return fromDetail;
+}
+
+// Learning job links use this same scoped library preview, with no model work
+// or new session. Import drafts and the original chat composer stay intact.
+export function showSkillInLibrary(ui, id, { scope = 'current' } = {}) {
+  resetViews(ui); ui.skillScope = scope; ui.skillOffset = 0;
+  setSkillView(ui, 'library'); preview(ui, id);
+  ui.skillAdminContext = contextKey(ui);
+  if (ui.tui) { ui.tui.bodyCache = null; ui.tui.skillFocus = 0; ui.tui.skillTopRequested = true; ui.tui.schedule(); }
+  return ui.skillPreview;
 }
 
 export function codexSkillDirectories(directory) {
@@ -317,7 +333,7 @@ export function skillRows(ui) {
   }
   if (ui.skillHistoryState && !ui.skillPreview) {
     const { skill, entries } = ui.skillHistoryState, seen = new Set();
-    const rows = [{ text: `${skill.name} · ${skill.scope} · version history`, tone: 'accent' }];
+    const rows = [{ text: `${skill.name} · ${skill.scope} · version history`, tone: 'accent' }, ...sourceRows(skill)];
     for (const entry of entries) {
       rows.push({ text: `${entry.action} · ${entry.version.slice(0, 8)} · revision ${entry.revision}`, tone: 'muted' });
       if (!seen.has(entry.version)) {
@@ -343,8 +359,10 @@ export function skillRows(ui) {
     const page = ui.skillPreview;
     return [{ text: ui.skillHistoryState ? '← Back to history' : '← Back to library', action: ui.skillHistoryState ? 'history-back' : 'library' },
       { text: `${page.name}/${page.file} · ${page.scope} · ${page.version.slice(0, 8)}${page.historical ? ' · historical' : ''}`, tone: 'accent' }, { text: page.text },
+      ...sourceRows(page),
       ...(page.nextOffset != null ? [{ text: 'Read next page', action: 'read-next' }] : []), { text: 'Supporting files', action: 'files' },
-      { text: page.enabled ? 'Disable for all models' : 'Enable for all models', action: `toggle:${page.id}` },
+      ...(!page.historical ? [{ text: page.enabled ? 'Disable for all models' : 'Enable for all models', action: `toggle:${page.id}` },
+        { text: 'Version history and source', action: `history:${page.id}` }, { text: 'Delete skill', action: `delete:${page.id}`, tone: 'warning' }] : []),
       ...(page.scope === 'project' && !page.historical ? [{ text: 'Move to BZZY Core', action: `move-global:${page.id}`, tone: 'accent' },
         { text: 'Create a separate generic global candidate', action: `promote:${page.id}` }] : []),
       ...(ui.skillHistoryState ? [{ text: 'Back to library', action: 'library' }] : [])];
@@ -384,7 +402,7 @@ export function skillRows(ui) {
   const globalSkills = page.skills.filter(skill => skill.scope !== 'project');
   const appendSkill = skill => {
     const id = skill.id || skill.name;
-    rows.push({ text: `  ${skill.enabled ? '●' : '○'} ${skill.name}`, action: `view:${id}`, tone: skill.enabled ? 'accent' : 'text' });
+    rows.push({ text: `  ${skill.enabled ? '●' : '○'} ${skill.name}${skill.provenance?.kind === 'learning' ? ' · learned' : ''}`, action: `view:${id}`, tone: skill.enabled ? 'accent' : 'text' });
   };
   rows.push({ text: 'THIS CHAT / PROJECT', tone: 'accent' });
   if (projectSkills.length) for (const skill of projectSkills) appendSkill(skill);
@@ -483,9 +501,25 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
     } else if (action === 'search') { const query = await prompt(ui, 'ask', 'Search skills · empty shows all'); if (query != null) { resetViews(ui); ui.skillQuery = query.trim(); ui.skillOffset = 0; } }
     else if (action === 'next' || action === 'previous') ui.skillOffset = Math.max(0, (ui.skillOffset || 0) + (action === 'next' ? 30 : -30));
     else if (action.startsWith('toggle:')) {
-      const skill = inspectSkill(action.slice(7), currentContext(ui));
+      const id = action.slice(7), shown = ui.skillPreview?.id === id ? ui.skillPreview : null;
+      if (shown && (shown.historical || ui.skillPreviewContext !== contextKey(ui))) throw new Error('Reopen the current skill before changing its enabled state.');
+      const selected = shown ? scopeForSkill(ui, shown) : currentContext(ui), current = inspectSkill(id, selected), skill = shown || current;
+      if (current.revision !== skill.revision || current.version !== skill.version) throw new Error('Skill changed. Reopen it before enabling or disabling.');
       if (!skill.enabled && await prompt(ui, 'chooseOne', `Enable ${skill.name} in ${skill.scope} scope? Existing session permissions apply.`, [{ value: 'cancel', label: 'Cancel', selected: true }, { value: 'enable', label: 'Enable for all models' }]) !== 'enable') return true;
-      setSkillEnabled(skill.id, !skill.enabled, skill.revision, currentContext(ui));
+      setSkillEnabled(skill.id, !skill.enabled, skill.revision, selected);
+      if (shown) preview(ui, skill.id, { ...selected, file: shown.file, offset: shown.offset || 0 });
+    } else if (action.startsWith('delete:')) {
+      const id = action.slice(7), shown = ui.skillPreview;
+      if (!shown || shown.id !== id || shown.historical || ui.skillPreviewContext !== contextKey(ui)) throw new Error('Open the current skill in the library before deleting it.');
+      const selected = scopeForSkill(ui, shown), current = inspectSkill(shown.id, selected);
+      if (current.revision !== shown.revision || current.version !== shown.version) throw new Error('Skill changed. Reopen it before deleting.');
+      const answer = await prompt(ui, 'chooseOne', `Delete ${shown.name} from ${shown.scope} Library? Saved versions, history and source files are retained.`, [
+        { value: 'cancel', label: 'Cancel', selected: true }, { value: 'delete', label: 'Delete skill' },
+      ]);
+      if (answer === 'delete') {
+        deleteSkill(shown.id, shown.revision, selected); resetViews(ui); ui.skillOffset = 0; setSkillView(ui, 'library');
+        ui.event('info', { message: `Deleted ${shown.name} from the ${shown.scope} library. Saved history and source files were retained.` });
+      }
     } else if (action.startsWith('view:')) {
       ui.skillHistoryState = null; preview(ui, action.slice(5));
     } else if (action.startsWith('history:')) {

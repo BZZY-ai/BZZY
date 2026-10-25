@@ -11,7 +11,8 @@ function alertPayload(value, hostId, grant) {
     const text = value.aps.alert[key];
     if (typeof text !== 'string' || [...text].length > max || /[\x00-\x1f\x7f]/u.test(text)) fail('INVALID_PUSH');
   }
-  if (!/^(Goal (achieved|stalled|paused|cancelled)|Input needed)( - .+)?$|^BZZY update available$/.test(value.aps.alert.title) ||
+  const libraryCreation = /^(Skill|Agent) created( - .+)?$/.test(value.aps.alert.title);
+  if ((!libraryCreation && !/^(Goal (achieved|stalled|paused|cancelled)|Input needed)( - .+)?$|^BZZY update available$/.test(value.aps.alert.title)) ||
     value.aps.sound !== 'default' || value.aps.category !== 'BZZY_UPDATE') fail('INVALID_PUSH');
   opaque(value.aps['thread-id']);
   const hint = value.bzzy;
@@ -19,8 +20,8 @@ function alertPayload(value, hostId, grant) {
   if (hint.v !== 1 || hint.hostId !== hostId || !['terminal', 'agents', 'updates'].includes(hint.destination)) fail('INVALID_PUSH');
   opaque(hint.eventId);
   if (hint.destination === 'updates') {
-    if (hint.resource !== undefined || hint.sessionId !== undefined || hint.agentId !== undefined) fail('INVALID_PUSH');
-  } else {
+    if (libraryCreation || hint.resource !== undefined || hint.sessionId !== undefined || hint.agentId !== undefined) fail('INVALID_PUSH');
+  } else if (!(libraryCreation && hint.resource === undefined && hint.sessionId === undefined && hint.agentId === undefined)) {
     opaque(hint.resource);
     if (typeof hint.sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(hint.sessionId)) fail('INVALID_PUSH');
     if (hint.agentId !== undefined && (hint.destination !== 'agents' || !/^[a-f0-9-]{36}$/i.test(hint.agentId))) fail('INVALID_PUSH');

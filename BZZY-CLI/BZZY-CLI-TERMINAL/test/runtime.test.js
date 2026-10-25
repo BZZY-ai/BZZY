@@ -581,6 +581,31 @@ test('the actual adaptive runner publishes the source goal validation badge only
   fs.writeFileSync(path.join(dir, 'source.txt'), 'Changed source control');
   assert.equal(loadSession(source.id).goalValidation.state, 'stale');
 });
+test('Validate repairs final report formats in the same native worker and retains optional independent caveats', async () => {
+  process.env.BZZY_TEST_ADVANCED = 'debate-report-repair';
+  const source = makeSession();
+  appendEvent(source.id, 'message.user', { text: source.goal.objective, kind: 'goal' });
+  source.goal.evidence = [captureEvidence(source, 'source.txt', 'original-control').id];
+  source.goal.status = 'complete'; saveSession(source);
+  appendEvent(source.id, 'text', { text: 'The supplied fixture controls satisfy the original goal.' });
+  const prepared = prepareChatDebate(source, '', ['claude'], { runtimeSeconds: 30 });
+  const launched = await start(prepared.session, prepared.options), job = await finished(launched.executionId, 40000);
+  const result = getRecord('debate', prepared.session.id);
+  assert.equal(job.exitCode, 0, job.error || JSON.stringify(result?.unresolvedDisagreement));
+  assert.equal(result.agreement.agreeTrue, true); assert.equal(result.protocol.followups.length, 0);
+  assert.equal(result.objectionLedger.length, 2);
+  assert.ok(result.objectionLedger.every(item => item.kind === 'uncertainty' && !item.invalid));
+  assert.equal(result.objectionReview.complete, true); assert.equal(result.sourceEvidenceCoverage.complete, true);
+  const final = getRecord('assignment', result.protocol.finalReviewer.assignmentId);
+  assert.equal(final.reportProtocol, 'validation-final-v1'); assert.equal(final.currentRound, 1);
+  assert.match(final.latestReport.report.summary, /corrected both rejected report formats/);
+  assert.equal(final.latestReport.report.decision.goalSatisfaction, 'supported');
+  assert.ok(final.latestReport.report.decision.objectionDispositions.every(item => item.status === 'rejected' && !Object.hasOwn(item, 'disposition')));
+  assert.equal(loadSession(source.id).goal.status, 'complete');
+  assert.equal(loadSession(source.id).goalValidation.state, 'validated');
+  assert.ok(events(source.id).some(event => event.type === 'goal.validation' && event.data.state === 'validated'));
+});
+
 test('uncertain Validate checks honor an explicit zero-followup limit', async () => {
   process.env.BZZY_TEST_ADVANCED = 'debate-no-evidence';
   const session = makeSession({ mode: 'debate', maxRetries: 0 });

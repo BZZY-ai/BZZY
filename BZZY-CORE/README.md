@@ -25,6 +25,10 @@ Implemented:
   model, restricted document generation, reviewed drafts and checked saving.
 - Reviewed combined ZIP export/import for portable skills and specialist agents,
   preserving package resources and scopes without account bindings or execution.
+- Background learning publishes reusable project skills directly to Library,
+  enabled with source/history, conflict-safe names and Disable/Delete controls.
+  Committed skill and agent creations queue concise iOS alerts for the full
+  paired own-phone grant using the existing notification delivery controls.
 
 - Reusable named specialist subagents, invoked from ordinary chat or goals across
   Core's supported providers. The CLI Agents library manages project/global

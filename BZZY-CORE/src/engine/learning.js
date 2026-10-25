@@ -12,6 +12,7 @@ import { getProvider } from './providers.js';
 import { CodexEngine } from './engines/codex.js';
 import { ClaudeEngine } from './engines/claude.js';
 import { learningWorkingDirectory } from './learning-backend.js';
+import { backendStartupFailure } from './backend-startup.js';
 import { processIdentity, identityAlive, signalProcess } from './process-identity.js';
 import { sharedSecrets } from './share-bundle-policy.js';
 
@@ -20,7 +21,14 @@ const reasons = new Set(['finding', 'correction', 'verified_fix', 'goal_complete
   'finding_outcome', 'recorded_lesson', 'verified_goal', 'user_correction']);
 const finished = new Set(['completed', 'cancelled', 'failed', 'budget_limited']);
 const error = (code, message) => Object.assign(new Error(message), { code });
-const publicJob = ({ runner, lease, ...job }) => job;
+const publicJob = ({ runner, lease, ...job }) => {
+  if (!Array.isArray(job.result?.skillPublications)) return job;
+  return { ...job, result: { ...job.result, skillPublications: job.result.skillPublications.map(publication => {
+    const current = getRecord('core.learning.skill-publication', publication.id);
+    return current?.jobId === job.id && current.skillId === publication.skillId
+      ? { ...publication, state: current.state, ...(current.deletedAt ? { deletedAt: current.deletedAt } : {}) } : publication;
+  }) } };
+};
 const operatorStopped = () => readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
 const bounded = (value, maximum, name) => {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > maximum || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw error('INVALID_LEARNING', `Invalid ${name}.`);
@@ -310,6 +318,10 @@ export async function runRestrictedLearningModel({ session, prompt, budget, sign
     if (signal?.aborted) throw signal.reason;
     if (engine.interrupted || result?.interrupted) throw error('LEARNING_BUDGET', 'Learning execution was interrupted.');
     return { text, tokens: draft.usage?.tokens || result?.tokens || 0, usageAvailable: draft.usage?.available === true || Number.isSafeInteger(result?.tokens) };
+  } catch (error) {
+    const failure = backendStartupFailure(error);
+    if (failure) draft.backendFailure = failure;
+    throw error;
   } finally {
     signal?.removeEventListener('abort', abort);
     try { await close(); } finally {
@@ -383,6 +395,7 @@ export async function executeLearningOperation(id, { session, signal, runReview 
     if (reservation.stopped) return reservation.stopped;
     const record = { ...previous, ...reservation, state: 'running', runner: processIdentity(), lease: randomUUID(),
       reviewStarted: false, startedAt: now(), updatedAt: now(), revision: previous.revision + 1 };
+    delete record.backendFailure;
     putRecord(kind, id, record, db); appendEvent(record.sessionId, 'learning.started', { id }, db); return record;
   });
   if (job.state !== 'running') return publicJob(job);
@@ -408,7 +421,11 @@ export async function executeLearningOperation(id, { session, signal, runReview 
       unknownUsage = true;
       const pending = Promise.resolve().then(() => runReview({ ...arguments_, budget: { ...job.attemptBudget, tokenBudget: remainingTokens } }));
       pendingReviews.add(pending); let output;
-      try { output = await pending; } finally { pendingReviews.delete(pending); }
+      try { output = await pending; }
+      catch (failure) {
+        if (backendStartupFailure(failure) && pendingReviews.size === 1) unknownUsage = false;
+        throw failure;
+      } finally { pendingReviews.delete(pending); }
       if (output.usageAvailable === false || !Number.isSafeInteger(output.tokens) || output.tokens < 0) throw error('LEARNING_BUDGET', 'Learning usage was not reported.');
       measuredTokens += output.tokens; unknownUsage = false;
       if (measuredTokens > job.attemptBudget.tokenBudget) throw error('LEARNING_BUDGET', 'Learning token budget reached.');
@@ -432,8 +449,10 @@ export async function executeLearningOperation(id, { session, signal, runReview 
     if (current?.state === 'running' && current.lease === job.lease) {
       const code = ['LEARNING_BUDGET', 'LEARNING_PAUSED', 'LEARNING_SCOPE', 'INVALID_LEARNING_OUTPUT'].includes(failure?.code) ? failure.code : 'LEARNING_REVIEW_FAILED';
       const state = code === 'LEARNING_BUDGET' ? 'budget_limited' : ['LEARNING_PAUSED', 'LEARNING_SCOPE'].includes(code) ? 'paused' : 'failed';
-      const stopped = { ...current, state, error: code, reasonPaused: state === 'paused' ? code : null, updatedAt: now(), revision: current.revision + 1 };
-      delete stopped.runner; delete stopped.lease; putRecord(kind, id, stopped); appendEvent(job.sessionId, 'learning.' + state, { id, error: code });
+      const backendFailure = backendStartupFailure(failure);
+      const stopped = { ...current, state, error: code, ...(backendFailure ? { backendFailure } : {}), reasonPaused: state === 'paused' ? code : null, updatedAt: now(), revision: current.revision + 1 };
+      delete stopped.runner; delete stopped.lease; putRecord(kind, id, stopped);
+      appendEvent(job.sessionId, 'learning.' + state, { id, error: code, ...(backendFailure ? { backendFailure } : {}) });
     }
     return publicJob(getRecord(kind, id));
   } finally {
@@ -476,7 +495,7 @@ export async function runLearningJob(id, options = {}) {
         jobId: job.id, sourcesHash: output.context.sourcesHash, material: output.context.material,
         parsed: output.parsed, hash: digest(output.parsed), createdAt: now(),
       });
-      const lessonIds = [], candidateIds = [], profileProposalIds = [];
+      const lessonIds = [], skillIds = [], skillPublications = [], candidateIds = [], profileProposalIds = [];
       for (const [index, lesson] of output.parsed.lessons.entries()) {
         const sourceId = lesson.sourceIds.find(id => id.startsWith(source.id + ':') && /^\d+$/.test(id.slice(source.id.length + 1)));
         const saved = remember(source, { ...lesson, sourceId, requestId: `${job.id}:lesson:${index}`, truth: 'hypothesis' },
@@ -484,9 +503,12 @@ export async function runLearningJob(id, options = {}) {
         lessonIds.push(saved.id);
       }
       for (const [index, candidate] of output.parsed.skills.entries()) {
-        const saved = skills.stageSkillCandidate({ ...candidate, domain: 'security' }, { session: source,
-          provenance: { kind: 'learning', jobId: job.id, sourceSessionId: source.id, sourceEventIds: candidate.sourceIds }, requestId: `${job.id}:skill:${index}` });
-        candidateIds.push(saved.id);
+        const saved = skills.publishLearnedSkill(candidate, { session: source,
+          provenance: { kind: 'learning', jobId: job.id, sourceSessionId: source.id, ...(job.goalId ? { sourceGoalId: job.goalId } : {}),
+            sourceEventIds: candidate.sourceIds }, requestId: `${job.id}:skill:${index}` });
+        skillPublications.push({ id: saved.id, skillId: saved.skillId, name: saved.name, scope: saved.scope, projectId: saved.projectId,
+          version: saved.version, enabled: saved.enabled, state: saved.state });
+        if (saved.state === 'published') skillIds.push(saved.skillId);
       }
       const access = knowledgeAccess(source);
       if (!access.disabled && !access.restricted && !source.parentSessionId) for (const [index, proposal] of output.parsed.profiles.entries()) {
@@ -495,7 +517,8 @@ export async function runLearningJob(id, options = {}) {
         const saved = proposeKnowledgeProfile(source, proposal);
         putRecord('core.learning.profile-receipt', receiptId, { proposalId: saved.id }); profileProposalIds.push(saved.id);
       }
-      return { lessonIds, candidateIds, profileProposalIds, noChange: !lessonIds.length && !candidateIds.length && !profileProposalIds.length, sourcesHash: output.context.sourcesHash };
+      return { lessonIds, skillIds, skillPublications, candidateIds, profileProposalIds,
+        noChange: !lessonIds.length && !skillPublications.length && !profileProposalIds.length, sourcesHash: output.context.sourcesHash };
     } });
 }
 

@@ -55,7 +55,8 @@ export class Rpc extends EventEmitter {
       if (!pending) return;
       this.pending.delete(message.id);
       clearTimeout(pending.timeout);
-      if (message.error) pending.reject(new Error(message.error.message));
+      if (message.error) pending.reject(Object.assign(new Error(message.error.message),
+        Number.isSafeInteger(message.error.code) ? { rpcCode: message.error.code } : {}));
       else pending.resolve(message.result);
     }
   }

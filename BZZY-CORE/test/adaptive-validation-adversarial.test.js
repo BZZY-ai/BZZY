@@ -84,6 +84,19 @@ test('supported criteria with informational caveats go directly to a fresh revie
   assert.equal(run.review.acceptance.passed, true); assert.equal(goalValidationFor(run.source.id).state, 'validated');
 });
 
+test('omitted optional objection lists preserve informational caveats through the full independent and final acceptance gates', async () => {
+  const run = await evaluate('complete', { mutateInvestigation(investigation) {
+    for (const entry of investigation.reports) amendReport(entry, report => { delete report.objections; report.uncertainties = [sourceLimitation]; });
+  } });
+  assert.equal(run.result.agreement.agreeTrue, true); assert.equal(run.activity.followups.length, 0);
+  assert.equal(run.result.objectionLedger.length, 2);
+  assert.ok(run.result.objectionLedger.every(item => item.kind === 'uncertainty' && item.claim === sourceLimitation && !item.invalid));
+  assert.equal(run.result.objectionReview.complete, true);
+  assert.equal(run.result.decision.objectionDispositions.length, 2);
+  assert.equal(run.result.sourceEvidenceCoverage.complete, true);
+  assert.equal(run.review.acceptance.passed, true); assert.equal(goalValidationFor(run.source.id).state, 'validated');
+});
+
 test('informational caveats cannot turn an explicitly missing original criterion into a supported assessment', async () => {
   const run = await evaluate('complete', { retries: 0, mutateInvestigation(investigation) {
     amendReport(investigation.reports[1], report => {

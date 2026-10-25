@@ -1,3 +1,39 @@
+# Validation reports, automatic Library skills and creation alerts (2026-10-25)
+
+Final Node.js 24/macOS suites: **612 Core tests passed, 2 skipped** (614 total),
+**598 CLI tests passed, 21 skipped** (619 total), and **37 Relay tests passed**,
+zero failures. All three syntax checks and `git diff --check` pass.
+
+Final-review tool schemas, prompts and host parsing now share exact decision
+fields and status enums. Native tool-bridge coverage submits two malformed final
+reports, receives actionable errors and corrects both in the same worker round.
+The complete independent/final acceptance path preserves optional concern-list
+semantics, attributed caveats, scoped evidence and the original source badge.
+Negative/null claims, stale bindings, unsupported impact and uninspected evidence
+retain their existing rejection gates. Saved historical outcomes are not upgraded.
+
+Learning tests exercise actual job publication into enabled project Library
+entries, no-clobber naming, immutable history, mandatory security instructions,
+source provenance, transactional rollback, scoped/CAS deletion and durable
+receipts that cannot replay a deleted or disabled skill. CLI checks cover an
+already-open Library, learned labels, source/history views, immediate disable,
+Cancel-first deletion, stale/foreign/historical guards and draft-preserving Back.
+
+Background adapter failures retain only fixed startup stages and safe RPC/OS
+codes. Tests reject forged zero-usage metadata; only genuine failures before
+model dispatch settle at zero. Unknown failures retain conservative accounting.
+A separate network-denied probe of the installed native adapter passed startup,
+profile checks and ephemeral thread creation without sending a model turn; the
+historical discarded failure reason could not be reconstructed.
+
+Creation alerts exercise atomic registry/outbox publication, bounded sanitized
+descriptions, current-definition receipts, deleted/recreated generations,
+own-phone-only authorization, mute/revoke and durable retry IDs. An authenticated
+loopback Core-to-Relay test reaches the real Relay push service and mocked APNs,
+covering creation titles and existing iOS navigation fields. No physical iPhone
+notification was sent and no public Relay was deployed. Relay-routed creation
+alerts require the corresponding Relay update; direct Core APNs remains supported.
+
 # Verified updater handoff and recovery (2026-10-25)
 
 Final Node.js 24/macOS suites: **580 Core tests passed, 2 skipped** (582 total)

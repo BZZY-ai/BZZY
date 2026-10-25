@@ -112,7 +112,15 @@ export function knowledgeRows(ui) {
       muted(`Reason ${data.reason} · ${data.tokensUsed || 0} tokens used`));
     if (data.reasonPaused) rows.push(muted('Paused: ' + data.reasonPaused));
     if (data.failure) rows.push(muted('Review stopped. Inspect its saved status before retrying.'));
-    if (data.result) rows.push(muted(`Result: ${(data.result.lessonIds || []).length} lessons · ${(data.result.candidateIds || []).length} skill candidates · ${(data.result.profileProposalIds || []).length} profile proposals${data.result.noChange ? ' · no change needed' : ''}`));
+    if (data.result) {
+      const publications = data.result.skillPublications || [], ids = [...new Set([...(data.result.skillIds || []), ...publications.map(item => item.skillId).filter(Boolean)])];
+      rows.push(muted(`Result: ${(data.result.lessonIds || []).length} lessons · ${ids.length} learned skills · ${(data.result.candidateIds || []).length} skill candidates · ${(data.result.profileProposalIds || []).length} profile proposals${data.result.noChange ? ' · no change needed' : ''}`));
+      for (const id of ids) {
+        const item = publications.find(entry => entry.skillId === id);
+        if (item?.state === 'deleted') rows.push(muted(`${item.name || id} · deleted from Library`));
+        else rows.push(action(`Open ${item?.name || id} in Skills Library${item?.scope ? ' · ' + item.scope : ''}`, 'skill:' + encode(id)));
+      }
+    }
     if (!finished(data.state)) rows.push(...(data.state === 'paused' ? [action('Resume this learning job', 'resume-job')] : [action('Pause this learning job', 'pause-job')]), action('Cancel this learning job', 'cancel-job'));
     rows.push(action('Back to learning jobs', 'jobs'));
   } else if (view === 'candidates') {
@@ -222,6 +230,14 @@ export async function knowledgeAction(command, ui) {
     ui.event('info', { message: 'Learning review queued. It uses recorded context and a bounded budget.' });
   } else if (verb === 'jobs') show(ui, 'jobs', request(ui, 'learning.list', { limit: 30 }));
   else if (verb === 'job') job(ui, argument);
+  else if (verb === 'skill') {
+    const publications = shown.result?.skillPublications || [], item = publications.find(entry => entry.skillId === argument);
+    if (!(shown.result?.skillIds || []).includes(argument) && !item) throw new Error('Choose a learned skill from this learning job.');
+    if (item?.state === 'deleted') throw new Error('This learned skill was deleted from the Library. Its learning history remains available.');
+    const original = key(ui), { showSkillInLibrary } = await import('./skills-ui.js');
+    if (key(ui) !== original) throw new Error('Conversation changed. Reopen learning for this project before acting.');
+    showSkillInLibrary(ui, argument, { scope: item?.scope === 'global' ? 'global' : 'current' });
+  }
   else if (['pause-job', 'resume-job', 'cancel-job'].includes(verb)) {
     request(ui, 'learning.control', { id: shown.id, action: verb.split('-')[0], expectedRevision: shown.revision }); job(ui, shown.id);
   } else if (verb === 'settings') show(ui, 'settings', request(ui, 'status'));

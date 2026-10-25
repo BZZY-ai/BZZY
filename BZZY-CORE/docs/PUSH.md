@@ -1,4 +1,4 @@
-# Goal notifications through Relay and APNs
+# Core activity notifications through Relay and APNs
 
 Current clients register the phone with Relay and register its approved scope
 with each Core over the encrypted Core protocol. Core saves each outcome and
@@ -39,7 +39,8 @@ the encrypted device registration; it never receives the Apple signing key or
 provider authorization. Closing/backgrounding iOS does not remove registration.
 
 Implemented events are `goal.completed`, `goal.stalled`, `goal.paused`,
-`goal.cancelled` and `goal.waiting_for_input`. An execution merely ending does not create a verified
+`goal.cancelled`, `goal.waiting_for_input`, `library.skill_created` and
+`library.agent_created`. An execution merely ending does not create a verified
 goal-completion alert. Titles use `Goal achieved - ALIAS`, `Goal stalled - ALIAS`
 or `Input needed - ALIAS` (the alias is omitted if unavailable/unsafe). Completion
 and stalled descriptions preview the last assistant reply, capped at **180 Unicode
@@ -53,6 +54,23 @@ persistence and checked again before dispatch. Input alerts keep commands and
 question details out of push payloads. Navigation uses opaque identifiers; full
 conversations, files, provider keys and invitation codes are excluded. Tapping an
 alert only opens/reconciles an authorized view.
+
+Committed skill and agent creations also queue alerts in the same registry
+transaction, including automatic learning, creators and imports. Titles are
+`Skill created - NAME` or `Agent created - NAME`, with a sanitized short portable
+description or a generic fallback. Instructions, source evidence and account
+bindings never enter these alerts. Draft candidates, previews, ordinary edits
+and enable/disable changes do not announce a new creation. Delivery rechecks the
+creation receipt and current definition; deletion or a later replacement cannot
+revive an old queued alert.
+
+Creation alerts require the fully approved own-phone grant and an enabled device
+registration. Scoped session/friend registrations cannot receive the host
+library feed. Existing iOS navigation hints open Agents or Terminals, optionally
+the already-authorized source conversation; they never create or execute work.
+The Relay route requires a Relay release supporting the new creation titles and
+screen-only library navigation. Older direct Core APNs registrations continue
+using the local provider configuration.
 
 Blocked goals, provider usage limits, token/runtime budget limits, acceptance
 review, turn limits and interrupted goals requiring recovery all produce the

@@ -12,6 +12,7 @@ import { writeJson } from './engine/files.js';
 import { canonicalPath, contains } from './paths.js';
 import { directoryIdentity, matchesDirectoryIdentity } from './engine/directory-identity.js';
 import { providerModelCapabilities } from './engine/providers.js';
+import { recordLibraryCreation } from './engine/library-notifications.js';
 
 const summary = row => {
   const session = getRecord('session', row.sessionId);
@@ -103,6 +104,7 @@ export class CoreAgents {
             cwd, sessionId: primarySession.id, revision: 1, rootPath: root.path, rootIdentity: identity(root.path),
             parentPath: parent, parentIdentity: parentPin, workspaceIdentity: workspacePin, importId,
             importProvenance: { bundleId, observation: 'imported-history' }, createdAt: now(), updatedAt: now() }, db);
+          recordLibraryCreation('agent', id, {}, db);
         } });
       return this.get(id);
     } catch (error) {
@@ -143,7 +145,7 @@ export class CoreAgents {
         const row = { id, name, instructions, ...selection, cwd, sessionId: session.id, revision: 1,
           rootPath: root.path, rootIdentity: identity(root.path), parentPath: parent, parentIdentity: identity(parent),
           workspaceIdentity: identity(cwd), createdAt: now(), updatedAt: now() };
-        putRecord('core.agent', id, row, db); return { agentId: id };
+        putRecord('core.agent', id, row, db); recordLibraryCreation('agent', id, {}, db); return { agentId: id };
       });
     } catch (error) { if (created) fs.rmSync(created, { recursive: true, force: true }); throw error; }
     const row = this.#row(result.agentId); conversationExport(row.sessionId);

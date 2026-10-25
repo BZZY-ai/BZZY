@@ -7,12 +7,14 @@ import { home, privateDir } from './files.js';
 import { database, transaction, getRecord, putRecord, digest, appendEvent, now } from './database.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 import { resolveProjectIdentity, projectIdentityForSession } from './project-identity.js';
+import { recordLibraryCreation } from './library-notifications.js';
 
 // Trusted host administration lives here; models receive only list/read tools.
 // One immutable, content-addressed copy per version, independent of providers.
 const kind = 'core.skill';
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
 const candidateKind = 'core.skill.candidate';
+const learningPublicationKind = 'core.learning.skill-publication';
 const versionKind = 'core.skill.version';
 const historyKind = 'core.skill.history';
 const validName = value => typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value.length <= 64;
@@ -28,7 +30,9 @@ const needsScopeReview = record => scopeOf(record) === 'global' && (privatePacka
 const publicRecord = record => record && ({ id: idOf(record), name: record.name, description: record.description,
   scope: scopeOf(record), ...(record.projectId ? { projectId: record.projectId } : {}), enabled: record.enabled,
   version: record.version, revision: record.revision, files: record.files.map(file => ({ path: file.path, bytes: file.bytes })),
-  updatedAt: record.updatedAt, ...(record.review ? { review: record.review } : {}), ...(needsScopeReview(record) ? { needsScopeReview: true } : {}) });
+  updatedAt: record.updatedAt, ...(record.review ? { review: record.review } : {}), ...(needsScopeReview(record) ? { needsScopeReview: true } : {}),
+  ...(record.provenance ? { provenance: Object.fromEntries(['kind', 'jobId', 'sourceSessionId', 'sourceGoalId'].filter(key =>
+    typeof record.provenance[key] === 'string' && record.provenance[key].length <= 240 && !/[\x00-\x1f\x7f]/.test(record.provenance[key])).map(key => [key, record.provenance[key]])) } : {}) });
 
 function context(options = {}, create = false) {
   // Model readers receive a host-owned session. No input-supplied scope or ID
@@ -286,7 +290,8 @@ export function importSkill(source, options = {}) {
       if (!fs.existsSync(target)) fs.renameSync(payload, target);
       if (candidate) return saveCandidate(prepared, previous, options, db);
       const record = { ...prepared, enabled: reclassified && !projectMove ? Boolean(previous ? previous.enabled : reclassified.enabled) : false,
-        ...(projectMove ? { review: { reason: 'scope-move', reviewed: false, fromScope: 'project' } } : {}), revision: expectedRevision + 1, updatedAt: now() };
+        ...(projectMove ? { review: { reason: 'scope-move', reviewed: false, fromScope: 'project' } } : {}),
+        revision: (previous?.revision || getRecord('core.skill.deleted', id)?.revision || 0) + 1, updatedAt: now() };
       if (reclassified) {
         rememberVersion(reclassified, db);
         const archiveId = digest([idOf(reclassified), reclassified.version, reclassified.revision, id]);
@@ -294,6 +299,7 @@ export function importSkill(source, options = {}) {
         db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, idOf(reclassified));
       }
       putRecord(kind, id, record, db); audit(record, previous, projectMove ? 'move-from-project' : 'import', db);
+      if (!previous && !reclassified) recordLibraryCreation('skill', id, { sourceSessionId: options.session?.id }, db);
       return publicRecord(record);
     });
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
@@ -306,6 +312,69 @@ export function createSkill({ name, description, instructions }, options = {}) {
     fs.writeFileSync(path.join(stage, 'SKILL.md'), `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${instructions.trim()}\n\n${fs.readFileSync(new URL('../../assets/generation-security.txt', import.meta.url), 'utf8').trim()}\n`, { mode: 0o600 });
     return importSkill(stage, options);
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+}
+
+// Automatic learning is a trusted Core publication path, not a model tool or
+// an import permission. Registry publication, enablement and its replay receipt
+// share one transaction, so readers never see a half-published learned skill.
+export function publishLearnedSkill(definition, options = {}) {
+  const { session, requestId } = options;
+  if (!session?.id || typeof requestId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(requestId) ||
+      !validName(definition?.name) || typeof definition.description !== 'string' || typeof definition.instructions !== 'string') fail('A learned skill needs its source session, stable publication request and reusable definition.');
+  const selected = selectedScope({ session, scope: 'project' }, true), source = provenance(options.provenance, 'learning');
+  if (source.kind !== 'learning' || !source.jobId || source.sourceSessionId !== session.id) fail('Learned skill provenance must identify its source job and conversation.');
+  const proposed = { name: definition.name, description: definition.description, instructions: definition.instructions };
+  const inputHash = digest({ definition: proposed, ...selected, provenance: source }), id = digest([selected.projectId, requestId]);
+  return atomic(db => {
+    const previous = getRecord(learningPublicationKind, id);
+    if (previous) {
+      if (previous.inputHash !== inputHash || previous.jobId !== source.jobId || previous.sourceSessionId !== session.id) fail('Learning publication request conflicts with its earlier result.');
+      return { ...previous };
+    }
+    // A new project method must not silently shadow an owner's existing local
+    // or global method. Stable suffixes also make interrupted retries repeatable.
+    let name = proposed.name;
+    const occupied = value => getRecord(kind, skillStorageId(value, selected)) || getRecord(kind, value);
+    if (occupied(name)) {
+      name = null;
+      for (let attempt = 0; attempt < 32; attempt++) {
+        const suffix = '-learned-' + digest([selected.projectId, requestId, proposed.name, attempt]).slice(0, 10);
+        const alternative = proposed.name.slice(0, 64 - suffix.length).replace(/-+$/, '') + suffix;
+        if (!occupied(alternative)) { name = alternative; break; }
+      }
+      if (!name) fail('No unused learned skill name is available. Existing skills were kept.');
+    }
+    const saved = createSkill({ ...proposed, name }, { ...selected, provenance: source, expectedRevision: 0 });
+    const inactive = getRecord(kind, saved.id);
+    const enabled = { ...inactive, enabled: true, revision: inactive.revision + 1, updatedAt: now() };
+    putRecord(kind, saved.id, enabled, db); audit(enabled, inactive, 'learning-enable', db);
+    const record = { id, requestId, inputHash, jobId: source.jobId, sourceSessionId: session.id,
+      skillId: saved.id, requestedName: proposed.name, name, scope: selected.scope, projectId: selected.projectId,
+      version: saved.version, enabled: true, state: 'published', createdAt: now() };
+    putRecord(learningPublicationKind, id, record, db);
+    appendEvent(session.id, 'learning.skill-published', { publicationId: id, skillId: saved.id, name, version: saved.version,
+      scope: selected.scope, projectId: selected.projectId, jobId: source.jobId }, db);
+    return { ...record };
+  });
+}
+
+export function deleteSkill(name, expectedRevision, options = {}) {
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) fail('Review the current skill revision before deleting it.');
+  const selected = findSkill(name, options), id = idOf(selected);
+  return atomic(db => {
+    const current = getRecord(kind, id);
+    if (!current || current.revision !== expectedRevision || current.version !== selected.version) fail('Skill changed. Reload before deleting it.');
+    const deletedAt = now(), revision = current.revision + 1;
+    audit({ ...current, revision, updatedAt: deletedAt }, current, 'delete', db);
+    putRecord('core.skill.deleted', id, { ...current, enabled: false, revision, deletedAt }, db);
+    db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, id);
+    const publications = db.prepare("SELECT id,data FROM records WHERE kind=? AND json_extract(data,'$.skillId')=? AND json_extract(data,'$.state')='published'").all(learningPublicationKind, id);
+    for (const item of publications) {
+      const receipt = JSON.parse(item.data);
+      putRecord(learningPublicationKind, item.id, { ...receipt, state: 'deleted', deletedAt, deletedRevision: revision }, db);
+    }
+    return { deleted: true, id, name: current.name, scope: scopeOf(current), ...(current.projectId ? { projectId: current.projectId } : {}), version: current.version, revision };
+  });
 }
 
 export function setSkillEnabled(name, enabled, expectedRevision, options = {}) {

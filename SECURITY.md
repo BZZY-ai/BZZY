@@ -35,7 +35,11 @@ Knowledge recall filters engagement identity and session ancestry before search;
 historical text does not authorize execution. Learning reviews use an empty
 private cwd and adapter-enforced no-tool backend profiles, bounded sanitized
 records, token/time/daily reservations and durable pause/recovery. Models cannot
-administer profiles or activate skill candidates. Candidate evaluation withholds
+administer profiles or the skill registry directly. Core automatically publishes
+validated learning output as enabled project skills under the owner's learning
+policy, preserving provenance, revisions and deletion receipts. This publication
+grants no new execution permissions or verified outcome. Manually staged
+candidate evaluation withholds
 expected labels for host comparison against approved offline fixtures; passing
 these cases is not live vulnerability verification or script execution proof.
 Project imports retain historical provenance and cannot reuse old acceptance

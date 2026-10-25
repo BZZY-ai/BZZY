@@ -28,7 +28,7 @@ There are four separate kinds of knowledge:
 | Kind | Scope and use |
 | --- | --- |
 | Investigation records | Engagement observations, hypotheses, failed approaches, findings, checkpoints, evidence and public chat history. |
-| Project methods | Explicitly enabled project skills; automatic proposals stay inactive. |
+| Project methods | Learned project skills publish automatically, enabled in Library. Manually staged candidates retain their separate review workflow. |
 | General methods | Explicitly enabled global skills. Global promotion creates a new generic text-only candidate, separate from the original case bundle. |
 | Profiles | Explicit owner-approved user preferences and expiring host facts. These stay in private Core storage and are excluded from project exports. |
 
@@ -102,12 +102,25 @@ adapter contract, in addition to the prompt. It never runs assessment commands,
 contacts targets, or starts a goal. Existing ordinary terminal permissions are
 unchanged.
 
-The review may propose attributed local hypotheses/failed approaches, inactive
-project skill candidates and pending profile changes. It may also return no
-change. It cannot activate skills, approve profiles, mark conclusions verified
-or broaden scope. Credentials and recognizable private bindings are rejected or
-redacted before reusable material is stored; automatic scanning cannot prove
-arbitrary text safe, so explicit review remains required.
+The review may return attributed local hypotheses/failed approaches, reusable
+project skills and pending profile changes. It may also return no change.
+Core validates the bounded output and automatically saves returned skills in its
+persistent Library, enabled for relevant models within the project scope. No
+candidate approval or evaluation is required for this automatic publication.
+Credentials and recognizable private bindings are rejected or redacted before
+reusable material is stored; generic skill text excludes the private case bundle.
+The model cannot administer profiles, mark conclusions verified or broaden scope.
+
+Each published skill retains its learning job and source-session provenance,
+immutable version and history. Job/index receipts make recovery idempotent;
+conflicting existing project or global names are kept and the new skill receives
+a distinct name. Library marks learned entries and offers Disable and Delete.
+Deletion retains history and a tombstone, so replaying an old learning result
+cannot recreate or re-enable it. Learning results link directly to the saved
+Library entry, including its live deleted state. These records have no monthly
+expiration; they remain in Core's private storage across terminal restarts.
+Automatic publication is not a measured improvement claim or a verification of
+the source goal. Model tools still enforce their normal permissions.
 
 ## Candidate evaluation and activation
 
@@ -129,7 +142,8 @@ supports semantic guidance on the reviewed offline cases: scripts were not run,
 targets were not contacted, and it is not proof of a vulnerability or universal
 workflow correctness.
 
-Activation remains a separate explicit owner operation pinned to candidate,
+For manually staged candidates and generic global promotion, activation remains
+a separate explicit owner operation pinned to candidate,
 skill and evaluation revisions. Rejected candidates stay auditable. Version
 history and rollback remain available; restored versions start disabled for
 review. Project-to-global promotion accepts newly written generic text, not raw
@@ -149,8 +163,9 @@ Use the existing **Skills** panel; the four-entry Settings menu is unchanged.
 ```
 
 The panel provides scope selection, review budgets, memory decisions, profile
-proposal approval, fixture preview/registration and candidate evaluation and
-activation. Skill library history/rollback and sanitized global promotion also
+proposal approval, fixture preview/registration and optional candidate evaluation
+and activation. Automatically learned skills open directly in Library. Skill
+library history/rollback and sanitized global promotion also
 live there. Changes use displayed revisions and require a fresh review after a
 concurrent update.
 

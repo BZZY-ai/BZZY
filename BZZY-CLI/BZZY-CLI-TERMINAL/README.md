@@ -56,6 +56,12 @@ terminal model and effort. Describe the behavior, review the generated draft and
 choose Save; skills remain inactive until enabled. Escape cancels generation or
 returns from a preview without saving.
 
+Background learning saves reusable project skills directly into Core's Library,
+enabled and marked **learned**, with their source and version history. Open an
+entry to inspect, disable or delete it. An old learning job cannot recreate a
+deleted entry. `/learn` shows review jobs and links to the skills they created;
+manually staged candidates and global promotion keep their separate workflow.
+
 Both libraries offer **Export skills & agents ZIP** and **Import skills & agents
 ZIP**. Export reviews the current project's and global portable definitions,
 including skill resources, then writes a dated archive in the terminal's original

@@ -26,6 +26,7 @@ import { getSubagentDefinition } from './subagent-definitions.js';
 import { sanitizeMissionValue } from './mission-context.js';
 import { sessionMemoryEligible, readSessionMemory, expandSessionMemory } from './session-memory.js';
 import { modelSkillUsageContext, recordModelSkillUse } from './skill-usage.js';
+import { finalValidationReportProtocol, validationDecisionSchema } from './validation-decision.js';
 
 const str = { type: 'string' }, strings = { type: 'array', items: str }, object = { type: 'object' };
 const spec = (name, description, properties = {}, required = []) => ({ name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false } });
@@ -64,7 +65,13 @@ export function taskTools(session, { goalMode } = {}) {
   );
   if (!['executor', 'reviewer'].includes(session.role)) tools.push(spec('assess_requirement', 'Assess a declared acceptance requirement using evidence you inspected. This is supervisor judgment; automated checks are also enforced before completion.',
     { id: str, status: { type: 'string', enum: ['supported', 'partial', 'unsupported', 'inconclusive'] }, rationale: str, evidence: strings }, ['id', 'status', 'rationale', 'evidence']));
-  if (['executor', 'reviewer', 'peer'].includes(session.role)) tools.push(spec('finish_assignment', 'Return your bounded worker claim for supervisor review. This never completes the parent goal. Save full supporting evidence first.',
+  if (['executor', 'reviewer', 'peer'].includes(session.role)) {
+    // A model-supplied session flag cannot opt into or out of a report contract.
+    const job = session.assignmentId && getRecord('assignment', session.assignmentId);
+    const finalReview = job?.reportProtocol === finalValidationReportProtocol && job.role === 'reviewer' && job.workerSessionId === session.id && job.currentRound === session.assignmentRound;
+    const brief = finalReview ? job.missionContext?.brief : null;
+    const finish = spec('finish_assignment', 'Return your bounded worker claim for supervisor review. This never completes the parent goal. Save full supporting evidence first.' +
+      (finalReview ? ' Final review complete/partial/inconclusive reports require validationAssessment and the typed decision. A rejected report is not saved: correct the named fields and submit again. Use blocked or needs_context when the check is unavailable.' : ''),
     { status: { type: 'string', enum: ['complete', 'partial', 'blocked', 'inconclusive', 'needs_context'] }, summary: str, evidence: strings,
       requestId: { type: 'string', maxLength: 160, description: 'Stable ID required for needs_context so retries cannot create duplicate questions.' },
       questions: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'object', additionalProperties: false,
@@ -78,7 +85,10 @@ export function taskTools(session, { goalMode } = {}) {
           evidence: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 36 }, description: 'Canonical artifact IDs also listed in this report’s evidence.' },
         } } },
       } },
-      objections: { type: 'array', items: object }, conclusions: strings, position: str, changedBecause: str, decision: object }, ['status', 'summary', 'evidence']));
+      objections: { type: 'array', items: object }, conclusions: strings, position: str, changedBecause: str,
+      decision: finalReview ? validationDecisionSchema({ objective: brief?.reviewSource?.objective || brief?.goal?.objective, criteria: brief?.acceptanceCriteria }) : object }, ['status', 'summary', 'evidence']);
+    tools.push(finish);
+  }
   if (session.goal && goalMode !== false && !['executor', 'reviewer'].includes(session.role)) tools.push(
     spec('get_goal', 'Read the current persistent goal and usage.'),
     spec('update_goal', 'Report full completion with evidence, or the same genuine blocker across three turns. Host acceptance checks still apply.',

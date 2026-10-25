@@ -46,8 +46,12 @@ replace another owner's decision. Model tools cannot administer this library.
 It includes a private project-scope marker and does not automatically install or activate that output. Import its folder
 through Skills after reviewing the workflow and its private evidence references.
 Version history and rollback are available in the same panel; restored versions
-start disabled. The knowledge/learning views stage inactive revisions, compare
-owner-approved offline fixtures and require explicit version-pinned acceptance.
+start disabled. Automatic learning publishes new project skills directly in
+Library, enabled for relevant model use, with source/job provenance and history.
+Disable or Delete is available in the skill preview; deletion preserves audit
+history and prevents an old learning job from recreating the entry. Manually
+staged candidates compare owner-approved offline fixtures and require explicit
+version-pinned acceptance.
 Global promotion creates a separate generic text-only candidate, never a copy of
 the original evidence/resources. See [reviewed learning](KNOWLEDGE.md).
 

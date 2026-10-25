@@ -9,7 +9,7 @@ import { createSession, saveSession } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
 import { projectIdentityForSession } from '../src/engine/project-identity.js';
 import { appendEvent, getRecord, putRecord, listRecords } from '../src/engine/database.js';
-import { inspectSkillCandidate, listSkills, setSkillEnabled, createSkill, stageSkillCandidate, acceptSkillCandidate } from '../src/engine/skills.js';
+import { inspectSkill, inspectSkillCandidate, listSkills, setSkillEnabled, createSkill, stageSkillCandidate, acceptSkillCandidate } from '../src/engine/skills.js';
 import { queueLearningReview, inspectLearningJob, listLearningJobs, runLearningJob, processLearningReviews,
   pauseLearningForSession, recoverLearningJobs, controlLearningJob, learningMaterial, configureLearning, learningUsage } from '../src/engine/learning.js';
 import { registerLearningFixtures, evaluateLearningCandidate, runLearningEvaluationJob, inspectLearningEvaluation, revokeLearningFixtures } from '../src/engine/learning-evaluation.js';
@@ -67,7 +67,7 @@ test('review material is bounded own-session visible data and excludes credentia
   assert.ok(Buffer.byteLength(material) <= 17000);
 });
 
-test('a bounded review adds only attributed hypotheses, pending profile proposals and inactive project skill candidates', async () => {
+test('a bounded review adds attributed hypotheses, pending profile proposals and enabled project library skills', async () => {
   const source = message('For reports, use concise reproducible steps and mark uncertainty.');
   const job = queueLearningReview(session, { reason: 'user_correction', sourceId: source.id });
   const result = await runLearningJob(job.id, { runReview: async () => ({ tokens: 200, text: JSON.stringify({
@@ -75,10 +75,11 @@ test('a bounded review adds only attributed hypotheses, pending profile proposal
     skills: [{ name: 'compare-auth-baselines', description: 'Review authorization observations.', instructions: 'Compare ownership, authorized and unauthorized baselines. Verify resource content. Preserve inconclusive outcomes when decisive evidence is unavailable.', sourceIds: [source.id] }],
     profiles: [{ target: 'user', text: 'Prefer concise reports with reproducible steps and explicit uncertainty.', reason: 'The user explicitly requested this report style.', sourceId: source.id }],
   }) }) });
-  assert.equal(result.state, 'completed'); assert.equal(result.result.lessonIds.length, 1); assert.equal(result.result.candidateIds.length, 1);
+  assert.equal(result.state, 'completed'); assert.equal(result.result.lessonIds.length, 1); assert.equal(result.result.candidateIds.length, 0);
   const lesson = getRecord('memory', result.result.lessonIds[0]); assert.equal(lesson.truth, 'hypothesis'); assert.equal(lesson.provenance.jobId, job.id);
-  const staged = inspectSkillCandidate(result.result.candidateIds[0], { session }); assert.equal(staged.scope, 'project'); assert.equal(staged.state, 'pending');
-  assert.equal(listSkills({ session, enabledOnly: true }).total, 0);
+  const learned = inspectSkill(result.result.skillIds[0], { session }); assert.equal(learned.scope, 'project'); assert.equal(learned.enabled, true);
+  assert.equal(learned.provenance.kind, 'learning'); assert.equal(learned.provenance.jobId, job.id);
+  assert.equal(listSkills({ session, enabledOnly: true }).total, 1);
   assert.equal(knowledgeProfileProposals().items.length, 1); assert.ok(listKnowledgeProfiles().every(item => !item.text));
   assert.equal(listRecords('execution').length, 0);
 });

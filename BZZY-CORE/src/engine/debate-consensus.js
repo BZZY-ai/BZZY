@@ -5,6 +5,7 @@ import { loadSession } from './store.js';
 import { listRecords } from './database.js';
 import { getProvider, apiKey } from './providers.js';
 import { generationSecurityPolicy } from './instructions.js';
+import { backendStartupFailure } from './backend-startup.js';
 
 export const consensusTokenBudget = 20000;
 
@@ -60,8 +61,9 @@ export async function synthesizeDebateConsensus(session, result, { signal, runMo
     return { state: 'ready', text, selection, ...provenance, authoritative: false,
       checkedStatus, ...usage };
   } catch (error) {
-    const known = error?.code === 'DOCUMENT_BUDGET' && error.usageAvailable === true && Number.isSafeInteger(error.tokens) && error.tokens >= 0;
-    return { state: 'unavailable', reason: combinedSignal.aborted ? 'consensus_interrupted' : 'consensus_failed', authoritative: false, selection, ...provenance,
-      tokens: known ? error.tokens : null, usageAvailable: known, chargedTokens: known ? error.tokens : reserved };
+    const startup = backendStartupFailure(error), known = Boolean(startup) || error?.code === 'DOCUMENT_BUDGET' && error.usageAvailable === true && Number.isSafeInteger(error.tokens) && error.tokens >= 0;
+    const tokens = startup ? 0 : known ? error.tokens : null;
+    return { state: 'unavailable', reason: combinedSignal.aborted ? 'consensus_interrupted' : startup ? 'consensus_backend_startup' : 'consensus_failed', authoritative: false, selection, ...provenance,
+      ...(startup ? { backendFailure: startup } : {}), tokens, usageAvailable: known, chargedTokens: known ? tokens : reserved };
   } finally { clearInterval(monitor); }
 }

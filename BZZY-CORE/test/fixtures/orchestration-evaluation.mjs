@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createSession, saveSession } from '../../src/engine/store.js';
 import { getRecord, putRecord, now } from '../../src/engine/database.js';
-import { artifact, captureEvidence } from '../../src/engine/evidence.js';
+import { artifact, artifactsFor, captureEvidence } from '../../src/engine/evidence.js';
 import { home } from '../../src/engine/files.js';
 import { BUILTINS } from '../../src/engine/providers.js';
 import { ToolHost } from '../../src/engine/tools.js';
 import * as delegation from '../../src/engine/delegation.js';
+import { requestedValidationSeverity } from '../../src/engine/validation-decision.js';
 
 export function debateEvaluationActors(parent, { scenario = 'complete', selectedArtifact } = {}) {
   const activity = { starts: [], followups: [], waits: 0, reports: [], decisions: [], finishes: [], mutated: false };
@@ -76,13 +77,16 @@ export function debateEvaluationActors(parent, { scenario = 'complete', selected
       criteria: parent.contract.acceptanceCriteria.map(item => ({ id: item.id, achieved: resolved, rationale: resolved === null ? 'The required control remains unavailable.' : 'The recorded positive and negative controls were compared.', evidence: [own.id] })) };
     if (!isMain && job.role === 'executor') report.objections = [];
     if (isMain) {
-      const ledger = getRecord('debate-objections', parent.id)?.entries || [], evidence = [selectedArtifact.id];
+      const ledger = getRecord('debate-objections', parent.id)?.entries || [];
       const inspect = scenario !== 'unsupported_resolution';
-      if (inspect) await new ToolHost(child, { event() {} }).call('read_artifact', { id: selectedArtifact.id });
+      const read = inspect ? await new ToolHost(child, { event() {} }).call('read_artifact', { id: selectedArtifact.id }) : null;
+      const evidence = [read?.importedEvidenceId || own.id];
+      report.evidence = [...new Set([...report.evidence, ...evidence])];
       // The wrong-severity actor overclaims success deliberately. The host must
       // reject its LOW impact for the original HIGH goal even when every actor
       // labels the goal and its criteria "supported".
       report.goalSatisfaction = scenario === 'minority' ? 'inconclusive' : 'supported';
+      const requestedSeverity = requestedValidationSeverity(parent.reviewSource?.objective || parent.goal.objective);
       report.decision = {
         acceptedConclusions: [scenario === 'wrong_severity' ? 'A real low-impact observation is supported; HIGH severity is not established.' : 'The synthetic observation is supported within the declared goal.'],
         rejectedClaims: [], corrections: [], remainingObjections: [], nextVerificationSteps: [],
@@ -95,8 +99,9 @@ export function debateEvaluationActors(parent, { scenario = 'complete', selected
           evidence, criteria: parent.contract.acceptanceCriteria.map(item => ({ id: item.id,
             status: report.goalSatisfaction,
             rationale: 'The supplied offline fixture defines the limits of this assessment.', evidence })),
-          ...(scenario === 'wrong_severity' ? { severity: { requested: 'high', assessed: 'low',
-            rationale: 'The synthetic observation demonstrates only a low-impact private field; the requested HIGH impact is unsupported.', evidence } } : {}) },
+          ...(requestedSeverity ? { severity: { requested: requestedSeverity, assessed: scenario === 'wrong_severity' ? 'low' : requestedSeverity,
+            rationale: scenario === 'wrong_severity' ? 'The synthetic observation demonstrates only a low-impact private field; the requested HIGH impact is unsupported.'
+              : 'The synthetic impact claim still requires host inspection and original-evidence checks.', evidence } } : {}) },
       };
       activity.decisions.push(report.decision);
       if (scenario === 'stale_source' && (job.currentRound > 1 || isFinal) && !activity.mutated) {
@@ -108,9 +113,19 @@ export function debateEvaluationActors(parent, { scenario = 'complete', selected
         saveSession(source); activity.mutated = true;
       }
     }
+    // Submit a consistent final report through the actual host contract. These
+    // two adversarial scenarios then corrupt only the durable main claim so
+    // downstream acceptance must still reject a false/unknown final criterion.
+    const inconsistentFinal = isFinal && ['final_false', 'final_null'].includes(scenario);
+    const claimed = report.decision && structuredClone(report.decision);
+    if (inconsistentFinal) {
+      report.decision.goalSatisfaction = resolved === false ? 'unsupported' : 'inconclusive';
+      report.decision.goalAssessment.criteria.forEach(item => { item.status = report.decision.goalSatisfaction; });
+    }
     delegation.recordWorkerReport(child, report);
+    if (inconsistentFinal) report.decision = claimed;
     const result = { assignmentId: id, round: job.currentRound, state: 'awaiting_review', report,
-      artifacts: [own], changes: [], summary: report.summary, workerClaim: report.status, usage: { tokens: 2 * job.currentRound, available: true }, finishedAt: now() };
+      artifacts: artifactsFor(child.id), changes: [], summary: report.summary, workerClaim: report.status, usage: { tokens: 2 * job.currentRound, available: true }, finishedAt: now() };
     putRecord('round', `${id}:${job.currentRound}`, { ...job.round, ...result });
     putRecord('assignment', id, { ...getRecord('assignment', id), latestReport: result }); activity.reports.push(result);
     return { terminal: true, round: result };
