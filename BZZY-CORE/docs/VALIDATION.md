@@ -1,3 +1,37 @@
+# Saved-goal picker and fresh reuse (2026-10-25)
+
+Full Node.js 24/macOS suites: **679 Core tests passed, 2 skipped** (681 total)
+and **656 CLI tests passed, 21 skipped** (677 total), zero failures. Both source
+checks and whitespace checks pass. Tests use isolated private homes and offline
+backend fixtures; no live model or running installation update is involved.
+
+Core projects the current goal and replaced/cleared goal history from SQLite in
+one read snapshot. Tests verify no writes or executions from listing/resolution,
+exact-text deduplication, complete multiline/Unicode objectives, timestamp-based
+ordering, deterministic bounded pages and durability across a fresh process.
+Deleted chats, imported untrusted history, registered Agents and worker/document
+contexts are excluded. An exact displayed source/revision must still exist;
+source deletion or edits cannot silently substitute another same-text goal.
+Only objective text and display metadata are returned, without old contracts,
+evidence, workflow pins, budgets or permissions. This is a private local-owner
+module, with no new scoped session endpoint, Relay command or model tool.
+
+Plain CLI `/goal` opens a paginated picker in idle chat and the attached runtime.
+Existing `/goal status|pause|cancel|clear|resume` controls remain explicit. Real
+private-daemon regressions verify empty/cancelled selection starts no execution,
+reused objectives receive a fresh goal identity with the current model/effort and
+workflow, source acceptance/evidence/constraints are not inherited, literal
+`status` and `resume` objectives remain data, replacement defaults to No, and
+read-only views cannot execute. Selection still uses ordinary authenticated goal
+admission and the existing exact-goal replacement confirmation.
+
+Actual terminal tests exercise one-Enter `/goal` submission in ordinary/minimal
+chat, picker keyboard/mouse behavior, narrow/80-column/wide geometry, Back/Esc,
+43-entry pagination and draft/cursor preservation. Host, visible session, target
+cwd, pending navigation, deleted target and changed-source checks reject stale
+choices. Existing active-goal replacement, pause/resume and watcher-completion
+regressions also pass. The Core/iOS goal-command parser and Relay remain unchanged.
+
 # iOS terminal appearance and hidden mascot (2026-10-25)
 
 Debug **0.1.0 (21)** builds for simulator and the connected physical iPhone.

@@ -262,6 +262,18 @@ It keeps the same goal and objective, resets the recurring-blocker audit and
 retains spent tokens. A completed goal cannot resume; an exhausted token budget
 requires an explicitly increased total.
 
+Plain `/goal` opens **Saved goals**. Core already retains submitted terminal
+goals, including earlier replaced or cleared goals. The picker lists distinct
+objectives across this host's retained terminal chats, newest first, with the
+source chat/project and older/newer pages. Use arrows and Enter to start the
+selected objective as a **new goal in the current terminal**; Back or Esc cancels.
+The current model, selected workflow and permissions apply. Original outcomes,
+evidence, budgets and permissions are not restored. Replacing unfinished work
+still opens the existing confirmation with No selected.
+Use `/goal status` to inspect the current goal and `/goal resume` to continue its
+checkpoint. Deleted chats, imported untrusted history, Agent and worker goals do
+not populate this local-owner picker; opening it starts no model work.
+
 Settings now includes **Default models** alongside API keys, the default folder,
 Pair iPhone and BZZY Core. Open it to edit a table of **Role | Provider | Model |
 Effort**: Solo, BZZY Core, Validate, Delegate Brain/Executor, Parallel, Besties,

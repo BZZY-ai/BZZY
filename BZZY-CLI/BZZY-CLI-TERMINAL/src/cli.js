@@ -44,6 +44,7 @@ import { knowledgeCLI, sessionMemoryCLI } from './knowledge-command.js';
 import { subagentsCLI } from '@bzzy/core/engine/subagents-cli.js';
 import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
 import { workflowSelection } from '@bzzy/core/engine/workflows.js';
+import { resolveInteractiveGoal } from './goal-controls.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
@@ -151,7 +152,7 @@ Options:
   -h, --help            Show help
   -v, --version         Show version
 
-Chat commands: /goal <objective>, /goal status|pause|resume|clear, /delegate, /validate, /solo,
+Chat commands: /goal (saved goals), /goal <objective>, /goal status|pause|resume|clear, /delegate, /validate, /solo,
 /new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /workflows, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /effort, /default, /usage, /settings, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
@@ -456,15 +457,16 @@ async function chat(provider, options, ui, existingSession) {
         if (input.trim() !== '/effort') throw new Error('Use /effort without arguments.');
         Object.assign(session, await changeSessionModel(session.id, '@effort', ui)); continue;
       }
+      const goalCommand = await resolveInteractiveGoal(input, ui, { sessionId: session.id });
+      if (goalCommand?.cancelled) continue;
       if (session.modelSelectionRequired) throw new Error(`Select a model with /models${ui.minimal ? '' : ' or the model dropdown'} before sending a message.`);
-      if (input === '/goal' || input.startsWith('/goal ')) {
-        const objective = input.slice(5).trim();
-        if (!objective || ['status', 'pause', 'cancel', 'clear', 'resume'].includes(objective)) {
+      if (goalCommand) {
+        if (goalCommand.action) {
           if (!session.goal) throw new Error('No goal yet. Use /goal <objective>.');
-          await goalControl(objective || 'status', session.id, { ...options, provider: session.provider, inChat: true }, ui);
+          await goalControl(goalCommand.action, session.id, { ...options, provider: session.provider, inChat: true }, ui);
           session = findSession(session.id);
         } else {
-          await submitManagedGoal(session, options, ui, objective);
+          await submitManagedGoal(session, options, ui, goalCommand.objective);
         }
       } else if (input.startsWith('/')) throw new Error('Unknown command. Use /help.');
       else {

@@ -17,7 +17,7 @@ import { chooseSavedCombo } from './mode-presets.js';
 import { chooseDelegation } from './delegation-setup.js';
 import { chooseDebate } from './debate-setup.js';
 import { initializeLaunchYolo } from './permission-controls.js';
-import { confirmGoalReplacement } from './goal-controls.js';
+import { confirmGoalReplacement, resolveInteractiveGoal } from './goal-controls.js';
 
 const groupMode = session => ['parallel', 'besties'].includes(session.mode);
 const executionActive = execution => execution && ['queued', 'launching', 'running'].includes(execution.state);
@@ -362,9 +362,15 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           }
           continue;
         }
-        const goalCommand = /^\/goal(?:\s+(.*))?$/s.exec(text);
-        if (goalCommand) {
-          const action = (goalCommand[1] || 'status').trim(), selected = await selectedApi('GET');
+        if (/^\/goal(?:\s|$)/.test(text)) {
+          // Keep the watcher from retiring a finished run's input reader while
+          // its saved-goal picker owns that reader.
+          modalTask = true;
+          let command;
+          try { command = await resolveInteractiveGoal(text, ui, { sessionId: groupMode(initial.session) ? sessionId : activeId }); }
+          finally { modalTask = false; }
+          if (command.cancelled) continue;
+          const action = command.action, selected = await selectedApi('GET');
           if (action === 'status') {
             if (!selected.session.goal) throw new Error('This session has no goal.');
             ui.event('info', { message: `Goal ${selected.session.goal.status}\n${selected.session.goal.objective}\n${selected.session.goal.tokensUsed || 0} tokens used.` });
@@ -392,7 +398,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           }
           await acquireControl();
           if (action !== 'resume' && (executionActive(selected.execution) || targetId === sessionId && children.length)) ui.event('info', { message: 'Replacing the current goal. Stopping its run before starting the new objective…' });
-          const execution = await runtimeRequest(info, 'POST', `/sessions/${targetId}/input`, { owner, operation: 'goal', options: ui.executionOptions?.(options.executionOptions || {}, { id: targetId }) || options.executionOptions || {}, ...(action === 'resume' ? { resumeGoal: true } : { objective: action, replaceGoalId: replacement.replaceGoalId }) }, randomUUID());
+          const execution = await runtimeRequest(info, 'POST', `/sessions/${targetId}/input`, { owner, operation: 'goal', options: ui.executionOptions?.(options.executionOptions || {}, { id: targetId }) || options.executionOptions || {}, ...(action === 'resume' ? { resumeGoal: true } : { objective: command.objective, replaceGoalId: replacement.replaceGoalId }) }, randomUUID());
           if (!groupMode(initial.session)) options.executionId = execution.executionId;
           continue;
         }

@@ -515,6 +515,16 @@ test('slash suggestions filter, complete without switching agent tabs, and keep 
     ui.tui.key('', { name: 'u', ctrl: true }); input.write('/goal status\r'); assert.equal(await answer, '/goal status');
   } finally { ui.close(); }
 });
+for (const minimal of [false, true]) test(`plain /goal submits the saved-goal command with one Enter (${minimal ? 'minimal' : 'ordinary'})`, async () => {
+  const { ui, input } = terminal({ minimal });
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve();
+    input.write('/goal\r');
+    assert.equal(await answer, '/goal');
+    assert.equal(ui.tui.value, '');
+  } finally { ui.close(); }
+});
+
 test('Left and Right adjust only the focused model effort and confirmation returns both settings', async () => {
   const { ui } = terminal();
   try {

@@ -12,6 +12,12 @@ the same engine and private state.
 
 Implemented:
 
+- Local-owner saved-goal browsing over existing terminal goals and their durable
+  replacement/clear history. The CLI's plain `/goal` picker deduplicates objectives
+  and starts a fresh goal through normal input admission. Listing is read-only;
+  old outcomes, evidence, workflows and permissions are never reused as authority.
+  Deleted, imported-untrusted, Agent and worker sources are excluded. No scoped
+  session endpoint or model tool exposes this host-wide history.
 - Durable session/goal usage metrics from model skill-load receipts and accepted
   specialist/worker assignments, with separate follow-up counts and explicit
   coverage limits for older history. Actual worker skill receipts also reach

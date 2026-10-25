@@ -1,4 +1,15 @@
-import { needsGoalReplacement } from '@bzzy/core/engine/goals.js';
+import { needsGoalReplacement, parseGoalCommand } from '@bzzy/core/engine/goals.js';
+import { chooseSavedGoal } from './saved-goals-ui.js';
+
+// A selected objective is data, including words such as "resume" or "clear".
+// Keep that intent separate from slash-command parsing all the way to admission.
+export async function resolveInteractiveGoal(input, ui, options) {
+  const command = parseGoalCommand(input);
+  if (!command) return null;
+  if (input.trim() !== '/goal') return command;
+  const saved = await chooseSavedGoal(ui, options);
+  return saved ? { objective: saved.objective } : { cancelled: true };
+}
 
 export async function confirmGoalReplacement(ui, goal) {
   if (!needsGoalReplacement(goal)) return { confirmed: true };

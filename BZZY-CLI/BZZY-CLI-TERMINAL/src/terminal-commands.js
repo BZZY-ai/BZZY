@@ -4,7 +4,9 @@ export const chatHelp = `Modes
   --delegate   A strong brain model plans and reviews; a cheaper executor does the work.
   --besties    2–3 agents collaborate on a shared goal and review each other’s evidence.
 
-/goal <objective>  Start a goal, replacing the current one.
+/goal              Choose a saved goal; Enter starts it as a fresh goal here.
+/goal <objective>  Start a goal; submitted goals are saved automatically.
+/goal status       Inspect the current goal without starting work.
 /goal resume       Continue a paused or stalled goal from its saved checkpoint.
 /delegate          Switch this paused chat to the saved Delegate combo (or choose its two agents).
 /validate            Validate an achieved goal immediately; otherwise switch this paused chat to its saved combo.
@@ -47,7 +49,7 @@ export const chatCommands = [
   { command: '/workflows', description: 'Create, load and select complete workflows for future goals' },
   { command: '/workflow', description: 'Open saved workflows and pre-prompts (alias of /workflows)' },
   { command: '/metrics', description: 'Inspect recorded goal and chat skill, specialist and worker usage' },
-  { command: '/goal', description: 'Work until an objective is resolved', argument: true },
+  { command: '/goal', description: 'Choose a saved goal, or add an objective to start a new one' },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/validate', description: 'Check the original goal and evidence; add a focus to review a reply' },
   { command: '/models', description: 'Choose a model and reasoning effort' },
