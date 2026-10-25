@@ -7,6 +7,7 @@ import { knowledgeAction, knowledgeRows } from './knowledge-ui.js';
 import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
 import { bundleLibraryRows, definitionBundleRows, definitionBundleAction, returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { libraryToggleRow } from './library-toggle-ui.js';
+import { openWorkflows } from './workflow-ui.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -378,7 +379,7 @@ export function skillRows(ui) {
   };
   if (ui.skillView === 'import') {
     const shown = ui.tui?.value || ui.skillImportDraft || ui.skillImportDirectory;
-    const rows = [tabs, { text: '' }, { text: 'CODEX SKILLS DIRECTORY', tone: 'accent' },
+    const rows = [tabs, { text: 'Workflows / pre-prompts', action: 'workflows', tone: 'accent' }, { text: '' }, { text: 'CODEX SKILLS DIRECTORY', tone: 'accent' },
       { text: '  ' + (shown || 'Type or paste a directory below'), tone: 'text' },
       { text: '  [ Save directory ]    [ Refresh ]', segments: [
         { text: '  [ Save directory ]', tone: 'accent', action: 'save-directory' },
@@ -397,7 +398,8 @@ export function skillRows(ui) {
     return rows;
   }
   const page = listSkills({ ...currentContext(ui), offset: ui.skillOffset || 0, limit: 30 });
-  const rows = [tabs, { text: 'Click ON/OFF · ↑/↓ or Tab select · Space toggles · Enter opens', tone: 'muted' }, { text: '' }, { text: 'Skill Creator · use current model', action: 'creator', tone: 'accent' },
+  const rows = [tabs, { text: 'Click ON/OFF · ↑/↓ or Tab select · Space toggles · Enter opens', tone: 'muted' },
+    { text: 'Workflows / pre-prompts', action: 'workflows', tone: 'accent' }, { text: '' }, { text: 'Skill Creator · use current model', action: 'creator', tone: 'accent' },
     { text: 'Create skill manually', action: 'create' }, ...bundleLibraryRows(), { text: '' }];
   const projectSkills = page.skills.filter(skill => skill.scope === 'project');
   const globalSkills = page.skills.filter(skill => skill.scope !== 'project');
@@ -436,7 +438,8 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
   if (!action.startsWith('promote:') && action !== 'promote-confirm') ui.skillPromotionDraft = null;
   if (!action.startsWith('move-') && !action.startsWith('move-global:') && action !== 'library') ui.skillMoveDraft = null;
   try {
-    if (action.startsWith('bundle-')) {
+    if (action === 'workflows') await openWorkflows(ui, { origin: 'skills' });
+    else if (action.startsWith('bundle-')) {
       if (['bundle-export', 'bundle-import'].includes(action)) { resetViews(ui); setSkillView(ui, 'library'); }
       await definitionBundleAction(action, ui, 'skills', { api: bundleApi });
     }

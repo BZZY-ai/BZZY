@@ -31,7 +31,9 @@ test.beforeEach(() => {
   directory = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'bos-'));
   saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_HOME: path.join(directory, 'codex'),
-    BZZY_CODEX_BIN: path.join(root, 'test/fixtures/codex.mjs'), BZZY_TEST_SCENARIO: 'interrupt', BZZY_TEST_LOG: path.join(directory, 'native.jsonl') });
+    // Strict workers may write their configured Codex home, not the surrounding
+    // fixture directory. Keep startup logging inside that existing sandbox root.
+    BZZY_CODEX_BIN: path.join(root, 'test/fixtures/codex.mjs'), BZZY_TEST_SCENARIO: 'interrupt', BZZY_TEST_LOG: path.join(directory, 'codex', 'native.jsonl') });
   fs.mkdirSync(process.env.BZZY_HOME, { mode: 0o700 });
   fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ executionEnvironment: { allow: ['BZZY_TEST_SCENARIO', 'BZZY_TEST_LOG'] } }));
   workspace = path.join(directory, 'project'); fs.mkdirSync(workspace); core = new BzzyCore();
@@ -136,27 +138,31 @@ test('operator stop also halts a detached real assignment runner and retains its
   const parent = conversation();
   prepareTask(parent, { mode: 'delegate', executor: 'codex' }, parent.goal.objective); saveSession(parent);
   const assignment = startAssignment(parent, { objective: 'Wait for operator maintenance.', context: 'Offline test, retain partial history.', acceptanceCriteria: ['Return only after explicit review.'] });
-  await waitFor(() => {
+  const state = () => {
     const current = getRecord('assignment', assignment.id), worker = current?.workerSessionId && loadSession(current.workerSessionId);
-    return worker && identityAlive(worker.backendProcess);
-  }, () => {
-    // Keep strict readiness unchanged, but retain the actual failure boundary
-    // before afterEach removes this isolated home. No prompts, tokens, account
-    // paths or raw backend traffic are included in this bounded diagnostic.
-    const current = getRecord('assignment', assignment.id), round = getRecord('round', `${assignment.id}:1`);
-    const worker = current?.workerSessionId && loadSession(current.workerSessionId), run = worker && getRecord('run', worker.id);
+    const round = getRecord('round', `${assignment.id}:1`), run = worker && getRecord('run', worker.id);
+    const nativeTurnStarted = Boolean(worker && events(worker.id, 0, 500).some(event => event.type === 'backend' && event.data.method === 'turn/started'));
     return { operatorStopped: operatorStopRequested(), runtimeAlive: identityAlive(runtimeInfo()?.identity),
       assignment: { currentRound: current?.currentRound, closure: current?.closure, workerCreated: Boolean(worker) },
-      round: { state: round?.state, error: round?.error, reason: round?.reason, runner: round?.runner, launcher: round?.launcher },
-      worker: worker ? { state: worker.executionState, stopReason: worker.stopReason, failure: worker.failure,
-        backend: worker.backendProcess, backendAlive: identityAlive(worker.backendProcess), runState: run?.state } : null,
+      round: { state: round?.state, runnerAlive: identityAlive(round?.runner), launcherAlive: identityAlive(round?.launcher) },
+      worker: worker ? { state: worker.executionState, stopReason: worker.stopReason, failureCategory: worker.failure?.category,
+        backendAlive: identityAlive(worker.backendProcess), runState: run?.state, nativeTurnStarted } : null,
       fixtureBackendStarted: fs.existsSync(process.env.BZZY_TEST_LOG) };
-  });
+  };
+  // backendProcess is recorded immediately after spawn, before native startup
+  // can succeed or fail. Stop an actual running native turn, not that transient
+  // launch window. The interrupt fixture holds this turn until Core stops it.
+  await waitFor(() => {
+    const current = state();
+    return current.round.state === 'running' && current.round.runnerAlive && current.worker?.backendAlive && current.worker.nativeTurnStarted;
+  }, state);
   const current = getRecord('assignment', assignment.id), round = getRecord('round', `${assignment.id}:1`), worker = loadSession(current.workerSessionId);
   const identities = [round.runner, round.launcher, worker.backendProcess];
   const partial = appendEvent(worker.id, 'text', { text: 'Retain this partial worker finding.' });
+  const beforeStop = state();
   const stopped = await runtimeRequest(runtimeInfo(), 'POST', '/v1/operator-stop', { shutdown: false });
-  assert.ok(stopped.pausedExecutions >= 1); assert.ok(identities.every(identity => !identityAlive(identity)));
+  assert.ok(stopped.pausedExecutions >= 1, `Detached assignment stop did not observe active work: ${JSON.stringify({ before: beforeStop, after: state(), pausedExecutions: stopped.pausedExecutions }).slice(0, 3500)}`);
+  assert.ok(identities.every(identity => !identityAlive(identity)));
   assert.equal(getRecord('round', `${assignment.id}:1`).state, 'interrupted');
   assert.equal(getRecord('assignment', assignment.id).closure, 'open');
   assert.equal(loadSession(parent.id).goal.status, 'paused');

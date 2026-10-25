@@ -11,13 +11,13 @@ import { assertSessionIdle } from './models.js';
 import { config, updateConfig } from './providers.js';
 import { codexHome, claudeHome, claudeAuthHomes } from './auth.js';
 import { conversationCursor } from './conversation.js';
-import { sharedKinds, portableState, sharedSecrets, assertShareText, validateSharedManifest, SHARE_LIMITS } from './share-bundle-policy.js';
+import { sharedKinds, portableState, sharedSecrets, assertShareText, validateSharedManifest, stripWorkflowAuthority, SHARE_LIMITS } from './share-bundle-policy.js';
 import { canonicalPath } from '../paths.js';
 import { resolveProjectIdentity, sessionBelongsToProject } from './project-identity.js';
 
 const helper = fileURLToPath(new URL('./archive.py', import.meta.url));
 const uuid = /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi;
-const ephemeral = kind => /^(?:telegram-|access-token$|input-owner$|account-status$|outbox$|notification|run$|control$|assignment-control$|assignment-context$|core\.(?:learning|skill|knowledge|project|memory|checkpoint|issue|mission)(?:\.|$))/.test(kind);
+const ephemeral = kind => /^(?:telegram-|access-token$|input-owner$|account-status$|outbox$|notification|run$|control$|assignment-control$|assignment-context$|core\.(?:learning|skill|knowledge|project|memory|checkpoint|issue|mission|workflow)(?:\.|$))/.test(kind);
 const within = (file, root) => file === root || file.startsWith(root + path.sep);
 const present = file => { try { fs.lstatSync(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
 
@@ -53,7 +53,7 @@ export function collectProjectState(root, sessionId, { shared = false, sessionTr
   sessions(); // Reconcile compatibility exports before taking one consistent database snapshot.
   const project = resolveProjectIdentity(root);
   return transaction(db => {
-    const candidates = db.prepare('SELECT kind,id,data FROM records').all().filter(row => shared ? sharedKinds.has(row.kind) : !ephemeral(row.kind)).map(row => ({ ...row, data: withoutTokens(JSON.parse(row.data)) }));
+    const candidates = db.prepare('SELECT kind,id,data FROM records').all().filter(row => shared ? sharedKinds.has(row.kind) : !ephemeral(row.kind)).map(row => ({ ...row, data: withoutTokens(stripWorkflowAuthority(JSON.parse(row.data))) }));
     const eligible = row => row.kind === 'session' && !['skill-writer', 'learning-review', 'knowledge-review'].includes(row.data.role);
     const selected = new Set(candidates.filter(row => eligible(row) && (row.id === sessionId || !sessionTreeOnly && sessionBelongsToProject(row.data, project))).map(row => row.id));
     // Legacy workers can have a private cwd and only a parent session binding.
@@ -85,7 +85,7 @@ export function collectProjectState(root, sessionId, { shared = false, sessionTr
     }
     const records = rows.filter((_row, index) => included.has(index));
     const events = db.prepare('SELECT seq,session_id AS sessionId,type,data,created_at AS createdAt FROM events WHERE session_id IN (SELECT value FROM json_each(?)) ORDER BY seq')
-      .all(JSON.stringify([...selected])).map(event => ({ ...event, data: withoutTokens(JSON.parse(event.data)) }));
+      .all(JSON.stringify([...selected])).map(event => ({ ...event, data: withoutTokens(stripWorkflowAuthority(JSON.parse(event.data))) }));
     return { records, events };
   }, { readOnly: true });
 }
@@ -310,7 +310,7 @@ export async function importProject(filename, directory, ui, { shared = false, k
     const usedAliases = new Set(sessions().map(session => session.alias).filter(Boolean));
     const records = manifest.records.filter(row => shared ? sharedKinds.has(row.kind) : !ephemeral(row.kind)).map(row => {
       if (typeof row.kind !== 'string' || typeof row.id !== 'string' || !row.data || typeof row.data !== 'object') throw new Error('Invalid saved context record.');
-      const record = transform(row, convert);
+      const record = transform(stripWorkflowAuthority(row), convert);
       if (['session', 'memory', 'issue', 'checkpoint'].includes(row.kind)) record.data.projectId = importedProjectId;
       record.data.importProvenance = { sourceRecordId: row.id, bundleId, importedAt: new Date().toISOString(), observation: 'imported-history' };
       if (['memory', 'issue', 'checkpoint'].includes(row.kind)) {
@@ -367,7 +367,7 @@ export async function importProject(filename, directory, ui, { shared = false, k
       writeJson(path.join(workspace, 'agent.json'), { version: 1, name: agentImport.name || manifest.agent.name,
         instructions: manifest.agent.instructions, ...agentImport.selection });
     }
-    const history = transform(manifest.events, convert);
+    const history = transform(stripWorkflowAuthority(manifest.events), convert);
     if (history.some(event => !sessionIds.has(event.sessionId) || typeof event.type !== 'string' || !Number.isSafeInteger(event.seq)
       || typeof event.createdAt !== 'string' || !Number.isFinite(Date.parse(event.createdAt))) || new Set(history.map(event => event.seq)).size !== history.length) throw new Error('Bundle history contains an invalid event or references an unknown session.');
     for (const record of records.filter(row => row.kind === 'artifact')) {

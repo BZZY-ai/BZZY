@@ -18,6 +18,10 @@ Implemented:
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).
+- Reusable goal workflows with project/global text definitions and independent
+  terminal selections. Core loads and pins the complete workflow before goal
+  dispatch, retaining it across resume and model changes. See
+  [workflows](docs/WORKFLOWS.md).
 - Compactor and Validate consensus share one owner-configured provider/model/effort
   selection, inheriting Core by default with an optional independent override.
   Changing it starts no inference and preserves selections pinned to existing jobs.

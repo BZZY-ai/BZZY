@@ -23,6 +23,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /import [CODE]     Import a terminal copy here; omit CODE for hidden entry.
 /skills            Browse shared workflows; /skills sync copies Codex skills for all models.
 /agents            Create and view reusable specialist subagents for any supported model.
+/workflows         Create, load and select complete instructions for future goals; /workflow is an alias.
 /metrics           Inspect recorded skill, specialist and worker usage for this goal or chat.
 /memory [query]    Search this engagement's findings, memory and past conversations.
 /learn             Review learning jobs, candidate skills and private user/host preferences.
@@ -43,6 +44,8 @@ export const chatCommands = [
   { command: '/update', description: 'Check GitHub and update CLI and Core together' },
   { command: '/skills', description: 'View, sync Codex skills, import and enable shared Core skills' },
   { command: '/agents', description: 'Create, view and use reusable specialist subagents across models' },
+  { command: '/workflows', description: 'Create, load and select complete workflows for future goals' },
+  { command: '/workflow', description: 'Open saved workflows and pre-prompts (alias of /workflows)' },
   { command: '/metrics', description: 'Inspect recorded goal and chat skill, specialist and worker usage' },
   { command: '/goal', description: 'Work until an objective is resolved', argument: true },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
@@ -85,4 +88,4 @@ export function commandSuggestions(value) {
   return chatCommands.filter(item => item.command.startsWith(value));
 }
 
-export function privateChatCommand(value) { return /^\/(?:import|session-action|yolo)(?:\s|$)/.test(String(value).trim()); }
+export function privateChatCommand(value) { return /^\/(?:import|session-action|yolo|workflows?)(?:\s|$)/.test(String(value).trim()); }

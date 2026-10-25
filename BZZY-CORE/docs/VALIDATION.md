@@ -1,3 +1,39 @@
+# Session workflows and pinned goal instructions (2026-10-25)
+
+Final Node.js 24/macOS suites: **661 Core tests passed, 2 skipped** (663 total)
+and **624 CLI tests passed, 21 skipped** (645 total), zero failures. Both syntax
+checks and `git diff --check` pass. Tests use isolated homes and offline provider
+fixtures; the running installation was not updated.
+
+The workflow picker supports direct selection, exactly one checked entry, None,
+creation/import, complete previews, revision-pinned edits/deletion and Back/Esc.
+Tests cover initial selection before the first goal in the same idle terminal,
+loaded-name clicks in ordinary/minimal chat, narrow/80-column/wide geometry,
+draft preservation, stopped-Core Back and private command history. Captured row
+commands cannot affect another terminal or private host after refresh, including
+matching names, IDs and revisions.
+
+Registry/admission tests cover project/global isolation, immutable versions,
+stale revisions, deleted selections, invalid files/links/private paths, explicit
+None and legacy behavior, replay, atomic rollback, known context limits and
+tampered receipts or context. Native adapters for Codex, Claude, DeepSeek,
+Abliteration and OrcaRouter receive every line of a long workflow before their
+first model action. Delegate, Parallel, Besties and Validate mission paths retain
+it across follow-ups, restart, model changes and later definition edits/deletion.
+
+Inert account-reference placeholders and their trailing control instructions
+survive worker handoffs unchanged. Configured secrets, actual credential fields,
+same-line secrets and malformed/attached reference values remain redacted.
+Workflows requiring any mission-text redaction are rejected explicitly. Ordinary
+and shared project ZIP tests preserve historical instructions while excluding
+private workflow definitions, selections and execution admission authority.
+
+The detached operator-stop fixture now logs inside its existing writable sandbox
+root and waits for a real native turn. Its previous external log path caused
+EPERM during startup; process-only readiness could mistake that transient launch
+for active work. All process-exit, interrupted-round, paused-goal and retained
+history assertions remain enforced.
+
 # Library availability switches and goal usage (2026-10-25)
 
 Final Node.js 24/macOS suites: **624 Core tests passed, 2 skipped** (626 total)

@@ -28,6 +28,11 @@ attributed recall, evidence freshness, scoped skills, private approved profiles
 and bounded idle reviews with explicit candidate evaluation and activation.
 CLI `/memory` and `/learn` open its review controls in the existing Skills panel.
 
+Reusable [workflows](BZZY-CORE/docs/WORKFLOWS.md) supply a goal's operating
+instructions. Create or load one through `/workflows`, then select it for the
+current terminal. Core pins its full text before the next `/goal` starts;
+existing goals retain their original workflow across resume and model changes.
+
 [Session history memory](BZZY-CORE/docs/SESSION-MEMORY.md) adds a bounded index of
 each terminal's own conversation across model and mode changes. Its background
 compactor shares one configurable model with validation consensus, inheriting the

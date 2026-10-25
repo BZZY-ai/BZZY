@@ -24,15 +24,38 @@ export const missionSourceRevision = (parent, { chat = false } = {}) => digest({
 export const missionResultRevision = parent => digest({ goalId: parent.goal?.id || null, status: parent.goal?.status || null,
   evidence: parent.goal?.evidence || [], acceptance: parent.acceptance || null, modeResult: parent.modeResult?.goalId === parent.goal?.id ? parent.modeResult : null });
 
+// Preserve only inert reference syntax, never arbitrary angle-wrapped values.
+// Real configured secrets are removed before this check. A safe token is one
+// value, not permission to preserve the remainder of a credential-bearing line.
+const referenceToken = String.raw`(?:<approved-private-host-reference>|\$\{[A-Z_][A-Z0-9_]{0,127}\}|\[redacted\])`;
+const exactReferenceToken = new RegExp(`^${referenceToken}$`);
+const quotedReference = `(?:"${referenceToken}"|'${referenceToken}'|${referenceToken})`;
+const referenceValue = `(?:(?:Bearer|Basic)\\s+)?${quotedReference}`;
+const referenceBoundary = String.raw`(?=$|[\s,;)}\]]|\.(?=\s|$))`;
+const credentialAssignment = String.raw`((?:["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)["']?)\s*[=:]\s*)`;
+// An attached suffix is part of a malformed value, not a safe reference token.
+// Consume that malformed tail too, so removing its credential label cannot
+// leave a following quoted secret exposed without its original assignment.
+const quotedValue = String.raw`(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')(?:(?!\.(?:\s|$))[^\s,;)}\]][^\r\n,;]*)?`;
+const quotedAssignment = new RegExp(credentialAssignment + `(${quotedValue})`, 'gi');
+const unquotedAssignment = new RegExp(credentialAssignment + `(${referenceValue}${referenceBoundary}|(?:Bearer|Basic)\\s+${quotedValue}|[^\\r\\n,;"']+)`, 'gi');
+const authorizationValue = new RegExp(String.raw`\b(?:Bearer|Basic)\s+(?:` + quotedReference + referenceBoundary + '|' + quotedValue + String.raw`|<[^>\r\n]*>[^\s"']*|<[^\r\n]*|[^\s"']+)`, 'gi');
+function referenceOnly(value) {
+  const unquote = text => text.length >= 2 && ['"', "'"].includes(text[0]) && text.at(-1) === text[0] ? text.slice(1, -1) : text;
+  const raw = unquote(value.trim()), authorization = /^(?:Bearer|Basic)\s+(.+)$/i.exec(raw);
+  return exactReferenceToken.test(unquote(authorization ? authorization[1] : raw));
+}
+
 function sanitized(value, secrets) {
   if (typeof value === 'string') {
     let result = value;
     for (const secret of secrets) result = result.replaceAll(secret, '[redacted]');
     return result.replace(/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----/g, '[redacted]')
-      .replace(/\b(?:Bearer|Basic)\s+[^\s"<>]+|\bsk-[A-Za-z0-9_-]{12,}|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gi, '[redacted]')
-      .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[redacted]@')
-      .replace(/((?:["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)["']?)\s*[=:]\s*)(["'])([^\r\n]*?)\2/gi, '$1$2[redacted]$2')
-      .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)\s*[=:]\s*)([^\r\n,;"']+)/gi, '$1[redacted]');
+      .replace(quotedAssignment, (_match, prefix, assigned) => prefix + (referenceOnly(assigned) ? assigned : assigned[0] + '[redacted]' + assigned[0]))
+      .replace(unquotedAssignment, (_match, prefix, assigned) => prefix + (referenceOnly(assigned) ? assigned : '[redacted]'))
+      .replace(authorizationValue, match => referenceOnly(match) ? match : '[redacted]')
+      .replace(/\bsk-[A-Za-z0-9_-]{12,}|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gi, '[redacted]')
+      .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[redacted]@');
   }
   if (Array.isArray(value)) return value.map(item => sanitized(item, secrets));
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)

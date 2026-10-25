@@ -7,6 +7,7 @@ import { chooseModel } from './models.js';
 import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
 import { bundleLibraryRows, definitionBundleRows, definitionBundleAction, cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { libraryToggleRow } from './library-toggle-ui.js';
+import { openWorkflows } from './workflow-ui.js';
 
 const definitionFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
 const cwdFor = ui => (ui.sessionId && loadSession(ui.sessionId)?.cwd) || ui.tui?.cwd || process.cwd();
@@ -75,6 +76,7 @@ export function subagentRows(ui) {
   const rows = [{ text: 'AGENTS · reusable specialists', tone: 'accent' },
     { text: 'Use these specialists from any supported chat model or goal.', tone: 'muted' },
     { text: 'Click ON/OFF · ↑/↓ or Tab select · Space toggles · Enter opens', tone: 'muted' },
+    { text: 'Workflows / pre-prompts', action: 'workflows', tone: 'accent' },
     { text: 'Agent Creator · use current model', action: 'creator', tone: 'accent' },
     { text: 'Create specialist manually', action: 'create' },
     ...bundleLibraryRows(),
@@ -144,7 +146,8 @@ export async function subagentsCommand(text, ui, { generateDefinition, bundleApi
   const originalProviderPicker = ui.chooseProvider, originalModelPicker = ui.chooseModel;
   ui.chooseProvider ||= chooseProvider; ui.chooseModel ||= chooseModel;
   try {
-    if (action.startsWith('bundle-')) {
+    if (action === 'workflows') await openWorkflows(ui, { origin: 'agents' });
+    else if (action.startsWith('bundle-')) {
       if (['bundle-export', 'bundle-import'].includes(action)) reset(ui);
       await definitionBundleAction(action, ui, 'agents', { api: bundleApi });
     }

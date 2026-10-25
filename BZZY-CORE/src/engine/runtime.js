@@ -30,6 +30,7 @@ import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, p
 import { recoverSessionCompactions, processSessionCompactions, pauseSessionCompaction, pauseAllSessionCompactions } from './session-compactor.js';
 import { CoreKnowledge } from '../knowledge.js';
 import { recordGoalValidationResult } from './goal-validation.js';
+import { assertGoalWorkflowAdmission } from './workflows.js';
 
 const runtimeBuild = digest(['src', 'assets', 'bin'].flatMap(directory => fs.readdirSync(path.join(root, directory), { recursive: true })
   .filter(file => !file.split(path.sep).some(part => part.startsWith('._')) && fs.statSync(path.join(root, directory, file)).isFile()).sort()
@@ -546,6 +547,7 @@ export async function executeJob(id) {
   const session = loadSession(acquired.sessionId), ui = new RunnerUI(session.id, { parentSessionId: session.parentSessionId, agent: session.agentNamespace || session.provider, peer: ['peer', 'bestie'].includes(session.role) });
   let code = 1, error;
   try {
+    if (acquired.goal || acquired.resumeGoal) assertGoalWorkflowAdmission(session, acquired.workflowAdmission);
     if (acquired.goal && session.mode === 'debate') { const { runDebate } = await import('./debate.js'); code = await runDebate(session, acquired.options, ui); }
     else if (acquired.goal && session.mode === 'parallel') { const { runParallel } = await import('./parallel.js'); code = await runParallel(session, acquired.options, ui); }
     else if (acquired.goal && session.mode === 'besties') { const { runBesties } = await import('./besties.js'); code = await runBesties(session, { ...acquired.options, bestiesResume: acquired.resumeGoal, bestiesRunId: acquired.id }, ui); }

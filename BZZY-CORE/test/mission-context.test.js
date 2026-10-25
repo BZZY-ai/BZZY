@@ -9,7 +9,7 @@ import { prepareTask } from '../src/engine/task.js';
 import { newGoal } from '../src/engine/goals.js';
 import { artifact } from '../src/engine/evidence.js';
 import { appendEvent, getRecord, putRecord } from '../src/engine/database.js';
-import { createMissionContext, missionContextCurrent, missionSourceRevision, missionResultRevision } from '../src/engine/mission-context.js';
+import { createMissionContext, missionContextCurrent, missionSourceRevision, missionResultRevision, sanitizeMissionValue } from '../src/engine/mission-context.js';
 import { prepareChatDebate } from '../src/engine/chat-debate.js';
 import { assessCompletion, assessRequirement } from '../src/engine/verification.js';
 import { randomUUID } from 'node:crypto';
@@ -47,6 +47,75 @@ test('nested credential bindings are redacted before persistent mission publicat
   const record = createMissionContext(source); assert.equal(record.redacted, true);
   assert.doesNotMatch(JSON.stringify(getRecord('core.mission.context', record.id)), /short-private|another-private|nested-private|quoted-private/);
   assert.match(record.brief.instructions, /account gateway/);
+});
+
+test('inert account-reference placeholders preserve complete trailing workflow steps in immutable mission instructions', () => {
+  const instructions = [
+    'Use API_KEY=<approved-private-host-reference> only through the approved gateway. Preserve the negative control.',
+    'Use access_token=${APPROVED_BINDING} through the approved gateway; retain the final verification step.',
+    'Use password=[redacted] as an inert example, then compare the controls.',
+    'Use api_key="${ENV_VAR}" as a host reference. Retain this complete instruction.',
+    'Use Authorization="Bearer ${APPROVED_BINDING}" only at the approved gateway. Preserve the evidence.',
+    'Use Authorization=Bearer "${APPROVED_BINDING}" only at the approved gateway. Preserve the evidence.',
+    'Use Bearer <approved-private-host-reference> through the gateway. Keep the final check.',
+    'Use Basic "${APPROVED_BINDING}" through the gateway. Keep the final check.',
+    'Use API_KEY="${ENV_VAR}". Retain the final control.',
+    'Use API_KEY=<approved-private-host-reference>. Retain the final control.',
+    'Use Bearer ${ENV_VAR}. Retain the final control.',
+  ].join('\n');
+  source.contract.context = instructions; saveSession(source);
+  const mission = createMissionContext(source);
+  assert.equal(mission.brief.instructions, instructions); assert.equal(sanitizeMissionValue(instructions), instructions);
+  assert.equal(missionContextCurrent(source, mission), true);
+});
+
+test('safe placeholders never protect following same-line credentials, quoted secrets or malformed placeholder contents', () => {
+  const cases = [
+    'API_KEY=<approved-private-host-reference> preserve controls PASSWORD=fixture-private-1',
+    'API_KEY=${APPROVED_BINDING} PASSWORD="fixture-private-2"; preserve controls',
+    'API_KEY=[redacted] Authorization=Bearer fixture-private-3',
+    'Authorization="Bearer ${ENV_VAR}" cookie=fixture-private-4',
+    'Bearer ${ENV_VAR} PASSWORD=fixture-private-5',
+    'Bearer "${ENV_VAR}" PASSWORD="fixture-private-6"',
+    'API_KEY=<approved-private-host-reference fixture-private-7> and preserve controls',
+    'API_KEY=${ENV_VAR:fixture-private-8} and preserve controls',
+    'API_KEY=[redacted fixture-private-9] and preserve controls',
+    'API_KEY=<approved-private-host-reference>fixture-private-10 and preserve controls',
+    'Authorization="Bearer ${ENV_VAR} fixture-private-11"',
+    'Bearer <approved-private-host-reference fixture-private-12>',
+    'Bearer "fixture-private-13" and preserve controls',
+    "Basic 'fixture-private-14' and preserve controls",
+    'Bearer <fixture-private-15> and preserve controls',
+    'Bearer <fixture-private-16 without a closing bracket',
+    'API_KEY="${ENV_VAR} PASSWORD=fixture-private-17"',
+    'API_KEY="fixture-private-18\\"still-private"; preserve controls',
+    'API_KEY="${ENV_VAR}"fixture-private-20 and preserve controls',
+    'API_KEY="${ENV_VAR}"PASSWORD="fixture-private-21"',
+    'Bearer "${ENV_VAR}"fixture-private-22 and preserve controls',
+    'Bearer "${ENV_VAR}"PASSWORD="fixture-private-23"',
+    'Bearer <approved-private-host-reference>PASSWORD="fixture-private-24"',
+    'Bearer ${ENV_VAR}PASSWORD="fixture-private-25"',
+    'Authorization=Bearer "fixture-private-26"; preserve controls',
+    "Authorization=Basic 'fixture-private-27'; preserve controls",
+    'API_KEY="${ENV_VAR}".fixture-private-28 and preserve controls',
+    'Bearer ${ENV_VAR}.fixture-private-29 and preserve controls',
+  ];
+  for (const input of cases) {
+    const result = sanitizeMissionValue(input);
+    assert.doesNotMatch(result, /fixture-private-\d+|still-private/, input);
+    assert.match(result, /\[redacted\]/, input);
+  }
+  const result = sanitizeMissionValue('API_KEY=${ENV_VAR} keep the negative control; PASSWORD="fixture-private-19"; preserve the final step.');
+  assert.match(result, /API_KEY=\$\{ENV_VAR\} keep the negative control/); assert.match(result, /preserve the final step/);
+  assert.equal(sanitizeMissionValue({ authorization: '${ENV_VAR}', cookie: '<approved-private-host-reference>' }).authorization, '[redacted]', 'Structured credential fields remain redacted unconditionally.');
+});
+
+test('a configured secret inside otherwise valid placeholder syntax is still removed before placeholder recognition', () => {
+  const previous = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'APPROVED_BINDING';
+  try {
+    const result = sanitizeMissionValue('API_KEY=${APPROVED_BINDING} and Authorization="Bearer ${APPROVED_BINDING}"');
+    assert.doesNotMatch(result, /APPROVED_BINDING/); assert.match(result, /\[redacted\]/);
+  } finally { if (previous === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = previous; }
 });
 
 test('missing or altered evidence and foreign artifact IDs cannot enter a mission', () => {

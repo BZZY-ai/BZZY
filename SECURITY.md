@@ -58,6 +58,14 @@ assistant by default. Changing defaults starts no work and grants no permissions
 Compaction retains durable usage reservations and explicit recovery after uncertain requests. See
 BZZY-CORE/docs/SESSION-MEMORY.md for bounds and provider billing limitations.
 
+Goal workflows are scoped reusable text, with credential rejection and Core's
+mandatory generation policy. The host pins the complete selected version before
+goal dispatch and verifies the original binding on resume. Workflow text grants
+no tools, accounts, targets or execution policy. Editing a Library selection
+does not rewrite a running goal. Private workflow selections and admission
+receipts cannot travel through project/share imports or become execution
+authority from historical text. See BZZY-CORE/docs/WORKFLOWS.md.
+
 Validate and Delegate now pin automatic mission context and source revisions.
 Missing-context reports stop workers and require explicit revision-pinned
 answers/follow-ups. Agreement cannot replace a final evidence review; the

@@ -42,6 +42,8 @@ import { activateCLIHost, coreHostStatus, stopCoreHost, restartCoreHost } from '
 import { syncCodexSkills, skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
 import { knowledgeCLI, sessionMemoryCLI } from './knowledge-command.js';
 import { subagentsCLI } from '@bzzy/core/engine/subagents-cli.js';
+import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
+import { workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
@@ -55,6 +57,10 @@ Usage:
   bzzy skills sync                     Choose and import Codex skill folders
   bzzy subagents list                  List reusable specialist subagents
   bzzy subagents create FILE.json      Save a specialist definition for this project
+  bzzy workflows list                 List reusable project/global goal instructions
+  bzzy workflows import FILE.txt --name NAME [--global]
+  bzzy workflows use NAME --session ID --revision N [--workflow-revision N]
+  bzzy workflows selection --session ID | clear --session ID --revision N
   bzzy knowledge search TEXT           Search this engagement's knowledge and past chats
   bzzy knowledge review [SESSION]      Queue a bounded lesson review for an existing chat
   bzzy session-memory status [SESSION] Inspect this session's history index and background budget
@@ -146,7 +152,7 @@ Options:
   -v, --version         Show version
 
 Chat commands: /goal <objective>, /goal status|pause|resume|clear, /delegate, /validate, /solo,
-/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /effort, /default, /usage, /settings, /help, /exit
+/new, /alias [name], /sessions, /export [FILE.zip], /share, /import [CODE], /skills [sync], /agents, /workflows, /memory [query], /learn, /skill_that [name], /providers [name], /models [name|default], /effort, /default, /usage, /settings, /help, /exit
 /providers chooses Codex, Claude or DeepSeek; missing API keys are prompted securely.
 Choosing a provider opens its model-and-effort picker, including the current provider.
 Model/provider changes retain this session's chat; the new backend receives prior messages.
@@ -213,6 +219,17 @@ export function parseArgs(argv) {
     if (raw === '--') { args.push(...argv.slice(i + 1)); break; }
     const equal = raw.indexOf('=');
     const flag = equal > 0 ? raw.slice(0, equal) : raw;
+    if (args[0] === 'workflows' && ['--global', '--revision', '--workflow-revision', '--session', '--name', '--description'].includes(flag)) {
+      if (flag === '--global') {
+        if (equal > 0) throw new Error('--global does not take a value.');
+        args.push(flag);
+      } else {
+        const value = equal > 0 ? raw.slice(equal + 1) : argv[++i];
+        if (value === undefined || equal < 0 && value.startsWith('--')) throw new Error(`${flag} requires a value.`);
+        args.push(flag, value);
+      }
+      continue;
+    }
     if (Object.hasOwn(values, flag)) {
       const value = equal > 0 ? raw.slice(equal + 1) : argv[++i];
       if (!value || (equal < 0 && value.startsWith('--'))) throw new Error(`${flag} requires a value.`);
@@ -267,6 +284,15 @@ export function parseArgs(argv) {
   if (options.alias != null) options.alias = normalizeSessionAlias(options.alias);
   options.cwd = path.resolve(options.cwd);
   return { options, args };
+}
+
+// Chat creation saves an idle terminal before prompting for the first input.
+// Library selection must use that exact terminal, never the latest session in
+// a directory or a worker tab, and never start an execution to obtain an ID.
+export function ensureCurrentTerminalSession(ui) {
+  const id = ui.activeTab || ui.sessionId;
+  if (!id) throw new Error('Open a terminal chat before selecting a workflow.');
+  return loadSession(workflowSelection(id).sessionId);
 }
 
 async function authenticate(provider, ui, options, { reuseExisting = false } = {}) {
@@ -524,7 +550,7 @@ export async function main(argv) {
   options.cwd = fs.realpathSync(options.cwd);
   await retireTelegram();
   const launchCommand = args[0];
-  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'subagents']);
+  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'subagents', 'workflows']);
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
@@ -533,11 +559,13 @@ export async function main(argv) {
   ui.onDebate = (id, focus) => debateConversation(loadSession(id), focus, ui.executionOptions(options, { id }), ui);
   ui.onProvider = (id, argument, connection) => changeConversationProvider(loadSession(id), argument, ui, connection);
   ui.onSessions = () => queueSessionBrowser(ui);
+  ui.ensureWorkflowSession = () => ensureCurrentTerminalSession(ui);
   const launch = async () => {
     const [command, ...rest] = args;
     if (command === 'knowledge') return knowledgeCLI(rest, options, ui);
     if (command === 'session-memory') return sessionMemoryCLI(rest, options, ui);
     if (command === 'subagents') return subagentsCLI(rest, options, ui);
+    if (command === 'workflows') return workflowsCLI(rest, options, ui);
     if (command === 'skills') {
       if (rest.length !== 1 || rest[0] !== 'sync') throw new Error('Use bzzy skills sync, or open Skills in the terminal.');
       if (ui.interactive) { await terminalSkillsCommand('/skills sync', ui); return 0; }

@@ -77,6 +77,14 @@ disabled; reviewed agent definitions are added without starting agents or models
 Private bindings, history and case/evidence packages are excluded from this
 portable format. Unsafe packages are blocked rather than silently stripped.
 
+Use `/workflows` to choose one reusable goal pre-prompt, like the model picker.
+Choose **None** to turn it off; chat shows the selected workflow's name. Create,
+load, inspect and edit definitions through this list or its links in Skills and
+Agents. Selection belongs to the current terminal session. A new `/goal` loads
+the complete workflow before model work and keeps that version when resumed;
+later selection changes affect future goals. Loading or selecting starts no
+model work. See [goal workflows](../../BZZY-CORE/docs/WORKFLOWS.md).
+
 Core also maintains a bounded [session history index](../../BZZY-CORE/docs/SESSION-MEMORY.md)
 across alias, model and mode changes. Its compactor uses the shared **Consensus &
 Compactor** default, which inherits BZZY Core unless explicitly changed. Inspect

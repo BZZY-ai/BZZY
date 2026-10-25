@@ -1,6 +1,7 @@
 import { updateCommand } from './update-checker.js';
 import { skillsCommand } from './skills-ui.js';
 import { subagentsCommand } from './subagents-ui.js';
+import { openWorkflows, workflowAction } from './workflow-ui.js';
 import { knowledgeCommand } from './knowledge-ui.js';
 import readline from 'node:readline';
 import { TerminalChat } from './tui.js';
@@ -157,6 +158,23 @@ export class UI {
       return true;
     }
     if (input.trim() === '/update') { await updateCommand(this); return true; }
+    const workflow = /^\/workflows?(?:\s|$)/.exec(input.trim());
+    if (workflow) {
+      const action = input.trim().slice(workflow[0].length).trim();
+      if (!action) openWorkflows(this);
+      else {
+        // Keep displayed row/context pins intact until the action validates
+        // them. Reopening first would replace those pins with the new session.
+        if (this.tui?.panel !== 'workflows') {
+          if (!['create', 'load'].includes(action)) {
+            this.event('error', { message: 'Reopen /workflows before choosing an action.' }); return true;
+          }
+          if (!openWorkflows(this)) return true;
+        }
+        await workflowAction(action, this);
+      }
+      return true;
+    }
     if (await knowledgeCommand(input, this)) return true;
     if (await skillsCommand(input, this)) return true;
     if (await subagentsCommand(input, this)) return true;

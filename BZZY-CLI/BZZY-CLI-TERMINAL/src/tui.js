@@ -1,5 +1,6 @@
 import { skillRows, returnToSkillLibrary } from './skills-ui.js';
 import { subagentRows } from './subagents-ui.js';
+import { workflowRows, workflowAction, workflowChatLabel } from './workflow-ui.js';
 import { namedTerminalSessions } from './session-browser.js';
 import { clean, cellWidth, clip, wrap, wrapProse, duration } from './terminal-format.js';
 import { mascotCells, mascotLine } from './mascot.js';
@@ -432,7 +433,7 @@ export class TerminalChat {
   }
   canCompose() {
     if (this.selection || this.renderingPicker) return false;
-    if (!this.promptDraft && (this.panel === 'settings' || this.panel === 'metrics' || this.panel === 'agents'
+    if (!this.promptDraft && (this.panel === 'settings' || this.panel === 'metrics' || this.panel === 'agents' || this.panel === 'workflows'
       || this.panel === 'skills' && this.ui.skillView !== 'import')) return false;
     return Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft);
   }
@@ -445,13 +446,13 @@ export class TerminalChat {
     this.value = ''; this.cursor = 0; this.schedule();
   }
   completions() {
-    if (['settings', 'skills', 'agents', 'metrics'].includes(this.panel)) return [];
+    if (['settings', 'skills', 'agents', 'workflows', 'metrics'].includes(this.panel)) return [];
     if (!this.resolveInput || this.hidden || this.selection || this.renderingPicker || this.pasting || !/^bzzy\b/.test(this.question || '')) return [];
     if (this.completionQuery !== this.value) { this.completionQuery = this.value; this.completionFocus = 0; this.completionDismissed = false; }
     return this.completionDismissed ? [] : commandSuggestions(this.value);
   }
   completeCommand(choice) { this.value = choice.command + ' '; this.cursor = [...this.value].length; this.schedule(); }
-  panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'agents', 'metrics', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'agents', 'metrics', 'settings']; }
+  panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'agents', 'workflows', 'metrics', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'agents', 'workflows', 'metrics', 'settings']; }
   setPanel(panel) {
     if (this.ui.coreLifecycleInterrupted && !['settings', 'metrics', 'chat'].includes(panel)) return;
     if (this.promptDraft || this.selection) return;
@@ -476,6 +477,7 @@ export class TerminalChat {
     this.settingsEnsureFocus = panel === 'settings';
     if (panel === 'skills') this.skillTopRequested = true;
     if (panel === 'agents') this.agentTopRequested = true;
+    if (panel === 'workflows') this.workflowTopRequested = true;
     if (panel === 'metrics') {
       this.ui.sessionMetrics ||= new SessionMetricsPanel(this.ui, { load: this.ui.sessionMetricsLoader });
       this.ui.sessionMetrics.open(this.ui.activeTab || this.ui.sessionId);
@@ -641,6 +643,7 @@ export class TerminalChat {
     if (hit?.type === 'session-new') { this.localCommand('/new'); return; }
     if (hit?.type === 'top-skills') { this.localCommand('/skills'); return; }
     if (hit?.type === 'top-agents') { this.localCommand('/agents'); return; }
+    if (hit?.type === 'workflow-open') { this.localCommand('/workflows'); return; }
     if (hit?.type === 'top-metrics') { this.setPanel('metrics'); return; }
     if (hit?.type === 'metrics-action') { if (!hit.disabled) this.metricsAction(hit.action); return; }
     if (hit?.type === 'usage-balance') { this.balanceTask = this.ui.showProviderBalance?.(); return; }
@@ -666,6 +669,7 @@ export class TerminalChat {
     }
     else if (hit?.type === 'skill-action') this.localCommand('/skills ' + hit.action);
     else if (hit?.type === 'agent-action') this.localCommand('/agents ' + hit.action);
+    else if (hit?.type === 'workflow-action') this.localCommand('/workflows ' + hit.action);
     else if (hit?.type === 'saved-session') this.localCommand('/open-session ' + hit.id);
     else if (hit?.type === 'alias') {
       const time = Date.now();
@@ -726,6 +730,7 @@ export class TerminalChat {
       this.lastFrame = []; this.schedule(); return;
     }
     if (this.panel === 'skills' && returnToSkillLibrary(this.ui)) return;
+    if (this.panel === 'workflows') { workflowAction('back', this.ui); return; }
     if (this.panel === 'agents' && returnFromDefinitionBundle(this.ui, 'agents')) return;
     if (this.panel === 'agents') {
       if (this.ui.subagentView === 'run') { this.ui.subagentView = 'runs'; this.ui.subagentRunId = null; }
@@ -754,6 +759,7 @@ export class TerminalChat {
     if (this.panel === 'chat' && this.debateFocus?.expanded) { this.toggleDebate(this.debateFocus); return true; }
     if (this.panel === 'settings') { this.leaveSettings(); return true; }
     if (this.panel === 'skills' && returnToSkillLibrary(this.ui)) return true;
+    if (this.panel === 'workflows') { workflowAction('back', this.ui); return true; }
     if (this.panel === 'agents' && returnFromDefinitionBundle(this.ui, 'agents')) return true;
     if (this.panel === 'agents' && this.ui.subagentCreatorDraft) {
       this.ui.subagentCreatorDraft = null; this.ui.subagentPreview = null; this.ui.subagentView = 'library';
@@ -895,6 +901,18 @@ export class TerminalChat {
       else if (key.name === 'r' && !key.ctrl && !key.meta) this.metricsAction('refresh');
       else if (key.name === 'g' && !key.ctrl && !key.meta) this.metricsAction('history');
       else if (key.name === 'up' || key.name === 'down') this.scroll = Math.max(0, this.scroll + (key.name === 'up' ? 1 : -1));
+      else if (key.name === 'home') this.scroll = this.scrollbar?.maximum || 0;
+      else if (key.name === 'end') this.scroll = 0;
+      this.schedule(); return;
+    }
+    if (this.panel === 'workflows' && !this.promptDraft) {
+      key.bzzyHandled = true;
+      const actions = libraryActionList(workflowRows(this.ui));
+      if (['up', 'down', 'left', 'right', 'tab'].includes(key.name) && actions.length) {
+        const backwards = ['up', 'left'].includes(key.name) || key.name === 'tab' && key.shift;
+        this.workflowFocus = ((this.workflowFocus || 0) + (backwards ? actions.length - 1 : 1)) % actions.length;
+        this.workflowEnsureFocus = true;
+      } else if (key.name === 'return' && actions[this.workflowFocus || 0]) this.localCommand('/workflows ' + actions[this.workflowFocus || 0]);
       else if (key.name === 'home') this.scroll = this.scrollbar?.maximum || 0;
       else if (key.name === 'end') this.scroll = 0;
       this.schedule(); return;
@@ -1075,6 +1093,16 @@ export class TerminalChat {
           this.contentHits.push({ type: 'agent-action', action: row.action, row: lines.length + offset, left: 2, right: width });
         for (const line of wrapped) put('  ' + line, palette[row.tone] || palette.text, Boolean(selected));
       }
+    } else if (this.panel === 'workflows') {
+      let actionIndex = 0;
+      for (const row of workflowRows(this.ui)) {
+        const selected = row.action && actionIndex++ === (this.workflowFocus || 0);
+        if (selected) this.workflowFocusRow = lines.length;
+        const wrapped = wrap((selected ? '› ' : '  ') + row.text, width - 4);
+        if (row.action) for (let offset = 0; offset < wrapped.length; offset++)
+          this.contentHits.push({ type: 'workflow-action', action: row.action, row: lines.length + offset, left: 2, right: width });
+        for (const line of wrapped) put('  ' + line, palette[row.tone] || palette.text, Boolean(selected));
+      }
     } else if (this.panel === 'metrics') {
       const layout = sessionMetricsLayout(this.ui.sessionMetrics, width, { currentGoal: this.goal, alias: this.alias, focus: this.metricsFocus || 0 });
       for (const row of layout.lines) put(row.text, palette[row.tone] || palette.text, row.bold);
@@ -1236,7 +1264,7 @@ export class TerminalChat {
     return { line, extra };
   }
   simpleChatLayout() {
-    return !this.ui.minimal && ['chat', 'room', 'skills', 'agents', 'metrics'].includes(this.panel);
+    return !this.ui.minimal && ['chat', 'room', 'skills', 'agents', 'workflows', 'metrics'].includes(this.panel);
   }
   elapsedClock() {
     const durationSeconds = () => {
@@ -1452,10 +1480,11 @@ export class TerminalChat {
     const skillDirectoryInput = this.panel === 'skills' && this.ui.skillView === 'import';
     const skillDetail = this.panel === 'skills' && Boolean(this.ui.skillPreview || this.ui.skillHistoryState
       || this.ui.skillSyncDetails || this.ui.skillPromotionDraft || this.ui.skillCreatorDraft || this.ui.skillMoveDraft || this.ui.definitionBundleDraft?.panel === 'skills');
-    const hasSubmit = (this.promptDraft || skillDirectoryInput || !['skills', 'agents', 'metrics'].includes(this.panel))
+    const hasSubmit = (this.promptDraft || skillDirectoryInput || !['skills', 'agents', 'workflows', 'metrics'].includes(this.panel))
       && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
     const prompt = this.promptDraft && this.question ? this.question
       : this.panel === 'agents' ? this.ui.definitionBundleDraft?.panel === 'agents' ? 'ZIP review · Esc goes back' : this.ui.subagentCreatorDraft ? 'Agent preview · Esc returns to library' : 'Agents · Esc returns to chat'
+      : this.panel === 'workflows' ? 'Workflows · ↑/↓ choose · Enter opens · Esc goes back'
       : this.panel === 'metrics' ? '←/→ scope · Enter opens · G goals · R refresh · PgUp/PgDn scroll'
       : this.ui.definitionBundleDraft?.panel === 'skills' && this.panel === 'skills' ? 'ZIP review · Esc goes back'
       : skillDirectoryInput ? 'Codex skills directory'
@@ -1466,9 +1495,9 @@ export class TerminalChat {
         : this.promptDraft && this.question ? this.question
           : this.mode === 'delegate' && !this.goal ? 'Ask BZZY, or type /goal to delegate work'
             : 'Ask BZZY to do anything';
-    const metrics = this.panel === 'metrics' && !this.promptDraft;
-    const visibleValue = metrics ? '' : this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
-    const before = metrics ? '' : this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
+    const panelOnly = ['metrics', 'workflows'].includes(this.panel) && !this.promptDraft;
+    const visibleValue = panelOnly ? '' : this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
+    const before = panelOnly ? '' : this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
     const sendLabel = this.promptDraft ? ' Confirm ↵ ' : skillDirectoryInput ? ' Save & refresh ' : ' Send ↵ ';
     const prefixWidth = 4, sendWidth = hasSubmit ? cellWidth(sendLabel) : 0;
     const inputWidth = Math.max(1, width - prefixWidth - (hasSubmit ? sendWidth + 1 : 0));
@@ -1482,6 +1511,15 @@ export class TerminalChat {
     const inputIndex = lines.length - 1;
     if (hasSubmit) hits.push({ type: 'confirm', row: inputIndex, left: prefixWidth + inputWidth + 2, right: width });
     if (breathingRoom) lines.push('');
+
+    if (this.panel === 'chat' && !this.promptDraft) {
+      const name = workflowChatLabel(this.ui);
+      if (name !== 'None' && name !== 'Unavailable') {
+        const label = clip(`  Workflow: ${name} · future goals`, width);
+        hits.push({ type: 'workflow-open', row: lines.length, left: 3, right: cellWidth(label) });
+        lines.push(color(label, /unavailable/i.test(name) ? palette.warning : palette.muted));
+      }
+    }
 
     const effort = (this.effort || 'default').replace(/^effort /, '').replace(/^provider default$/, 'default');
     const usage = `${this.tokenLabel()} · ${this.elapsedClock()}`;
@@ -1909,6 +1947,14 @@ export class TerminalChat {
         }
       }
       if (!this.ui.minimal && this.busy && (this.currentTool || this.currentActivity)) bottom.push(muted('  ' + clip(this.currentTool || this.currentActivity, width - 3)));
+      if (this.panel === 'chat' && !this.promptDraft) {
+        const name = workflowChatLabel(this.ui);
+        if (name !== 'None' && name !== 'Unavailable') {
+          const label = clip(`  Workflow: ${name} · future goals`, width);
+          bottomHits.push({ type: 'workflow-open', row: bottom.length, left: 3, right: cellWidth(label) });
+          bottom.push(color(label, /unavailable/i.test(name) ? palette.warning : palette.muted));
+        }
+      }
       if (completions.length) {
         const maximum = height < 28 ? 3 : 6, offset = Math.max(0, Math.min(this.completionFocus - Math.floor(maximum / 2), completions.length - maximum));
         bottom.push(muted('  Commands · ↑/↓ choose · Tab complete · Esc close'));
@@ -1918,21 +1964,22 @@ export class TerminalChat {
           bottom.push(color(`  ${index === this.completionFocus ? '›' : ' '} ${item.command.padEnd(18)}${clip(item.description, width - 25)}`, index === this.completionFocus ? palette.accent : palette.muted, index === this.completionFocus));
         }
       }
-      const prompt = this.panel === 'settings' && !this.promptDraft ? 'Settings' : !this.resolveInput || /^(bzzy\b)/.test(this.question || '') ? 'Message' : clip(this.question || 'Message', width - 6);
+      const workflowOnly = this.panel === 'workflows' && !this.promptDraft;
+      const prompt = workflowOnly ? 'Workflows' : this.panel === 'settings' && !this.promptDraft ? 'Settings' : !this.resolveInput || /^(bzzy\b)/.test(this.question || '') ? 'Message' : clip(this.question || 'Message', width - 6);
       bottom.push(edge('╭─ ') + color(prompt, palette.text, true) + edge(' ' + '─'.repeat(Math.max(0, width - cellWidth(prompt) - 5)) + '╮'));
       if (this.promptDraft) {
         const left = width - 11;
         bottom[bottom.length - 1] = replaceCells(bottom.at(-1), left, color(' ← Back ', palette.accent, true), width, this.theme, palette.background);
         bottomHits.push({ type: 'cancel', back: true, row: bottom.length - 1, left: left + 1, right: left + 8 });
       }
-      const visibleValue = this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
-      const before = this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
-      const hasSubmit = Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
+      const visibleValue = workflowOnly ? '' : this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
+      const before = workflowOnly ? '' : this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
+      const hasSubmit = !workflowOnly && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
       const sendLabel = this.promptDraft ? ' Confirm ' : ' Send ↵ ';
       const inputWidth = Math.max(1, width - 5 - (hasSubmit ? cellWidth(sendLabel) + 1 : 0));
       const cropped = cropLeft(visibleValue, Math.max(0, cellWidth(before) - inputWidth + 1));
-      const inputText = this.value ? clip(cropped, inputWidth, '') : clip(this.panel === 'settings' && !this.promptDraft ? `↑/↓ choose · Enter opens · Esc ${this.ui.settingsOnly ? 'closes Settings' : 'returns to chat'}` : this.ui.sessionMode === 'VIEW' ? 'Read-only · /tabs or /detach' : this.mode === 'delegate' && !this.goal ? 'Chat, or /goal <objective> for supervised work' : 'Ask something, or /goal an objective', inputWidth);
-      const inputLine = color(inputText, this.value ? palette.text : palette.muted) + ' '.repeat(Math.max(0, inputWidth - cellWidth(inputText)));
+      const inputText = visibleValue ? clip(cropped, inputWidth, '') : clip(workflowOnly ? '↑/↓ choose · Enter opens · Esc goes back' : this.panel === 'settings' && !this.promptDraft ? `↑/↓ choose · Enter opens · Esc ${this.ui.settingsOnly ? 'closes Settings' : 'returns to chat'}` : this.ui.sessionMode === 'VIEW' ? 'Read-only · /tabs or /detach' : this.mode === 'delegate' && !this.goal ? 'Chat, or /goal <objective> for supervised work' : 'Ask something, or /goal an objective', inputWidth);
+      const inputLine = color(inputText, visibleValue ? palette.text : palette.muted) + ' '.repeat(Math.max(0, inputWidth - cellWidth(inputText)));
       bottom.push(edge('│ ') + inputLine + (hasSubmit ? ' ' + fillSurface(sendLabel, cellWidth(sendLabel), this.theme, this.value && !this.renderingPicker ? palette.accent : palette.selection, this.value && !this.renderingPicker ? palette.background : palette.accent, true) : '') + '  ' + edge('│'));
       inputIndex = bottom.length - 1;
       if (hasSubmit) bottomHits.push({ type: 'confirm', row: inputIndex, left: inputWidth + 4, right: inputWidth + 3 + cellWidth(sendLabel) });
@@ -1964,7 +2011,7 @@ export class TerminalChat {
     this.selectionHeight = bodyHeight;
     const contentWidth = width - 2;
     const roomLabels = this.panel === 'room' ? JSON.stringify([this.peers.map(peer => [peer.sessionId || peer.id, peer.namespace || peer.agent]), this.ui.tabs?.map(tab => [tab.id, tab.agent])]) : '';
-    const contentKey = `${['skills', 'agents'].includes(this.panel) ? Date.now() : this.panel === 'metrics' ? this.ui.sessionMetrics?.revision : ''}:${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
+    const contentKey = `${['skills', 'agents', 'workflows'].includes(this.panel) ? Date.now() : this.panel === 'metrics' ? this.ui.sessionMetrics?.revision : ''}:${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
     let body;
     if (!this.selection && this.panel !== 'settings' && this.bodyCache?.key === contentKey) {
       body = this.bodyCache.lines; this.contentHits = this.bodyCache.hits;
@@ -2002,6 +2049,15 @@ export class TerminalChat {
         this.agentEnsureFocus = false;
       }
     }
+    if (this.panel === 'workflows' && !this.selection) {
+      if (this.workflowTopRequested) { this.scroll = Math.max(0, body.length - bodyHeight); this.workflowTopRequested = false; }
+      if (this.workflowEnsureFocus) {
+        const start = Math.max(0, body.length - this.scroll - bodyHeight), focus = this.workflowFocusRow || 0;
+        if (focus < start) this.scroll = Math.max(0, body.length - bodyHeight - focus);
+        else if (focus >= start + bodyHeight) this.scroll = Math.max(0, body.length - focus - 1);
+        this.workflowEnsureFocus = false;
+      }
+    }
     if (this.panel === 'metrics' && !this.selection && (this.metricsTopRequested || metricsAtTop)) {
       this.scroll = Math.max(0, body.length - bodyHeight); this.metricsTopRequested = false;
     }
@@ -2017,7 +2073,7 @@ export class TerminalChat {
       if (cellWidth(line) > contentWidth) line = color(clip(line, contentWidth), palette.text);
       visibleBody[index] = line + ' '.repeat(Math.max(0, width - 1 - cellWidth(line))) + (this.selection || !maximum ? ' ' : index >= thumbOffset && index < thumbOffset + thumbHeight ? color('┃', palette.accent) : edge('│'));
     }
-    if (['chat', 'room', 'skills', 'agents', 'settings', 'metrics'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
+    if (['chat', 'room', 'skills', 'agents', 'workflows', 'settings', 'metrics'].includes(this.panel) || this.selection) for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
     for (const hit of bottomHits) this.hitTargets.push({ ...hit, row: header.length + bodyHeight + hit.row + 1 });
     this.composerRow = header.length + bodyHeight + inputIndex + 1;
     this.composerOffset = composerOffset;
