@@ -11,20 +11,24 @@ struct AgentsView: View {
     @State private var editingHostAgent: HostAgentRecord?
     @State private var archivingHostAgent: HostAgentRecord?
     @State private var notificationAgent: HostAgentRecord?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(spacing: 24) {
-                    FlyEyes().frame(maxWidth: .infinity).padding(.horizontal, -14)
-                    Button { showVoice = true } label: {
-                        Label("Talk to BZZY", systemImage: "waveform").bzzyFont(13, weight: .medium)
-                    }.buttonStyle(BZZYActionStyle()).accessibilityLabel("Open voice").accessibilityIdentifier("open-voice-chat")
-                        .disabled(!AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
-                }.frame(maxWidth: .infinity).padding(.top, 32).padding(.bottom, 30)
+                VStack(alignment: .leading, spacing: 12) {
+                    if BZZYTheme.showsMascot {
+                        FlyEyes().frame(maxWidth: .infinity).padding(.horizontal, -14)
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { agentsHeading; Spacer(minLength: 8); voiceButton }
+                        VStack(alignment: .leading, spacing: 8) { agentsHeading; voiceButton }
+                    }
+                    Rectangle().fill(BZZYTheme.line).frame(height: 0.5)
+                }.padding(.top, 8).padding(.bottom, 16)
 
                 if relay.coreAgentsAvailable || !store.hostAgents.isEmpty {
-                    VStack(alignment: .leading, spacing: 15) {
+                    VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text(relay.coreAgentsAvailable ? "On demand" : "Saved agents · Offline").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                             Spacer()
@@ -38,21 +42,14 @@ struct AgentsView: View {
                             NavigationLink {
                                 HostAgentConversationView(store: store, agent: agent)
                             } label: {
-                                HStack(spacing: 15) {
-                                    Image(systemName: "square.stack.3d.up").bzzyFont(20).frame(width: 46)
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text(agent.name).bzzyFont(15, weight: .medium)
-                                        Text("\(agent.provider) · \(agent.model) · \(agent.state)").bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "arrow.up.right").bzzyFont(12)
-                                }.padding(.vertical, 15).contentShape(Rectangle())
+                                hostAgentRow(agent)
                             }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable || !relay.coreCatalogReady || relay.coreBusy)
                                 .accessibilityIdentifier("host-agent-\(agent.id)")
                                 .contextMenu {
                                     Button("Edit") { editingHostAgent = agent }.disabled(!relay.coreActionsAvailable)
                                     Button("Archive", role: .destructive) { archivingHostAgent = agent }.disabled(!relay.coreActionsAvailable)
                                 }
+                            Rectangle().fill(BZZYTheme.line.opacity(0.7)).frame(height: 0.5)
                         }
                         if !relay.coreAgentStatus.isEmpty { Text(relay.coreAgentStatus).bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
                         if relay.coreAgentMutationPending {
@@ -60,10 +57,10 @@ struct AgentsView: View {
                             Button("Retry exact saved agent request") { relay.performHostAction { await relay.retryCoreAgentCommand() } }.bzzyFont(12)
                         }
                         if relay.coreSessionAttachmentPending { Button("Cancel pending attachment") { relay.cancelCoreSessionAttachment() }.bzzyFont(12) }
-                    }.padding(.bottom, 24)
+                    }.padding(.bottom, 16)
                 } else if !store.showsDemoContent {
                     Text("Agent management is not enabled for this iPhone. Enable it when approving the pairing on your host.")
-                        .bzzyFont(12).foregroundStyle(BZZYTheme.secondary).padding(.bottom, 24)
+                        .bzzyFont(12).foregroundStyle(BZZYTheme.secondary).padding(.bottom, 16)
                 }
                 if !store.agents.isEmpty && !store.showsDemoContent { Text("On-device drafts · Inactive").bzzyFont(11).foregroundStyle(BZZYTheme.muted) }
                 VStack(spacing: 0) {
@@ -74,16 +71,16 @@ struct AgentsView: View {
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("agent-\(agent.name)")
                         if agent.id != store.agents.last?.id {
-                            Rectangle().fill(BZZYTheme.line.opacity(0.7)).frame(height: 0.5).padding(.leading, 65)
+                            Rectangle().fill(BZZYTheme.line.opacity(0.7)).frame(height: 0.5).padding(.leading, 22)
                         }
                     }
                     if store.agents.isEmpty {
                         VStack(spacing: 8) {
                             AccentButton(title: "New agent", symbol: "plus") { showCreate = true }
-                        }.frame(maxWidth: .infinity).padding(.vertical, 30)
+                        }.frame(maxWidth: .infinity).padding(.vertical, 16)
                     }
                 }
-            }.padding(.horizontal, 25).padding(.bottom, 20)
+            }.padding(.horizontal, 16).padding(.bottom, 16)
         }.scrollIndicators(.hidden)
             .sheet(isPresented: $showCreate, onDismiss: {
                 if let createdAgent { openedAgent = createdAgent; self.createdAgent = nil }
@@ -108,19 +105,49 @@ struct AgentsView: View {
                 if let id, let agent = store.hostAgents.first(where: { $0.id == id }) { notificationAgent = agent; store.notificationAgentID = nil }
             }
     }
+
+    private var agentsHeading: some View {
+        Text("› agents").bzzyFont(14, weight: .semibold).foregroundStyle(BZZYTheme.accent)
+            .fixedSize(horizontal: true, vertical: false).accessibilityAddTraits(.isHeader)
+    }
+
+    private func hostAgentRow(_ agent: HostAgentRecord) -> some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
+        return layout {
+            HStack(alignment: .top, spacing: 10) {
+                Text("›").bzzyFont(16, weight: .semibold).foregroundStyle(BZZYTheme.accent)
+                    .frame(minWidth: 12).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(agent.name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.agent)
+                    Text("\(agent.provider) · \(agent.model)").bzzyFont(11).foregroundStyle(BZZYTheme.secondary).lineLimit(2)
+                }
+            }
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
+            Text(agent.state.uppercased()).bzzyFont(10, weight: .medium).foregroundStyle(BZZYTheme.secondary)
+                .multilineTextAlignment(dynamicTypeSize.isAccessibilitySize ? .leading : .trailing)
+        }.padding(.vertical, 12).frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
+    }
+
+    private var voiceButton: some View {
+        Button { showVoice = true } label: {
+            Label("Talk to BZZY", systemImage: "waveform").bzzyFont(12, weight: .medium)
+        }.buttonStyle(BZZYActionStyle()).accessibilityLabel("Open voice").accessibilityIdentifier("open-voice-chat")
+            .disabled(!AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
+    }
 }
 
 struct AgentRow: View {
     let agent: AgentProfile
     var body: some View {
-        HStack(spacing: 15) {
-            Image(systemName: agent.symbol).bzzyFont(20, weight: .light)
-                .foregroundStyle(BZZYTheme.secondary)
-                .frame(width: 46, height: 40)
-            Text(agent.name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.secondary)
+        HStack(spacing: 10) {
+            Text("›").bzzyFont(16, weight: .semibold).foregroundStyle(BZZYTheme.accent)
+                .frame(minWidth: 12).accessibilityHidden(true)
+            Text(agent.name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.text)
             Spacer(minLength: 5)
             Image(systemName: "arrow.up.right").bzzyFont(12, weight: .regular).foregroundStyle(BZZYTheme.muted)
-        }.padding(.vertical, 13).contentShape(Rectangle())
+        }.padding(.vertical, 12).frame(minHeight: 48).contentShape(Rectangle())
     }
 }
 
@@ -139,8 +166,8 @@ struct CreateAgentView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    Text("New agent").bzzyFont(26, weight: .medium)
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("New agent").bzzyFont(20, weight: .semibold)
                     if let mode {
                         Button { self.mode = nil } label: {
                             Label(mode.rawValue, systemImage: mode == .scheduled ? "clock.arrow.circlepath" : "bubble.left")
@@ -151,7 +178,7 @@ struct CreateAgentView: View {
                         typeChoice(.scheduled, icon: "clock.arrow.circlepath", explanation: "Runs at an interval.")
                         typeChoice(.onDemand, icon: "bubble.left", explanation: "Acts when you ask.")
                     }
-                }.padding(25)
+                }.padding(16)
             }.bzzyScreen().textFieldStyle(.plain)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
@@ -181,7 +208,7 @@ struct CreateAgentView: View {
                     Image(systemName: item).bzzyFont(20)
                         .frame(maxWidth: .infinity).frame(minHeight: 48)
                         .foregroundStyle(symbol == item ? BZZYTheme.accent : BZZYTheme.secondary)
-                        .background(symbol == item ? BZZYTheme.accent.opacity(0.1) : BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+                        .background(symbol == item ? BZZYTheme.accent.opacity(0.1) : BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
                 }.buttonStyle(.plain).accessibilityLabel(item.replacingOccurrences(of: ".", with: " "))
                     .accessibilityAddTraits(symbol == item ? .isSelected : [])
             }
@@ -189,13 +216,13 @@ struct CreateAgentView: View {
         VStack(alignment: .leading, spacing: 10) {
             Eyebrow(text: "Name")
             TextField("Name", text: $name).accessibilityIdentifier("agent-name")
-                .bzzyFont(16).padding(18).background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 17))
+                .bzzyFont(15).padding(12).background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
         }
         VStack(alignment: .leading, spacing: 10) {
             Eyebrow(text: mode == .scheduled ? "Task" : "Instructions")
             TextField(mode == .scheduled ? "What should it do each time?" : "What should it help with?", text: $purpose, axis: .vertical)
-                .accessibilityIdentifier("agent-purpose").lineLimit(3...6).bzzyFont(15).padding(18)
-                .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 17))
+                .accessibilityIdentifier("agent-purpose").lineLimit(3...6).bzzyFont(14).padding(12)
+                .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
         }
         if mode == .scheduled {
             VStack(alignment: .leading, spacing: 14) {
@@ -227,7 +254,7 @@ private struct AgentAccessRequiredView: View {
     var body: some View {
         NavigationStack {
             Text("Enable Agent management when approving this iPhone on your Core host.")
-                .bzzyFont(15).padding(25).frame(maxWidth: .infinity, maxHeight: .infinity).bzzyScreen()
+                .bzzyFont(15).padding(16).frame(maxWidth: .infinity, maxHeight: .infinity).bzzyScreen()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
     }
@@ -277,8 +304,8 @@ private struct HostAgentEditorView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    Text(agent == nil ? "New agent" : "Edit agent").bzzyFont(28, weight: .medium)
+                VStack(alignment: .leading, spacing: 18) {
+                    Text(agent == nil ? "New agent" : "Edit agent").bzzyFont(20, weight: .semibold)
                     Label("On demand", systemImage: "bubble.left").bzzyFont(13).foregroundStyle(BZZYTheme.accent)
                     Text("Scheduling is not available on this host.").bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
                     if loading { ProgressView().tint(BZZYTheme.accent) }
@@ -314,7 +341,7 @@ private struct HostAgentEditorView: View {
                     }
                     AccentButton(title: saving ? "Saving" : agent == nil ? "Create on Core" : "Save on Core", symbol: "checkmark") { relay.performHostAction { await save() } }
                         .disabled(!valid).opacity(valid ? 1 : 0.4).accessibilityIdentifier("host-agent-save")
-                }.padding(25)
+                }.padding(16)
             }.textFieldStyle(.plain).bzzyScreen()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)

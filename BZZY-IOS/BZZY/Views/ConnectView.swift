@@ -28,8 +28,11 @@ struct ConnectView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    Text(relay.isAddingHost ? "Add computer" : required ? "Pair BZZY Core" : "Connect").bzzyFont(30, weight: .medium)
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text(relay.isAddingHost ? "Add computer" : required ? "Pair BZZY Core" : "Connect")
+                    }.bzzyFont(20, weight: .semibold)
                     HStack {
                         Label(relay.status.rawValue, systemImage: relay.status == .connected ? "checkmark.circle" : "network")
                             .bzzyFont(13).foregroundStyle(relay.status == .connected ? BZZYTheme.accent : BZZYTheme.secondary)
@@ -41,7 +44,7 @@ struct ConnectView: View {
                     }
                     if relay.hasHost && !relay.isAddingHost {
                         if let name = relay.hosts.first(where: { $0.id == relay.activeHostID })?.name {
-                            Text(name).bzzyFont(22, weight: .medium).foregroundStyle(BZZYTheme.accent)
+                            Text(name).bzzyFont(16, weight: .medium).foregroundStyle(BZZYTheme.accent)
                         }
                         Label(relay.hostStatus, systemImage: "desktopcomputer").bzzyFont(17)
                         fingerprintBlock("Host", relay.hostFingerprint)
@@ -76,18 +79,21 @@ struct ConnectView: View {
                             Button { showScanner = true } label: {
                                 Label("Scan host QR", systemImage: "qrcode.viewfinder").bzzyFont(15)
                                     .frame(maxWidth: .infinity, minHeight: 52)
-                                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 17))
+                                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+                                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
                             }.buttonStyle(.plain).foregroundStyle(BZZYTheme.accent)
                             #endif
                             SecureField("Pairing code or QR text", text: $code)
                                 .textContentType(.oneTimeCode).autocorrectionDisabled()
-                                .bzzyFont(13, design: .monospaced).padding(17)
-                                .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 17))
+                                .bzzyFont(13, design: .monospaced).padding(14)
+                                .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+                                .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
                                 .accessibilityIdentifier("pairing-code")
                             if !code.hasPrefix("BZZY:INVITE:1:") && !code.hasPrefix("BZZY:P:") {
                                 TextField("Host fingerprint", text: $fingerprint).autocorrectionDisabled()
-                                    .bzzyFont(13, design: .monospaced).padding(17)
-                                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 17))
+                                    .bzzyFont(13, design: .monospaced).padding(14)
+                                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+                                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
                                     .accessibilityIdentifier("pairing-fingerprint")
                             }
                             Button("Review host") { review(code) }.bzzyFont(14).foregroundStyle(BZZYTheme.accent)
@@ -101,7 +107,7 @@ struct ConnectView: View {
                     if !relay.deviceFingerprint.isEmpty && relay.pairingStatus != "Pending approval" {
                         fingerprintBlock("This iPhone", relay.deviceFingerprint)
                     }
-                }.padding(25)
+                }.padding(16)
             }.bzzyScreen().toolbar {
                 if !required { ToolbarItem(placement: .cancellationAction) { Button("Close") { if relay.isAddingHost { relay.cancelAddingHost() }; dismiss() }.accessibilityIdentifier("close-connection") } }
             }
@@ -152,11 +158,11 @@ struct HostPickerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 16) {
                     HStack(spacing: 13) {
-                        Image(systemName: "desktopcomputer").bzzyFont(26, weight: .light).foregroundStyle(BZZYTheme.accent)
+                        Image(systemName: "desktopcomputer").bzzyFont(20, weight: .regular).foregroundStyle(BZZYTheme.accent)
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Computers").bzzyFont(28, weight: .medium)
+                            Text("Computers").bzzyFont(20, weight: .semibold)
                             Text("Your default opens on a fresh app launch.").bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
                         }
                     }.padding(.top, 6)
@@ -173,7 +179,7 @@ struct HostPickerView: View {
                     }.buttonStyle(BZZYActionStyle()).accessibilityIdentifier("add-computer")
                     Text("Pair with the new computer’s QR or expiring code, then compare its full fingerprint.")
                         .bzzyFont(11).foregroundStyle(BZZYTheme.muted).lineSpacing(4)
-                }.padding(25)
+                }.padding(16)
             }.bzzyScreen()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() }.accessibilityIdentifier("close-host-picker") } }
                 .sheet(isPresented: $showConnection) { ConnectView() }
@@ -216,7 +222,7 @@ struct HostPickerView: View {
                         }
                     }
                     Spacer(minLength: 0)
-                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel("Select \(host.name)")
                 .accessibilityValue((selected ? "Selected" : "Not selected") + (host.isDefault ? ", Default on launch" : ""))
                 .accessibilityIdentifier("select-host-\(host.id)")
@@ -227,10 +233,10 @@ struct HostPickerView: View {
                 if selected { Button("Connection details", systemImage: "network") { showConnection = true } }
                 Button("Remove computer", systemImage: "trash", role: .destructive) { removingID = host.id }
             } label: {
-                Image(systemName: "ellipsis").bzzyFont(17, weight: .semibold).foregroundStyle(BZZYTheme.accent).frame(width: 36, height: 44)
+                Image(systemName: "ellipsis").bzzyFont(17, weight: .semibold).foregroundStyle(BZZYTheme.accent).frame(width: 44, height: 44)
             }.accessibilityLabel("Options for \(host.name)").accessibilityIdentifier("host-options-\(host.id)")
-        }.padding(16).background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(selected ? BZZYTheme.accent.opacity(0.45) : BZZYTheme.line, lineWidth: 0.8))
+        }.padding(12).background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.panelRadius))
+            .overlay(RoundedRectangle(cornerRadius: BZZYTheme.panelRadius).stroke(selected ? BZZYTheme.accent.opacity(0.6) : BZZYTheme.line, lineWidth: 0.8))
     }
 }
 

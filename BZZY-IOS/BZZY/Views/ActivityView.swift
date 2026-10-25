@@ -13,9 +13,10 @@ struct ActivityView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
+                LazyVStack(alignment: .leading, spacing: 16) {
                     HStack {
-                        Text("Activity").bzzyFont(26, weight: .medium)
+                        Text("›").bzzyFont(20, weight: .semibold).foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text("Activity").bzzyFont(20, weight: .semibold)
                         Spacer()
                         if session != nil { Button("Refresh") { relay.performHostAction { await relay.refreshCore() } }.bzzyFont(12) }
                     }
@@ -40,14 +41,14 @@ struct ActivityView: View {
                                         .textSelection(.enabled).padding(.top, 8)
                                 } label: {
                                     VStack(alignment: .leading, spacing: 5) {
-                                        Text(item.type).bzzyFont(13)
+                                        Text(item.type).bzzyFont(13, weight: .medium).foregroundStyle(BZZYTheme.accent)
                                         Text(item.date.formatted(date: .omitted, time: .standard)).bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
                                     }
                                 }.panel()
                             }
                         } else { Text("No recorded activity").bzzyFont(13).foregroundStyle(BZZYTheme.muted) }
                     } else { Text("No activity").bzzyFont(13).foregroundStyle(BZZYTheme.muted) }
-                }.padding(25).frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
             .coreAvailabilityGate()

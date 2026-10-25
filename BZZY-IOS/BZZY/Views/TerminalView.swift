@@ -6,18 +6,19 @@ struct TerminalView: View {
     @Bindable var store: WorkspaceStore
     @State private var showConnection = false
     @State private var notificationTerminal: LiveTerminalRecord?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
-                Button { showConnection = true } label: {
-                    Label(relay.shortStatus, systemImage: "desktopcomputer")
-                        .bzzyFont(12).foregroundStyle(BZZYTheme.muted)
-                        .frame(minHeight: 44)
-                }.buttonStyle(.plain).accessibilityIdentifier("host-status")
+            VStack(alignment: .leading, spacing: 16) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { sessionsHeading; Spacer(minLength: 8); hostStatus }
+                    VStack(alignment: .leading, spacing: 4) { sessionsHeading; hostStatus }
+                }
+                Rectangle().fill(BZZYTheme.line).frame(height: 0.5)
 
                 if relay.coreCatalogAvailable || !store.liveTerminals.isEmpty {
-                    HStack {
+                    HStack(alignment: .firstTextBaseline) {
                         Text(relay.coreCatalogAvailable ? "Your terminals" : "Saved terminals · Offline").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         Spacer()
                         Button { relay.performHostAction { await relay.refreshCoreSessions() } } label: {
@@ -55,6 +56,7 @@ struct TerminalView: View {
                     }
                 }
                 if !store.terminalDrafts.isEmpty {
+                    Eyebrow(text: "Local drafts")
                     VStack(spacing: 0) {
                         ForEach(store.terminalDrafts) { draft in
                             NavigationLink {
@@ -69,6 +71,7 @@ struct TerminalView: View {
                     }
                 }
                 if store.showsDemoContent {
+                Eyebrow(text: "Sample sessions")
                 VStack(spacing: 0) {
                     ForEach(TerminalPreview.samples) { session in
                         NavigationLink {
@@ -79,12 +82,11 @@ struct TerminalView: View {
                         Rectangle().fill(BZZYTheme.line.opacity(0.6)).frame(height: 0.5)
                     }
                 }
-                Text("Sample sessions").bzzyFont(10).foregroundStyle(BZZYTheme.muted)
                 }
                 if let message = relay.coreError {
                     Text(message).bzzyFont(11).foregroundStyle(BZZYTheme.amber).accessibilityIdentifier("terminal-status-message")
                 }
-            }.padding(.horizontal, 25).padding(.top, 26).padding(.bottom, 20)
+            }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 16)
         }.scrollIndicators(.hidden)
             .task { if relay.coreCatalogAvailable { await relay.refreshCoreSessions() } }
             .sheet(isPresented: $showConnection) { ConnectView() }
@@ -93,14 +95,32 @@ struct TerminalView: View {
                 if let id, let terminal = store.liveTerminals.first(where: { $0.id == id }) { notificationTerminal = terminal; store.notificationTerminalID = nil }
             }
     }
+
+    private var sessionsHeading: some View {
+        Text("› sessions").bzzyFont(14, weight: .semibold).foregroundStyle(BZZYTheme.accent)
+            .fixedSize(horizontal: true, vertical: false).accessibilityAddTraits(.isHeader)
+    }
+
+    private var hostStatus: some View {
+        Button { showConnection = true } label: {
+            Label(relay.shortStatus, systemImage: "desktopcomputer")
+                .bzzyFont(11).foregroundStyle(BZZYTheme.secondary).frame(minHeight: 44)
+        }.buttonStyle(.plain).accessibilityIdentifier("host-status")
+    }
+
     private func sessionRow(name: String, symbol: String, activity: TerminalGoalActivity? = nil) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "chevron.right").bzzyFont(12, weight: .medium)
-                .foregroundStyle(BZZYTheme.accent).frame(width: 20).accessibilityHidden(true)
-            Text(name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.text)
-            Spacer()
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 10))
+        return layout {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: "chevron.right").bzzyFont(12, weight: .semibold)
+                    .foregroundStyle(BZZYTheme.accent).frame(minWidth: 12).accessibilityHidden(true)
+                Text(name).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.text)
+            }
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
             if let activity { TerminalGoalIndicator(activity: activity, online: relay.coreActionsAvailable) }
-        }.padding(.vertical, 17).contentShape(Rectangle())
+        }.padding(.vertical, 12).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
     }
 }
 
@@ -115,15 +135,15 @@ private struct TerminalGoalIndicator: View {
             } else {
                 Circle().fill(color).frame(width: 8, height: 8)
             }
-            Text(activity.rawValue).bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
+            Text(activity.rawValue.uppercased()).bzzyFont(10, weight: .medium).foregroundStyle(color)
         }.opacity(online ? 1 : 0.5)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(online ? activity.rawValue : "Last known: \(activity.rawValue), Core offline")
     }
     private var color: Color {
         switch activity {
-        case .achieved: .green
-        case .stalled: .red
+        case .achieved: BZZYTheme.success
+        case .stalled: BZZYTheme.danger
         case .paused, .waiting: BZZYTheme.amber
         case .running: BZZYTheme.accent
         case .idle, .cancelled: BZZYTheme.muted
@@ -153,7 +173,7 @@ struct LiveSessionDetailsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let session = store.liveSession {
-                        Text(session.title).bzzyFont(25, weight: .medium)
+                        Text(session.title).bzzyFont(20, weight: .semibold)
                         Text("\(session.provider) · \(session.model)").bzzyFont(13)
                         if let directory = session.directory { Text(directory).bzzyFont(12, design: .monospaced).textSelection(.enabled) }
                         Text("Execution: \(session.execution)").bzzyFont(13)
@@ -207,7 +227,7 @@ struct LiveSessionDetailsView: View {
                             Text(verbatim: item.details).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                         }.bzzyFont(12)
                     }
-                }.padding(25)
+                }.padding(16)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .confirmationDialog("Transfer input from the current client?", isPresented: $confirmTakeover, titleVisibility: .visible) {
                     Button("Take over") { relay.performHostAction { await relay.claimCoreInput(takeover: true) } }
@@ -261,7 +281,7 @@ struct LiveQuestionView: View {
     private func approvalButton(_ title: String, symbol: String, answer: String, tone: Color) -> some View {
         Button { relay.performHostAction { await relay.answerCoreQuestion(question.id, answer: answer, sessionID: sessionID) }; BZZYTheme.haptic() } label: {
             Label(title, systemImage: symbol).bzzyFont(13, weight: .semibold).frame(maxWidth: .infinity, minHeight: 44)
-                .foregroundStyle(BZZYTheme.background).background(tone, in: RoundedRectangle(cornerRadius: 13))
+                .foregroundStyle(BZZYTheme.background).background(tone, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
         }.buttonStyle(BZZYPressStyle()).accessibilityIdentifier(answer == "yes" ? "approve-once" : "deny-approval")
     }
 }

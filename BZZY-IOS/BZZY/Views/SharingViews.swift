@@ -21,8 +21,11 @@ struct ShareResourceView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    Text("Share").bzzyFont(32, weight: .medium).tracking(-1)
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 8) {
+                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text("Share")
+                    }.bzzyFont(20, weight: .semibold)
                     SharedResourceLabel(kind: target.kind, name: target.name)
                     Picker("Share mode", selection: $mode) {
                         ForEach(ResourceShareMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -56,7 +59,7 @@ struct ShareResourceView: View {
                         }
                     }
                     if let error { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.amber).accessibilityIdentifier("sharing-error") }
-                }.padding(25)
+                }.padding(16)
             }.scrollIndicators(.hidden).bzzyScreen().toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
             }
@@ -133,9 +136,11 @@ struct ImportResourceView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 27) {
-                    Text(importedName == nil ? "Import \(kind.title.lowercased())" : "Imported")
-                        .bzzyFont(32, weight: .medium).tracking(-1)
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text(importedName == nil ? "Import \(kind.title.lowercased())" : "Imported")
+                    }.bzzyFont(20, weight: .semibold)
                     if let importedName {
                         completion(importedName)
                     } else if let demo {
@@ -149,7 +154,7 @@ struct ImportResourceView: View {
                         Text(error).bzzyFont(13).foregroundStyle(BZZYTheme.amber).fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("import-error")
                     }
-                }.padding(25)
+                }.padding(16)
             }.scrollIndicators(.hidden).bzzyScreen().toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
             }
@@ -172,12 +177,14 @@ struct ImportResourceView: View {
         VStack(alignment: .leading, spacing: 23) {
             #if os(iOS)
             Button { codeFocused = false; showScanner = true } label: {
-                VStack(spacing: 18) {
-                    Image(systemName: "qrcode.viewfinder").font(.system(size: 48, weight: .ultraLight))
+                HStack(spacing: 12) {
+                    Image(systemName: "qrcode.viewfinder").bzzyFont(20)
                     Text("Scan QR").bzzyFont(14, weight: .medium)
-                }.foregroundStyle(BZZYTheme.accent).frame(maxWidth: .infinity).padding(.vertical, 34)
-                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 24))
-                    .overlay(RoundedRectangle(cornerRadius: 24).stroke(BZZYTheme.line, lineWidth: 0.6))
+                    Spacer()
+                    Image(systemName: "arrow.right").bzzyFont(12)
+                }.foregroundStyle(BZZYTheme.accent).padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 52)
+                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
             }.buttonStyle(.plain).accessibilityIdentifier("import-scan")
             #endif
             VStack(alignment: .leading, spacing: 13) {
@@ -187,9 +194,9 @@ struct ImportResourceView: View {
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
-                    .bzzyFont(13, design: .monospaced).padding(18).textFieldStyle(.plain)
-                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 17))
-                    .overlay(RoundedRectangle(cornerRadius: 17).stroke(BZZYTheme.line, lineWidth: 0.6))
+                    .bzzyFont(13, design: .monospaced).padding(14).textFieldStyle(.plain)
+                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
                     .accessibilityIdentifier("import-code")
                     .onChange(of: code) { _, value in
                         if value.utf8.count > 4096 { code = ""; error = SharingFailure.invalid.localizedDescription }
@@ -284,7 +291,7 @@ private struct SharedResourceLabel: View {
     var body: some View {
         HStack(spacing: 15) {
             Image(systemName: kind.symbol).font(.system(size: 21, weight: .light)).foregroundStyle(BZZYTheme.accent)
-                .frame(width: 48, height: 48).background(BZZYTheme.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+                .frame(width: 44, height: 44).background(BZZYTheme.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
             VStack(alignment: .leading, spacing: 6) {
                 Text(name).bzzyFont(18, weight: .medium)
                 Text(kind.title).bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
@@ -358,8 +365,11 @@ struct LiveTerminalShareView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    Text(kind == .agent ? "Share agent" : "Share terminal").bzzyFont(30, weight: .medium)
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text(kind == .agent ? "Share agent" : "Share terminal")
+                    }.bzzyFont(20, weight: .semibold)
                     Text(title).bzzyFont(17, weight: .medium)
                     if let directory { Text(directory).bzzyFont(12, design: .monospaced).textSelection(.enabled) }
                     Text("Project files and full saved context, including chats, notes, memory, goals, nested agents and evidence. Private credentials stay on your host; the recipient connects their own accounts.")
@@ -417,7 +427,7 @@ struct LiveTerminalShareView: View {
                     if let error { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
                     Text(kind == .agent ? "Both Cores must stay online. Your recipient imports on iPhone; Core restores a fresh paused agent beneath their own Agents workspace. Their accounts and permissions stay separate." : "The source Core must stay online. Your recipient imports the code in their BZZY CLI, restores it into their current directory, and authorizes their own accounts.")
                         .bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
-                }.padding(25)
+                }.padding(16)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .confirmationDialog("Approve this recipient to receive the project and saved context?", isPresented: Binding(get: { selectedClaim != nil }, set: { if !$0 { selectedClaim = nil } }), titleVisibility: .visible) {
                     if let claim = selectedClaim {
@@ -588,8 +598,11 @@ struct LiveAgentImportView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    Text("Import agent").bzzyFont(30, weight: .medium)
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 8) {
+                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text("Import agent")
+                    }.bzzyFont(20, weight: .semibold)
                     if !relay.coreAgentsAvailable {
                         Text("Agent management must be explicitly enabled for this iPhone when pairing.").bzzyFont(14)
                     } else if relay.coreAgentImportPending {
@@ -600,7 +613,7 @@ struct LiveAgentImportView: View {
                         entry
                     }
                     if let error { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.amber).accessibilityIdentifier("agent-import-error") }
-                }.padding(25)
+                }.padding(16)
             }.bzzyScreen().textFieldStyle(.plain)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 #if os(iOS)
@@ -637,7 +650,7 @@ struct LiveAgentImportView: View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Receive a complete agent workspace on your Core, including its project files and saved conversations/context.").bzzyFont(14).foregroundStyle(BZZYTheme.secondary)
             #if os(iOS)
-            Button { showScanner = true } label: { Label("Scan QR", systemImage: "qrcode.viewfinder").bzzyFont(18).frame(maxWidth: .infinity).padding(30).panel() }
+            Button { showScanner = true } label: { Label("Scan QR", systemImage: "qrcode.viewfinder").bzzyFont(14).frame(maxWidth: .infinity, minHeight: 44).panel() }
                 .accessibilityIdentifier("agent-import-scan")
             #endif
             SecureField("BZZY-AGENT-…", text: $code).bzzyFont(13, design: .monospaced).panel()

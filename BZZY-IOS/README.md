@@ -1,6 +1,27 @@
 # BZZY native iOS
 
-Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The home screen displays the supplied two-eye artwork with its original texture and silhouette, paired with a complete single-eye app icon and celeste controls. Local pixel distortion animates the pupils and antennae without blinking, pauses in the background and respects Reduce Motion.
+Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The current
+appearance follows the CLI: dark flat surfaces, compact monospaced prompt rows,
+cyan controls, teal user messages and lavender assistant messages.
+
+Build **Debug 0.1.0 (21)** extends that terminal treatment across home, chats,
+settings, connection, sharing and voice controls. Headers and lists use compact
+separators and rectangular controls, while touch targets and Dynamic Type remain
+accessible. Chats show the current model above the prompt composer and keep the
+existing explicit Send, dictation, goal, draft and Back behavior.
+
+The in-app eyes are hidden through the single `BZZYTheme.showsMascot` appearance
+flag. The original artwork, animation and app icon remain available. Restoring
+the flag re-enables the existing mascot views; hidden views reserve no hero area.
+
+Validation for build 21: **86 native Swift tests**, model/message-format checks,
+and the latest results for **19 presentation/navigation UI cases** pass across
+broad and focused simulator runs. Visual checks include normal and accessibility
+text, rich chats, sharing QR quiet zones and voice-only controls. The signed app
+passed development APNs/privacy/signature checks and was installed in place on
+the connected iPhone; CoreDevice confirms **0.1.0 (21)**. iOS blocked automatic
+launch while the phone was locked. No app uninstall, data reset or pairing reset
+was performed. See the [validation record](../BZZY-CORE/docs/VALIDATION.md).
 
 Build **Debug 0.1.0 (20)** keeps the existing palette with terminal typography,
 flatter controls and transcript rows. The compact chat header reads

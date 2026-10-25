@@ -124,7 +124,7 @@ struct WorkspaceView: View {
                         workspaceHeader
                         if relay.coreActionsAvailable {
                             HostMetricsBar(metrics: relay.hostMetrics, status: relay.hostMetricsStatus)
-                                .padding(.horizontal, 25).padding(.bottom, 8)
+                                .padding(.horizontal, 16).padding(.bottom, 8)
                         }
                         if store.selectedTab == .agents {
                             AgentsView(store: store, showCreate: $showCreate)
@@ -201,8 +201,13 @@ struct WorkspaceView: View {
 
     private var workspaceHeader: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                Text("BZZY").bzzyFont(22, weight: .bold).foregroundStyle(BZZYTheme.accent)
+            HStack(spacing: 8) {
+                Text(">_").bzzyFont(15, weight: .semibold).foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                Text("BZZY").bzzyFont(18, weight: .bold).foregroundStyle(BZZYTheme.accent)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Text("/ " + store.selectedTab.rawValue.lowercased()).bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
+                        .accessibilityHidden(true)
+                }
                 Spacer()
                 RoundButton(symbol: "square.and.arrow.down", label: "Import \(store.selectedTab == .agents ? "agent" : "terminal")") {
                     importKind = store.selectedTab == .agents ? .agent : .terminal
@@ -222,15 +227,17 @@ struct WorkspaceView: View {
                         if relay.activeHostID == relay.defaultHostID { Image(systemName: "star.fill").bzzyFont(9) }
                         Spacer(minLength: 4)
                         Image(systemName: "chevron.up.chevron.down").bzzyFont(10, weight: .semibold)
-                    }.foregroundStyle(BZZYTheme.accent).padding(.horizontal, 14).frame(minHeight: 39)
-                        .background(BZZYTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 13))
-                        .overlay(RoundedRectangle(cornerRadius: 13).stroke(BZZYTheme.accent.opacity(0.2), lineWidth: 0.7))
+                    }.foregroundStyle(BZZYTheme.accent).padding(.horizontal, 12).frame(minHeight: 44)
+                        .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+                        .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
                 }.buttonStyle(BZZYPressStyle()).accessibilityIdentifier("host-selector")
                     .accessibilityLabel("Computer")
                     .accessibilityValue(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Choose computer")
                     .accessibilityHint("Switch computers, choose a default, or add a computer")
             }
-        }.padding(.horizontal, 25).padding(.top, 10).padding(.bottom, 8)
+        }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 10)
+            .background(BZZYTheme.surface)
+            .overlay(alignment: .bottom) { Rectangle().fill(BZZYTheme.line).frame(height: 0.5) }
     }
 
     private func resetHostNavigation() {
@@ -322,7 +329,7 @@ struct WorkspaceView: View {
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             ForEach(WorkspaceTab.allCases, id: \.self) { tab in
                 Button {
                     BZZYTheme.haptic()
@@ -337,16 +344,16 @@ struct WorkspaceView: View {
                     }.frame(maxWidth: .infinity).frame(minHeight: 52)
                         .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 8 : 0)
                         .foregroundStyle(store.selectedTab == tab ? BZZYTheme.accent : BZZYTheme.secondary)
-                        .background(store.selectedTab == tab ? BZZYTheme.accent.opacity(0.09) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 6))
+                        .background(store.selectedTab == tab ? BZZYTheme.selection : .clear,
+                                    in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
                 }.buttonStyle(.plain)
                     .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
                     .accessibilityAddTraits(store.selectedTab == tab ? .isSelected : [])
             }
-        }.padding(6)
-            .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(BZZYTheme.line, lineWidth: 0.7))
-            .padding(.horizontal, 25).padding(.top, 10).padding(.bottom, 9)
+        }.padding(.horizontal, 8).padding(.vertical, 4)
+            .background(BZZYTheme.surface)
+            .overlay(alignment: .top) { Rectangle().fill(BZZYTheme.line).frame(height: 0.5) }
+            .padding(.top, 4)
             .background(BZZYTheme.background)
     }
 }
@@ -372,6 +379,7 @@ private struct CoreConnectionFooter: View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             HStack(spacing: 7) {
                 Circle().fill(relay.connectionOnline ? BZZYTheme.success : BZZYTheme.danger).frame(width: 6, height: 6)
+                Text("CORE").bzzyFont(10, weight: .semibold).foregroundStyle(BZZYTheme.secondary)
                 Text(relay.connectionOnline ? "Online" : "Offline").bzzyFont(11, weight: .medium)
                     .accessibilityIdentifier("connection-status-label")
                 Spacer()
@@ -380,9 +388,9 @@ private struct CoreConnectionFooter: View {
                     Task { await relay.checkConnection(); checking = false }
                 } label: {
                     Label(checking ? "Checking…" : "Refresh", systemImage: "arrow.clockwise").bzzyFont(10)
-                }.disabled(checking).buttonStyle(.plain).foregroundStyle(BZZYTheme.secondary)
+                }.frame(minWidth: 44, minHeight: 44).disabled(checking).buttonStyle(.plain).foregroundStyle(BZZYTheme.secondary)
                     .accessibilityIdentifier("refresh-connection")
-            }.padding(.horizontal, 25).frame(minHeight: 30).background(BZZYTheme.background)
+            }.padding(.horizontal, 16).frame(minHeight: 44).background(BZZYTheme.background)
                 .accessibilityElement(children: .contain).accessibilityIdentifier("connection-status")
         }
     }

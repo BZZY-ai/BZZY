@@ -1,3 +1,42 @@
+# iOS terminal appearance and hidden mascot (2026-10-25)
+
+Debug **0.1.0 (21)** builds for simulator and the connected physical iPhone.
+The compact terminal treatment covers home, conversation, settings, connection,
+sharing and voice screens: monospaced prompt rows, cyan rectangular controls,
+teal user messages and lavender assistant messages. All four in-app mascot
+instances are disabled through one appearance flag; artwork, animation and the
+app icon remain available. No Core, Relay or execution contract changes.
+
+ModelChecks and ChatChecks pass. The complete native Swift suite passes **86/86**
+with zero skips/failures using Node.js 24 for isolated Core fixtures. The synthetic
+line-model fixture now matches only the current request's exact sentinel, rather
+than triggering hold/approval behavior from markers in recalled test history.
+Existing hold, approval, coordinator, pause and revocation assertions remain.
+No live provider or user session is used by these tests.
+
+The latest results for **19 distinct Debug presentation/navigation UI cases**
+pass across a broad run and a final five-case focused run. Rechecks cover aligned
+transcript rows, native Back/edge gestures, sheet transitions, keyboard and draft
+isolation, alias-only terminal rows, independent speech-language persistence,
+accessibility text and voice-only controls. Broad coverage also includes offline
+locking, computer selection, pairing gates, history paging, goal shortcuts,
+sharing/import and structured-message rendering. Notification delivery, native
+TLS authentication and the Release-only preview gate were outside this UI run.
+The Back button has an explicit accessibility identifier so UI tests do not
+mistake a system keyboard Back button for chat navigation.
+
+Simulator screenshots were inspected at normal and accessibility text sizes;
+scaled decorative row glyphs retain enough width. Sharing QR white backgrounds
+and 18-point quiet zones remain unchanged. Plist validation, whitespace checks,
+and built-app identity, development APNs, permission-description, privacy-manifest
+and strict signature checks pass. Signing identity/team bindings remain local.
+
+The signed app was installed in place on the connected iPhone. CoreDevice
+confirms **0.1.0 (21)**; automatic launch was denied by iOS because the device was
+locked. No uninstall, app-data reset or pairing reset was performed. Build/test
+artifacts and signing metadata stay in a private temporary directory on the
+internal disk. The running Core/CLI installation was not updated.
+
 # In-chat skill and specialist invocation status (2026-10-25)
 
 Full Node.js 24/macOS suites: **671 Core tests passed, 2 skipped** (673 total)

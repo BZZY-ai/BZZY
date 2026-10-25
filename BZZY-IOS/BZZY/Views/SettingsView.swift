@@ -17,13 +17,18 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    FlyEyes(interactive: false).frame(width: 100).frame(maxWidth: .infinity).padding(.top, 10)
-                    Text("Settings").bzzyFont(32, weight: .medium).tracking(-1)
+                VStack(alignment: .leading, spacing: 18) {
+                    if BZZYTheme.showsMascot {
+                        FlyEyes(interactive: false).frame(width: 100).frame(maxWidth: .infinity).padding(.top, 10)
+                    }
+                    HStack(spacing: 8) {
+                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text("Settings")
+                    }.bzzyFont(20, weight: .semibold)
                     Eyebrow(text: "Connection")
                     Button { showConnection = true } label: {
                         HStack(spacing: 14) {
-                            Image(systemName: "desktopcomputer").bzzyFont(22, weight: .light).foregroundStyle(BZZYTheme.accent)
+                            Image(systemName: "desktopcomputer").bzzyFont(18, weight: .regular).foregroundStyle(BZZYTheme.accent)
                             VStack(alignment: .leading, spacing: 7) {
                                 Text(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Computer").bzzyFont(14, weight: .medium)
                                 Text(relay.corePairAuthorized ? relay.coreConnectionLabel : relay.hostStatus).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
@@ -81,7 +86,7 @@ struct SettingsView: View {
                     }
                     Text("BZZY · Native iOS")
                         .bzzyFont(9, design: .monospaced).foregroundStyle(BZZYTheme.muted).lineSpacing(5).padding(.top, 12)
-                }.padding(25)
+                }.padding(16)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .task {
                     let origin = HostActionContext(hostID: relay.activeHostID)
@@ -160,7 +165,10 @@ struct CoreDefaultsEditor: View {
         NavigationStack {
             ScrollView { VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 22) {
-                    Text(sessionID == nil ? "Models and defaults" : "Conversation model").bzzyFont(27, weight: .medium)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text(sessionID == nil ? "Models and defaults" : "Conversation model")
+                    }.bzzyFont(20, weight: .semibold)
                     Text(sessionID == nil ? "Saved on this computer. Defaults apply to new chats and mode launches." : "Pause, choose a model, then resume your saved goal in this conversation.")
                         .bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                     if sessionID == nil {
@@ -189,7 +197,7 @@ struct CoreDefaultsEditor: View {
                         .accessibilityIdentifier("save-model-defaults")
                     Button("Reload saved settings") { relay.performHostAction { await load() } }.disabled(busy || !available)
                 }.padding(.top, 20)
-            } }.padding(25).bzzyScreen()
+            } }.padding(16).bzzyScreen()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
             .task { origin = relay.activeHostID; await load() }

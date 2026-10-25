@@ -5,6 +5,16 @@ import readline from 'node:readline';
 const body = '<message version="1"><h2>Line check</h2><p><b>Offline result</b> <span color="mint">ready</span></p><ul><li>One shared execution</li></ul></message>';
 const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 const notify = (method, params) => send({ method, params: { threadId: 'line-thread', ...params } });
+function currentFixtureRequest(params) {
+  const text = Array.isArray(params?.input) ? params.input.filter(item => item?.type === 'text' && typeof item.text === 'string')
+    .map(item => item.text).join('\n') : typeof params?.prompt === 'string' ? params.prompt : '';
+  // Core can supply historical knowledge or a provider handoff in the same
+  // text input. Old fixture markers are data, not the current test instruction.
+  const boundaries = ['\n\nCURRENT REQUEST:\n', '\n\nCURRENT USER MESSAGE:\n'];
+  const boundary = boundaries.map(value => ({ value, index: text.lastIndexOf(value) }))
+    .sort((a, b) => b.index - a.index)[0];
+  return (boundary.index < 0 ? text : text.slice(boundary.index + boundary.value.length)).trim();
+}
 const overrides = new Map();
 for (let i = 0; i < process.argv.length - 1; i++) if (process.argv[i] === '-c') {
   const value = process.argv[++i], equal = value.indexOf('=');
@@ -37,8 +47,9 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   }
   if (request.method === 'turn/start') {
     result = { turn: { id: 'line-turn' } };
-    const hold = JSON.stringify(request.params).includes('HOLD_LINE_INTEGRATION');
-    const approval = JSON.stringify(request.params).includes('APPROVAL_LINE_INTEGRATION');
+    const currentRequest = currentFixtureRequest(request.params);
+    const hold = currentRequest === 'HOLD_LINE_INTEGRATION';
+    const approval = currentRequest === 'APPROVAL_LINE_INTEGRATION';
     setTimeout(() => {
       notify('turn/started', { turn: { id: 'line-turn' } });
       if (hold) return;

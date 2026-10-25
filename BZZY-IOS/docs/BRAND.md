@@ -1,5 +1,12 @@
 # BZZY artwork and celeste theme
 
+The current iOS presentation uses the CLI's compact terminal layout. In-app
+mascot views are hidden by `BZZYTheme.showsMascot = false`, with no reserved hero
+spacing. The artwork and animation below remain intact for restoration through
+that one appearance flag. User transcript rails use **#58DFC7** on **#0B302E**;
+assistant rails use **#B9B6FF** on **#101B2C**. Controls and panels use restrained
+4-point corners, separators and monospaced labels with accessible touch targets.
+
 `BZZY/Assets.xcassets/BZZYEyes.imageset/eyes.png` is the supplied two-eye PNG,
 copied without redrawing, cropping or resampling. The iOS view scales it as a
 complete mark and uses screen blending to integrate its black background with

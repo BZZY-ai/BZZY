@@ -40,7 +40,7 @@ struct VoiceChatView: View {
                 .frame(height: 180).padding(.horizontal, 12).accessibilityHidden(true)
             Spacer(minLength: 35)
             ZStack {
-                Circle().stroke(BZZYTheme.accent.opacity(capture.isRecording ? 0.55 : 0.13), lineWidth: 1)
+                RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.accent.opacity(capture.isRecording ? 0.55 : 0.13), lineWidth: 1)
                     .frame(width: 118, height: 118)
                 if relay.voiceWaiting || submitting {
                     control("stop.fill", label: "Stop assistant response") { speech.stop(); relay.performHostAction { await relay.stopVoiceTurn() } }
@@ -53,9 +53,9 @@ struct VoiceChatView: View {
                 } else {
                     Button {} label: { Image(systemName: capture.isFinishing ? "ellipsis" : "mic.fill")
                         .font(.system(size: 31, weight: .medium)).foregroundStyle(BZZYTheme.background)
-                        .frame(width: 94, height: 94).background(BZZYTheme.accent, in: Circle())
+                        .frame(width: 94, height: 94).background(BZZYTheme.accent, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
                         .scaleEffect(capture.isRecording && !reduceMotion ? 1.035 : 1)
-                        .contentShape(Circle()) }
+                        .contentShape(Rectangle()) }
                         .buttonStyle(BZZYPressStyle())
                         .simultaneousGesture(DragGesture(minimumDistance: 0).updating($held) { _, held, _ in held = true })
                         .disabled(!relay.coreActionsAvailable || !relay.voiceConfigured || capture.isFinishing)
@@ -71,7 +71,7 @@ struct VoiceChatView: View {
                 if !lastReply.isEmpty { RoundButton(symbol: "speaker.wave.2", label: "Replay assistant reply") { say(lastReply) }.disabled(relay.voiceWaiting || capture.isBusy || submitting) }
             }.frame(height: 54).padding(.top, 20)
             Spacer(minLength: 25)
-        }.padding(.horizontal, 28)
+        }.padding(.horizontal, 16)
             .background(BZZYTheme.background.ignoresSafeArea()).preferredColorScheme(.dark)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("voice-only-chat")
@@ -109,7 +109,7 @@ struct VoiceChatView: View {
         Button { BZZYTheme.haptic(); action() } label: {
             Image(systemName: symbol).font(.system(size: 31, weight: .medium))
                 .foregroundStyle(BZZYTheme.background).frame(width: 94, height: 94)
-                .background(BZZYTheme.accent, in: Circle())
+                .background(BZZYTheme.accent, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
         }.buttonStyle(BZZYPressStyle()).accessibilityLabel(label)
     }
     private func beginRecording() {

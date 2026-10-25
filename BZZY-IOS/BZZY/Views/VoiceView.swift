@@ -17,18 +17,20 @@ struct VoiceView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 24) {
+                VStack(spacing: 18) {
                     HStack {
-                        Text("Voice").bzzyFont(22, weight: .medium)
+                        Text("›").bzzyFont(20, weight: .semibold).foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
+                        Text("Voice").bzzyFont(20, weight: .semibold)
                         Spacer()
                         Picker("Speech language", selection: $locale) {
                             Text("EN").tag("en-US")
                             Text("ES").tag("es-ES")
                         }.pickerStyle(.menu).disabled(capture.isBusy)
                     }
-                    Spacer(minLength: 10)
-                    FlyEyes(mood: capture.isRecording ? .listening : .curious)
-                        .frame(maxWidth: 340).padding(.vertical, 18)
+                    if BZZYTheme.showsMascot {
+                        FlyEyes(mood: capture.isRecording ? .listening : .curious)
+                            .frame(maxWidth: 340).padding(.vertical, 18)
+                    }
                     if capture.isRecording {
                         Text("Listening").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                     } else if capture.isFinishing {
@@ -46,8 +48,8 @@ struct VoiceView: View {
                             .bzzyFont(27, weight: .light)
                             .foregroundStyle(BZZYTheme.accent)
                             .frame(width: 82, height: 82)
-                            .background(BZZYTheme.accent.opacity(0.08), in: Circle())
-                            .overlay(Circle().stroke(BZZYTheme.accent.opacity(0.38), lineWidth: 0.8))
+                            .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+                            .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.accent.opacity(0.6), lineWidth: 1))
                     }.buttonStyle(.plain).disabled(capture.isStarting || capture.isFinishing)
                         .accessibilityLabel(capture.isRecording ? "Stop recording" : "Start on-device recording")
                     if let error = capture.error {
@@ -78,7 +80,7 @@ struct VoiceView: View {
                         .opacity(targetID == nil || capture.transcript.isEmpty ? 0.35 : 1)
                     Text("On device")
                         .bzzyFont(10).foregroundStyle(BZZYTheme.muted).lineSpacing(4).multilineTextAlignment(.center)
-                }.padding(25)
+                }.padding(16)
             }.scrollIndicators(.hidden).bzzyScreen()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
