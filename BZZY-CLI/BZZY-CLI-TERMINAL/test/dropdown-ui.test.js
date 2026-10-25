@@ -103,6 +103,26 @@ test('top New Session dispatches a local new-chat command instead of model input
   assert.equal(tui.inputQueue.length, 0);
 });
 
+test('top Skills opens Core/project skills and Metrics is an empty escapable view', async t => {
+  const { ui, tui, input } = terminal(t), skills = ui.ask('bzzy › '); await Promise.resolve();
+  tui.value = 'keep this draft'; tui.cursor = 5; tui.render();
+  const skill = tui.hitTargets.find(hit => hit.type === 'top-skills'); assert.ok(skill);
+  input.write(`\x1b[<0;${skill.left + 1};${skill.row}M`);
+  assert.equal(await skills, '/skills'); assert.equal(tui.value, 'keep this draft');
+  await ui.settingsCommand('/skills'); tui.render();
+  assert.match(tui.lastFrame.map(clean).join('\n'), /Sync skills from Codex into BZZY/);
+  tui.key('', { name: 'escape' }); assert.equal(tui.panel, 'chat');
+
+  const metrics = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
+  const metric = tui.hitTargets.find(hit => hit.type === 'top-metrics'); assert.ok(metric);
+  input.write(`\x1b[<0;${metric.left + 1};${metric.row}M`);
+  assert.equal(tui.panel, 'metrics'); assert.equal(tui.value, 'keep this draft');
+  tui.render(); assert.doesNotMatch(tui.lastFrame.map(clean).join('\n'), /No metrics records yet/);
+  assert.equal(tui.hitTargets.some(hit => hit.type === 'confirm'), false);
+  tui.key('', { name: 'escape' }); assert.equal(tui.panel, 'chat');
+  ui.reader.close(); assert.equal(await metrics, null);
+});
+
 test('disabled model controls give feedback without dispatching a command', async t => {
   const { ui, tui } = terminal(t);
   const answer = ui.ask('bzzy › '); await Promise.resolve(); tui.modelSelectionRequired = true; tui.render();

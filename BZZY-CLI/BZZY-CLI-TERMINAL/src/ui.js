@@ -4,7 +4,7 @@ import { knowledgeCommand } from './knowledge-ui.js';
 import readline from 'node:readline';
 import { TerminalChat } from './tui.js';
 import { clean, cellWidth, clip } from './terminal-format.js';
-import { AccountStatusMonitor, accountStatusDetails } from './account-status.js';
+import { AccountStatusMonitor, accountStatusDetails, accountStatusLabels } from './account-status.js';
 import { ClientSettings } from './client-settings.js';
 import { Pet } from './mascot.js';
 import { MESSAGE_FORMAT_LIMITS, parseMessageBody } from '@bzzy/core/message-format';
@@ -118,6 +118,17 @@ export class UI {
     }
   }
   showAccountStatus() { this.event('info', { message: accountStatusDetails(this.accountStatus) }); }
+  async showProviderBalance(providerId = this.tui?.provider) {
+    if (providerId !== 'deepseek' || this.closed) return;
+    await this.accountMonitor?.refresh();
+    const status = accountStatusLabels(this.accountStatus).find(item => item.label === 'DeepSeek');
+    const record = this.accountStatus?.deepseek;
+    const message = [`DeepSeek balance: ${status?.value || '—'}`,
+      record?.checkedAt ? `Checked ${new Date(record.checkedAt).toLocaleString()}` : '',
+      status?.reason || '', 'Balance lookup uses the configured DeepSeek API key and makes no inference request.']
+      .filter(Boolean).join('\n');
+    this.event('info', { message });
+  }
   openSettings() { this.openTerminal(); this.settings ||= new ClientSettings(this); this.tui?.setPanel('settings'); }
   async settingsCommand(input) {
     if (/^\/color(?:\s|$)/.test(input.trim())) {
@@ -149,8 +160,8 @@ export class UI {
     if (action) await this.settings.run(action);
     return true;
   }
-  async chooseMany(title, choices) {
-    if (this.tui) return this.tui.chooseMany(title, choices);
+  async chooseMany(title, choices, options = {}) {
+    if (this.tui) return this.tui.chooseMany(title, choices, options);
     return choices.filter(choice => choice.selected).map(choice => choice.value);
   }
   async chooseOne(title, choices, options = {}) {

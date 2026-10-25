@@ -19,7 +19,7 @@ test('Core telemetry is rendered as host CPU/RAM and never confused with a goal 
     ui.setSession('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
     await new Promise(resolve => setTimeout(resolve, 10)); ui.tui.render();
     assert.equal(reads, 1);
-    assert.match(ui.tui.lastFrame[0], /CPU 19% · RAM 12\.5\/32 GB/);
+    assert.match(ui.tui.lastFrame[0], /CPU\s*19%.*12\.5\/32(?: GB|G)/);
     assert.equal(ui.tui.entries.length, 0, 'telemetry does not become transcript/history');
     for (const columns of [48, 22]) {
       output.columns = columns; ui.tui.render();

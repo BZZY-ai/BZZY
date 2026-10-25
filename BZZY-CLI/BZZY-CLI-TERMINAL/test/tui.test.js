@@ -40,6 +40,24 @@ test('connection indicators remain independent of busy model work and preserve t
     assert.equal(ui.tui.entries.length, 0, 'connection checks never become conversation events');
   } finally { ui.close(); }
 });
+test('DeepSeek balance appears in the top bar only for the DeepSeek API-key provider and opens usage details', async () => {
+  const { ui, output } = terminal();
+  try {
+    Object.assign(output, { columns: 120, rows: 30 });
+    ui.tui.provider = 'deepseek';
+    ui.accountStatus = { deepseek: { provider: 'deepseek', status: 'available',
+      balance: { currency: 'USD', amount: 12.34 }, checkedAt: Date.now(), source: 'provider-api' } };
+    ui.tui.render();
+    assert.match(ui.tui.lastFrame[0], /\$12\.34/);
+    const balance = ui.tui.hitTargets.find(hit => hit.type === 'usage-balance'); assert.ok(balance);
+    ui.tui.mouse(0, balance.left, balance.row); await ui.tui.balanceTask;
+    assert.match(ui.tui.entries.at(-1).text, /DeepSeek balance: \$12\.34/);
+
+    ui.tui.provider = 'codex'; ui.tui.render();
+    assert.doesNotMatch(ui.tui.lastFrame[0], /\$12\.34/);
+    assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'usage-balance'), false);
+  } finally { ui.close(); }
+});
 function terminal(options = {}) {
   const input = new PassThrough(); input.isTTY = true; input.isRaw = false; input.setRawMode = value => { input.isRaw = value; };
   const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 32, columns: 100 });
@@ -299,11 +317,14 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       ui.event('text', { text: 'Answer in the transcript', itemId: 'settings-layout' });
       ui.tui.render();
       const chat = ui.tui.lastFrame.map(clean);
-      assert.match(chat[0], /(?:Open Sessions|Sessions).*(?:\+ New Session|\+ New).*CPU.*12.*RAM.*4\.0\/16(?: GB|G).*⚙/);
+      assert.doesNotMatch(chat[0], /bzzy|◉◉/);
+      assert.match(chat[0], /(?:Open Sessions|Sessions).*(?:\+ New Session|\+ New).*CPU\s*12%.*4\.0\/16(?: GB|G).*Skills.*Metrics.*⚙ Settings/);
       assert.match(chat.join('\n'), /chosen-model.*effort high/);
       assert.match(chat.join('\n'), /1,234 tokens.*\d{2}:\d{2}:\d{2}/);
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-sessions'));
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'session-new'));
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-skills'));
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-metrics'));
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-settings'));
       const send = ui.tui.hitTargets.find(hit => hit.type === 'confirm');
       const model = ui.tui.hitTargets.find(hit => hit.command === '/providers');
@@ -313,7 +334,8 @@ test('the chat keeps top actions and runtime context while Settings replaces the
 
       ui.tui.setPanel('settings'); ui.tui.render();
       const settings = ui.tui.lastFrame.map(clean);
-      assert.match(settings[0], /Settings.*CPU.*12.*RAM.*4\.0\/16 GB/);
+      assert.doesNotMatch(settings[0], /bzzy|◉◉/);
+      assert.match(settings[0], /Settings.*CPU.*12.*RAM.*4\.0\/16 GB.*Esc · Chat/);
       assert.match(settings.join('\n'), /API key.*Default BZZY folder.*Pair iPhone.*BZZY Core/s);
       assert.doesNotMatch(settings.join('\n'), /Question in the transcript|Answer in the transcript|Ask BZZY to do anything/);
       assert.equal(ui.tui.lastFrame.length, rows);

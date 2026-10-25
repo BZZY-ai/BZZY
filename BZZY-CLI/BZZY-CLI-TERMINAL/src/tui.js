@@ -302,10 +302,10 @@ export class TerminalChat {
       this.schedule();
     });
   }
-  chooseMany(title, choices) {
+  chooseMany(title, choices, options = {}) {
     this.textSelection = null;
     return new Promise(resolve => {
-      this.selection = { title, choices, selected: new Set(choices.filter(choice => choice.selected).map(choice => choice.value)), focus: 0, resolve };
+      this.selection = { title, choices, selected: new Set(choices.filter(choice => choice.selected).map(choice => choice.value)), focus: 0, resolve, ...options };
       this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule();
     });
   }
@@ -379,7 +379,7 @@ export class TerminalChat {
   canvasVisible() { return Boolean(this.ui.canvas && this.ui.canvasView && !this.ui.canvasView.drawer && this.panel === 'chat' && !this.promptDraft && !this.hidden && !this.ui.privateView); }
   canCompose() {
     if (this.canvasVisible() || this.selection || this.renderingPicker) return false;
-    if (!this.promptDraft && (this.ui.canvasView?.historyThread || ['settings', 'skills'].includes(this.panel))) return false;
+    if (!this.promptDraft && (this.ui.canvasView?.historyThread || ['settings', 'skills', 'metrics'].includes(this.panel))) return false;
     return Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft);
   }
   submitMessage() {
@@ -391,13 +391,13 @@ export class TerminalChat {
     this.value = ''; this.cursor = 0; this.schedule();
   }
   completions() {
-    if (['settings', 'skills'].includes(this.panel)) return [];
+    if (['settings', 'skills', 'metrics'].includes(this.panel)) return [];
     if (!this.resolveInput || this.hidden || this.selection || this.renderingPicker || this.pasting || !/^bzzy\b/.test(this.question || '')) return [];
     if (this.completionQuery !== this.value) { this.completionQuery = this.value; this.completionFocus = 0; this.completionDismissed = false; }
     return this.completionDismissed ? [] : commandSuggestions(this.value);
   }
   completeCommand(choice) { this.value = choice.command + ' '; this.cursor = [...this.value].length; this.schedule(); }
-  panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'settings']; }
+  panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'metrics', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'metrics', 'settings']; }
   setPanel(panel) {
     if (this.ui.coreLifecycleInterrupted && panel !== 'settings') return;
     if (this.promptDraft || this.selection) return;
@@ -409,6 +409,11 @@ export class TerminalChat {
     this.settingsEnsureFocus = panel === 'settings';
     if (panel === 'skills') this.skillTopRequested = true;
     this.textSelection = null; this.panel = panel; this.scroll = 0; this.schedule();
+  }
+  leaveSettings() {
+    if (this.ui.settings) this.ui.settings.qrView = false;
+    if (this.ui.settingsOnly) this.finish(null);
+    else this.setPanel('chat');
   }
   localCommand(command) {
     if (this.selection || this.promptDraft || this.hidden || this.aliasEdit || this.ui.privateView || this.ui.coreLifecycleInterrupted || this.resolveInput && !/^bzzy\b/.test(this.question || '')) return;
@@ -437,7 +442,7 @@ export class TerminalChat {
     if (choice.disabled) { picker.error = choice.description || 'This option is unavailable.'; this.schedule(); return; }
     if (picker.single) this.finishSelection(picker.selectEffort ? { value: choice.value, effort: picker.efforts.get(choice.value) } : choice.value);
     else if (picker.selected.size) this.finishSelection([...picker.selected]);
-    else { picker.error = 'Select at least one agent.'; this.schedule(); }
+    else { picker.error = 'Select at least one option.'; this.schedule(); }
   }
   selectedText() {
     const selected = this.textSelection;
@@ -570,7 +575,11 @@ export class TerminalChat {
       return;
     }
     if (hit?.type === 'session-new') { this.localCommand('/new'); return; }
+    if (hit?.type === 'top-skills') { this.localCommand('/skills'); return; }
+    if (hit?.type === 'top-metrics') { this.setPanel('metrics'); return; }
+    if (hit?.type === 'usage-balance') { this.balanceTask = this.ui.showProviderBalance?.(); return; }
     if (hit?.type === 'top-settings') { this.localCommand('/settings'); return; }
+    if (hit?.type === 'settings-exit') { this.leaveSettings(); return; }
     if (hit?.type === 'yolo') { this.permissionTask = this.ui.toggleYolo(); return; }
     if (hit?.type === 'approval') { this.approvalTask = this.ui.answerApproval(hit.answer); return; }
     if (hit?.type === 'approval-details') {
@@ -678,7 +687,8 @@ export class TerminalChat {
     }
     if (this.panel === 'settings' && this.ui.settings?.qrView && !this.promptDraft) {
       key.bzzyHandled = true;
-      if (key.name === 'escape' || key.name === 'return') { this.ui.settings.qrView = false; this.lastFrame = []; this.schedule(); }
+      if (key.name === 'escape') this.leaveSettings();
+      else if (key.name === 'return') { this.ui.settings.qrView = false; this.lastFrame = []; this.schedule(); }
       else if (key.name === 'o') this.settingsAction('open-qr');
       else if (key.name === 'c' && !key.ctrl) this.settingsAction('copy-code');
       return;
@@ -731,11 +741,7 @@ export class TerminalChat {
     if (key.name === 'escape' && this.promptDraft) { this.finish(null); return; }
     if (this.panel === 'settings' && !this.promptDraft) {
       key.bzzyHandled = true;
-      if (key.name === 'escape') {
-        if (this.ui.settingsOnly) this.finish(null);
-        else this.setPanel('chat');
-        return;
-      }
+      if (key.name === 'escape') { this.leaveSettings(); return; }
       if (key.name === 'home' || key.name === 'end') { this.settingsOffset = key.name === 'home' ? 0 : this.settingsMaximum || 0; this.settingsEnsureFocus = false; this.schedule(); return; }
       const actions = this.ui.settings.rows().filter(row => row.action);
       if (['up', 'down', 'left', 'right', 'tab'].includes(key.name)) {
@@ -743,6 +749,9 @@ export class TerminalChat {
         this.ui.settings.focus = (this.ui.settings.focus + direction + actions.length) % actions.length; this.settingsEnsureFocus = true; this.schedule();
       } else if (key.name === 'return') this.settingsAction(actions[this.ui.settings.focus]?.action);
       return;
+    }
+    if (this.panel === 'metrics' && !this.promptDraft) {
+      if (key.name === 'escape') { this.setPanel('chat'); return; }
     }
     if (this.panel === 'skills' && !this.promptDraft) {
       if (key.name === 'escape') { this.setPanel('chat'); return; }
@@ -844,6 +853,8 @@ export class TerminalChat {
         if (row.action) for (let offset = 0; offset < wrapped.length; offset++) this.contentHits.push({ type: 'skill-action', action: row.action, row: lines.length + offset, left: 2, right: width });
         for (const line of wrapped) put('  ' + line, row.tone === 'muted' ? palette.muted : palette.accent, focused);
       }
+    } else if (this.panel === 'metrics') {
+      // Reserved empty surface for the upcoming metrics view.
     } else if (this.panel === 'room') {
       for (const item of this.sharedRoom) {
         const review = item.kind === 'review';
@@ -979,7 +990,7 @@ export class TerminalChat {
     lines.push(line); return lines;
   }
   simpleChatLayout() {
-    return !this.ui.canvas && !this.ui.minimal && ['chat', 'room'].includes(this.panel);
+    return !this.ui.canvas && !this.ui.minimal && ['chat', 'room', 'skills', 'metrics'].includes(this.panel);
   }
   elapsedClock() {
     const durationSeconds = () => {
@@ -1016,47 +1027,68 @@ export class TerminalChat {
       );
       return left + ' '.repeat(Math.max(0, width - leftWidth - rightWidth)) + right;
     }
-    const variants = [
-      { brand: '  ◉◉ bzzy', sessions: '  Open Sessions ▾', create: '   + New Session', alias: true, metrics: true },
-      { brand: '  ◉◉ bzzy', sessions: '  Open Sessions ▾', create: '   + New Session', alias: false, metrics: true },
-      { brand: '◉◉', sessions: ' Open Sessions ▾', create: ' + New Session', alias: false, metrics: true },
-      { brand: '  ◉◉', sessions: '  Open Sessions ▾', create: '   + New', alias: false, metrics: true },
-      { brand: '  ◉◉', sessions: '  Open Sessions', create: '   + New', alias: false, metrics: false },
-      { brand: '', sessions: 'Sessions', create: ' +', alias: false, metrics: false },
+    const leftVariants = [
+      { sessions: '  Open Sessions ▾', create: '   + New Session', alias: true },
+      { sessions: '  Open Sessions ▾', create: '   + New Session', alias: false },
+      { sessions: ' Open Sessions ▾', create: '  + New Session', alias: false },
+      { sessions: '  Open Sessions ▾', create: '   + New', alias: false },
+      { sessions: 'Open Sessions ▾', create: '+ New', alias: false },
+      { sessions: '  Open Sessions', create: '   + New', alias: false },
+      { sessions: 'Sessions', create: ' +', alias: false },
     ];
     const alias = this.alias ? clip(this.alias, Math.max(1, Math.floor(width / 4))) : '';
     const relayOnline = this.ui.connectionStatus?.core === true && this.ui.connectionStatus?.relay === true;
-    const relay = color('●', relayOnline ? palette.goalSuccess : palette.danger, true)
-      + color(width >= 72 ? ' BZZY Relay' : ' Relay', palette.muted);
-    const relayBadge = width >= 24 ? relay + '  ' : '';
-    const metricText = width < 96 ? hostMetricsCompact(this.ui.hostMetrics).replace(/\sGB$/, 'G') : hostMetricsCompact(this.ui.hostMetrics);
+    const relayTone = relayOnline ? palette.goalSuccess : palette.danger;
+    const relayFull = color('●', relayTone, true) + color(' BZZY Relay', palette.muted);
+    const relayDot = color('●', relayTone, true);
+    const deepseekBalance = this.provider === 'deepseek' ? accountStatusLabels(this.ui.accountStatus)[2].value : null;
+    const balance = deepseekBalance != null ? {
+      text: ` ${deepseekBalance} `, tone: deepseekBalance.startsWith('$') ? palette.goalSuccess : palette.muted,
+      bold: true, type: 'usage-balance', surface: true,
+    } : null;
+    const metric = hostMetricsCompact(this.ui.hostMetrics).replace(/\sGB$/, 'G');
+    const tinyMetric = metric.replace('CPU ', 'CPU').replace(' · RAM ', ' ');
+    const selectedRelay = width >= 112 ? relayFull : relayDot;
+    const selectedMetric = width >= 112 ? metric : tinyMetric;
+    const actionsFull = [
+      { text: ' Skills ', tone: palette.accent, bold: true, type: 'top-skills', surface: true },
+      { text: ' Metrics ', tone: palette.accent, bold: true, type: 'top-metrics', surface: true },
+      { text: ' ⚙ Settings ', tone: palette.accent, bold: true, type: 'top-settings', surface: true },
+    ];
+    const actionsCompact = [
+      { text: 'Skills', tone: palette.accent, bold: true, type: 'top-skills' },
+      { text: 'Metrics', tone: palette.accent, bold: true, type: 'top-metrics' },
+      { text: '⚙', tone: palette.accent, bold: true, type: 'top-settings' },
+    ];
+    const actionOptions = [actionsFull, actionsCompact];
+    const withBalance = tokens => balance ? [tokens[0], balance, ...tokens.slice(1)] : tokens;
+    const rightVariants = [
+      withBalance([{ text: selectedRelay }, { text: selectedMetric }, ...actionsFull]),
+      withBalance([{ text: selectedRelay }, { text: selectedMetric }, ...actionsCompact]),
+      withBalance([{ text: relayDot }, ...actionsFull]),
+      withBalance([{ text: relayDot }, ...actionsCompact]),
+      [{ text: relayDot }, { text: selectedMetric }, ...actionsFull],
+      [{ text: relayDot }, ...actionsCompact],
+      ...actionOptions,
+    ];
     let selected;
-    for (const variant of variants) {
-      let left = variant.brand + variant.sessions + '  │ ' + variant.create;
-      if (variant.alias && alias) left += '  │ ' + alias;
-      if (cellWidth(left) + cellWidth(relayBadge) + cellWidth(' ⚙ ') + 1 > width) continue;
-      const metric = variant.metrics ? metricText : '';
-      const withMetrics = relayBadge + (metric ? metric + '  ' : '') + ' ⚙ ';
-      if (metric && cellWidth(left) + cellWidth(withMetrics) + 1 <= width) {
-        selected = { ...variant, alias: variant.alias && alias, metric, right: withMetrics, left };
-        break;
+    for (const rightTokens of rightVariants) {
+      const rightWidth = rightTokens.reduce((sum, token) => sum + cellWidth(token.text), 0) + Math.max(0, rightTokens.length - 1) * 2;
+      for (const variant of leftVariants) {
+        let left = variant.sessions + '  │ ' + variant.create;
+        if (variant.alias && alias) left += '  │ ' + alias;
+        if (cellWidth(left) + rightWidth + 1 <= width) {
+          selected = { ...variant, alias: variant.alias && alias, rightTokens, rightWidth, left };
+          break;
+        }
       }
-    }
-    if (!selected) for (const variant of variants) {
-      let left = variant.brand + variant.sessions + '  │ ' + variant.create;
-      if (variant.alias && alias) left += '  │ ' + alias;
-      const right = relayBadge + ' ⚙ ';
-      if (cellWidth(left) + cellWidth(right) + 1 <= width) {
-        selected = { ...variant, alias: variant.alias && alias, metric: '', right, left };
-        break;
-      }
+      if (selected) break;
     }
     if (!selected) {
-      const right = ' ⚙ ';
-      selected = { brand: '', sessions: 'S', create: '', alias: false, metric: '', right, left: 'S' };
+      selected = { sessions: 'S', create: '', alias: false,
+        rightTokens: [{ text: '⚙', tone: palette.accent, bold: true, type: 'top-settings' }], rightWidth: 1, left: 'S' };
     }
     const tokens = [
-      ...(selected.brand ? [{ text: selected.brand, tone: palette.accent, bold: true }] : []),
       { text: selected.sessions, tone: palette.accent, bold: true, type: 'top-sessions' },
       { text: '  │ ', tone: palette.muted },
       { text: selected.create, tone: palette.accent, bold: true, type: 'session-new' },
@@ -1069,22 +1101,45 @@ export class TerminalChat {
       left += color(token.text, token.tone, token.bold);
       column += size;
     }
-    const gap = Math.max(1, width - column - cellWidth(selected.right));
-    const gear = ' ⚙ ';
-    this.hitTargets.push({ type: 'top-settings', row: 1, left: width - cellWidth(gear) + 1, right: width });
-    return left + ' '.repeat(gap) + relayBadge + (selected.metric ? color(selected.metric, palette.muted) + '  ' : '')
-      + fillSurface(gear, cellWidth(gear), this.theme, palette.elevated, palette.accent, true, surface);
+    const rightStart = width - selected.rightWidth;
+    let right = '', offset = rightStart;
+    for (const [index, token] of selected.rightTokens.entries()) {
+      if (index) { right += '  '; offset += 2; }
+      const size = cellWidth(token.text);
+      if (token.type) this.hitTargets.push({ type: token.type, row: 1, left: offset + 1, right: offset + size });
+      const active = token.type === 'top-skills' && this.panel === 'skills'
+        || token.type === 'top-metrics' && this.panel === 'metrics';
+      right += token.surface
+        ? fillSurface(token.text, size, this.theme, active ? palette.accent : palette.selection,
+          active ? palette.background : token.tone, token.bold, surface)
+        : color(token.text, token.tone || palette.muted, token.bold);
+      offset += size;
+    }
+    return left + ' '.repeat(Math.max(1, rightStart - column)) + right;
   }
   settingsTopBar(width) {
-    const { color } = this.theme;
-    const brand = '  ◉◉ ', section = this.ui.settings?.page === 'main' ? 'Settings' : this.ui.settings?.pageTitle || 'Settings';
-    const left = color(brand, palette.accent, true) + color(clip(section, Math.max(1, width - 32)), palette.text, true);
+    const { color } = this.theme, surface = palette.surface;
+    const section = this.ui.settings?.page === 'main' ? 'Settings' : this.ui.settings?.pageTitle || 'Settings';
+    const left = color(clip('  ' + section, Math.max(1, width - 18)), palette.text, true);
     const metrics = width >= 56 ? hostMetricsCompact(this.ui.hostMetrics) : '';
     const relayOnline = this.ui.connectionStatus?.core === true && this.ui.connectionStatus?.relay === true;
-    const relay = color('●', relayOnline ? palette.goalSuccess : palette.danger, true) + color(' BZZY Relay', palette.muted);
-    const right = relay + (metrics ? '  ' + color(metrics, palette.muted) : '');
+    const relayTone = relayOnline ? palette.goalSuccess : palette.danger;
+    const relay = color('●', relayTone, true) + color(' BZZY Relay', palette.muted);
+    const relayDot = color('●', relayTone, true);
+    const metricText = metrics ? color(metrics, palette.muted) : '';
+    const exit = this.ui.settingsOnly ? '  Esc · Exit  ' : '  Esc · Chat  ';
+    const rightOptions = [
+      relay + (metricText ? '  ' + metricText : '') + '  ' + exit,
+      relayDot + (metricText ? '  ' + metricText : '') + '  ' + exit,
+      relayDot + '  ' + exit,
+      exit,
+    ].filter((value, index, all) => all.indexOf(value) === index);
+    const right = rightOptions.find(option => cellWidth(left) + cellWidth(option) + 1 <= width) || exit;
     const gap = Math.max(1, width - cellWidth(left) - cellWidth(right));
-    return left + ' '.repeat(gap) + right;
+    const exitLeft = width - cellWidth(exit) + 1;
+    this.hitTargets.push({ type: 'settings-exit', row: 1, left: exitLeft, right: width });
+    return left + ' '.repeat(gap) + right.slice(0, -cellWidth(exit))
+      + fillSurface(exit, cellWidth(exit), this.theme, palette.selection, palette.accent, true, surface);
   }
   codexBottom(width, height, completions) {
     const { color } = this.theme, surface = palette.surface;
@@ -1135,8 +1190,11 @@ export class TerminalChat {
     const composerTop = lines.length;
     const breathingRoom = height >= 18;
     if (breathingRoom) lines.push('');
-    const hasSubmit = Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
-    const prompt = this.panel === 'room' ? 'Message all agents'
+    const hasSubmit = !['skills', 'metrics'].includes(this.panel)
+      && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
+    const prompt = this.panel === 'metrics' ? 'Metrics · no data yet'
+      : this.panel === 'skills' ? 'Skills · Esc returns to chat'
+      : this.panel === 'room' ? 'Message all agents'
       : this.ui.sessionMode === 'VIEW' ? 'Read-only session'
         : this.promptDraft && this.question ? this.question
           : this.mode === 'delegate' && !this.goal ? 'Ask BZZY, or type /goal to delegate work'
@@ -1339,7 +1397,8 @@ export class TerminalChat {
     const exit = settings.page !== 'main' ? 'back' : this.ui.settingsOnly ? 'close' : 'chat';
     if (!compact) footer.push('');
     const exitRow = footer.length;
-    footer.push(color(clip('  ‹ ' + (exit === 'back' ? 'Back' : exit === 'close' ? 'Close' : 'Back to chat') + '    ↑/↓ choose · Enter open', width), palette.muted));
+    footer.push(color(clip('  ‹ ' + (exit === 'back' ? 'Back' : exit === 'close' ? 'Close' : 'Back to chat')
+      + '    ↑/↓ choose · Enter open · Esc ' + (this.ui.settingsOnly ? 'exit' : 'chat'), width), palette.muted));
     if (!compact) footer.push('');
     const bodyHeight = Math.max(1, height - header.length - footer.length);
     const body = this.content(width - 2), focus = this.settingsFocusRow || 0;
@@ -1709,7 +1768,7 @@ export class TerminalChat {
         : ['', accent('  What should BZZY work on?'), color('  Ask a question, build something, or investigate a task.', palette.text), muted('  /goal <objective>   Persist until the outcome is verified'), muted('  Type / for commands, models and sessions.')];
       const mode = this.entries.findLast(entry => /^(Parallel|Debate) mode/.test(entry.text));
       if (mode) welcome.push('', ...wrap(mode.text, width - 5).map(line => muted('  ' + line)));
-      body = this.panel === 'chat' ? welcome : this.panel === 'room' ? [accent('  Shared room · waiting for peer messages'), ...wrap('The two besties exchange findings, evidence and reviews here. Their separate chats stay available above. Use /goal <objective> to begin collaboration.', width - 5).map(line => muted('  ' + line))]
+      body = this.panel === 'metrics' ? [] : this.panel === 'chat' ? welcome : this.panel === 'room' ? [accent('  Shared room · waiting for peer messages'), ...wrap('The two besties exchange findings, evidence and reviews here. Their separate chats stay available above. Use /goal <objective> to begin collaboration.', width - 5).map(line => muted('  ' + line))]
         : this.panel === 'http' ? [muted('  No HTTP records yet.'), ...wrap('WebFetch and browser visits appear automatically as backend-reported activity. For measured shell HTTP traffic, start bzzy with --capture-network. The http_request tool always records observed requests.', width - 5).map(line => muted('  ' + line))] : [muted('  No ' + this.panel + ' records yet.')];
     }
     if (this.panel === 'settings' && !this.selection && this.settingsEnsureFocus) {

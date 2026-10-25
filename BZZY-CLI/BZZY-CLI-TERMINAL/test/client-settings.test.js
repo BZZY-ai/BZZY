@@ -103,7 +103,7 @@ test('Settings takes over the full screen and keeps all four choices at normal t
     Object.assign(output, { rows, columns: 100 }); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
     for (const label of ['API keys', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
-    assert.match(frame, /◉◉ Settings/);
+    assert.match(frame, /^\s*Settings/m); assert.doesNotMatch(frame, /◉◉|bzzy/);
     assert.doesNotMatch(frame, /fixture-model-banner|fixture-project-path|987,654 tokens|Ask BZZY to do anything/);
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'settings'));
     assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'confirm'), false);
@@ -121,6 +121,28 @@ test('Esc leaves any Settings page for the active chat and preserves the draft',
   assert.equal(ui.tui.panel, 'chat');
   assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.cursor, 5);
   ui.reader.close(); assert.equal(await answer, null);
+});
+
+test('the visible Esc Chat control leaves Settings and preserves the draft', async () => {
+  const { ui } = terminal(), answer = ui.ask('bzzy › '); await Promise.resolve();
+  ui.tui.value = 'Visible exit draft'; ui.tui.cursor = 7;
+  ui.openSettings(); ui.renderFooter(); ui.tui.render();
+  const exit = ui.tui.hitTargets.find(hit => hit.type === 'settings-exit'); assert.ok(exit);
+  ui.tui.mouse(0, exit.left, exit.row);
+  assert.equal(ui.tui.panel, 'chat');
+  assert.equal(ui.tui.value, 'Visible exit draft'); assert.equal(ui.tui.cursor, 7);
+  ui.reader.close(); assert.equal(await answer, null);
+});
+
+test('BZZY Core Settings exposes one action that updates both CLI and Core', async () => {
+  const { ui } = terminal(); ui.openSettings(); ui.settings.page = 'core';
+  let updatedWith;
+  ui.settings.updater = async target => { updatedWith = target; };
+  assert.ok(ui.settings.rows().some(row => row.action === 'update-bzzy'));
+  await ui.settings.run('update-bzzy');
+  assert.equal(updatedWith, ui);
+  assert.equal(ui.settings.busy, false);
+  assert.equal(listRecords('execution').length, 0);
 });
 
 test('terminal mode settings have separate clickable model/effort fields and preserve unsaved edits through Back', async () => {
@@ -188,7 +210,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'core-model', 'core-effort', 'core-save', 'modes', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'core-model', 'core-effort', 'core-save', 'update-bzzy', 'modes', 'back']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');
@@ -244,8 +266,7 @@ test('Pair iPhone uses maximum access without pickers and its secondary screen r
     sessionAccess: true, shareAccess: true, agentAccess: true, ttlSeconds: 600, grantTtlSeconds: 86400 });
   assert.ok(ui.settings.rows().some(row => row.action === 'back')); assert.ok(ui.settings.rows().some(row => row.action === 'copy-code'));
   assert.ok(ui.settings.rows().some(row => /^BZZY-PAIR-/.test(row.text)));
-  // Escape first dismisses an optional QR, then returns to chat.
-  if (ui.settings.qrView) ui.tui.key('', { name: 'escape' });
+  // Escape closes an optional QR and returns directly to chat.
   ui.tui.key('', { name: 'escape' });
   assert.equal(ui.settings.page, 'pair'); assert.equal(ui.tui.panel, 'chat');
   ui.tui.setPanel('settings'); await ui.settings.run('back');
@@ -385,10 +406,10 @@ test('a small Pair viewport scrolls back to host identity and expiry after actio
     id: randomUUID(), deviceId: `fixture-phone-${index}`, expiresAt: Date.now() + 600000,
   })) });
   ui.settings = new ClientSettings(ui, { relayLoader: async () => fixture.module }); ui.openSettings();
-  Object.assign(output, { rows: 16, columns: 100 });
+  Object.assign(output, { rows: 10, columns: 100 });
   await ui.settings.run('pair');
   await ui.settings.run('new-pair');
-  ui.tui.key('', { name: 'escape' });
+  ui.tui.key('', { name: 'return' });
   ui.settings.focusAction('back'); ui.settings.changed(); ui.tui.render();
   const frame = () => ui.tui.lastFrame.map(clean).join('\n');
   assert.ok(ui.tui.settingsOffset > 0); assert.match(frame(), /Back/); assert.doesNotMatch(frame(), /Host fingerprint:/);

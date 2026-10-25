@@ -48,8 +48,8 @@ This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
 `bzzy` opens a Codex-style terminal chat with three fixed sections: a one-row
-top bar for Open Sessions, New Session, host CPU/RAM and Settings; the live chat
-transcript; and a compact composer with the current model, effort, token count,
+top bar for Open Sessions, New Session, Skills, Metrics, host CPU/RAM and
+Settings; the live chat transcript; and a compact composer with the current model, effort, token count,
 `HH:MM:SS` runtime and color-coded goal state. User turns and agent replies use
 separate labeled rails, and the latest user request stays pinned directly below
 the top bar while a long reply streams. Open Sessions deploys an anchored
@@ -57,6 +57,12 @@ dropdown of aliased terminals. A green or red Relay dot is always available in
 the status treatment. The gear opens a full-screen Settings view in place of the
 transcript and composer, while preserving the chat draft. Esc returns from any
 Settings page to chat.
+
+**Skills** opens the existing project/global skills library, including **Sync
+skills from Codex into BZZY**. **Metrics** is a reserved empty view for now.
+When the active terminal model uses the DeepSeek API key, the top bar also shows
+the current USD balance; click it for freshness/source details. Subscription
+providers do not show an account balance control.
 
 `bzzy --canvas` retains the character workspace: insert model/effort characters,
 set goals, and connect them for Delegate, Debate, Besties or Parallel.
@@ -257,7 +263,29 @@ project alias in the top bar to rename it inline; Enter/Save name confirms and
 Esc/Cancel returns. Core's own model and effort dropdowns remain independent in
 Settings → BZZY Core.
 
-Open **Skills** or `/skills` to view, create, import folders/ZIPs and explicitly enable workflows for every model within their project/global scope. New UI imports default to the current project. Choose **Sync Codex skills**, type `/skills sync`, or run `bzzy skills sync` to copy Codex workflows on Linux/macOS. It searches project, user, configured Codex and machine skill folders; project sources stay project-scoped. New/changed versions need review and enable; repeating sync preserves unchanged enable decisions and local BZZY edits. See [Core skills](../../BZZY-CORE/docs/SKILLS.md).
+Open **Skills** from the top bar or type `/skills` to view project skills and
+Core/global skills, create or import one skill folder/ZIP, and explicitly enable
+workflows for every model. A skill uses the same package shape as Codex: one
+directory per skill with a required `SKILL.md` plus optional `scripts/`,
+`references/`, `assets/`, and `agents/openai.yaml`, per the
+[official skill-building guide](https://learn.chatgpt.com/docs/build-skills).
+
+Choose **Sync skills from Codex into BZZY**, type `/skills sync`, or run `bzzy
+skills sync` in a terminal to enter a Codex skills directory. BZZY lists every
+immediate skill package, then Space toggles checkboxes and Enter imports the
+selected packages. Imported skills remain disabled for review. Noninteractive
+`bzzy skills sync --json` scans project `.agents/skills`,
+user `.agents/skills`, `$CODEX_HOME/skills`, `$BZZY_CODEX_HOME/skills`,
+`~/.codex/skills`, and the admin skill directory.
+
+The whole package is copied inactively; project discoveries stay
+project-scoped, while user and machine discoveries become Core/global skills.
+Scripts and hooks never execute during import or enable. Codex folders whose
+metadata name uses underscores are displayed with that name and normalized to
+BZZY’s hyphenated format (for example, `read_emails` imports as `read-emails`).
+New/changed versions require review and enable; repeat syncs preserve unchanged
+enable decisions and independent BZZY edits. See
+[Core skills](../../BZZY-CORE/docs/SKILLS.md).
 
 Use `/memory [query]` for attributed project history and `/learn` for bounded lesson reviews, private profiles, fixtures and inactive skill candidates. Meaningful saved outcomes can queue idle reviews; opening these views never starts inference. Pauses and recovery retain interrupted reviews until explicit resume. Candidates need reviewed offline evaluation and explicit activation. See [knowledge and learning](../../BZZY-CORE/docs/KNOWLEDGE.md) for scope, defaults, owner commands and validation limits.
 
@@ -292,8 +320,11 @@ or launch `bzzy --settings` directly. It includes hidden DeepSeek, Abliteration
 and OrcaRouter API-key save/replacement and device
 pairing using the bundled Core Relay gateway. The main menu has four entries:
 **API keys**, **Default BZZY folder**, **Pair iPhone**, and **BZZY Core**.
-Open BZZY Core for status, Start, Stop, Restart and its independent model/effort default. Stop leaves Settings usable;
-Start/Restart preserve paused work. Leaving Settings reconnects an existing chat
+Open BZZY Core for status, Start, Stop, Restart and its independent model/effort
+default. Stop leaves Settings usable. The BZZY Core page also provides **Update
+BZZY CLI + Core**, which uses the same checked updater and reloads this terminal
+with chat and draft retained. Start/Restart preserve paused work. Leaving
+Settings reconnects an existing chat
 without replaying a goal; leaving while Core is stopped closes the CLI.
 Pair iPhone offers a QR and a random code for the same expiring request, then
 requires phone-fingerprint confirmation on the host. It requests all session

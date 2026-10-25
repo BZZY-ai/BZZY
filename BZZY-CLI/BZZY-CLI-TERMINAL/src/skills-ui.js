@@ -1,8 +1,11 @@
-import { listSkills, inspectSkill, readSkill, importSkill, createSkill, setSkillEnabled, skillHistory, rollbackSkill, promoteSkill, scopeSkillToProject } from '@bzzy/core/engine/skills.js';
-import { syncCodexSkills, skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
+import { listSkills, inspectSkill, readSkill, importSkill, createSkill, setSkillEnabled, skillHistory, rollbackSkill, promoteSkill, scopeSkillToProject, skillMetadata } from '@bzzy/core/engine/skills.js';
+import { skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { projectIdentityForSession, resolveProjectIdentity } from '@bzzy/core/engine/project-identity.js';
 import { knowledgeAction, knowledgeRows } from './knowledge-ui.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const sessionFor = ui => ui.sessionId && loadSession(ui.sessionId);
 const projectFor = ui => {
@@ -26,6 +29,133 @@ const preview = (ui, id, options = {}) => {
   ui.skillPreviewContext = contextKey(ui);
 };
 const resetViews = ui => { ui.skillPreview = null; ui.skillHistoryState = null; ui.skillPromotionDraft = null; ui.skillSyncDetails = false; ui.knowledgeView = null; };
+
+export function codexSkillDirectories(directory) {
+  const root = fs.realpathSync(directory), stat = fs.lstatSync(root);
+  if (!stat.isDirectory()) throw new Error('Choose a directory containing Codex skill folders.');
+  const candidates = [], issues = [];
+  const add = (folder, name) => {
+    const entry = fs.lstatSync(folder);
+    if (entry.isSymbolicLink()) { issues.push({ name, reason: 'Linked skill folders are not imported.' }); return; }
+    if (entry.isDirectory() && fs.existsSync(path.join(folder, 'SKILL.md'))) candidates.push({ source: folder, name });
+  };
+  if (fs.existsSync(path.join(root, 'SKILL.md'))) add(root, path.basename(root));
+  else {
+    const ordered = fs.readdirSync(root, { withFileTypes: true })
+      .sort((a, b) => a.name.replaceAll('_', '-').localeCompare(b.name.replaceAll('_', '-')));
+    for (const entry of ordered) {
+      if (candidates.length >= 512) break;
+      if (entry.name.startsWith('.') || !entry.isDirectory()) continue;
+      add(path.join(root, entry.name), entry.name);
+    }
+  }
+  return { root, candidates, issues, truncated: candidates.length >= 512 };
+}
+
+function codexSkillManifest(directory) {
+  const file = path.join(directory, 'SKILL.md'), stat = fs.lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 128 * 1024) throw new Error('SKILL.md is not a bounded regular file.');
+  const markdown = fs.readFileSync(file, 'utf8');
+  try {
+    const metadata = skillMetadata(markdown);
+    return { rawName: metadata.name, metadata, normalizedMarkdown: markdown };
+  } catch (error) {
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown), name = /^name:\s*(.+?)\s*$/m.exec(frontmatter?.[1] || '')?.[1];
+    const normalized = name?.replaceAll('_', '-').toLowerCase();
+    if (!normalized || normalized === name) throw error;
+    const normalizedMarkdown = markdown.replace(/^name:\s*.+$/m, `name: ${normalized}`);
+    return { rawName: name, metadata: skillMetadata(normalizedMarkdown), normalizedMarkdown };
+  }
+}
+
+function stageCodexSkill(candidate, manifest) {
+  if (manifest.rawName === manifest.metadata.name) return { source: candidate.source, cleanup() {} };
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-codex-skill-'));
+  const target = path.join(temporary, manifest.metadata.name);
+  try {
+    fs.cpSync(candidate.source, target, {
+      recursive: true,
+      dereference: false,
+      filter: source => !['.DS_Store'].includes(path.basename(source)) && !path.basename(source).startsWith('._'),
+    });
+    fs.writeFileSync(path.join(target, 'SKILL.md'), manifest.normalizedMarkdown, { mode: 0o600 });
+    return { source: target, cleanup: () => fs.rmSync(temporary, { recursive: true, force: true }) };
+  } catch (error) {
+    fs.rmSync(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export async function importCodexSkillDirectory(ui, {
+  directory,
+  discover = codexSkillDirectories,
+  importer = importSkill,
+} = {}) {
+  const fallback = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'skills');
+  if (!directory) {
+    const entered = await prompt(ui, 'ask',
+      `Codex skills directory · one folder per skill · default: ${fallback} · Esc cancels`);
+    if (entered == null) return null;
+    directory = entered.trim() || fallback;
+  }
+  const found = discover(path.resolve(directory));
+  if (!found.candidates.length) {
+    ui.event('info', { message: `No skill folders with SKILL.md found in ${found.root}.` });
+    return null;
+  }
+  const projectRoot = projectFor(ui).root;
+  const projectDirectory = path.resolve(path.join(projectRoot, '.agents', 'skills'));
+  const projectScope = ui.skillScope === 'project'
+    || (ui.skillScope !== 'global' && (found.root === projectDirectory || found.root.startsWith(projectDirectory + path.sep)));
+  const scopeOptions = projectScope ? { ...currentContext(ui), scope: 'project' } : { scope: 'global' };
+  const choices = [], manifests = new Map();
+  for (const candidate of found.candidates) {
+    try {
+      const manifest = codexSkillManifest(candidate.source);
+      if (choices.some(choice => choice.importName === manifest.metadata.name)) {
+        found.issues.push({ name: manifest.rawName, reason: 'Duplicate skill name; choose one source at a time.' });
+        continue;
+      }
+      const rename = manifest.rawName === manifest.metadata.name ? '' : ` · imports as ${manifest.metadata.name}`;
+      choices.push({ value: candidate.source, label: `${manifest.rawName}${rename}`, importName: manifest.metadata.name,
+        description: manifest.metadata.description, candidate, manifest });
+      manifests.set(candidate.source, manifest);
+    } catch {
+      found.issues.push({ name: candidate.name, reason: 'Invalid or unsafe skill package.' });
+    }
+  }
+  if (!choices.length) {
+    ui.event('info', { message: 'No valid Codex skill packages were found.' });
+    return null;
+  }
+  const selected = await ui.chooseMany(`Import from Codex · ${choices.length} available · ${projectScope ? 'this project' : 'Core / global'}`, choices,
+    { hint: 'Space toggles · ↑/↓ moves · Enter imports selected · Esc cancels', confirmLabel: 'Import selected' });
+  if (!selected?.length) return null;
+  const counts = { imported: 0, updated: 0, unchanged: 0, conflicts: 0, rejected: 0, scanned: found.candidates.length,
+    unavailable: found.issues.length, truncated: found.truncated };
+  const results = [];
+  for (const choice of choices.filter(item => selected.includes(item.value))) {
+    const manifest = manifests.get(choice.value), staged = stageCodexSkill(choice.candidate, manifest);
+    try {
+      const preview = importer(staged.source, { ...scopeOptions, preview: true, provenance: { kind: 'codex-sync' } });
+      let existing = null;
+      try { existing = inspectSkill(preview.name, scopeOptions); } catch {}
+      if (existing?.version === preview.version) {
+        counts.unchanged++;
+        results.push({ name: preview.name, status: 'unchanged', enabled: existing.enabled });
+        continue;
+      }
+      const skill = importer(staged.source, { ...scopeOptions, expectedRevision: existing?.revision || 0,
+        provenance: { kind: 'codex-sync' } });
+      const status = existing ? 'updated' : 'imported'; counts[status]++;
+      results.push({ name: skill.name, status, enabled: false });
+    } catch {
+      counts.rejected++;
+      results.push({ name: manifest.metadata.name, status: 'rejected', reason: 'Import failed or the package changed.' });
+    } finally { staged.cleanup(); }
+  }
+  return { ...counts, locations: 1, results, issues: found.issues };
+}
 
 export function skillRows(ui) {
   if (ui.knowledgeView) return knowledgeRows(ui);
@@ -68,29 +198,41 @@ export function skillRows(ui) {
   }
   const query = ui.skillQuery || '', offset = ui.skillOffset || 0;
   const page = listSkills({ ...currentContext(ui), query, offset, limit: 30 }), target = ui.skillScope === 'global' ? 'global' : 'project';
-  const rows = [ { text: 'All providers and models · project knowledge stays scoped', tone: 'muted' },
+  const rows = [ { text: 'Codex-compatible skill library · Core/global + this project', tone: 'accent' },
+    { text: 'Each skill folder has SKILL.md plus optional scripts/, references/, assets/ and agents/openai.yaml', tone: 'muted' },
+    { text: 'Discovery: project .agents/skills · user .agents/skills · $CODEX_HOME/skills · ~/.codex/skills', tone: 'muted' },
     { text: 'Scope: ' + (ui.skillScope === 'global' ? 'Global methods' : ui.skillScope === 'project' ? 'This project only' : 'This project + global methods'), action: 'scope' },
     { text: 'Project memory and history', action: 'knowledge:memory' }, { text: 'Learning reviews and candidates', action: 'knowledge:home' },
-    { text: 'Sync Codex skills', action: 'sync' }, { text: `Import folder or ZIP · ${target}`, action: 'import' }, { text: `Create ${target} skill`, action: 'create' }, { text: `Search${query ? ': ' + query : '…'}`, action: 'search' }, { text: '' } ];
+    { text: 'Sync skills from Codex into BZZY', action: 'sync' }, { text: `Import one skill folder or ZIP · ${target}`, action: 'import' }, { text: `Create ${target} skill`, action: 'create' }, { text: `Search${query ? ': ' + query : '…'}`, action: 'search' }, { text: '' } ];
   if (ui.skillSyncResult) {
     rows.push({ text: skillSyncSummary(ui.skillSyncResult), tone: 'muted' });
     if (ui.skillSyncResult.conflicts || ui.skillSyncResult.rejected || ui.skillSyncResult.unavailable) rows.push({ text: 'Sync details', action: 'sync-details' });
   }
-  for (const skill of page.skills) {
+  const appendSkill = skill => {
     const id = skill.id || skill.name;
-    rows.push({ text: `${skill.enabled ? '●' : '○'} ${skill.name} · ${skill.scope} · ${skill.enabled ? 'enabled' : 'disabled'}`, action: `view:${id}` });
+    rows.push({ text: `${skill.enabled ? '●' : '○'} ${skill.name} · ${skill.enabled ? 'enabled' : 'disabled'}`, action: `view:${id}` });
     rows.push({ text: '  ' + skill.description, tone: 'muted' });
     rows.push({ text: `  ${skill.enabled ? 'Disable' : 'Enable'} · ${skill.version.slice(0, 8)}`, action: `toggle:${id}` }, { text: '  Version history and rollback', action: `history:${id}` });
     if (skill.scope === 'project') rows.push({ text: '  Propose a separate global method', action: `promote:${id}` });
     if (skill.needsScopeReview) rows.push({ text: '  Keep this legacy copy in this project', action: `scope-project:${id}` });
+  };
+  const projectSkills = page.skills.filter(skill => skill.scope === 'project');
+  const globalSkills = page.skills.filter(skill => skill.scope !== 'project');
+  if (projectSkills.length) {
+    rows.push({ text: 'PROJECT SKILLS', tone: 'accent' });
+    for (const skill of projectSkills) appendSkill(skill);
   }
-  if (!page.total) rows.push({ text: 'No skills yet. Sync Codex skills, import a folder/ZIP, or create one.', tone: 'muted' });
+  if (globalSkills.length) {
+    rows.push({ text: 'CORE / GLOBAL SKILLS', tone: 'accent' });
+    for (const skill of globalSkills) appendSkill(skill);
+  }
+  if (!page.total) rows.push({ text: 'No skills yet. Import from a Codex skills directory, import one folder/ZIP, or create one.', tone: 'muted' });
   if (offset) rows.push({ text: 'Previous page', action: 'previous' });
   if (page.nextOffset != null) rows.push({ text: 'Next page', action: 'next' });
   return rows;
 }
 
-export async function skillsCommand(text, ui, { sync = syncCodexSkills } = {}) {
+export async function skillsCommand(text, ui, { sync, discover = codexSkillDirectories, importer = importSkill } = {}) {
   if (!/^\/skills(?:\s|$)/.test(text)) return false;
   ui.openTerminal();
   if (!ui.tui) { ui.event('error', { message: 'Open the interactive terminal to manage skills.' }); return true; }
@@ -108,7 +250,10 @@ export async function skillsCommand(text, ui, { sync = syncCodexSkills } = {}) {
         { value: 'global', label: 'Global reusable methods', selected: ui.skillScope === 'global' }]);
       if (scope) { ui.skillScope = scope; ui.skillOffset = 0; resetViews(ui); }
     } else if (action === 'sync' || action === 'sync codex') {
-      const result = sync({ cwd: ui.tui.cwd || process.cwd() });
+      const result = sync
+        ? sync({ cwd: ui.tui.cwd || process.cwd() })
+        : await importCodexSkillDirectory(ui, { discover, importer });
+      if (!result) return true;
       resetViews(ui); ui.skillSyncResult = skillSyncReport(result); ui.skillQuery = ''; ui.skillOffset = 0;
       ui.event('info', { message: skillSyncSummary(result) });
     } else if (action === 'sync-details') { ui.skillSyncDetails = true; ui.skillSyncOffset = 0; }

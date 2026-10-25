@@ -11,6 +11,7 @@ import { copyText } from './clipboard.js';
 import { PairingQRImage } from './pairing-qr-image.js';
 import { home } from './files.js';
 import { ModeSettings, modeSettings } from './mode-settings.js';
+import { updateCommand } from './update-checker.js';
 
 const loadRelay = () => {
   let location;
@@ -53,10 +54,10 @@ export class ClientSettings {
   #expiry;
   #approvalRequest;
   constructor(ui, { relayLoader = loadRelay, hostLoader = loadHost, workspaces = new CoreWorkspaces(),
-    qrImage = new PairingQRImage(), modelPicker = chooseUnifiedModel } = {}) {
+    qrImage = new PairingQRImage(), modelPicker = chooseUnifiedModel, updater = updateCommand } = {}) {
     this.ui = ui; this.relayLoader = relayLoader; this.workspaces = workspaces;
     this.hostLoader = hostLoader; this.hostHome = home();
-    this.qrImage = qrImage; this.modelPicker = modelPicker;
+    this.qrImage = qrImage; this.modelPicker = modelPicker; this.updater = updater;
     this.modes = new ModeSettings(ui);
     this.message = ''; this.warning = false; this.focus = 0; this.page = 'main';
   }
@@ -112,7 +113,7 @@ export class ClientSettings {
       rows.push({ text: 'Default BZZY folder', action: 'workspace-root', icon: '▱', card: true, tone: 'accent', detail: folder });
       rows.push({ text: 'Pair iPhone', action: 'pair', icon: '⌁', card: true, tone: 'accent',
         detail: this.pending().length ? 'iPhone waiting for approval' : this.grants().length ? 'iPhone paired' : 'Full access · QR or code' });
-      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, default assistant and terminal agent setups', value: this.hostStatus ? this.hostLabel() : undefined });
+      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, updates, default assistant and terminal agent setups', value: this.hostStatus ? this.hostLabel() : undefined });
       return rows;
     }
     if (this.page === 'keys') {
@@ -138,6 +139,8 @@ export class ClientSettings {
       rows.push({ text: 'Effort', value: (this.coreSelection?.effort || 'default') + ' ▾', action: 'core-effort', inline: 'agent-core', control: true });
       put('Save Core default', 'accent', 'core-save');
       put('Independent from the CLI chat default.', 'muted');
+      rows.push({ text: 'Update BZZY CLI + Core', action: 'update-bzzy', icon: '↻', card: true, tone: 'accent',
+        detail: 'Check the official release and update both products · this terminal reloads' });
       rows.push({ text: 'Terminal agent setups', action: 'modes', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Delegate · Debate · Parallel · Besties' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
       const push = notificationDeliveryStatus();
@@ -307,7 +310,11 @@ export class ClientSettings {
     if (action !== 'modes' && !this.rows().some(row => row.action === action)) return;
     this.busy = true; this.message = ''; this.warning = false; this.changed();
     try {
-      if (action === 'solo-default') {
+      if (action === 'update-bzzy') {
+        this.busy = false; this.changed();
+        await this.updater(this.ui);
+        return;
+      } else if (action === 'solo-default') {
         const current = defaultSelection() || (this.ui.sessionId ? loadSession(this.ui.sessionId) : null) || { cwd: this.ui.tui.cwd || process.cwd() };
         const selection = await this.modelPicker(current, this.ui, { title: 'Solo chat default', scope: 'settings-solo' });
         if (selection) {

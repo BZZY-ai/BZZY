@@ -8,6 +8,7 @@ import { chooseSavedSession, namedTerminalSessions, promptSessionAlias, queueSes
 import { exportProject, importProject } from './project-bundle.js';
 import { shareTerminal, importTerminal, relayImportArgument, forgetPrivateImportInput } from './share-ui.js';
 import { skillThat } from './skill-that.js';
+import { skillsCommand as terminalSkillsCommand } from './skills-ui.js';
 import { root } from './process.js';
 import { checkConnections } from './connection-check.js';
 import { UI } from './ui.js';
@@ -51,7 +52,7 @@ Usage:
   bzzy "initial context" --goal "task"  Send context first, then start a durable goal
   bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
-  bzzy skills sync                     Sync Codex skills into the shared BZZY library
+  bzzy skills sync                     Choose and import Codex skill folders
   bzzy knowledge search TEXT           Search this engagement's knowledge and past chats
   bzzy knowledge review [SESSION]      Queue a bounded lesson review for an existing chat
   bzzy --delegate                       Choose brain and hands; chat normally or start /goal
@@ -526,6 +527,7 @@ export async function main(argv) {
     if (command === 'knowledge') return knowledgeCLI(rest, options, ui);
     if (command === 'skills') {
       if (rest.length !== 1 || rest[0] !== 'sync') throw new Error('Use bzzy skills sync, or open Skills in the terminal.');
+      if (ui.interactive) { await terminalSkillsCommand('/skills sync', ui); return 0; }
       const result = syncCodexSkills({ cwd: options.cwd });
       ui.event('info', { ...skillSyncReport(result), message: skillSyncSummary(result) }); return 0;
     }

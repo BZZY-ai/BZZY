@@ -39,7 +39,7 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   else if (!filtered.length) put(' No matching models.', palette.muted);
   else for (const { choice, index } of filtered.slice(offset, offset + rows)) {
     const focused = index === picker.focus, selected = picker.single ? choice.selected : picker.selected.has(choice.value);
-    let tail = selected ? ' ✓' : '';
+    let tail = picker.single ? selected ? ' ✓' : '' : selected ? ' [x]' : ' [ ]';
     if (picker.selectEffort && choice.efforts?.length) tail = ` ‹ ${picker.efforts.get(choice.value)} ›`;
     const label = ` ${focused ? '›' : ' '} ${clip(choice.label, inner - cellWidth(tail) - 5)}`;
     const tone = picker.kind === 'approval' && palette[choice.tone];
@@ -56,8 +56,11 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   const count = filtered.length ? `${position + 1}/${filtered.length}` : '';
   put(' ' + clip((dropdown ? 'Click select · ↑↓ · Esc' : picker.hint || (picker.single ? '↑↓ choose · Enter confirm · Esc cancel' : 'Space selects · Enter confirms')) + (count ? '  ' + count : ''), inner - 1), palette.muted);
   if (!dropdown && !locked) {
-    put(' [ Confirm ]   [ Cancel ]', palette.accent, true);
-    hits.push({ type: 'confirm', row: lines.length - 1, left: 2, right: 13 }, { type: 'cancel', row: lines.length - 1, left: 16, right: 26 });
+    const confirm = ` [ ${picker.confirmLabel || 'Confirm'} ] `;
+    put(confirm + '  [ Cancel ]', palette.accent, true);
+    const cancelLeft = cellWidth(confirm) + 3;
+    hits.push({ type: 'confirm', row: lines.length - 1, left: 2, right: cellWidth(confirm) },
+      { type: 'cancel', row: lines.length - 1, left: cancelLeft, right: cancelLeft + 9 });
   }
   lines.push(edge('╰' + '─'.repeat(inner) + '╯'));
   // Keep a dropdown attached to its control, including on small terminals and
