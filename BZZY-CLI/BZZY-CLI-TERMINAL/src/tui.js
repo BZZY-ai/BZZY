@@ -41,6 +41,18 @@ export class TerminalChat {
     readline.emitKeypressEvents(this.input, { escapeCodeTimeout: 50 }); this.input.setRawMode?.(true); this.input.resume();
     this.onKey = (text, key) => this.key(text, key || {});
     this.input.on('keypress', this.onKey);
+    this.rawEscapeTimer = null;
+    this.onRawData = chunk => {
+      const sequence = chunk?.toString?.('utf8') ?? String(chunk ?? '');
+      clearTimeout(this.rawEscapeTimer); this.rawEscapeTimer = null;
+      if (!isEscapeInput(sequence, { sequence })) return;
+      this.rawEscapeTimer = setTimeout(() => {
+        this.rawEscapeTimer = null;
+        this.key('\x1b', { name: 'escape', sequence: '\x1b', meta: true });
+      }, 80);
+      this.rawEscapeTimer.unref?.();
+    };
+    this.input.on('data', this.onRawData);
     this.onResize = () => { this.textSelection = null; if (this.copyMode) this.setCopyMode(false); this.lastFrame = []; this.dashboardFrame = null; this.paintedFrame = null; this.render(); };
     this.output.on?.('resize', this.onResize);
     this.onDrain = () => { this.outputBlocked = false; this.lastFrame = []; this.schedule(); };
@@ -671,7 +683,10 @@ export class TerminalChat {
     }
   }
   key(text, key) {
-    if (isEscapeInput(text, key)) key = { ...key, name: 'escape', meta: false };
+    if (isEscapeInput(text, key)) {
+      clearTimeout(this.rawEscapeTimer); this.rawEscapeTimer = null;
+      key = { ...key, name: 'escape', meta: false };
+    }
     if (key.meta && ['y', 'n'].includes(key.name) && this.pendingApproval && !this.hidden && !this.promptDraft && !this.selection) {
       key.bzzyHandled = true; this.approvalTask = this.ui.answerApproval(key.name === 'y' ? 'yes' : 'no'); return;
     }
@@ -1945,8 +1960,8 @@ export class TerminalChat {
   restore(preserveScreen = false) { if (this.restored) return; this.restored = true; this.input.setRawMode?.(this.wasRaw); this.output.write(this.canvasGraphics.clear() + '\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l' + (preserveScreen ? '' : '\x1b[?1049l')); }
   close({ preserveScreen = false } = {}) {
     this.writeFrame(this.canvasGraphics.clear());
-    if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer); clearTimeout(this.feedbackTimer); clearTimeout(this.noticeTimer);
-    this.finish(null); this.finishSelection(null, true); this.input.removeListener('keypress', this.onKey); this.output.removeListener?.('resize', this.onResize); this.output.removeListener?.('drain', this.onDrain); process.removeListener('exit', this.onExit); this.restore(preserveScreen); this.input.pause();
+    if (this.closed) return; this.closed = true; clearTimeout(this.timer); clearTimeout(this.renderTimer); clearTimeout(this.clipboardNoticeTimer); clearTimeout(this.feedbackTimer); clearTimeout(this.noticeTimer); clearTimeout(this.rawEscapeTimer);
+    this.finish(null); this.finishSelection(null, true); this.input.removeListener('keypress', this.onKey); this.input.removeListener('data', this.onRawData); this.output.removeListener?.('resize', this.onResize); this.output.removeListener?.('drain', this.onDrain); process.removeListener('exit', this.onExit); this.restore(preserveScreen); this.input.pause();
   }
 }
 function agentLabel(value) {

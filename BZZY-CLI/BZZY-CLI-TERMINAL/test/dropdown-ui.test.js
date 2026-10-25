@@ -125,6 +125,16 @@ test('top Skills opens Core/project skills and Metrics is an empty escapable vie
   ui.reader.close(); assert.equal(await metrics, null);
 });
 
+test('raw Escape fallback exits Skills when the terminal keypress parser omits it', async t => {
+  const { ui, input, tui } = terminal(t);
+  await ui.settingsCommand('/skills'); tui.render();
+  assert.equal(tui.panel, 'skills');
+  input.removeListener('keypress', tui.onKey);
+  input.write('\x1b');
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(tui.panel, 'chat');
+});
+
 test('disabled model controls give feedback without dispatching a command', async t => {
   const { ui, tui } = terminal(t);
   const answer = ui.ask('bzzy › '); await Promise.resolve(); tui.modelSelectionRequired = true; tui.render();

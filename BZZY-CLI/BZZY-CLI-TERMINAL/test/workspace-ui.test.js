@@ -21,7 +21,7 @@ function terminal() {
  const ui = new UI({ input, output, error: output });
  const session = createChatSession(getProvider('codex'), { cwd: directory, modelSelectionRequired: true });
  ui.setSession(session.id); ui.updateSession({ ...session, alias: 'COOL' });
- return { ui, output, session };
+ return { ui, input, output, session };
 }
 
 test('Skills sync imports from Codex into the shared library and stays idle until explicit enable', async () => {
@@ -144,7 +144,7 @@ test('double clicking the alias edits inline through the authorized alias comman
 });
 test('the shared skills view reads instructions and explicitly enables a disabled import without inference', async () => {
  const skill = createSkill({ name: 'ui-check', description: 'Review a UI.', instructions: 'Inspect the layout and verify it at two terminal sizes.' });
- const { ui } = terminal();
+ const { ui, input } = terminal();
  try {
   await ui.settingsCommand('/skills'); ui.tui.render();
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /IMPORT.*LIBRARY/);
@@ -152,10 +152,11 @@ test('the shared skills view reads instructions and explicitly enables a disable
   await ui.settingsCommand('/skills view:' + skill.name); ui.tui.render();
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Back to library[\s\S]*Inspect the layout[\s\S]*Skill · Esc goes back/);
   assert.equal(skillRows(ui)[0].action, 'library');
-  ui.tui.key('\x1b', { sequence: '\x1b', meta: true });
+  input.write('\x1b'); await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(ui.skillPreview, null); assert.equal(ui.tui.panel, 'skills');
   ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /ui-check/);
-  ui.tui.key('\x1b[27;1:1u', { sequence: '\x1b[27;1:1u' }); assert.equal(ui.tui.panel, 'chat');
+  input.write('\x1b'); await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(ui.tui.panel, 'chat');
   await ui.settingsCommand('/skills library'); ui.chooseOne = async () => 'enable';
   await ui.settingsCommand('/skills toggle:' + skill.name); assert.equal(inspectSkill(skill.name).enabled, true);
   assert.equal(listRecords('execution').length, 0);
