@@ -6,6 +6,7 @@ import { projectIdentityForSession, resolveProjectIdentity } from '@bzzy/core/en
 import { knowledgeAction, knowledgeRows } from './knowledge-ui.js';
 import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
 import { bundleLibraryRows, definitionBundleRows, definitionBundleAction, returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
+import { libraryToggleRow } from './library-toggle-ui.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -396,13 +397,17 @@ export function skillRows(ui) {
     return rows;
   }
   const page = listSkills({ ...currentContext(ui), offset: ui.skillOffset || 0, limit: 30 });
-  const rows = [tabs, { text: '' }, { text: 'Skill Creator · use current model', action: 'creator', tone: 'accent' },
+  const rows = [tabs, { text: 'Click ON/OFF · ↑/↓ or Tab select · Space toggles · Enter opens', tone: 'muted' }, { text: '' }, { text: 'Skill Creator · use current model', action: 'creator', tone: 'accent' },
     { text: 'Create skill manually', action: 'create' }, ...bundleLibraryRows(), { text: '' }];
   const projectSkills = page.skills.filter(skill => skill.scope === 'project');
   const globalSkills = page.skills.filter(skill => skill.scope !== 'project');
+  ui.skillLibraryContext = contextKey(ui);
+  ui.skillLibraryEntries = new Map(page.skills.map(skill => [skill.id || skill.name, { ...skill }]));
   const appendSkill = skill => {
     const id = skill.id || skill.name;
-    rows.push({ text: `  ${skill.enabled ? '●' : '○'} ${skill.name}${skill.provenance?.kind === 'learning' ? ' · learned' : ''}`, action: `view:${id}`, tone: skill.enabled ? 'accent' : 'text' });
+    rows.push(libraryToggleRow({ name: skill.name, scope: skill.scope, enabled: skill.enabled,
+      suffix: skill.provenance?.kind === 'learning' ? ' · learned' : '', viewAction: `view:${id}`,
+      toggleAction: `toggle-row:${id}|${skill.revision}|${skill.version}|${skill.enabled ? '1' : '0'}` }, ui.tui?.output?.columns || 80));
   };
   rows.push({ text: 'THIS CHAT / PROJECT', tone: 'accent' });
   if (projectSkills.length) for (const skill of projectSkills) appendSkill(skill);
@@ -500,6 +505,15 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
       ui.event('info', { message: `Created ${skill.name} in ${skill.scope} scope. Review it before enabling.` });
     } else if (action === 'search') { const query = await prompt(ui, 'ask', 'Search skills · empty shows all'); if (query != null) { resetViews(ui); ui.skillQuery = query.trim(); ui.skillOffset = 0; } }
     else if (action === 'next' || action === 'previous') ui.skillOffset = Math.max(0, (ui.skillOffset || 0) + (action === 'next' ? 30 : -30));
+    else if (action.startsWith('toggle-row:')) {
+      const [id, revision, version, enabled] = action.slice(11).split('|'), shown = ui.skillLibraryEntries?.get(id);
+      if (ui.skillLibraryContext !== contextKey(ui) || !shown || shown.revision !== Number(revision) || shown.version !== version ||
+          String(shown.enabled ? 1 : 0) !== enabled) throw new Error('The library changed. Refresh the skill before toggling it.');
+      const selected = scopeForSkill(ui, shown), current = inspectSkill(id, selected);
+      if (current.revision !== shown.revision || current.version !== shown.version || current.enabled !== shown.enabled) throw new Error('Skill changed. Refresh the library before toggling it.');
+      const saved = setSkillEnabled(id, !shown.enabled, shown.revision, selected);
+      ui.event('info', { message: `${shown.name} is ${saved.enabled ? 'ON · available to models' : 'OFF · unavailable to models'} in ${shown.scope} scope.` });
+    }
     else if (action.startsWith('toggle:')) {
       const id = action.slice(7), shown = ui.skillPreview?.id === id ? ui.skillPreview : null;
       if (shown && (shown.historical || ui.skillPreviewContext !== contextKey(ui))) throw new Error('Reopen the current skill before changing its enabled state.');
@@ -575,6 +589,10 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
       if (file) preview(ui, page.id || page.name, { file, version: page.version, historical: page.historical });
     }
   } catch (error) { ui.event('error', { message: ['ENOENT', 'EACCES', 'EPERM', 'ELOOP', 'ENOTDIR'].includes(error.code) ? 'Skill source unavailable. Check its location and permissions.' : error.message }); }
-  finally { ui.skillAdminContext = contextKey(ui); ui.tui.bodyCache = null; ui.tui.scroll = 0; ui.tui.skillFocus = 0; ui.tui.skillTopRequested = true; ui.tui.schedule(); }
+  finally {
+    ui.skillAdminContext = contextKey(ui); ui.tui.bodyCache = null;
+    if (!action.startsWith('toggle-row:')) { ui.tui.scroll = 0; ui.tui.skillFocus = 0; ui.tui.skillTopRequested = true; }
+    ui.tui.schedule();
+  }
   return true;
 }

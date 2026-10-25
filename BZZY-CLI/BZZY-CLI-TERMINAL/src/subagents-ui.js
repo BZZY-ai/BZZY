@@ -1,15 +1,16 @@
-import { listSubagentDefinitions, getSubagentDefinition, saveSubagentDefinition, deleteSubagentDefinition } from '@bzzy/core/engine/subagent-definitions.js';
-import { loadSession } from '@bzzy/core/engine/store.js';
+import { listSubagentDefinitions, getSubagentDefinition, saveSubagentDefinition, deleteSubagentDefinition, setSubagentEnabled } from '@bzzy/core/engine/subagent-definitions.js';
+import { home, loadSession } from '@bzzy/core/engine/store.js';
 import { listSubagentRuns, subagentStatus } from '@bzzy/core/engine/subagents.js';
 import { compactAssignmentStatus } from '@bzzy/core/engine/assignment-views.js';
 import { chooseProvider } from './providers.js';
 import { chooseModel } from './models.js';
 import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
 import { bundleLibraryRows, definitionBundleRows, definitionBundleAction, cancelDefinitionBundle } from './definition-bundle-ui.js';
+import { libraryToggleRow } from './library-toggle-ui.js';
 
 const definitionFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
 const cwdFor = ui => (ui.sessionId && loadSession(ui.sessionId)?.cwd) || ui.tui?.cwd || process.cwd();
-const contextKey = ui => JSON.stringify([ui.sessionId || null, cwdFor(ui)]);
+const contextKey = ui => JSON.stringify([home(), ui.sessionId || null, cwdFor(ui)]);
 const reset = ui => { cancelDefinitionBundle(ui, 'agents'); ui.subagentCreatorDraft = null; ui.subagentPreview = null; ui.subagentOffset = 0; ui.subagentView = 'library'; ui.subagentRunId = null; ui.subagentRunOffset = 0; };
 const selectionLabel = agent => agent.provider || agent.model || agent.effort
   ? `${agent.provider || 'current provider'} · ${agent.model || 'provider default'} · ${agent.effort || 'default effort'}`
@@ -64,19 +65,26 @@ export function subagentRows(ui) {
       { text: '' }, { text: 'INSTRUCTIONS', tone: 'accent' }, { text: shown.instructions },
       ...(shown.policy ? [{ text: 'Permission limits: ' + JSON.stringify(shown.policy), tone: 'muted' }] : []),
       ...(shown.limits ? [{ text: 'Execution limits: ' + JSON.stringify(shown.limits), tone: 'muted' }] : []),
-      { text: '' }, { text: 'Use in chat', action: 'use', tone: 'accent' },
+      { text: '' }, { text: shown.enabled !== false ? 'ON · available to models' : 'OFF · unavailable to models', tone: shown.enabled !== false ? 'accent' : 'muted' },
+      { text: shown.enabled !== false ? 'Turn OFF for all models' : 'Turn ON for all models', action: 'toggle', tone: 'accent' },
+      { text: 'Use in chat', ...(shown.enabled !== false ? { action: 'use', tone: 'accent' } : { tone: 'muted' }) },
       { text: 'Edit specialist', action: 'edit' }, { text: 'Delete specialist', action: 'delete' },
       { text: 'Back to agents', action: 'library' }];
   }
   const page = listSubagentDefinitions({ cwd: cwdFor(ui), offset: ui.subagentOffset || 0, limit: 20 });
   const rows = [{ text: 'AGENTS · reusable specialists', tone: 'accent' },
     { text: 'Use these specialists from any supported chat model or goal.', tone: 'muted' },
+    { text: 'Click ON/OFF · ↑/↓ or Tab select · Space toggles · Enter opens', tone: 'muted' },
     { text: 'Agent Creator · use current model', action: 'creator', tone: 'accent' },
     { text: 'Create specialist manually', action: 'create' },
     ...bundleLibraryRows(),
     ...(parent ? [{ text: 'View invocations in this chat', action: 'runs' }] : []), { text: '' }];
+  ui.subagentLibraryContext = context;
+  ui.subagentLibraryEntries = new Map(page.subagents.map(agent => [`${agent.scope}:${agent.name}`, { ...agent }]));
   for (const agent of page.subagents) {
-    rows.push({ text: `${agent.name} · ${agent.scope}`, action: `view:${agent.scope}:${agent.name}`, tone: 'accent' },
+    rows.push(libraryToggleRow({ name: agent.name, scope: agent.scope, enabled: agent.enabled !== false,
+      viewAction: `view:${agent.scope}:${agent.name}`,
+      toggleAction: `toggle-row:${agent.scope}:${agent.name}:${agent.revision}:${agent.enabled !== false ? '1' : '0'}` }, ui.tui?.output?.columns || 80),
       { text: agent.description }, { text: selectionLabel(agent), tone: 'muted' }, { text: '' });
   }
   if (!page.subagents.length) rows.push({ text: 'No specialists created yet.', tone: 'muted' },
@@ -149,22 +157,34 @@ export async function subagentsCommand(text, ui, { generateDefinition, bundleApi
     else if (action.startsWith('run:')) { ui.subagentRunId = action.slice(4); ui.subagentView = 'run'; }
     else if (action === 'runs-next' || action === 'runs-previous') ui.subagentRunOffset = Math.max(0, (ui.subagentRunOffset || 0) + (action === 'runs-next' ? 10 : -10));
     else if (action === 'next' || action === 'previous') ui.subagentOffset = Math.max(0, (ui.subagentOffset || 0) + (action === 'next' ? 20 : -20));
+    else if (action.startsWith('toggle-row:')) {
+      const [scope, name, revision, enabled] = action.slice(11).split(':'), shown = ui.subagentLibraryEntries?.get(`${scope}:${name}`);
+      if (ui.subagentLibraryContext !== contextKey(ui) || !shown || shown.revision !== Number(revision) || String(shown.enabled !== false ? 1 : 0) !== enabled)
+        throw new Error('The library changed. Refresh the specialist before toggling it.');
+      const current = getSubagentDefinition(name, { cwd: cwdFor(ui), scope });
+      if (current.id !== shown.id || current.revision !== shown.revision || current.version !== shown.version || (current.enabled !== false) !== (shown.enabled !== false))
+        throw new Error('Specialist changed. Refresh the library before toggling it.');
+      const saved = setSubagentEnabled(name, shown.enabled === false, { cwd: cwdFor(ui), scope, expectedRevision: shown.revision });
+      ui.event('info', { message: `${name} is ${saved.enabled ? 'ON · available to models' : 'OFF · unavailable to models'} in ${scope} scope.` });
+    }
     else if (action.startsWith('view:')) {
       const [, scope, name] = action.split(':');
       ui.subagentView = 'library';
       ui.subagentPreview = getSubagentDefinition(name, { cwd: cwdFor(ui), scope });
-    } else if (['edit', 'delete', 'use'].includes(action)) {
+    } else if (['edit', 'delete', 'use', 'toggle'].includes(action)) {
       const shown = ui.subagentPreview;
       if (!shown) throw new Error('Choose a specialist from Agents first.');
       const current = getSubagentDefinition(shown.name, { cwd: cwdFor(ui), scope: shown.scope });
       if (current.id !== shown.id || current.revision !== shown.revision) throw new Error('This specialist changed. Reopen it before acting.');
       if (action === 'edit') await editDefinition(ui, shown);
+      else if (action === 'toggle') ui.subagentPreview = setSubagentEnabled(shown.name, shown.enabled === false, { cwd: cwdFor(ui), scope: shown.scope, expectedRevision: shown.revision });
       else if (action === 'delete') {
         const answer = await prompt(ui, 'chooseOne', `Delete ${shown.name}?`, [
           { value: 'cancel', label: 'Cancel', selected: true }, { value: 'delete', label: 'Delete specialist' },
         ]);
         if (answer === 'delete') { deleteSubagentDefinition(shown.name, { cwd: cwdFor(ui), scope: shown.scope, expectedRevision: shown.revision }); reset(ui); }
       } else {
+        if (shown.enabled === false) throw new Error('Turn this specialist ON before using it in chat.');
         const task = (await prompt(ui, 'ask', `Task for ${shown.name} · draft only, press Send when ready`))?.trim();
         if (task) {
           ui.tui.setPanel('chat');
@@ -179,7 +199,9 @@ export async function subagentsCommand(text, ui, { generateDefinition, bundleApi
     if (originalProviderPicker === undefined) delete ui.chooseProvider;
     if (originalModelPicker === undefined) delete ui.chooseModel;
     ui.subagentAdminContext = contextKey(ui);
-    ui.tui.bodyCache = null; ui.tui.scroll = 0; ui.tui.agentFocus = 0; ui.tui.agentTopRequested = true; ui.tui.schedule();
+    ui.tui.bodyCache = null;
+    if (!action.startsWith('toggle-row:')) { ui.tui.scroll = 0; ui.tui.agentFocus = 0; ui.tui.agentTopRequested = true; }
+    ui.tui.schedule();
   }
   return true;
 }

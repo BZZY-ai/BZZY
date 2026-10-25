@@ -37,9 +37,11 @@ function location({ cwd = process.cwd(), scope } = {}) {
 }
 const idFor = (name, selected) => digest([selected.scope, selected.projectRoot, name]);
 const active = record => record && !record.deletedAt;
+const enabled = record => active(record) && record.enabled !== false;
+const catalogRecord = record => ({ ...clone(record), enabled: record.enabled !== false });
 const summary = record => {
   const { instructions, ...value } = record;
-  return clone(value);
+  return catalogRecord(value);
 };
 
 export function normalizeSubagentDefinition(input) {
@@ -105,13 +107,13 @@ export function normalizeSubagentDefinition(input) {
 }
 
 export function listSubagentDefinitions(options = {}) {
-  const { scope, query = '', offset = 0, limit = 50 } = options;
+  const { scope, query = '', offset = 0, limit = 50, enabledOnly = false } = options;
   if (typeof query !== 'string' || query.length > 200 || !Number.isSafeInteger(offset) || offset < 0 ||
-      !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('Invalid subagent definition page.');
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || typeof enabledOnly !== 'boolean') fail('Invalid subagent definition page.');
   const selected = location(options);
   const rows = database().prepare('SELECT data FROM records WHERE kind=?').all(kind).map(row => JSON.parse(row.data));
   const localNames = new Set(rows.filter(row => row.scope === 'project' && row.projectRoot === selected.projectRoot).map(row => row.name));
-  const visible = rows.filter(row => active(row) && (scope === 'global' ? row.scope === 'global'
+  const visible = rows.filter(row => active(row) && (!enabledOnly || enabled(row)) && (scope === 'global' ? row.scope === 'global'
     : scope === 'project' ? row.scope === 'project' && row.projectRoot === selected.projectRoot
       : row.scope === 'project' && row.projectRoot === selected.projectRoot || row.scope === 'global' && !localNames.has(row.name)))
     .filter(row => `${row.name} ${row.description}`.toLowerCase().includes(query.toLowerCase()))
@@ -127,12 +129,14 @@ export function getSubagentDefinition(name, options = {}) {
   // missing/removed specialist must never silently execute different behavior.
   if (project) {
     if (!active(project)) fail('Subagent definition was removed from this project.', 'NOT_FOUND');
-    return clone(project);
+    if (options.enabledOnly && !enabled(project)) fail('This subagent is disabled. Enable it in Agents before using it.', 'SUBAGENT_DISABLED');
+    return catalogRecord(project);
   }
   if (options.scope === 'project') fail('Subagent definition not found in this project.', 'NOT_FOUND');
   const global = getRecord(kind, idFor(name, { scope: 'global', projectRoot: null }));
   if (!active(global)) fail('Subagent definition not found in this project.', 'NOT_FOUND');
-  return clone(global);
+  if (options.enabledOnly && !enabled(global)) fail('This subagent is disabled. Enable it in Agents before using it.', 'SUBAGENT_DISABLED');
+  return catalogRecord(global);
 }
 
 export function saveSubagentDefinition(input, options = {}) {
@@ -150,7 +154,7 @@ export function saveSubagentDefinition(input, options = {}) {
       const count = database().prepare("SELECT count(*) AS total FROM records WHERE kind=? AND json_extract(data,'$.scope')=? AND json_extract(data,'$.projectRoot') IS ? AND json_extract(data,'$.deletedAt') IS NULL").get(kind, selected.scope, selected.projectRoot).total;
       if (count >= 128) fail('The subagent scope definition limit was reached.', 'CAPACITY');
     }
-    const timestamp = now(), record = { ...definition, id, ...selected, version, revision: expectedRevision + 1,
+    const timestamp = now(), record = { ...definition, id, ...selected, version, enabled: active(previous) ? previous.enabled !== false : true, revision: expectedRevision + 1,
       createdAt: previous?.createdAt || timestamp, updatedAt: timestamp };
     const versionId = digest([id, version]);
     if (!getRecord(versionKind, versionId)) {
@@ -161,6 +165,31 @@ export function saveSubagentDefinition(input, options = {}) {
     if (!active(previous)) recordLibraryCreation('specialist', id, { sourceSessionId: options.session?.id }, db);
     return clone(record);
   });
+}
+
+// Availability is host catalog metadata, separate from immutable instructions.
+// Turning it off never rewrites an existing worker pin or cancels running work.
+export function setSubagentEnabled(name, value, options = {}) {
+  nameOf(name); const { expectedRevision } = options;
+  if (typeof value !== 'boolean' || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) fail('Supply an on/off value and the current subagent revision.');
+  const selected = location({ ...options, scope: options.scope || 'project' }), id = idFor(name, selected);
+  return atomic(db => {
+    const previous = getRecord(kind, id);
+    if (!active(previous) || previous.revision !== expectedRevision) fail('Subagent definition changed or was removed. Reload before toggling it.', 'CONFLICT');
+    if ((previous.enabled !== false) === value) return catalogRecord(previous);
+    const record = { ...previous, enabled: value, revision: previous.revision + 1, updatedAt: now() };
+    putRecord(kind, id, record, db); return catalogRecord(record);
+  });
+}
+
+// New admission and follow-up paths check the current host catalog by pinned
+// identity, rather than trusting a copied enabled flag or resolving newer text.
+export function assertSubagentDefinitionEnabled(definition) {
+  const record = typeof definition?.id === 'string' && getRecord(kind, definition.id);
+  if (!active(record)) fail('This subagent was removed. No new worker execution was started.', 'SUBAGENT_DISABLED');
+  if (!enabled(record)) fail('This subagent is disabled. Enable it in Agents before starting or following up work.', 'SUBAGENT_DISABLED');
+  if (record.name !== definition.name || record.scope !== definition.scope || record.projectRoot !== definition.projectRoot) fail('The subagent catalog identity changed.', 'CONFLICT');
+  return catalogRecord(record);
 }
 
 export function deleteSubagentDefinition(name, options = {}) {
@@ -186,7 +215,8 @@ export function getSubagentDefinitionVersion(id, version) {
 }
 
 export function assertSubagentDefinitionPin(definition) {
-  object(definition, [...fields, 'id', 'scope', 'projectRoot', 'version', 'revision', 'createdAt', 'updatedAt'], 'pinned subagent definition');
+  object(definition, [...fields, 'id', 'scope', 'projectRoot', 'version', 'revision', 'createdAt', 'updatedAt', 'enabled'], 'pinned subagent definition');
+  if (definition.enabled !== undefined && typeof definition.enabled !== 'boolean') fail('Invalid pinned subagent availability.');
   const pinned = getSubagentDefinitionVersion(definition.id, definition.version);
   const payload = Object.fromEntries(fields.filter(key => Object.hasOwn(definition, key)).map(key => [key, definition[key]]));
   // Content versions deliberately exclude mutable catalog metadata. A no-op

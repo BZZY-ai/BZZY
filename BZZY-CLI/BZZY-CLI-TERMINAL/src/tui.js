@@ -902,13 +902,17 @@ export class TerminalChat {
     if (this.panel === 'agents' && !this.promptDraft) {
       key.bzzyHandled = true;
       if (key.name === 'escape') { this.setPanel('chat'); return; }
-      const actions = subagentRows(this.ui).filter(row => row.action);
-      if (['up', 'down', 'tab'].includes(key.name) && actions.length) {
-        const backwards = key.name === 'up' || key.name === 'tab' && key.shift;
+      const rows = subagentRows(this.ui), actions = libraryActionList(rows);
+      if (['up', 'down', 'left', 'right', 'tab'].includes(key.name) && actions.length) {
+        const backwards = ['up', 'left'].includes(key.name) || key.name === 'tab' && key.shift;
         this.agentFocus = ((this.agentFocus || 0) + (backwards ? actions.length - 1 : 1)) % actions.length;
         this.agentEnsureFocus = true; this.schedule(); return;
       }
-      if (key.name === 'return' && actions[this.agentFocus || 0]) this.localCommand('/agents ' + actions[this.agentFocus || 0].action);
+      const focused = actions[this.agentFocus || 0];
+      if (key.name === 'space') {
+        const toggle = libraryRowToggle(rows, focused);
+        if (toggle) this.localCommand('/agents ' + toggle);
+      } else if (key.name === 'return' && focused) this.localCommand('/agents ' + focused);
       return;
     }
     if (this.panel === 'skills' && !this.promptDraft) {
@@ -916,10 +920,15 @@ export class TerminalChat {
         if (returnToSkillLibrary(this.ui)) return;
         this.setPanel('chat'); return;
       }
-      const actions = skillActionList(skillRows(this.ui));
-      if ((key.name === 'up' || key.name === 'down') && actions.length) {
-        this.skillFocus = ((this.skillFocus || 0) + (key.name === 'up' ? actions.length - 1 : 1)) % actions.length;
+      const rows = skillRows(this.ui), actions = libraryActionList(rows);
+      if (['up', 'down', 'left', 'right', 'tab'].includes(key.name) && actions.length && !(this.ui.skillView === 'import' && ['left', 'right'].includes(key.name))) {
+        const backwards = ['up', 'left'].includes(key.name) || key.name === 'tab' && key.shift;
+        this.skillFocus = ((this.skillFocus || 0) + (backwards ? actions.length - 1 : 1)) % actions.length;
         this.skillEnsureFocus = true; this.schedule(); return;
+      }
+      if (key.name === 'space' && this.ui.skillView === 'library') {
+        const toggle = libraryRowToggle(rows, actions[this.skillFocus || 0]);
+        if (toggle) { this.localCommand('/skills ' + toggle); return; }
       }
       if (key.name === 'return' && this.ui.skillView === 'import' && this.value.trim()) {
         this.localCommand('/skills save-directory'); return;
@@ -1045,6 +1054,20 @@ export class TerminalChat {
     } else if (this.panel === 'agents') {
       let actionIndex = 0;
       for (const row of subagentRows(this.ui)) {
+        if (row.segments) {
+          let column = 0, rendered = '';
+          for (const segment of row.segments) {
+            const selected = segment.action && actionIndex++ === (this.agentFocus || 0), size = cellWidth(segment.text);
+            if (selected) this.agentFocusRow = lines.length;
+            if (segment.action) this.contentHits.push({ type: 'agent-action', action: segment.action,
+              row: lines.length, left: column + 1, right: column + size });
+            rendered += selected
+              ? fillSurface(segment.text, size, this.theme, palette.selection, palette.accent, true)
+              : color(segment.text, palette[segment.tone] || palette.text, segment.tone === 'accent');
+            column += size;
+          }
+          lines.push(rendered); continue;
+        }
         const selected = row.action && actionIndex++ === (this.agentFocus || 0);
         if (selected) this.agentFocusRow = lines.length;
         const wrapped = wrap((selected ? '› ' : '  ') + row.text, width - 4);
@@ -2035,10 +2058,13 @@ function agentLabel(value) {
   const text = clean(value || 'Agent'), bestie = /^(.*?)-bestie-(\d+)(?:-|$)/.exec(text);
   return bestie ? `${bestie[1]} · ${bestie[2]}` : text.split('-').slice(0, 2).join('-');
 }
-function skillActionList(rows) {
+function libraryActionList(rows) {
   return rows.flatMap(row => row.segments
     ? row.segments.filter(segment => segment.action).map(segment => segment.action)
     : row.action ? [row.action] : []);
+}
+function libraryRowToggle(rows, focused) {
+  return rows.find(row => row.toggleAction && (row.action === focused || row.segments?.some(segment => segment.action === focused)))?.toggleAction;
 }
 function screenPoint(x, y, region) { return { x: Math.max(region.left, Math.min(region.right, x)), y: Math.max(region.top, Math.min(region.bottom, y)) }; }
 function screenRange(anchor, focus) { return anchor.y < focus.y || anchor.y === focus.y && anchor.x <= focus.x ? [anchor, focus] : [focus, anchor]; }

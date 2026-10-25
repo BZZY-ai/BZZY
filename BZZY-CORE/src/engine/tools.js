@@ -205,7 +205,7 @@ export class ToolHost {
     }
     appendEvent(session.id, 'coordination.tool', { name, input: name === 'http_request' ? { ...input, url: redactedUrl(input.url), headers: redactedHeaders(input.headers || {}), body: input.body ? '[body omitted]' : undefined } : name.includes('subagent') ? sanitizeMissionValue(input) : input });
     if (name === 'list_subagents') return discoverSubagents(session, input);
-    if (name === 'read_subagent') return getSubagentDefinition(input.name, { cwd: session.projectRoot || session.cwd });
+    if (name === 'read_subagent') return getSubagentDefinition(input.name, { cwd: session.projectRoot || session.cwd, enabledOnly: true });
     if (name === 'list_subagent_runs') return listSubagentRuns(session, input);
     if (name === 'spawn_subagent') {
       for (const id of input.evidence || []) authorizedArtifact(session, id);

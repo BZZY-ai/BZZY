@@ -15,7 +15,7 @@ import { assignmentCounts, activeAssignmentsFor, budgetUsage, currentAssignmentU
 import { compactAssignmentRound } from './assignment-views.js';
 import { createMissionContext, missionSourceRevision, missionContextCurrent } from './mission-context.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
-import { assertSubagentDefinitionPin } from './subagent-definitions.js';
+import { assertSubagentDefinitionPin, assertSubagentDefinitionEnabled } from './subagent-definitions.js';
 import { normalizeValidationAssessment, naturalValidationSummary } from './validation-assessment.js';
 import { finalValidationReportProtocol, normalizeValidationDecision } from './validation-decision.js';
 
@@ -190,6 +190,7 @@ export function startAssignment(parent, input, { executor, snapshot, role = 'exe
   const source = currentSource(parent);
   if (subagent) {
     assertSubagentDefinitionPin(subagent.definition);
+    assertSubagentDefinitionEnabled(subagent.definition);
     if (parent.parentSessionId || parent.assignmentId || ['executor', 'reviewer', 'peer', 'bestie'].includes(parent.role) || parent.purpose === 'agent') throw new Error('Subagents require an authorized parent conversation and a pinned definition.');
   }
   if (parentStopped(source, subagent)) throw new Error('The parent conversation is paused. No assignment was launched.');
@@ -210,6 +211,7 @@ export function startAssignment(parent, input, { executor, snapshot, role = 'exe
   const missionContext = createMissionContext(source, { purpose: subagent ? 'subagent' : allowDebate ? 'debate' : 'delegate', independent, evidenceIds: sharedEvidence, taskContext: subagent?.taskContext });
   const result = reserveRequest(`assignment:${parent.id}:${subagent?.chatRunId || parent.goal?.id || 'chat'}`, requestId, { input, selection, role, snapshot: snapshot?.id, sourceGoalRevision: missionContext.sourceRevision, sharedEvidence, ...(reportProtocol ? { reportProtocol } : {}), ...(subagent ? { subagent } : {}) }, db => {
     if (parentStopped(loadSession(parent.id), subagent)) throw new Error('The parent conversation stopped before dispatch.');
+    if (subagent) assertSubagentDefinitionEnabled(subagent.definition);
     checkLimits(parent, subagent);
     const remaining = subagent?.chatRunId || parent.goal?.tokenBudget == null ? null : parent.goal.tokenBudget - budgetUsage(parent);
     if (remaining != null && remaining <= 0) throw new Error('Parent usage budget is exhausted.');
@@ -237,6 +239,13 @@ function dispatchAssignment(id, number, launch) {
     const parent = loadSession(job.parentSessionId);
     if (!parent || parentStopped(parent, job)) {
       putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: 'Parent conversation paused before dispatch.' }, db); return false;
+    }
+    if (job.subagentDefinition) {
+      try { assertSubagentDefinitionEnabled(job.subagentDefinition); }
+      catch (error) {
+        if (error.code !== 'SUBAGENT_DISABLED') throw error;
+        putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: error.message }, db); return false;
+      }
     }
     putRecord('round', `${id}:${number}`, { ...round, dispatchRequestedAt: now() }, db); return true;
   });
@@ -269,6 +278,7 @@ export function followupAssignment(parent, id, input, { sharedEvidence, launch =
     if (job.currentRound >= maxRounds) throw new Error('Assignment follow-up limit reached; take over directly or record the unresolved result.');
     if (!job.chatRunId && parent.goal?.tokenBudget != null && budgetUsage(parent) >= parent.goal.tokenBudget) throw new Error('Parent usage budget is exhausted.');
     if (job.subagentDefinition) {
+      assertSubagentDefinitionEnabled(job.subagentDefinition);
       if ((currentAssignmentUsage(job).elapsedSeconds || 0) >= job.contract.limits.runtimeSeconds) throw new Error('Subagent runtime budget is exhausted.');
       const usageScope = job.chatRunId ? { ...parent, goal: null } : parent;
       const { active } = assignmentCounts(usageScope);
@@ -407,6 +417,13 @@ export async function runAssignment(id, number) {
     if (!job || !round || round.state !== 'starting' || job.currentRound !== number) return false;
     const parent = loadSession(job.parentSessionId);
     if (!parent || parentStopped(parent, job)) { putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: 'Parent conversation paused before execution.' }, db); return false; }
+    if (job.subagentDefinition) {
+      try { assertSubagentDefinitionEnabled(job.subagentDefinition); }
+      catch (error) {
+        if (error.code !== 'SUBAGENT_DISABLED') throw error;
+        putRecord('round', `${id}:${number}`, { ...round, state: 'paused', reason: error.message }, db); return false;
+      }
+    }
     putRecord('round', `${id}:${number}`, { ...round, state: 'running', runner: processIdentity(), token, startedAt: now() }, db);
     appendEvent(job.parentSessionId, 'assignment.started', { id, round: number, provider: job.selection.provider, model: job.selection.model }, db); return true;
   });

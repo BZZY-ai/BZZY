@@ -85,6 +85,12 @@ agent definition or putting an invocation draft into chat starts no assignment
 and adds no invocation. Sessions in the same directory never share totals unless
 they are explicitly linked as workers or reviews.
 
+Library ON/OFF switches control future model skill loads and specialist
+admissions. Switching an entry, browsing it or attempting a disabled/invalid
+invocation adds no use. Re-enabling makes the same method available again;
+successful later loads or new accepted requests retain their normal goal/chat
+attribution and deduplication rules.
+
 Ordinary chat remains outside goals even if the session retains an older achieved
 goal. Worker and linked Validate usage is attributed to the original parent goal
 using stored assignment/review bindings. New skill receipts retain immutable

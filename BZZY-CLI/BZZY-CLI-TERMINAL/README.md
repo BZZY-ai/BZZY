@@ -62,6 +62,12 @@ entry to inspect, disable or delete it. An old learning job cannot recreate a
 deleted entry. `/learn` shows review jobs and links to the skills they created;
 manually staged candidates and global promotion keep their separate workflow.
 
+Every skill and specialist-agent Library row has a visible **ON/OFF** switch.
+Click the switch to change availability or click its name to inspect it. Arrows
+and Tab select a control; Space toggles the selected entry, and Enter activates
+the selected switch or opens the name. OFF entries remain visible in Library
+and are unavailable for new model invocations; changing a switch starts no work.
+
 Both libraries offer **Export skills & agents ZIP** and **Import skills & agents
 ZIP**. Export reviews the current project's and global portable definitions,
 including skill resources, then writes a dated archive in the terminal's original

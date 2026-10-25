@@ -1,3 +1,27 @@
+# Library availability switches and goal usage (2026-10-25)
+
+Final Node.js 24/macOS suites: **624 Core tests passed, 2 skipped** (626 total)
+and **603 CLI tests passed, 21 skipped** (624 total), zero failures. Both syntax
+checks and `git diff --check` pass.
+
+Skills and Agents Library rows expose separate clickable ON/OFF and name
+controls, with keyboard selection, Enter and Space. Width checks cover narrow,
+80-column and wide layouts while retaining switch and scope labels. Tests cover
+stale revisions, host/session changes, draft/cursor preservation, preview actions
+and disabled-agent Use controls.
+
+Core tests retain legacy-enabled definitions, immutable content pins and owner
+views of disabled entries. Model discovery/reads, new requests, generic follow-ups
+and deferred worker admission recheck enabled state. Running workers can finish
+their existing reports. Scope shadowing and CAS failures cannot silently select
+a global fallback or alter another entry.
+
+A live-goal ToolHost integration exercises enabled skills and named specialists
+across Codex, Claude, DeepSeek, Abliteration and OrcaRouter selections, using an
+offline dispatch fixture. Goal/chat Metrics count admitted uses once, reject
+disabled attempts and duplicate requests, and preserve totals after re-enabling.
+Provider models and external targets are not invoked by these tests.
+
 # Validation reports, automatic Library skills and creation alerts (2026-10-25)
 
 Final Node.js 24/macOS suites: **612 Core tests passed, 2 skipped** (614 total),

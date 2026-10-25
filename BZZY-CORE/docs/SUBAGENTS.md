@@ -6,6 +6,17 @@ history. These are reusable worker definitions, separate from persistent iPhone
 Agents. Creating, editing, inspecting or choosing **Use in chat** starts no model
 work; Use in chat fills an editable draft.
 
+Each definition has an owner-controlled ON/OFF state in Library. Existing and
+new definitions start ON. OFF definitions remain visible to the owner but are
+excluded from model discovery and cannot start a new invocation or follow-up.
+A disabled project override continues to shadow a same-name global definition;
+turning one off cannot silently select different instructions. Toggle writes
+check the displayed revision and scope. Availability is separate from immutable
+instruction versions, so it does not rewrite saved evidence or worker pins.
+Already admitted running work can finish and report its evidence; turning OFF
+does not issue cancellation. Queued work rechecks availability before admission
+and remains paused until an explicit follow-up after the owner turns it ON.
+
 A specialist can inherit the current provider, model and effort, or use an
 explicit selection from Core's catalog. The same library and Core tools are
 available to Codex, Claude and Core's supported API providers. This does not rely
@@ -43,7 +54,9 @@ bzzy subagents create ./http-response-analyzer.json
 bzzy subagents list
 bzzy subagents show http-response-analyzer
 bzzy subagents update ./http-response-analyzer.json --revision 1
-bzzy subagents delete http-response-analyzer --revision 2
+bzzy subagents disable http-response-analyzer --revision 2
+bzzy subagents enable http-response-analyzer --revision 3
+bzzy subagents delete http-response-analyzer --revision 4
 ```
 
 Use `--global` to manage global definitions. An example JSON definition is:
@@ -86,7 +99,9 @@ Use `waitSeconds: 0` to start independent workers, then `wait_assignment` to
 collect results. `list_subagent_runs` exposes earlier invocation history.
 
 An invocation pins the definition version and selection. Editing a definition
-affects new invocations, not an existing worker's follow-ups. Repeating the same
+affects new invocations, not an existing worker's pinned instructions. Starting
+a follow-up still requires the pinned definition to be ON in the current host
+catalog. Repeating the same
 request reuses its saved invocation; conflicting reuse is rejected. Each
 invocation receives a separate workspace snapshot and durable conversation. Raw
 parent conversation, unrelated projects, private credentials and account grants

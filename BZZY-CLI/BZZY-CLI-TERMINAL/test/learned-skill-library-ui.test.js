@@ -40,7 +40,7 @@ function back() { ui.tui.render(); const hit = ui.tui.hitTargets.find(item => it
 
 test('automatically learned skills appear enabled in Library with source, history and immediate disable controls', async () => {
   let prompts = 0; ui.chooseOne = async () => { prompts++; return 'cancel'; };
-  await command(''); assert.match(text(), /● dated-controls · learned/);
+  await command(''); assert.match(text(), /\[ ON \] dated-controls · learned/);
   assert.equal(listSkills({ session, enabledOnly: true }).skills.some(item => item.id === publication.skillId), true);
   ui.tui.render();
   publishLearnedSkill({ name: 'new-live-method', description: 'A method learned while Library is open.', instructions: 'Compare the supplied records within the existing project scope.' },

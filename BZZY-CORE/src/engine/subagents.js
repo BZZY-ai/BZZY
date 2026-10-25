@@ -4,7 +4,7 @@ import { getProvider } from './providers.js';
 import { childPolicy } from './policy.js';
 import { normalizePolicy } from './contracts.js';
 import { agentExecutionScope } from './agent-execution.js';
-import { getSubagentDefinition, listSubagentDefinitions } from './subagent-definitions.js';
+import { getSubagentDefinition, listSubagentDefinitions, assertSubagentDefinitionEnabled } from './subagent-definitions.js';
 import { startAssignment, assignmentStatus, followupAssignment, answerAssignmentContext } from './delegation.js';
 import { sanitizeMissionValue } from './mission-context.js';
 import { reasoningEffort } from './instructions.js';
@@ -54,7 +54,7 @@ export function spawnSubagent(parent, input, context = {}) {
     if (previous.digest !== invocation.digest) fail('Idempotency conflict: request ID was already used for different input.');
     return subagentStatus(source, previous.assignmentId);
   }
-  const definition = getSubagentDefinition(input.name, { cwd: source.projectRoot || source.cwd });
+  const definition = getSubagentDefinition(input.name, { cwd: source.projectRoot || source.cwd, enabledOnly: true });
   const provider = getProvider(definition.provider || source.provider);
   const inheritedModel = provider.id === source.provider ? source.model : provider.model;
   const sameModel = provider.id === source.provider && (!definition.model || definition.model === source.model);
@@ -99,11 +99,12 @@ export function listSubagentRuns(parent, { offset = 0, limit = 10 } = {}) {
 export function discoverSubagents(parent, input = {}) {
   if (!subagentsAvailable(parent)) fail('Subagent discovery is unavailable to this execution.');
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['query', 'offset', 'limit'].includes(key))) fail('Invalid subagent discovery fields.');
-  return listSubagentDefinitions({ cwd: parent.projectRoot || parent.cwd, query: input.query, offset: input.offset, limit: input.limit });
+  return listSubagentDefinitions({ cwd: parent.projectRoot || parent.cwd, query: input.query, offset: input.offset, limit: input.limit, enabledOnly: true });
 }
 
 export function followupSubagent(parent, id, input, context = {}) {
   const saved = runningParent(parent, context), job = subagentStatus(saved, id);
+  assertSubagentDefinitionEnabled(job.subagentDefinition);
   if (Boolean(job.chatRunId) === Boolean(context.goalMode)) fail('A subagent follow-up must retain its original chat or goal scope.');
   text(input.requestId, 128, 'request ID'); text(input.feedback, 16000, 'feedback'); text(input.objective, 16000, 'objective');
   return followupAssignment(saved, id, sanitizeMissionValue(input), { ...(context.launch ? { launch: context.launch } : {}),

@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { listSubagentDefinitions, getSubagentDefinition, saveSubagentDefinition, deleteSubagentDefinition } from './subagent-definitions.js';
+import { listSubagentDefinitions, getSubagentDefinition, saveSubagentDefinition, deleteSubagentDefinition, setSubagentEnabled } from './subagent-definitions.js';
 
-const usage = 'Usage: bzzy subagents list [--global] | show NAME [--global] | create FILE.json [--global] | update FILE.json --revision N [--global] | delete NAME --revision N [--global]';
+const usage = 'Usage: bzzy subagents list [--global] | show NAME [--global] | create FILE.json [--global] | update FILE.json --revision N [--global] | enable|disable|delete NAME --revision N [--global]';
 
 function readDefinition(filename, cwd) {
   if (typeof filename !== 'string' || !filename || filename.startsWith('-')) throw new Error(usage);
@@ -34,10 +34,10 @@ export function subagentsCLI(args, options = {}, ui) {
     else values.push(value);
   }
   const [command = 'list', argument, ...rest] = values;
-  if (rest.length || !['list', 'show', 'create', 'update', 'delete'].includes(command) ||
+  if (rest.length || !['list', 'show', 'create', 'update', 'delete', 'enable', 'disable'].includes(command) ||
       command === 'list' && argument !== undefined || command !== 'list' && !argument ||
       ['list', 'show', 'create'].includes(command) && expectedRevision !== undefined ||
-      ['update', 'delete'].includes(command) && expectedRevision === undefined) throw new Error(usage);
+      ['update', 'delete', 'enable', 'disable'].includes(command) && expectedRevision === undefined) throw new Error(usage);
   const selected = { cwd: path.resolve(options.cwd || process.cwd()), scope };
   let result;
   if (command === 'list') {
@@ -51,6 +51,7 @@ export function subagentsCLI(args, options = {}, ui) {
   }
   else if (command === 'show') result = getSubagentDefinition(argument, selected);
   else if (command === 'delete') result = deleteSubagentDefinition(argument, { ...selected, expectedRevision });
+  else if (['enable', 'disable'].includes(command)) result = setSubagentEnabled(argument, command === 'enable', { ...selected, expectedRevision });
   else result = saveSubagentDefinition(readDefinition(argument, selected.cwd), { ...selected, expectedRevision: expectedRevision || 0 });
   if (ui?.event) ui.event('info', { result, message: JSON.stringify(result, null, 2) });
   else process.stdout.write(JSON.stringify(result, null, 2) + '\n');
