@@ -1,3 +1,29 @@
+# Explicit owner YOLO attachment (2026-10-26)
+
+Node.js 24/macOS full suites: **777 Core tests passed, 2 skipped** (779 total)
+and **750 CLI tests passed, 21 skipped** (771 total), zero failures. Final focused
+Core permission/input checks pass after covering a parent with over 256 historical
+workers. Core and CLI syntax checks and repository whitespace checks pass.
+
+Actual CLI subprocesses exercise `--attach NAME --yolo` against an isolated saved
+read-only ordinary parent, verify persisted YOLO and the authenticated runtime
+snapshot, and repeat attachment without duplicate policy transitions or execution.
+The explicit owner transition retains the saved goal/context/scope and disabled
+network policy, records the previous runtime/contract policies in a private audit,
+and allows workspace writes. Read-only reviewers remain read-only, including
+active children and their pending approvals; child attachment cannot widen them.
+
+Core checks cover next-job YOLO admission despite a caller's false option,
+already-YOLO live reattachment without duplicate events, a live non-YOLO legacy
+runner requiring pause, private audit exclusion from portable bundles, authorized
+idempotent retries, unchanged normal permission restrictions, and rejection of
+worker, persistent-Agent and read-only validation contexts. Attachment changes
+only the parent and does not scan or widen its historical worker tree.
+
+Tests use temporary private homes and offline fixtures. No provider inference,
+user-session policy change, running-installation update or service restart was
+performed. Native provider permissions were not exercised against live models.
+
 # Library removal and named/workflow launch controls (2026-10-26)
 
 Node.js 24/macOS full suites: **773 Core tests passed, 2 skipped** (775 total)

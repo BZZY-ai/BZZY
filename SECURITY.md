@@ -113,6 +113,20 @@ well. Never include actual secret values to illustrate the policy. Runtime
 validation and tool/OS enforcement must remain authoritative even if a model
 ignores the preprompt or encounters prompt injection.
 
+EXPLICIT OWNER TERMINAL PERMISSION TRANSITIONS
+
+`--attach NAME --yolo` is an explicit local-owner request for parent terminal
+autonomy. Core verifies input ownership and durably enables YOLO; this is not a
+model tool or remotely supplied permission option. For an idle ordinary parent,
+this flag may authorize workspace writes that were previously read-only. Core
+audits the prior runtime/contract policy and retains network restrictions, scope,
+objective, limits, evidence and pinned workflow. Existing read-only review/worker
+children and persistent Agents are never upgraded. Read-only validation contexts
+are protected separately. A live already-YOLO parent needs no policy transition;
+a non-YOLO live execution must stop before native permissions change. Normal
+permission inputs still cannot widen enforced read-only access. Imported history
+and policy-change events carry no authority to recreate the owner permission.
+
 PRIVATE CREDENTIAL HANDLING
 
 - Keep provider API keys, passwords, OAuth access/refresh tokens, cookies, account

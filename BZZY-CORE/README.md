@@ -36,6 +36,11 @@ Implemented:
   and removal receipts. Explicit recreation gets a new revision, and accepted
   import retries cannot undo a recipient's removal. Existing skill, specialist
   and workflow removal APIs retain immutable versions for current work.
+- Explicit owner `--attach --yolo` initializes persistent parent autonomy without
+  widening isolated children. Idle ordinary parents can receive an audited
+  read-only-to-workspace-write permission transition; network/scope restrictions
+  remain. Already-YOLO live attachments are idempotent. Ordinary remote permission
+  inputs cannot invoke this owner-only transition.
 - Owner named-session attachment resolves existing IDs/aliases/prefixes or
   creates one idle terminal using normal chat defaults. Private identity-checked
   locks serialize concurrent creation. CLI workflow launch selection is applied

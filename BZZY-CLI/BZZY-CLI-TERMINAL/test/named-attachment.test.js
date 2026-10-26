@@ -6,9 +6,14 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runtimeInfo, runtimeRequest } from '../src/runtime.js';
 import { identityAlive } from '../src/recovery.js';
-import { listRecords, appendEvent } from '../src/database.js';
+import { listRecords, appendEvent, getRecord } from '../src/database.js';
 import { saveWorkflow, workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { parseArgs } from '../src/cli.js';
+import { createChatSession } from '@bzzy/core/engine/host-commands.js';
+import { getProvider } from '@bzzy/core/engine/providers.js';
+import { loadSession, saveSession } from '@bzzy/core/engine/store.js';
+import { newGoal } from '@bzzy/core/engine/goals.js';
+import { terminalYolo } from '@bzzy/core/engine/terminal-permissions.js';
 
 let directory, previous;
 const keys = ['BZZY_HOME', 'BZZY_DIRECT'];
@@ -60,4 +65,23 @@ test('workflow parsing accepts an explicit name and rejects contradictory view/r
   assert.equal(parseArgs(['--workflow', 'evidence-review']).options.workflow, 'evidence-review');
   assert.equal(parseArgs(['--workflow=none']).options.workflow, 'none');
   for (const args of [['--workflow'], ['--workflow', 'a', '--view', 'saved'], ['--workflow', 'a', '--resume', 'saved'], ['resume', 'saved', '--workflow', 'a'], ['goal', 'resume', '--workflow', 'a']]) assert.throws(() => parseArgs(args));
+});
+
+test('actual --attach --yolo reopens a saved read-only parent, stays on and leaves its review child read-only', async () => {
+  const parent = createChatSession(getProvider('codex'), { cwd: path.join(directory, 'first'), model: 'offline-fixture', alias: 'yolo-parent' });
+  parent.goal = { ...newGoal('Preserve this saved objective'), status: 'paused', evidence: ['saved-evidence'] };
+  parent.contract = { objective: parent.goal.objective, context: 'Saved context.', scope: { allowedTargets: ['fixture.invalid'] },
+    policy: { mode: 'read-only', network: 'disabled', writablePaths: [] } }; parent.policy = parent.contract.policy; parent.strictPolicy = true; saveSession(parent);
+  const child = createChatSession(getProvider('codex'), { cwd: path.join(directory, 'first'), model: 'offline-fixture' });
+  Object.assign(child, { parentSessionId: parent.id, role: 'reviewer', contract: { policy: { mode: 'read-only', network: 'disabled', writablePaths: [] } } }); saveSession(child);
+  const first = invoke('second', ['--attach', 'yolo-parent', '--yolo']); assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /YOLO on/); assert.equal(terminalYolo(parent.id), true); assert.equal(getRecord('terminal-permissions', parent.id).yolo, true);
+  assert.equal(loadSession(parent.id).contract.policy.mode, 'workspace-write'); assert.equal(loadSession(parent.id).contract.policy.network, 'disabled');
+  assert.deepEqual(loadSession(parent.id).goal, parent.goal); assert.equal(terminalYolo(child.id), false);
+  const second = invoke('second', ['--attach', 'yolo-parent', '--yolo']); assert.equal(second.status, 0, second.stderr);
+  assert.equal(terminalYolo(parent.id), true); assert.equal(listRecords('terminal-policy-change').length, 1);
+  const info = runtimeInfo(), snapshot = await runtimeRequest(info, 'GET', `/sessions/${parent.id}`);
+  assert.equal(snapshot.permissions.yolo, true); assert.equal(listRecords('execution').length, 0);
+  const isolated = invoke('second', ['--attach', child.id, '--yolo']); assert.notEqual(isolated.status, 0);
+  assert.equal(terminalYolo(child.id), false); assert.equal(loadSession(child.id).contract.policy.mode, 'read-only');
 });

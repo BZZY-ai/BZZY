@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
-import { setTerminalYolo, terminalYolo } from '@bzzy/core/engine/terminal-permissions.js';
+import { setTerminalYolo, terminalYolo, enableAttachedTerminalYolo } from '@bzzy/core/engine/terminal-permissions.js';
 export { terminalYolo };
 
 export async function changeTerminalYolo(ui, enabled) {
@@ -16,9 +16,13 @@ export async function changeTerminalYolo(ui, enabled) {
   } finally { if (!connection) await api('release', {}).catch(() => {}); }
 }
 
-export function initializeLaunchYolo(ui, sessionId, owner) {
+export function initializeLaunchYolo(ui, sessionId, owner, { attached = false } = {}) {
   const initialized = ui.yoloLaunchInitialized ||= new Set();
   if (ui.launchYolo !== true || initialized.has(sessionId)) return;
-  setTerminalYolo(sessionId, { enabled: true }, randomUUID(), { authorize: () => requireOwner(sessionId, owner) });
+  const authorization = { authorize: () => requireOwner(sessionId, owner) };
+  const result = attached ? enableAttachedTerminalYolo(sessionId, randomUUID(), authorization)
+    : setTerminalYolo(sessionId, { enabled: true }, randomUUID(), authorization);
+  ui.sessionPermissionStates?.set(sessionId, true);
+  if (result.policyUpgraded) ui.event('info', { message: 'YOLO on · this saved parent now permits workspace writes. Network restrictions and isolated worker/review policies are retained.' });
   initialized.add(sessionId);
 }

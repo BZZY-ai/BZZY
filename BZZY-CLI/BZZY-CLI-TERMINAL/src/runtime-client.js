@@ -570,7 +570,7 @@ export async function attachSession(session, options, ui) {
   const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
   let result, next;
   try {
-    if (!options.restoreAfterUpdate && ui.launchYolo === true) { await api('POST', 'claim', { takeover: true }); initializeLaunchYolo(ui, session.id, owner); }
+    if (!options.restoreAfterUpdate && ui.launchYolo === true) { await api('POST', 'claim', { takeover: true }); initializeLaunchYolo(ui, session.id, owner, { attached: true }); }
     result = await watch(info, session.id, owner, ui, {
       activeControl: false, allowControlOnInput: true,
       follow: ui.interactive || options.follow, restoreInitial: true, executionOptions: options,

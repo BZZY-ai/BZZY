@@ -165,6 +165,18 @@ starts no inference, replayed work or input takeover. Ambiguous matches fail
 instead of creating another chat. Read-only views and update-restoration handoffs
 remain strict existing-session lookups.
 
+`bzzy --attach NAME --yolo` explicitly keeps Core-owned YOLO on for the parent
+terminal. Historical or current read-only review children do not block that
+attachment, and their policies remain read-only. Reattaching to an already-YOLO
+live parent is idempotent and starts no new execution. An idle ordinary parent
+saved with read-only execution can be explicitly upgraded to workspace writes
+by this owner flag; Core retains its previous policy in a private audit receipt.
+Network restrictions, scope, objective, evidence and pinned workflow remain.
+Protected worker, persistent Agent and read-only validation contexts cannot be
+upgraded this way. A currently running non-YOLO parent must be paused before its
+native execution settings can change. Read-only `--view` and goal-resume behavior
+are unchanged; attachment does not automatically resume a paused goal.
+
 Chat history saves automatically. Use `/alias my-project` to rename a chat,
 then reopen it with `bzzy --attach my-project` or Sessions. A fresh plain `bzzy`
 chat in the same directory has its own session history and compaction index;
