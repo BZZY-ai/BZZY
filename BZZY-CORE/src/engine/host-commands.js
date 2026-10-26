@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config, getProvider, defaultSelection } from './providers.js';
-import { createSession, saveSession, loadSession, lockSession, setSessionAlias, readJson } from './store.js';
+import { createSession, saveSession, loadSession, lockSession, lockFile, setSessionAlias, readJson, findSession, normalizeSessionAlias, home } from './store.js';
 import { newGoal } from './goals.js';
 import { CodexEngine } from './engines/codex.js';
 import { claudeEnvironment } from './engines/claude.js';
@@ -19,6 +19,7 @@ import { applyBestiesSelection } from './besties-setup.js';
 import { applyParallelSelection } from './parallel-setup.js';
 import { applyDebateSelection } from './debate-setup.js';
 import { projectIdentityForSession } from './project-identity.js';
+import { getWorkflow, selectWorkflow, workflowSelection } from './workflows.js';
 
 // Trusted local host operations. UI adapters collect input and display results;
 // the engine owns durable state, execution setup, recovery and provider calls.
@@ -54,14 +55,61 @@ function applySelections(session, options) {
   return applyLaunchSelection(session, options);
 }
 
+function launchWorkflow(reference, cwd) {
+  return reference === undefined ? undefined : reference === 'none' ? null : getWorkflow(reference, { cwd });
+}
+function bindLaunchWorkflow(session, workflow) {
+  if (workflow === undefined) return;
+  const current = workflowSelection(session.id);
+  if (workflow && current.available && current.selected?.id === workflow.id || !workflow && !current.selected) return current;
+  return selectWorkflow(session.id, workflow?.name || null, { expectedRevision: current.revision,
+    ...(workflow ? { scope: workflow.scope, expectedWorkflowRevision: workflow.revision } : {}) });
+}
+export function applyLaunchWorkflow(session, reference) {
+  return bindLaunchWorkflow(session, launchWorkflow(reference, session.cwd));
+}
+
 export function createChatSession(provider, options) {
+  const workflow = launchWorkflow(options.workflow, options.cwd);
   const session = createSession(provider, options.cwd, options.model, options.alias);
   const project = projectIdentityForSession(session);
   session.projectRoot = project.root; session.projectId = project.id;
   applySelections(session, options);
   if (options.modelSelectionRequired) { session.modelSelectionRequired = true; session.model = null; }
   saveSession(session);
+  bindLaunchWorkflow(session, workflow);
   return session;
+}
+
+// Owner CLI attachment may create an idle named terminal, never replay work.
+// Serialize the resolve/create gap across CLI processes using the existing
+// identity-checked private lock. Existing ID/alias/prefix resolution wins.
+export async function openOrCreateChatSession(reference, options) {
+  const alias = normalizeSessionAlias(reference), sourceHome = home(), supplied = { ...options };
+  const lookup = () => {
+    try { return findSession(alias); }
+    catch (error) { if (error.code !== 'SESSION_NOT_FOUND') throw error; return null; }
+  };
+  const busy = 'Named session creation is busy. Try attaching again.';
+  const file = path.join(sourceHome, 'sessions', 'attach-' + digest(alias) + '.lock'), deadline = Date.now() + 5000;
+  let unlock;
+  while (!unlock) {
+    if (home() !== sourceHome) throw new Error('The private Core host changed while opening this session. Retry attachment.');
+    try { unlock = lockFile(file, busy); }
+    catch (error) {
+      if (error.code !== 'BZZY_LOCKED' || Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+  }
+  try {
+    if (home() !== sourceHome) throw new Error('The private Core host changed while opening this session. Retry attachment.');
+    const current = lookup();
+    if (current) { applyLaunchWorkflow(current, supplied.workflow); return { session: current, created: false }; }
+    const selection = { ...supplied, alias };
+    applyLaunchDefault(selection);
+    if (!config().defaultProvider && !selection.provider && !selection.model) selection.modelSelectionRequired = true;
+    return { session: createChatSession(selectedProvider(selection), selection), created: true };
+  } finally { unlock(); }
 }
 
 export function newConversation(previous, options) {
@@ -116,6 +164,7 @@ export async function controlSavedGoal(session, action, options, events) {
 }
 
 export function prepareResume(session, options, requireGoal = false) {
+  if (options.workflow !== undefined) throw new Error('Resumed goals keep their saved workflow. Use --attach with --workflow for future goals, or start a new goal.');
   if (options.alias != null) Object.assign(session, setSessionAlias(session.id, options.alias));
   if (options.provider && options.provider !== session.provider) throw new Error('A session keeps its provider. Start a new session to switch backends.');
   if (requireGoal && !session.goal) throw new Error('This session has no goal.');
@@ -146,6 +195,7 @@ export function createTaskSession(provider, options, prompt, { goal, initialCont
   // upgrade resolves to its original session rather than creating another run.
   const taskOptions = { ...options, initialContext, contextFileText };
   const creationInput = { provider: provider.id, model: options.model || null, cwd: options.cwd, alias: options.alias || null, prompt, initialContext: initialContext || null,
+    ...(options.workflow === undefined ? {} : { workflow: options.workflow }),
     ...(contextFileText == null ? {} : { contextFileDigest: digest(contextFileText) }), goal, mode: options.mode || 'solo',
     contractDigest: options.contract ? digest(fs.readFileSync(path.resolve(options.contract))) : null,
     authorization: { yolo: options.yolo, readOnly: options.readOnly || false, tokenBudget: options.tokenBudget || null, runtime: options.runtimeSeconds || null, executor: options.delegationSelection?.executor || options.executor || null,
@@ -153,17 +203,22 @@ export function createTaskSession(provider, options, prompt, { goal, initialCont
   let session;
   if (options.requestId) {
     const reserved = reserveRequest('cli-create', options.requestId, creationInput, db => {
+      const workflow = launchWorkflow(options.workflow, options.cwd);
       const initial = { version: 1, id: randomUUID(), provider: provider.id, backend: provider.backend, cwd: options.cwd, model: options.model || provider.model || null,
         ...(options.alias == null ? {} : { alias: options.alias }),
         engineThreadId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), turns: 0, goal: null, executionState: 'idle' };
-      applySelections(initial, options); prepareTask(initial, taskOptions, prompt, { persist: false });
+      applySelections(initial, options);
+      if (workflow !== undefined) { putRecord('session', initial.id, initial, db); bindLaunchWorkflow(initial, workflow); }
+      prepareTask(initial, taskOptions, prompt, { persist: false });
       if (goal && !initialContext) initial.goal = newGoal(initial.contract.objective, options.tokenBudget || initial.contract.limits.tokenBudget);
       putRecord('session', initial.id, initial, db); appendEvent(initial.id, 'session.created', { sessionId: initial.id }, db); return { sessionId: initial.id };
     });
     session = loadSession(reserved.sessionId);
     if (!initialContext && listRecords('execution').some(job => job.sessionId === session.id)) return { session, existingExecution: true };
   } else {
+    const workflow = launchWorkflow(options.workflow, options.cwd);
     session = createSession(provider, options.cwd, options.model, options.alias);
+    bindLaunchWorkflow(session, workflow);
     applySelections(session, options); prepareTask(session, taskOptions, prompt);
     if (goal && !initialContext) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget);
   }

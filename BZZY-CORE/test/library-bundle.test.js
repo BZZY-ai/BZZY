@@ -12,7 +12,7 @@ import { importSkill, inspectSkill, readSkill, createSkill, setSkillEnabled } fr
 import { saveSubagentDefinition, getSubagentDefinition } from '../src/engine/subagent-definitions.js';
 import { saveWorkflow, getWorkflow } from '../src/engine/workflows.js';
 import { listGoalTemplates as listSavedGoals, getSavedGoalTemplate as getSavedGoal } from '../src/engine/goal-templates.js';
-import { normalizeGoalTemplate, saveGoalTemplate, getGoalTemplate } from '../src/engine/goal-templates.js';
+import { normalizeGoalTemplate, saveGoalTemplate, getGoalTemplate, deleteGoalTemplate } from '../src/engine/goal-templates.js';
 import { previewLibraryExport, buildLibraryArchive, previewLibraryImport, importLibraryBundle,
   readDefinitionBundleFile, discardDefinitionBundleReview, previewDefinitionImport, libraryImportEntryIndexes } from '../src/engine/definition-bundle.js';
 
@@ -311,4 +311,13 @@ test('executed objectives alone do not suppress a separately imported saved-goal
   assert.equal(imported.goals.length, 1); assert.equal(listSavedGoals().total, 1);
   assert.equal(listRecords('execution').length, 0);
   assert.equal(getRecord('session', session.id).goal.id, session.goal.id);
+});
+
+test('an accepted import retry cannot restore a goal that its recipient explicitly removed', () => {
+  goal('An explicitly shared objective'); const { file } = bundle(), target = recipient();
+  const preview = () => remember(previewLibraryImport(file, { cwd: target }));
+  importLibraryBundle(preview(), { cwd: target });
+  const entry = listSavedGoals().goals[0]; deleteGoalTemplate(entry.id, { revision: entry.revision });
+  const retry = importLibraryBundle(preview(), { cwd: target, reportReceipt: true });
+  assert.equal(retry.alreadyImported, true); assert.equal(listSavedGoals().total, 0);
 });

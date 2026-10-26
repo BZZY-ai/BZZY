@@ -32,6 +32,14 @@ Implemented:
   do not duplicate chats, and later snapshots append missing immutable history
   without overwriting local sessions/goals. Source metadata versions and scoped
   knowledge revision history remain historical. See [project sharing](docs/PROJECT-SHARING.md).
+- Revision-pinned removal of saved-goal templates, retaining execution history
+  and removal receipts. Explicit recreation gets a new revision, and accepted
+  import retries cannot undo a recipient's removal. Existing skill, specialist
+  and workflow removal APIs retain immutable versions for current work.
+- Owner named-session attachment resolves existing IDs/aliases/prefixes or
+  creates one idle terminal using normal chat defaults. Private identity-checked
+  locks serialize concurrent creation. CLI workflow launch selection is applied
+  before new-goal admission; existing goals and accepted retries keep their pins.
 - Explicitly saved/imported goal templates in Core's Library. The CLI Goals tab
   saves objectives manually; bare `/goal` chooses one and starts a fresh goal
   through normal input admission. `/goal <objective>` does not auto-save a template.

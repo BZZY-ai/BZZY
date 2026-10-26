@@ -24,6 +24,15 @@ and model changes. Other sessions in the same directory keep their own
 selections. Global definitions are available across projects; project definitions
 stay within their original project directory.
 
+Use `bzzy --workflow NAME` to select at launch, or combine it with
+`--attach NAME` or an explicit new `--goal`. `--workflow none` clears selection.
+New chat/task creation validates the requested definition before creation;
+request-ID retries return the original accepted task without repinning it.
+Read-only view and goal-resume commands reject selection overrides.
+Right-click/F10 on a workflow row opens its removal action. Existing goal
+versions survive removal; a selected removed definition becomes unavailable
+for future goals until None or another workflow is selected.
+
 ## Starting a goal
 
 For a new `/goal`, Core prepares the goal, resolves the selected workflow and

@@ -1,6 +1,7 @@
 import { home, loadSession } from '@bzzy/core/engine/store.js';
 import { listGoalTemplates as listSavedGoals, getSavedGoalTemplate as getSavedGoal, saveGoalTemplate } from '@bzzy/core/engine/goal-templates.js';
 import { transferLibraryTab } from './library-ui.js';
+import { libraryEntryMenu, prepareLibraryRemoval, removeLibraryEntry } from './library-entry-menu.js';
 
 const pageSize = 20;
 const unavailable = () => new Error('The terminal or host changed. Reopen /goal before choosing a saved goal.');
@@ -74,7 +75,8 @@ export function openGoals(ui) {
 }
 export function goalRows(ui) {
   try {
-    if (ui.goalPreview) return [{ text: '← Back to goals', action: 'back' }, { text: 'SAVED GOAL', tone: 'accent' }, { text: ui.goalPreview.objective }];
+    if (ui.goalPreview) return [{ text: '← Back to goals', action: 'back' }, { text: 'SAVED GOAL', tone: 'accent' }, { text: ui.goalPreview.objective },
+      { text: 'Remove saved goal', action: 'remove', buttonGroup: 'manage', buttonIcon: '−' }];
     const page = listSavedGoals({ offset: ui.goalOffset || 0, limit: pageSize });
     ui.goalEntries = new Map(page.goals.map(goal => [goal.id, goal]));
     return [{ text: '← Back to chat', action: 'close' }, { text: 'GOALS · manually saved objectives', tone: 'accent' },
@@ -83,7 +85,8 @@ export function goalRows(ui) {
       ...(ui.sessionId && loadSession(ui.sessionId)?.goal ? [{ text: 'Save current goal', action: 'save-current', buttonGroup: 'save' }] : []),
       { text: 'Import', action: 'import', buttonGroup: 'transfer', buttonIcon: '↓' },
       { text: 'Export', action: 'export', buttonGroup: 'transfer', buttonIcon: '↑', disabled: !page.total },
-      ...page.goals.map(goal => ({ text: goal.objective.replace(/\s+/gu, ' ').trim(), action: 'view:' + goal.id })),
+      ...page.goals.map(goal => ({ text: goal.objective.replace(/\s+/gu, ' ').trim(), action: 'view:' + goal.id,
+        menu: libraryEntryMenu(ui, 'goal', goal, '/saved-goals view:' + goal.id) })),
       ...(!page.total ? [{ text: 'No manually saved goals yet.', tone: 'muted' }] : []),
       ...(ui.goalOffset ? [{ text: '← Newer goals', action: 'previous' }] : []),
       ...(page.nextOffset != null ? [{ text: 'Older goals →', action: 'next' }] : [])];
@@ -100,6 +103,10 @@ export async function goalAction(action, ui, { transfer = transferLibraryTab } =
   try {
     if (action === 'close') ui.tui?.setPanel('chat');
     else if (action === 'back') ui.goalPreview = null;
+    else if (action === 'remove') {
+      if (!ui.goalPreview) throw unavailable();
+      await removeLibraryEntry(ui, prepareLibraryRemoval(ui, libraryEntryMenu(ui, 'goal', ui.goalPreview))); check();
+    }
     else if (['save', 'save-current'].includes(action)) {
       const initialValue = action === 'save-current' ? loadSession(ui.sessionId)?.goal?.objective || '' : '';
       const objective = await ui.ask('Save goal · objective text · Esc cancels', { initialValue }); check();

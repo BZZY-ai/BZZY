@@ -4,6 +4,7 @@ import { createDefinitionCommand } from './definition-creator-ui.js';
 import { subagentsCommand } from './subagents-ui.js';
 import { openWorkflows, chooseWorkflow, workflowAction } from './workflow-ui.js';
 import { openGoals, goalAction } from './saved-goals-ui.js';
+import { removeLibraryEntry } from './library-entry-menu.js';
 import { libraryCommand } from './library-ui.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { knowledgeCommand } from './knowledge-ui.js';
@@ -175,7 +176,11 @@ export class UI {
     }
     if (input.trim() === '/update') { await updateCommand(this); return true; }
     if (/^\/library(?:\s|$)/.test(input.trim())) {
-      try { await libraryCommand(input.trim().slice(8).trim(), (this.sessionId && loadSession(this.sessionId)?.cwd) || this.tui?.cwd || process.cwd(), this); }
+      try {
+        const removal = /^\/library remove-entry ([a-f0-9-]{36})$/.exec(input.trim());
+        if (removal) await removeLibraryEntry(this, removal[1]);
+        else await libraryCommand(input.trim().slice(8).trim(), (this.sessionId && loadSession(this.sessionId)?.cwd) || this.tui?.cwd || process.cwd(), this);
+      }
       catch (error) { this.event('error', { message: error.message }); }
       return true;
     }

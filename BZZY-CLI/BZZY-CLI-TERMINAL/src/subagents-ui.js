@@ -7,6 +7,7 @@ import { chooseModel } from './models.js';
 import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
 import { bundleLibraryRows, definitionBundleRows, definitionBundleAction, cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { libraryToggleRow } from './library-toggle-ui.js';
+import { libraryEntryMenu } from './library-entry-menu.js';
 import { openWorkflows } from './workflow-ui.js';
 
 const definitionFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
@@ -81,7 +82,7 @@ export function subagentRows(ui) {
   ui.subagentLibraryEntries = new Map(page.subagents.map(agent => [`${agent.scope}:${agent.name}`, { ...agent }]));
   for (const agent of page.subagents) {
     rows.push(libraryToggleRow({ name: agent.name, scope: agent.scope, enabled: agent.enabled !== false,
-      viewAction: `view:${agent.scope}:${agent.name}`,
+      menu: libraryEntryMenu(ui, 'agent', agent, `/agents view:${agent.scope}:${agent.name}`), viewAction: `view:${agent.scope}:${agent.name}`,
       toggleAction: `toggle-row:${agent.scope}:${agent.name}:${agent.revision}:${agent.enabled !== false ? '1' : '0'}` }, ui.tui?.output?.columns || 80));
   }
   if (!page.subagents.length) rows.push({ text: 'No specialists created yet.', tone: 'muted' },

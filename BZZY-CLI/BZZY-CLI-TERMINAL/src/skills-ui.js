@@ -7,6 +7,7 @@ import { knowledgeAction, knowledgeRows } from './knowledge-ui.js';
 import { creatorRows, startCreator, saveCreator } from './definition-creator-ui.js';
 import { bundleLibraryRows, definitionBundleRows, definitionBundleAction, returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { libraryToggleRow } from './library-toggle-ui.js';
+import { libraryEntryMenu } from './library-entry-menu.js';
 import { openWorkflows } from './workflow-ui.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -407,7 +408,7 @@ export function skillRows(ui) {
   const appendSkill = skill => {
     const id = skill.id || skill.name;
     rows.push(libraryToggleRow({ name: skill.name, scope: skill.scope, enabled: skill.enabled,
-      viewAction: `view:${id}`,
+      menu: libraryEntryMenu(ui, 'skill', skill, '/skills view:' + id), viewAction: `view:${id}`,
       toggleAction: `toggle-row:${id}|${skill.revision}|${skill.version}|${skill.enabled ? '1' : '0'}` }, ui.tui?.output?.columns || 80));
   };
   rows.push({ text: 'THIS CHAT / PROJECT', tone: 'accent' });

@@ -10,7 +10,7 @@ export function libraryActions(rows) {
 // Shared terminal presentation; actions and revision/context pins stay owned by
 // each existing menu. Only painted button cells are clickable, including wraps.
 export function libraryLayout(rows, width, theme, { panel, focus = 0 } = {}) {
-  const lines = [], hits = [], usable = Math.max(1, width - 4);
+  const lines = [], hits = [], menus = new Map(), usable = Math.max(1, width - 4);
   let actionIndex = 0, focusRow = 0;
   const gap = () => { if (lines.length && clean(lines.at(-1)).trim()) lines.push(''); };
   const paintButton = (row, column, target) => {
@@ -41,8 +41,10 @@ export function libraryLayout(rows, width, theme, { panel, focus = 0 } = {}) {
         const selected = segment.action && !segment.disabled && actionIndex++ === focus;
         const text = clip(segment.text, Math.max(0, width - column)), size = cellWidth(text);
         if (selected) focusRow = lines.length;
-        if (segment.action && !segment.disabled && size) hits.push({ type: panel + '-action', action: segment.action,
-          row: lines.length, left: column + 1, right: column + size });
+        if (segment.action && !segment.disabled && size) {
+          hits.push({ type: panel + '-action', action: segment.action, libraryMenu: row.menu, row: lines.length, left: column + 1, right: column + size });
+          if (row.menu) menus.set(segment.action, row.menu);
+        }
         rendered += selected ? fillSurface(text, size, theme, palette.selection, palette.accent, true)
           : theme.color(text, palette[segment.tone] || palette.text, segment.tone === 'accent');
         column += size;
@@ -54,10 +56,13 @@ export function libraryLayout(rows, width, theme, { panel, focus = 0 } = {}) {
     if (selected) focusRow = lines.length;
     const wrapped = wrap((selected ? '› ' : '  ') + row.text, usable);
     for (const line of wrapped) {
-      if (row.action && !row.disabled) hits.push({ type: panel + '-action', action: row.action, row: lines.length, left: 3, right: width - 2 });
+      if (row.action && !row.disabled) {
+        hits.push({ type: panel + '-action', action: row.action, libraryMenu: row.menu, row: lines.length, left: 3, right: width - 2 });
+        if (row.menu) menus.set(row.action, row.menu);
+      }
       const tone = row.disabled ? palette.muted : palette[row.tone] || palette.text;
       lines.push('  ' + (selected ? fillSurface(line, usable, theme, palette.selection, palette.accent, true) : theme.color(line, tone, row.tone === 'accent')));
     }
   }
-  return { lines, hits, focusRow };
+  return { lines, hits, menus, actions: libraryActions(rows), focusRow };
 }

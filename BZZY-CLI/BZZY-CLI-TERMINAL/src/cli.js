@@ -45,7 +45,7 @@ import { subagentsCLI } from '@bzzy/core/engine/subagents-cli.js';
 import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
 import { workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { resolveInteractiveGoal } from './goal-controls.js';
-import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, newConversation, startConversationGoal,
+import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, openOrCreateChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
 const HELP = `bzzy 0.2.0 · a persistent coding agent
@@ -78,7 +78,7 @@ Usage:
   bzzy goal status|pause|resume|clear [session]
   bzzy resume [session]                  Resume the latest session in this directory
   bzzy --view SESSION                   Replay history and watch without taking input
-  bzzy --attach SESSION                 Restore chat and transfer input ownership
+  bzzy --attach NAME                    Open a saved chat, or create a named chat here
   bzzy --resume SESSION                 Resume a saved chat or unfinished goal
   bzzy delegate "objective" --supervisor codex --executor deepseek
   bzzy validate "question" --artifact FILE --participant claude --participant deepseek
@@ -115,6 +115,7 @@ Options:
   --model MODEL         Select a model (provider default otherwise)
   --cwd DIRECTORY       Working directory
   --alias NAME          Name a session; restore it later with --attach NAME or --resume NAME
+  --workflow NAME       Select a workflow for new goals; use none to clear it
   --import FILE.zip|CODE Restore a project ZIP or expiring Relay terminal copy into --cwd; never starts work
   --goal OBJECTIVE      Start a persistent goal; quoted positional text is sent first as context
   --context-file FILE   UTF-8 task instructions (up to 1 MiB), relative to --cwd; no initialization chat
@@ -211,7 +212,7 @@ API providers must support the Responses protocol in this version.
 export function parseArgs(argv) {
   const options = { cwd: process.cwd(), pet: true, yolo: false, json: false };
   const args = [];
-  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile',
+  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile', '--workflow': 'workflow',
     '--token-budget': 'tokenBudget', '--max-turns': 'maxTurns', '--effort': 'effort',
     '--base-url': 'baseUrl', '--env-key': 'envKey', '--context-window': 'contextWindow',
     '--view': 'view', '--attach': 'attach', '--atach': 'attach', '--resume': 'resume', '--mode': 'mode', '--supervisor': 'supervisor', '--executor': 'executor',
@@ -279,6 +280,7 @@ export function parseArgs(argv) {
     }
   }
   if ([options.view, options.attach, options.resume].filter(Boolean).length > 1) throw new Error('Choose --view, --attach or --resume.');
+  if (options.workflow !== undefined && (options.view || options.resume || args[0] === 'resume' || args[0] === 'goal' && args[1] === 'resume')) throw new Error('--workflow selects instructions for new goals. Use it with chat, --attach or a new goal; saved goal resumes keep their original workflow.');
   if (options.mode === 'validate') options.mode = 'debate';
   if (options.mode && !['solo', 'delegate', 'besties', 'debate', 'parallel'].includes(options.mode)) throw new Error('Invalid execution mode.');
   if (options.yolo && options.readOnly) throw new Error('--yolo conflicts with --read-only.');
@@ -605,8 +607,10 @@ export async function main(argv) {
       ui.event('info', { message: fs.readFileSync(file, 'utf8') }); return 0;
     }
     if (options.view || options.attach) {
-      let session = findSession(options.view || options.attach);
+      const opened = options.view || options.restoreAfterUpdate ? { session: findSession(options.view || options.attach), created: false } : await openOrCreateChatSession(options.attach, options);
+      let session = opened.session;
       if (options.alias != null) session = setSessionAlias(session.id, options.alias);
+      if (opened.created) ui.event('info', { message: `Created session ${session.alias}. No work has started.` });
       return options.view ? await viewSession(session, options, ui) : await attachSession(session, options, ui);
     }
     if (options.resume) return await resume(findSession(options.resume), options, ui);

@@ -4,6 +4,7 @@ import { workflowRows, workflowAction, workflowChatLabel } from './workflow-ui.j
 import { goalRows, goalAction } from './saved-goals-ui.js';
 import { ExecutionFeedback } from './execution-feedback.js';
 import { libraryLayout, libraryActions as libraryActionList } from './library-layout.js';
+import { assertLibraryMenu, prepareLibraryRemoval } from './library-entry-menu.js';
 import { namedTerminalSessions } from './session-browser.js';
 import { clean, cellWidth, clip, wrap, wrapProse, duration } from './terminal-format.js';
 import { commandSuggestions, privateChatCommand } from './terminal-commands.js';
@@ -414,6 +415,26 @@ export class TerminalChat {
       } };
     this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule(); return true;
   }
+  openLibraryMenu(menu, x, y) {
+    if (!menu || this.selection || this.hidden || this.promptDraft || this.ui.privateView || this.aliasEdit) return false;
+    try { assertLibraryMenu(this.ui, menu); } catch (error) { this.notice(error.message, true); return false; }
+    const shown = structuredClone(menu), reader = this.ui.reader;
+    this.textSelection = null;
+    this.selection = { title: shown.entry.name || 'Saved goal', presentation: 'context', scope: 'library-entry-menu',
+      anchor: { left: x, row: y }, backgroundFrame: this.lastFrame.slice(), single: true, loading: false, focus: 0, query: '', choices: [
+        { value: 'open', label: 'Open details', description: shown.entry.objective || `Inspect this ${shown.entry.scope} ${shown.kind}.` },
+        { value: 'remove', label: 'Remove…', description: 'Remove this Library entry after confirmation. Chat history and evidence are retained.' },
+        { value: 'cancel', label: 'Cancel' },
+      ], resolve: action => {
+        this.ui.reader = reader;
+        if (!['open', 'remove'].includes(action)) return;
+        try {
+          assertLibraryMenu(this.ui, shown);
+          this.localCommand(action === 'open' ? shown.openAction : '/library remove-entry ' + prepareLibraryRemoval(this.ui, shown));
+        } catch (error) { this.notice(error.message, true); }
+      } };
+    this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule(); return true;
+  }
   finish(answer) {
     const resolve = this.resolveInput; if (!resolve) return;
     this.resolveInput = null; this.ui.reader = null;
@@ -610,6 +631,7 @@ export class TerminalChat {
     }
     if ((button & 3) === 2) {
       const target = this.hitTargets?.findLast(hit => hit.row === y && x >= hit.left && x <= hit.right);
+      if (target?.libraryMenu) { if (this.openLibraryMenu(target.libraryMenu, x, y)) this.feedback(target); return; }
       if (target?.type === 'response') { if (this.openResponseMenu(target.entry, x, y)) this.feedback(target); return; }
       const id = target?.type === 'saved-session' ? target.id : target?.type === 'alias' ? this.ui.sessionId
         : target?.type === 'choice' && this.selection?.scope === 'sessions' ? this.selection.choices[target.index]?.value : null;
@@ -828,6 +850,15 @@ export class TerminalChat {
     if (this.copyMode) { if (key.name === 'escape' || key.ctrl && key.name === 's') this.setCopyMode(false); return; }
     if (key.name === 'f10') {
       key.bzzyHandled = true;
+      if (['skills', 'agents', 'workflows', 'goals'].includes(this.panel) && !this.selection && !this.promptDraft) {
+        const key = ({ skills: 'skill', agents: 'agent', workflows: 'workflow', goals: 'goal' })[this.panel];
+        const library = this.libraryMenus?.panel === this.panel ? this.libraryMenus : null;
+        const action = library?.actions[this[key + 'Focus'] || 0], menu = library?.menus.get(action);
+        const hit = this.hitTargets?.find(target => target.action === action && target.libraryMenu);
+        if (menu) this.openLibraryMenu(menu, hit?.left || 3, hit?.row || (this.sceneHeaderLength || 2) + 1);
+        else this.notice('Choose a Library entry, then press F10 for its actions.');
+        return;
+      }
       const response = !this.selection && this.hitTargets?.find(hit => hit.type === 'response' && targetKey(hit) === this.hoverTarget);
       if (response) { this.openResponseMenu(response.entry, response.left, response.row); return; }
       const target = this.selection?.scope === 'sessions' ? this.hitTargets?.find(hit => hit.type === 'choice' && hit.index === this.selection.focus)
@@ -1081,6 +1112,7 @@ export class TerminalChat {
         : this.panel === 'workflows' ? workflowRows(this.ui) : goalRows(this.ui);
       const key = ({ skills: 'skill', agents: 'agent', workflows: 'workflow', goals: 'goal' })[this.panel];
       const layout = libraryLayout(rows, width, this.theme, { panel: key, focus: this[key + 'Focus'] || 0 });
+      this.libraryMenus = { panel: this.panel, menus: layout.menus, actions: layout.actions };
       this[key + 'FocusRow'] = layout.focusRow; this.contentHits.push(...layout.hits); lines.push(...layout.lines);
     } else if (this.panel === 'metrics') {
       const layout = sessionMetricsLayout(this.ui.sessionMetrics, width, { currentGoal: this.goal, alias: this.alias, focus: this.metricsFocus || 0 });
@@ -1468,14 +1500,14 @@ export class TerminalChat {
     const hasSubmit = (this.promptDraft || skillDirectoryInput || !['skills', 'agents', 'workflows', 'goals', 'metrics'].includes(this.panel))
       && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.canSubmitInput();
     const prompt = this.promptDraft && this.question ? this.question
-      : this.panel === 'agents' ? this.ui.definitionBundleDraft?.panel === 'agents' ? 'ZIP review · Esc goes back' : this.ui.subagentCreatorDraft ? 'Agent preview · Esc returns to library' : 'Agents · ↑/↓ choose · Enter opens · Space toggles · Esc back'
-      : this.panel === 'workflows' ? 'Workflows · ↑/↓ choose · Enter opens · Esc goes back'
-      : this.panel === 'goals' ? 'Goals · ↑/↓ choose · Enter opens · Esc goes back'
+      : this.panel === 'agents' ? this.ui.definitionBundleDraft?.panel === 'agents' ? 'ZIP review · Esc goes back' : this.ui.subagentCreatorDraft ? 'Agent preview · Esc returns to library' : 'Agents · ↑/↓ choose · Enter opens · F10 actions · Esc back'
+      : this.panel === 'workflows' ? 'Workflows · ↑/↓ choose · Enter opens · F10 actions · Esc back'
+      : this.panel === 'goals' ? 'Goals · ↑/↓ choose · Enter opens · F10 actions · Esc back'
       : this.panel === 'metrics' ? '←/→ scope · Enter opens · G goals · R refresh · PgUp/PgDn scroll'
       : this.ui.definitionBundleDraft?.panel === 'skills' && this.panel === 'skills' ? 'ZIP review · Esc goes back'
       : skillDirectoryInput ? 'Codex skills directory'
       : skillDetail ? 'Skill · Esc goes back'
-      : this.panel === 'skills' ? 'Skills · ↑/↓ choose · Enter opens · Space toggles · Esc back'
+      : this.panel === 'skills' ? 'Skills · ↑/↓ choose · Enter opens · F10 actions · Esc back'
       : this.panel === 'room' ? 'Message all agents'
       : this.ui.sessionMode === 'VIEW' ? this.ui.canSubmitInput() ? 'Send a message to continue here' : 'Read-only session'
         : this.promptDraft && this.question ? this.question

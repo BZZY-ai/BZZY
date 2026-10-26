@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createSession, saveSession } from '../src/engine/store.js';
 import { newGoal } from '../src/engine/goals.js';
 import { database, listRecords, putRecord } from '../src/engine/database.js';
-import { saveGoalTemplate, listGoalTemplates, getSavedGoalTemplate, hasGoalTemplateObjective } from '../src/engine/goal-templates.js';
+import { saveGoalTemplate, listGoalTemplates, getSavedGoalTemplate, hasGoalTemplateObjective, deleteGoalTemplate } from '../src/engine/goal-templates.js';
 import { listLibraryExportChoices } from '../src/engine/definition-bundle.js';
 
 let directory, previous;
@@ -64,4 +64,28 @@ test('invalid pages, changed revisions and damaged templates fail closed', () =>
   putRecord('core.goal.template', record.id, { ...record, objective: 'Unreviewed modification' });
   assert.throws(() => getSavedGoalTemplate(entry.id), { code: 'CONFLICT' });
   assert.throws(() => listGoalTemplates(), { code: 'CONFLICT' });
+});
+
+test('removing a saved goal preserves executions and history; explicit restoration invalidates old picker revisions', () => {
+  const session = createSession({ id: 'codex', backend: 'codex' }, directory, 'offline-model');
+  session.goal = { ...newGoal('Keep the completed goal and its history'), status: 'complete', evidence: ['retained-evidence'] }; saveSession(session);
+  const template = saveGoalTemplate({ objective: session.goal.objective }), entry = listGoalTemplates().goals[0];
+  const executions = listRecords('session'), beforeEvents = state().events;
+  assert.throws(() => deleteGoalTemplate(entry.id), { code: 'INVALID_REQUEST' });
+  deleteGoalTemplate(entry.id, { revision: entry.revision });
+  assert.equal(listGoalTemplates().total, 0); assert.equal(hasGoalTemplateObjective(entry.objective), false);
+  assert.throws(() => getSavedGoalTemplate(entry.id), { code: 'SAVED_GOAL_UNAVAILABLE' });
+  assert.deepEqual(listRecords('session'), executions); assert.deepEqual(state().events, beforeEvents);
+  assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('core.goal.template.removal').length, 1);
+  const restored = saveGoalTemplate({ objective: entry.objective }); assert.equal(restored.id, template.id); assert.equal(restored.revision, 3);
+  const current = listGoalTemplates().goals[0]; assert.notEqual(current.revision, entry.revision);
+  assert.throws(() => deleteGoalTemplate(entry.id, { revision: entry.revision }), { code: 'CONFLICT' });
+  assert.deepEqual(saveGoalTemplate({ objective: entry.objective }), restored); assert.equal(listGoalTemplates().total, 1);
+});
+
+test('damaged removed templates cannot silently overwrite their history during restoration', () => {
+  const record = saveGoalTemplate({ objective: 'Retain the immutable objective' }), entry = listGoalTemplates().goals[0];
+  deleteGoalTemplate(entry.id, { revision: entry.revision });
+  putRecord('core.goal.template', record.id, { ...record, revision: 2, deletedAt: new Date().toISOString(), objective: 'Tampered objective' });
+  assert.throws(() => saveGoalTemplate({ objective: record.objective }), { code: 'CONFLICT' });
 });

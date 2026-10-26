@@ -129,6 +129,16 @@ text in the checkbox list and installation result. Import remains available when
 there are no saved goals. Imports neither start goals nor change the terminal's
 selected workflow. **Load workflow from a text file** remains a separate action.
 
+Right-click a skill, agent, workflow or saved goal for **Open details** and
+**Remove…**. Keyboard users can highlight an entry and press **F10**. Removal
+requires confirmation with Cancel selected, and pins the displayed scope/version
+and terminal context. It removes the reusable Library entry; existing chats,
+evidence, loaded instructions and pinned running work are retained. Goals also
+has a **Remove saved goal** button in its detail view. A removed selected workflow
+becomes unavailable: choose None or another workflow for future goals. Explicitly
+saving removed goal text again creates a fresh revision; old open pickers cannot
+remove that replacement. Accepted import retries retain the recipient's removal.
+
 Use `/workflow` to choose one reusable goal pre-prompt, like the model picker.
 Choose **None** to turn it off; chat shows the selected workflow's name. Create,
 load, inspect and edit definitions from the **Workflows** top tab. `/workflows`
@@ -137,6 +147,35 @@ available. Selection belongs to the current terminal session. A new `/goal` load
 the complete workflow before model work and keeps that version when resumed;
 later selection changes affect future goals. Loading or selecting starts no
 model work. See [goal workflows](../../BZZY-CORE/docs/WORKFLOWS.md).
+
+You can select the workflow at launch:
+
+```sh
+bzzy --workflow bug-bounty-methodology
+bzzy --attach my-project --workflow bug-bounty-methodology
+bzzy --workflow bug-bounty-methodology --goal "Review the supplied HTTP responses"
+bzzy --attach my-project --workflow none
+```
+
+A named attachment opens an existing alias/ID/prefix or creates a new idle named
+chat in the current directory when no match exists. Creation uses the ordinary
+chat defaults and is serialized per name to avoid duplicate concurrent opens.
+Existing chats keep their original cwd, model, history and goal state; opening
+starts no inference, replayed work or input takeover. Ambiguous matches fail
+instead of creating another chat. Read-only views and update-restoration handoffs
+remain strict existing-session lookups.
+
+Chat history saves automatically. Use `/alias my-project` to rename a chat,
+then reopen it with `bzzy --attach my-project` or Sessions. A fresh plain `bzzy`
+chat in the same directory has its own session history and compaction index;
+project knowledge and learned skills remain separately scoped.
+
+`--workflow NAME` resolves against that terminal's project/global Library.
+It selects instructions for future new goals and starts no work by itself;
+`none` clears the selection. Unknown workflows fail before creating a new chat
+or goal. Existing goals keep their admitted workflow across selection changes
+and retries. A goal resume cannot replace its workflow: use attachment for
+future-goal selection or start a new goal.
 
 Core also maintains a bounded [session history index](../../BZZY-CORE/docs/SESSION-MEMORY.md)
 across alias, model and mode changes. Its compactor uses the shared **Consensus &

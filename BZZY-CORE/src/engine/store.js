@@ -118,7 +118,8 @@ export function findSession(id, cwd) {
     if (!matches.length) matches = all.filter(s => s.alias === id);
     if (!matches.length) matches = all.filter(s => s.id.startsWith(id));
   }
-  if (matches.length !== 1) throw new Error(matches.length ? 'Session name or prefix is ambiguous. Use the session ID.' : 'No matching session. Run bzzy sessions.');
+  if (matches.length !== 1) throw Object.assign(new Error(matches.length ? 'Session name or prefix is ambiguous. Use the session ID.' : 'No matching session. Run bzzy sessions.'),
+    { code: matches.length ? 'SESSION_AMBIGUOUS' : 'SESSION_NOT_FOUND' });
   return matches[0];
 }
 

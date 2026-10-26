@@ -26,16 +26,20 @@ export function normalizeGoalTemplate(input) {
   return result;
 }
 
+function checkedRecord(record, id) {
+  const value = normalizedText({ objective: record.objective });
+  if (record.id !== id || record.version !== id || digest(value) !== id || !Number.isSafeInteger(record.revision) || record.revision < 1 ||
+      typeof record.createdAt !== 'string' || !Number.isFinite(Date.parse(record.createdAt)) ||
+      record.deletedAt !== undefined && (typeof record.deletedAt !== 'string' || !Number.isFinite(Date.parse(record.deletedAt)))) {
+    fail('The saved goal template changed unexpectedly. Reopen /goal.', 'CONFLICT');
+  }
+  return structuredClone(record);
+}
 export function getGoalTemplate(id) {
   if (!validId(id)) fail('Choose a saved goal from its current list.');
   const record = getRecord(GOAL_TEMPLATE_KIND, id);
   if (!record || record.deletedAt) fail('This saved goal is no longer available. Reopen /goal.', 'SAVED_GOAL_UNAVAILABLE');
-  const value = normalizedText({ objective: record.objective });
-  if (record.id !== id || record.version !== id || digest(value) !== id || record.revision !== 1 ||
-      typeof record.createdAt !== 'string' || !Number.isFinite(Date.parse(record.createdAt))) {
-    fail('The saved goal template changed unexpectedly. Reopen /goal.', 'CONFLICT');
-  }
-  return structuredClone(record);
+  return checkedRecord(record, id);
 }
 
 export function goalTemplateEntry(record) {
@@ -69,15 +73,34 @@ export function hasGoalTemplateObjective(objective) {
   return record && !record.deletedAt ? Boolean(getGoalTemplate(id)) : false;
 }
 
+// Local-owner Library management only. Removing a template never edits a
+// session, goal outcome or evidence. A later explicit save may restore its text
+// with a new revision, so an old open picker cannot act on the replacement.
+export function deleteGoalTemplate(id, { revision } = {}) {
+  if (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision)) fail('Review the current saved goal before removing it.', 'INVALID_REQUEST');
+  return atomic(db => {
+    const entry = getSavedGoalTemplate(id, { revision }), current = getGoalTemplate(id.slice(9));
+    const next = current.revision + 1;
+    if (!Number.isSafeInteger(next)) fail('The saved goal revision limit was reached.', 'CAPACITY');
+    const record = { ...current, revision: next, deletedAt: now() };
+    putRecord(GOAL_TEMPLATE_KIND, current.id, record, db);
+    putRecord('core.goal.template.removal', digest([current.id, next]), { id, version: current.version, revision: next, removedAt: record.deletedAt }, db);
+    return { deleted: true, id: entry.id, revision: next };
+  });
+}
+
 export function saveGoalTemplate(input) {
   const value = normalizeGoalTemplate(input), id = digest(value);
   return atomic(db => {
     const existing = getRecord(GOAL_TEMPLATE_KIND, id);
-    if (existing) return getGoalTemplate(id);
-    if (db.prepare('SELECT count(*) AS total FROM records WHERE kind=?').get(GOAL_TEMPLATE_KIND).total >= 4096) {
+    if (existing && !existing.deletedAt) return getGoalTemplate(id);
+    if (existing) checkedRecord(existing, id);
+    if (db.prepare("SELECT count(*) AS total FROM records WHERE kind=? AND json_extract(data,'$.deletedAt') IS NULL").get(GOAL_TEMPLATE_KIND).total >= 4096) {
       fail('The saved goal template limit was reached.', 'CAPACITY');
     }
-    const createdAt = now(), record = { ...value, id, version: id, revision: 1, createdAt };
+    const revision = (existing?.revision || 0) + 1;
+    if (!Number.isSafeInteger(revision)) fail('The saved goal revision limit was reached.', 'CAPACITY');
+    const createdAt = now(), record = { ...value, id, version: id, revision, createdAt };
     putRecord(GOAL_TEMPLATE_KIND, id, record, db);
     return structuredClone(record);
   });

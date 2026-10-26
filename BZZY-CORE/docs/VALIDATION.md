@@ -1,3 +1,46 @@
+# Library removal and named/workflow launch controls (2026-10-26)
+
+Node.js 24/macOS full suites: **773 Core tests passed, 2 skipped** (775 total)
+and **749 CLI tests passed, 21 skipped** (770 total), zero failures. Core and CLI
+syntax and whitespace checks pass.
+
+Right-click/F10 on an actual skill, agent, workflow or saved-goal row opens its
+entry menu. Remove requires default-Cancel confirmation and rechecks the displayed
+identity/scope/version plus private host, session, active tab, cwd and panel after
+the prompt. Tests exercise all four actual terminal menus, Cancel/Escape, unknown
+or reused local requests, same-name scope separation, concurrent revision changes,
+removed/recreated goal text, host/session changes, preserved drafts and no model
+execution. Native skill/agent/workflow deletion retains existing history and pins;
+a removed selected workflow becomes unavailable for future new goals.
+
+Core adds revision-checked saved-goal template removal with tombstones and removal
+receipts. Listing/export excludes removed entries; active execution/goal history
+and evidence remain separate. Explicit saving restores the same immutable text
+with a new revision, invalidating old picker/removal tokens. Damaged tombstones
+fail closed. An accepted Library import retry cannot undo the recipient's removal.
+
+`bzzy --attach NAME` resolves existing aliases/IDs/prefixes or creates an idle named
+terminal using ordinary chat defaults and the caller's cwd. Existing terminals
+retain their original model/cwd/history/goal, and opening never replays work or
+claims input. Per-name identity-checked locks cover the resolve/create gap, with
+bounded contention waits; concurrent child processes create one alias once.
+SQLite's busy timeout is installed before WAL initialization to avoid the cold
+startup contention exposed by this check. Ambiguity stays an error. Read-only
+views and update handoffs remain strict existing-session lookups.
+
+`--workflow NAME` selects before ordinary chat/new-goal admission and composes
+with named attachment; `none` clears future selection. Unknown definitions fail
+before new session/task creation. Tests check project/global resolution, direct
+and request-ID goal creation, immutable running-goal pins, and accepted retries
+after the original definition is removed. Saved-goal resumes reject overrides.
+Actual CLI subprocesses create, reopen/replay and select/clear workflows with no
+inference, duplicate sessions or goal execution.
+
+New tests use isolated temporary homes and synthetic/offline models. No user
+Library entries were removed, target testing performed, or running installation
+updated/restarted. User reference folders, private bindings and test artifacts
+remain outside product commits.
+
 # Live execution feedback and shared Library buttons (2026-10-26)
 
 Node.js 24/macOS full suites: **763 Core tests passed, 2 skipped** (765 total),

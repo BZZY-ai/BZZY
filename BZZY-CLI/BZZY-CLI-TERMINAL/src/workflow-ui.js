@@ -1,5 +1,6 @@
 import { home, loadSession } from '@bzzy/core/engine/store.js';
 import { createHash } from 'node:crypto';
+import { libraryEntryMenu } from './library-entry-menu.js';
 import { transferLibraryTab } from './library-ui.js';
 import { listWorkflows, getWorkflow, saveWorkflow, importWorkflow, deleteWorkflow, workflowSelection, selectWorkflow, getGoalWorkflow } from '@bzzy/core/engine/workflows.js';
 
@@ -97,8 +98,11 @@ export function workflowRows(ui) {
       { text: 'Create workflow', action: 'create', buttonGroup: 'create', buttonIcon: '+' },
       { text: 'Load workflow from a text file', action: 'load', buttonLabel: 'Load file', buttonGroup: 'create' }, { text: '' },
       { text: `${state.selected ? '  ' : '✓ '}None · no workflow`, action: `none:${state.revision}:${token}`, tone: 'accent' },
-      ...page.workflows.flatMap(row => [{ text: `${state.available && state.selected?.id === row.id ? '✓ ' : '  '}${row.name} · ${row.scope}`, action: `select:${row.scope}:${row.name}:${row.revision}:${state.revision}:${token}`, tone: 'accent' },
-        { text: `  Inspect / edit ${row.name}`, action: `view:${row.scope}:${row.name}:${row.revision}:${token}` }]),
+      ...page.workflows.flatMap(row => {
+        const action = `view:${row.scope}:${row.name}:${row.revision}:${token}`, menu = libraryEntryMenu(ui, 'workflow', row, '/workflow ' + action);
+        return [{ text: `${state.available && state.selected?.id === row.id ? '✓ ' : '  '}${row.name} · ${row.scope}`, action: `select:${row.scope}:${row.name}:${row.revision}:${state.revision}:${token}`, tone: 'accent', menu },
+          { text: `  Inspect / edit ${row.name}`, action, menu }];
+      }),
       ...(!page.workflows.length ? [{ text: 'No workflows saved for this project. Create one or load reusable text.', tone: 'muted' }] : []),
       ...(ui.workflowOffset ? [{ text: 'Previous workflows', action: 'previous' }] : []), ...(page.nextOffset != null ? [{ text: 'More workflows', action: 'next' }] : [])];
   } catch (error) { return [{ text: error.message, tone: 'warning' }, { text: backLabel(ui), action: 'close' }]; }

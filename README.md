@@ -33,6 +33,8 @@ instructions. Create or load one from the **Workflows** top tab. `/workflow`
 opens a quick picker with **None** and the available workflows for this terminal.
 Core pins its full text before the next `/goal` starts;
 existing goals retain their original workflow across resume and model changes.
+`bzzy --workflow NAME` selects it at launch, including with `--attach NAME`;
+`--workflow none` clears it without starting work.
 
 [Session history memory](BZZY-CORE/docs/SESSION-MEMORY.md) adds a bounded index of
 each terminal's own conversation across model and mode changes. Its background
@@ -54,7 +56,8 @@ CLI chat shows the current action with an animated indicator, its own timer,
 last-output age and a recent Core process observation. Quiet periods, approval
 waits and lost connections remain explicit; process liveness does not claim
 model progress. Skills, Agents, Workflows and Goals share spaced button toolbars
-and visible keyboard focus.
+and visible keyboard focus. Right-click an entry or press F10 for confirmed
+removal from Library, preserving chat history, evidence and pinned running work.
 
 Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALIDATION.md)
 after `/validate` checks the original requirements and recorded evidence. The
@@ -93,6 +96,9 @@ iPhone Settings → Models and defaults edits independent solo CLI, Core assista
 Besties, Parallel, Validate and Delegate presets. Mode flags reuse their saved setup
 automatically; a missing preset opens setup. Terminal projects keep their original working directory. Use `/alias NAME` to
 show a session in CLI/iOS; both lists put the most recent activity first.
+History saves automatically. `bzzy --attach NAME` opens that saved chat, or creates
+an idle named chat here when no match exists. Existing chats keep their original
+directory, model, history and goal; attachment starts no model work.
 
 ## iPhone and Relay
 
