@@ -3,7 +3,7 @@ import path from 'node:path';
 import { launch, root, version, assertCodexVersion, backendCommand } from '../process.js';
 import { home, privateDir, writeJson, saveSession } from '../store.js';
 import { apiKey, providerModelCapabilities, providerEffortPolicy, providerEffortCapabilities } from '../providers.js';
-import { Rpc } from '../rpc.js';
+import { Rpc, BackendClosedError } from '../rpc.js';
 import { backendIsolation } from '../policy.js';
 import { taskTools } from '../tools.js';
 import { agentInstructions, reasoningEffort } from '../instructions.js';
@@ -229,13 +229,13 @@ export class CodexEngine {
     if (this.options.learningReview && (goal || resumeGoal || this.options.toolHost)) throw new Error('Learning reviews cannot execute goals or expose tools.');
     this.options.goalMode = goal;
     this.progress.setPrompt(goal ? this.session.goal.objective : prompt);
-    await this.open();
-    if (this.interrupted) return;
-    let resolve, reject;
-    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
-    promise.catch(() => {});
-    this.operation = { promise, resolve, reject, goal, pendingStart: true };
     try {
+      await this.open();
+      if (this.interrupted) return;
+      let resolve, reject;
+      const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+      promise.catch(() => {});
+      this.operation = { promise, resolve, reject, goal, pendingStart: true };
       if (goal) {
         if (!resumeGoal) await this.rpc.request('thread/goal/clear', { threadId: this.threadId, origin: 'user' });
         if (this.interrupted) return;
@@ -265,6 +265,8 @@ export class CodexEngine {
       this.settle();
       await promise;
       if (!this.interrupted) completeConversationHandoff(this.session);
+    } catch (error) {
+      if (!this.interrupted || !(error instanceof BackendClosedError)) throw error;
     } finally { this.operation = null; this.goalArmed = false; }
   }
 
@@ -388,14 +390,20 @@ export class CodexEngine {
     this.interrupted = true;
     this.stopReason = reason;
     if (!this.rpc || !this.threadId) return;
-    if (this.operation?.goal && this.goalArmed) {
-      const result = await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'user' });
-      this.updateGoal(result.goal);
-      this.session.goal.reason = reason;
-      saveSession(this.session);
+    try {
+      if (this.operation?.goal && this.goalArmed) {
+        const result = await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'user' });
+        this.updateGoal(result.goal);
+        this.session.goal.reason = reason;
+        saveSession(this.session);
+      }
+      for (const turnId of this.activeTurns) await this.rpc.request('turn/interrupt', { threadId: this.threadId, turnId });
+      this.settle();
+    } catch (error) {
+      // A terminal notification can settle run() before this request's reply.
+      // Its normal cleanup then closes the pipe; that is a successful stop.
+      if (!(error instanceof BackendClosedError)) throw error;
     }
-    for (const turnId of this.activeTurns) await this.rpc.request('turn/interrupt', { threadId: this.threadId, turnId });
-    this.settle();
   }
 
   async close() {

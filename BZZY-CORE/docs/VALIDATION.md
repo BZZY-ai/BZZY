@@ -1,3 +1,34 @@
+# Clean cancellation during goal replacement (2026-10-26)
+
+Node.js 24/macOS full suites: **784 Core tests passed, 2 skipped** (786 total)
+and **751 CLI tests passed, 21 skipped** (772 total), zero failures. Core and CLI
+syntax and repository whitespace checks pass.
+
+A deterministic native-backend fixture reproduced the connection-closed error
+before the fix: the final interrupted-turn/paused-goal notification settled the
+run before the pending interrupt response, so ordinary cleanup rejected that
+request and the controller emitted an error. Actual attached CLI replacement
+regressions failed for both Codex and DeepSeek with this ordering.
+
+Core's RPC transport now distinguishes deliberate local closure by error type
+and retains the original failure for requests made after a transport failure.
+Codex-backed run/interrupt paths accept this closure only during a requested
+stop. Seven Core regressions cover goal/chat notification-before-response races,
+stops during initialization and goal dispatch, genuine process exit during stop,
+closure without a requested stop, and a genuine RPC error carrying the same
+connection-closed text. Real errors remain failures; cancellation never establishes
+achievement or completes a conversation handoff.
+
+Attached CLI fixtures exercise Codex, DeepSeek and Claude goal replacement. They
+verify cancellation/archive of the old goal, completion of the replacement, no
+overlapping runner admissions, preserved thread/scope/constraints, and absence
+of false shutdown errors in both terminal output and durable events. Existing
+permission, recovery, input-identity and evidence checks remain unchanged.
+
+All model work used offline fixtures in temporary private homes. No live model
+request, user-session mutation, running-installation update, service restart or
+Relay deployment was performed.
+
 # Explicit owner YOLO attachment (2026-10-26)
 
 Node.js 24/macOS full suites: **777 Core tests passed, 2 skipped** (779 total)

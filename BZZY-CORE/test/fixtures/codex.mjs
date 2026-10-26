@@ -24,7 +24,7 @@ const turns = (status = 'complete') => {
     const item = { id: 'open-page', type: 'webSearch', query: '', action: { type: 'openPage', url: 'https://www.paypal.com/?token=fixture-secret' } };
     notify('item/started', { item }); notify('item/completed', { item });
   }
-  if (scenario === 'interrupt') return;
+  if (['interrupt', 'interrupt-response-race', 'exit-on-stop', 'rpc-error-on-stop'].includes(scenario)) return;
   notify('item/agentMessage/delta', { itemId: 'message-1', delta: 'First pass.\n' });
   notify('turn/completed', { turn: { id: 't1', status: 'completed' } });
   if (!goal) return;
@@ -39,6 +39,7 @@ const turns = (status = 'complete') => {
 for await (const line of readline.createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
   log(request);
+  if (scenario === 'hold-initialize' && request.method === 'initialize') continue;
   if (request.method === 'initialize' && request.params?.clientInfo?.name !== 'bzzy-usage' && preparationHeld()) { log({ preparing: true, savedTask: savedTask() }); continue; }
   if (['thread/start', 'thread/resume'].includes(request.method) && process.env.BZZY_TEST_CAPTURE_TASK) log({ savedTask: savedTask() });
   if (request.id === 900 && !request.method) {
@@ -55,10 +56,21 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   else if (request.method === 'thread/goal/get') result = { goal: goal || { status: 'paused' } };
   else if (request.method === 'thread/goal/clear') { goal = null; result = { cleared: true }; }
   else if (request.method === 'thread/goal/set') {
+    if (scenario === 'exit-on-stop' && request.params.status === 'paused') process.exit(23);
+    if (scenario === 'rpc-error-on-stop' && request.params.status === 'paused') {
+      send({ id: request.id, error: { code: -32603, message: 'Backend connection closed.' } });
+      continue;
+    }
     goal = { goalId: 'native-goal', objective: request.params.objective || goal?.objective || 'resume goal', status: request.params.status, tokensUsed: goal?.tokensUsed || 0 };
     result = { goal };
+    if (scenario === 'hold-goal-start' && goal.status === 'active') continue;
     if (goal.status === 'active') setTimeout(() => turns(scenario === 'blocked' ? 'blocked' : 'complete'), 10);
     else notify('thread/goal/updated', { goal });
+    if (scenario === 'interrupt-response-race' && goal.status === 'paused') {
+      notify('turn/completed', { turn: { id: 't1', status: 'interrupted' } });
+      setTimeout(() => send({ id: request.id, result }), 100);
+      continue;
+    }
   } else if (request.method === 'turn/start') {
     result = { turn: { id: 't1' } };
     setTimeout(() => {
@@ -70,6 +82,10 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     }, 20);
   } else if (request.method === 'turn/interrupt') {
     notify('turn/completed', { turn: { id: request.params.turnId, status: 'interrupted' } });
+    if (scenario === 'interrupt-response-race') {
+      setTimeout(() => send({ id: request.id, result }), 100);
+      continue;
+    }
   }
   if (request.id != null) send({ id: request.id, result });
 }

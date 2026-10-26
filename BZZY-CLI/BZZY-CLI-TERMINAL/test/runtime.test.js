@@ -386,8 +386,8 @@ for (const status of ['paused', 'blocked', 'awaiting_review']) test(`attached /g
   assert.ok(listRecords('execution').find(job => job.sessionId === source.id).resumeGoal);
 });
 
-for (const provider of ['codex', 'claude']) test(`${provider}: /goal replaces active work without closing the chat or overlapping runners`, { timeout: 25000 }, async () => {
-  process.env.BZZY_TEST_ADVANCED = 'slow';
+for (const provider of ['codex', 'claude', 'deepseek']) test(`${provider}: /goal replaces active work without closing the chat or overlapping runners`, { timeout: 25000 }, async () => {
+  process.env.BZZY_TEST_ADVANCED = provider === 'claude' ? 'slow' : 'stop-race';
   const source = makeSession(); source.provider = provider; source.backend = BUILTINS[provider].backend;
   source.contract.constraints = ['Preserve approved scope']; source.contract.scope.allowedTargets = ['https://scope.example']; saveSession(source);
   const original = source.goal.id, launched = await start(source);
@@ -412,6 +412,9 @@ for (const provider of ['codex', 'claude']) test(`${provider}: /goal replaces ac
   assert.equal(jobs.length, 2); assert.ok(jobs[0].finishedAt <= jobs[1].createdAt);
   assert.deepEqual(saved.contract.scope.allowedTargets, ['https://scope.example']); assert.ok(saved.contract.constraints.includes('Preserve approved scope'));
   assert.ok(seen.some(event => event.type === 'info' && /Replacing the current goal/.test(event.data.message)));
+  assert.equal(seen.some(event => event.type === 'error' && /Backend connection (?:is )?closed/.test(event.data.message)), false);
+  assert.equal(events(source.id).some(event => event.type === 'error' && /Backend connection (?:is )?closed/.test(event.data.message)), false);
+  assert.equal(saved.failure, null);
 });
 
 test('/goal from a parallel agent tab replaces the whole group objective and stops the old peers', { timeout: 25000 }, async () => {

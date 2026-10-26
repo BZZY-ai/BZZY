@@ -64,7 +64,7 @@ async function work() {
     return;
   }
   if (process.env.BZZY_TEST_ADVANCED === 'wait') { await new Promise(resolve => setTimeout(resolve, 300)); }
-  if (process.env.BZZY_TEST_ADVANCED === 'slow') { await new Promise(resolve => setTimeout(resolve, 1800)); }
+  if (['slow', 'stop-race'].includes(process.env.BZZY_TEST_ADVANCED)) { await new Promise(resolve => setTimeout(resolve, 1800)); }
   if (process.env.BZZY_TEST_ADVANCED === 'question') {
     if (claude) throw new Error('Question fixture uses Codex.');
     const id = ++seq; send({ id, method: 'item/tool/requestUserInput', params: { threadId: thread, questions: [{ id: 'environment', question: 'Which approved account?', options: [] }] } });
@@ -212,6 +212,11 @@ readline.createInterface({ input: process.stdin }).on('line', async line => {
       if (objectiveFile) currentPrompt = fs.readFileSync(objectiveFile[1], 'utf8');
     }
     if (goal.status === 'active') setTimeout(launchWork, 5);
+    else if (process.env.BZZY_TEST_ADVANCED === 'stop-race') {
+      notify('thread/goal/updated', { goal });
+      notify('turn/completed', { turn: { id: 'turn', status: 'interrupted' } });
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
   }
   else if (request.method === 'turn/start') { currentPrompt = request.params.input.map(item => item.text || '').join('\n'); setTimeout(launchWork, 5); }
   else if (request.method === 'turn/interrupt') notify('turn/completed', { turn: { id: 'turn', status: 'interrupted' } });

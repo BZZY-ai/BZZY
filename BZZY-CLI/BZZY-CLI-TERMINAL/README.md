@@ -400,6 +400,9 @@ Sending another `/goal <objective>` while a goal is active, verifying or paused
 opens **Replace current goal?** with **No** selected initially. Yes stops the
 previous run before queueing the new goal; No or Escape keeps it. Core checks the
 confirmed goal ID again, so a goal changed by another client needs a fresh review.
+An intentional backend shutdown during replacement or pause finishes as a stop,
+including when its final notification precedes the stop response. Unexpected
+backend exits and RPC errors remain visible; a stopped run is never achievement.
 Use `/goal resume` to continue a paused or stalled goal from its saved checkpoint.
 It keeps the same goal and objective, resets the recurring-blocker audit and
 retains spent tokens. A completed goal cannot resume; an exhausted token budget

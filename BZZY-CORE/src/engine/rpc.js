@@ -2,6 +2,12 @@ import { EventEmitter } from 'node:events';
 import readline from 'node:readline';
 import { stopProcess } from './policy.js';
 
+// Only local, deliberate transport cleanup creates this error. Backend crashes
+// and RPC error replies remain distinct, even if they use the same message.
+export class BackendClosedError extends Error {
+  constructor() { super('Backend connection closed.'); this.name = 'BackendClosedError'; }
+}
+
 export class Rpc extends EventEmitter {
   constructor(child, onRequest) {
     super();
@@ -26,7 +32,7 @@ export class Rpc extends EventEmitter {
   }
 
   send(message) {
-    if (this.closed) throw new Error('Backend connection is closed.');
+    if (this.closed) throw this.failure;
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
@@ -64,13 +70,14 @@ export class Rpc extends EventEmitter {
   fail(error) {
     if (this.closed) return;
     this.closed = true;
+    this.failure = error;
     for (const pending of this.pending.values()) { clearTimeout(pending.timeout); pending.reject(error); }
     this.pending.clear();
     this.emit('failure', error);
   }
 
   async close() {
-    this.fail(new Error('Backend connection closed.'));
+    this.fail(new BackendClosedError());
     this.lines.close();
     this.child.stdin.end();
     if (this.child.exitCode != null || this.child.signalCode != null) return;

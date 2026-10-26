@@ -12,6 +12,10 @@ the same engine and private state.
 
 Implemented:
 
+- Native Codex-backed cancellation distinguishes deliberate transport cleanup
+  from backend failures. Goal replacement waits for the old runner to stop;
+  late interrupt responses do not produce a false connection-closed error.
+
 - Read-only execution-process observations on authenticated session snapshots.
   Identity-checked liveness is sampled at most every two seconds per unchanged
   process/state and returned separately from model output. Unknown, legacy or
