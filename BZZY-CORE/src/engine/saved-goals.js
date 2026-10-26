@@ -1,8 +1,10 @@
 import { database, transaction, digest } from './database.js';
 import { getGoalTemplate, goalTemplateEntry } from './goal-templates.js';
 
-// Private local-owner history projection. This module grants no runtime access
-// and is deliberately not exposed as a model tool or a scoped session endpoint.
+// Legacy private local-owner history projection. The Saved Goals Library uses
+// goal-templates.js and intentionally excludes this execution history. This
+// module grants no runtime access and is not exposed as a model tool or a scoped
+// session endpoint.
 const UUID = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 const selectionID = new RegExp(`^(${UUID}):(${UUID})$`);
 // Match String.prototype.trim(), preserving every internal space and newline.

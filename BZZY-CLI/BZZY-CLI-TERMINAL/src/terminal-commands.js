@@ -5,7 +5,7 @@ export const chatHelp = `Modes
   --besties    2–3 agents collaborate on a shared goal and review each other’s evidence.
 
 /goal              Reuse, import or export saved goals; choosing an objective starts a fresh goal here.
-/goal <objective>  Start a goal; submitted goals are saved automatically.
+/goal <objective>  Start a goal; save reusable objectives manually in the Goals tab.
 /goal status       Inspect the current goal without starting work.
 /goal resume       Continue a paused or stalled goal from its saved checkpoint.
 /delegate          Switch this paused chat to the saved Delegate combo (or choose its two agents).
@@ -30,7 +30,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /agents            Create and view reusable specialist subagents for any supported model.
 /create-skill <description> Ask for a name, then create and enable a global Core skill with the current model.
 /create-agent <description> Ask for a name, then create a global Core specialist with the current model.
-/workflows         Create, load, import/export and select instructions for future goals; /workflow is an alias.
+/workflow          Choose one workflow or None for future goals; manage them from the Workflows tab.
 /metrics           Inspect recorded skill, specialist and worker usage for this goal or chat.
 /memory [query]    Search this engagement's findings, memory and past conversations.
 /learn             Review learning jobs, candidate skills and private user/host preferences.
@@ -54,8 +54,7 @@ export const chatCommands = [
   { command: '/agents', description: 'Create, view and use reusable specialist subagents across models' },
   { command: '/create-skill', description: 'Create an enabled global skill with the current model', argument: true },
   { command: '/create-agent', description: 'Create a global specialist with the current model', argument: true },
-  { command: '/workflows', description: 'Create, load and select complete workflows for future goals' },
-  { command: '/workflow', description: 'Open saved workflows and pre-prompts (alias of /workflows)' },
+  { command: '/workflow', description: 'Choose a workflow or None for future goals' },
   { command: '/metrics', description: 'Inspect recorded goal and chat skill, specialist and worker usage' },
   { command: '/goal', description: 'Choose a saved goal, or add an objective to start a new one' },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
@@ -99,4 +98,4 @@ export function commandSuggestions(value) {
   return chatCommands.filter(item => item.command.startsWith(value));
 }
 
-export function privateChatCommand(value) { return /^\/(?:import|library|session-action|yolo|workflows?|create-skill|create-agent)(?:\s|$)/.test(String(value).trim()); }
+export function privateChatCommand(value) { return /^\/(?:import|library|session-action|yolo|workflow|saved-goals|create-skill|create-agent)(?:\s|$)/.test(String(value).trim()); }

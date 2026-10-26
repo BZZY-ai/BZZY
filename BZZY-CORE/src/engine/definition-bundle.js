@@ -10,8 +10,8 @@ import { listSkills, inspectSkill, importSkill, skillStorageId, setSkillEnabled 
 import { listSubagentDefinitions, getSubagentDefinition, normalizeSubagentDefinition, saveSubagentDefinition, setSubagentEnabled } from './subagent-definitions.js';
 import { assertPortableDefinitionText as portable } from './definition-portability.js';
 import { listWorkflows, getWorkflow, normalizeWorkflow, saveWorkflow } from './workflows.js';
-import { listSavedGoals, getSavedGoal, hasSavedGoalObjective } from './saved-goals.js';
-import { normalizeGoalTemplate, saveGoalTemplate } from './goal-templates.js';
+import { normalizeGoalTemplate, saveGoalTemplate, listGoalTemplates as listSavedGoals,
+  getSavedGoalTemplate as getSavedGoal, hasGoalTemplateObjective as hasSavedGoalObjective } from './goal-templates.js';
 
 export const DEFINITION_BUNDLE_LIMITS = Object.freeze({ bytes: 64 * 1024 * 1024, fileBytes: 1024 * 1024, entries: 4096, definitions: 256 });
 export const LIBRARY_BUNDLE_LIMITS = Object.freeze({ ...DEFINITION_BUNDLE_LIMITS, definitions: 1024 });

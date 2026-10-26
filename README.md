@@ -29,8 +29,9 @@ and bounded idle reviews with explicit candidate evaluation and activation.
 CLI `/memory` and `/learn` open its review controls in the existing Skills panel.
 
 Reusable [workflows](BZZY-CORE/docs/WORKFLOWS.md) supply a goal's operating
-instructions. Create or load one through `/workflows`, then select it for the
-current terminal. Core pins its full text before the next `/goal` starts;
+instructions. Create or load one from the **Workflows** top tab. `/workflow`
+opens a quick picker with **None** and the available workflows for this terminal.
+Core pins its full text before the next `/goal` starts;
 existing goals retain their original workflow across resume and model changes.
 
 [Session history memory](BZZY-CORE/docs/SESSION-MEMORY.md) adds a bounded index of
@@ -42,7 +43,10 @@ Skills and Agents tabs show names and ON/OFF controls, with plain Import and
 Export actions. Select names once and copy the generated code. On another BZZY,
 Import asks **ENTER CODE**, then downloads, checks and installs missing entries
 with visible progress. Completion lists only newly installed names.
-The saved-goal picker (`/goal`) and Workflows (`/workflows`) provide the same
+The **Goals** top tab saves reusable objectives manually, including the current
+goal when explicitly chosen. Running `/goal <objective>` never adds it to this
+Library; execution history stays available for recovery and metrics. Bare `/goal`
+opens the saved-objective quick picker. Goals and Workflows provide the same
 Import/Export flow. Goal exports show readable objective text; imports save
 templates without starting goals or changing the selected workflow.
 

@@ -6,8 +6,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { UI } from '../src/ui.js';
-import { chooseSavedGoal } from '../src/saved-goals-ui.js';
+import { chooseSavedGoal, openGoals, goalRows, goalAction } from '../src/saved-goals-ui.js';
 import { createSession, loadSession, saveSession } from '@bzzy/core/engine/store.js';
+import { saveGoalTemplate, goalTemplateEntry } from '@bzzy/core/engine/goal-templates.js';
 import { newGoal } from '@bzzy/core/engine/goals.js';
 import { getRecord, putRecord, listRecords, database } from '@bzzy/core/engine/database.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
@@ -19,6 +20,9 @@ function saved(objective, createdAt = '2026-10-01T00:00:00.000Z', extra = {}) {
   const session = createSession(provider, directory, 'offline-model', extra.alias);
   session.goal = { ...newGoal(objective), createdAt };
   Object.assign(session, extra); saveSession(session);
+  const template = saveGoalTemplate({ objective });
+  putRecord('core.goal.template', template.id, { ...template, createdAt });
+  session.template = goalTemplateEntry({ ...template, createdAt });
   return session;
 }
 function state() {
@@ -44,7 +48,7 @@ test.afterEach(() => {
 test('empty saved goals offer Import without changing durable state', async () => {
   const before = state();
   ui.chooseOne = (_title, offered) => {
-    assert.match(offered.description, /No saved goals.*\/goal <objective>/);
+    assert.match(offered.description, /No saved goals.*Goals tab/);
     assert.equal(offered.choices.find(row => row.value === 'import').disabled, undefined);
     assert.equal(offered.choices.find(row => row.value === 'export').disabled, true);
     return null;
@@ -54,24 +58,22 @@ test('empty saved goals offer Import without changing durable state', async () =
 });
 
 test('reuse returns the complete objective as data, including reserved controls and multiline text', async () => {
-  const source = saved('resume');
   const full = ('Review the complete HTTP response\nKeep newlines, Unicode 你🐝 and /goal cancel as text.\n' + 'A long requirement. '.repeat(200)).trim();
   for (const objective of ['resume', full]) {
-    source.goal.objective = objective; saveSession(source);
+    const source = saved(objective);
     const before = state();
     ui.chooseOne = async (title, offered, options) => {
       assert.equal(title, 'Saved goals'); assert.equal(options.scope, 'saved-goals');
       assert.equal(offered.choices[0].value, 'back'); assert.equal(offered.choices[0].selected, true);
       assert.match(offered.description, /NEW goal/);
-      assert.match(offered.description, /Saved goals 1–1 of 1/);
-      const choice = offered.choices.find(row => !['back', 'import', 'export'].includes(row.value));
+      const choice = offered.choices.find(row => row.value === source.template.id);
       assert.ok(choice.description.endsWith(objective));
-      assert.equal(choice.value, `${source.id}:${source.goal.id}`);
+      assert.equal(choice.value, source.template.id);
       return choice.value;
     };
     const result = await chooseSavedGoal(ui);
-    assert.equal(result.objective, objective); assert.equal(result.goalId, source.goal.id);
-    assert.equal(result.sessionId, source.id); assert.deepEqual(state(), before);
+    assert.equal(result.objective, objective); assert.equal(result.goalId, null);
+    assert.equal(result.sessionId, null); assert.deepEqual(state(), before);
     assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.cursor, 4);
   }
 });
@@ -127,22 +129,21 @@ test('picker pins its host, visible conversation and target directory across an 
   assert.equal(listRecords('execution').length, 0);
 });
 
-test('source edits/deletions and target deletion invalidate an open choice while status updates remain reusable', async () => {
+test('saved templates survive changes to source execution history while template and target changes invalidate choices', async () => {
   const source = saved('Keep the exact original objective');
   ui.chooseOne = async (_title, offered) => {
-    const chosen = pick(offered); source.goal.status = 'paused'; saveSession(source); return chosen;
+    const chosen = pick(offered); source.goal.objective = 'A later execution'; source.goal.status = 'paused'; saveSession(source);
+    putRecord('session-deletion', source.id, { id: source.id }); return chosen;
   };
-  assert.equal((await chooseSavedGoal(ui)).objective, source.goal.objective);
+  assert.equal((await chooseSavedGoal(ui)).objective, 'Keep the exact original objective');
+  const record = getRecord('core.goal.template', source.template.id.slice(9));
   ui.chooseOne = async (_title, offered) => {
-    const chosen = pick(offered); source.goal.objective = 'An unreviewed replacement'; saveSession(source); return chosen;
+    const chosen = pick(offered); putRecord('core.goal.template', record.id, { ...record, objective: 'Unreviewed edit' }); return chosen;
   };
-  await assert.rejects(chooseSavedGoal(ui), /changed|revision/i);
-  ui.chooseOne = async (_title, offered) => { const chosen = pick(offered); putRecord('session-deletion', source.id, { id: source.id }); return chosen; };
-  await assert.rejects(chooseSavedGoal(ui), /available|deleted/i);
-  const replacement = saved('Another objective');
+  await assert.rejects(chooseSavedGoal(ui), /changed/i);
+  putRecord('core.goal.template', record.id, record);
   ui.chooseOne = async (_title, offered) => { const chosen = pick(offered); putRecord('session-deletion', target.id, { id: target.id }); return chosen; };
   await assert.rejects(chooseSavedGoal(ui), /root terminal/i);
-  assert.equal(getRecord('session', replacement.id).goal.objective, 'Another objective');
   assert.equal(listRecords('execution').length, 0);
 });
 
@@ -225,4 +226,83 @@ test('saved-goal Export uses the original project and a context switch cancels a
   assert.equal(called, 1); assert.equal(listRecords('execution').length, 0);
   ui.chooseOne = async () => 'import';
   await assert.rejects(chooseSavedGoal(ui, { transfer: async () => { ui.sessionId = randomUUID(); } }), /terminal or host changed/);
+});
+
+
+test('Goals tab saves only explicitly entered or confirmed current objectives and cancelling cannot save', async () => {
+  ui.tui.setPanel = panel => { ui.tui.panel = panel; }; ui.tui.schedule = () => {};
+  target.goal = newGoal('Current objective remains execution history'); saveSession(target);
+  openGoals(ui);
+  assert.equal(ui.tui.panel, 'goals'); assert.ok(goalRows(ui).some(row => row.action === 'save-current'));
+  assert.ok(goalRows(ui).some(row => /No manually saved/.test(row.text)));
+  ui.ask = async (_prompt, options) => { assert.equal(options.initialValue, ''); return 'A manually saved objective'; };
+  await goalAction('save', ui);
+  ui.ask = async (_prompt, options) => { assert.equal(options.initialValue, target.goal.objective); return null; };
+  await goalAction('save-current', ui);
+  let rows = goalRows(ui); assert.equal(rows.filter(row => row.action?.startsWith('view:')).length, 1);
+  ui.ask = async (_prompt, options) => options.initialValue;
+  await goalAction('save-current', ui); await goalAction('save-current', ui);
+  rows = goalRows(ui); assert.equal(rows.filter(row => row.action?.startsWith('view:')).length, 2);
+  await goalAction(rows.find(row => row.action?.startsWith('view:')).action, ui);
+  assert.ok(ui.goalPreview.objective); assert.equal(goalRows(ui)[0].action, 'back');
+  await goalAction('back', ui); assert.equal(ui.goalPreview, null);
+  await goalAction('close', ui); assert.equal(ui.tui.panel, 'chat');
+  assert.equal(loadSession(target.id).goal.id, target.goal.id); assert.equal(listRecords('execution').length, 0);
+  assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.cursor, 4);
+});
+
+test('Goals tab rejects a save when the conversation changes while editing', async () => {
+  ui.tui.setPanel = panel => { ui.tui.panel = panel; }; ui.tui.schedule = () => {};
+  openGoals(ui); ui.ask = async () => { ui.sessionId = randomUUID(); return 'Do not save in a different context'; };
+  await goalAction('save', ui);
+  assert.equal(listRecords('core.goal.template').length, 0);
+  assert.ok(notices.some(row => row.type === 'error' && /terminal or host changed/.test(row.message)));
+});
+
+test('actual top tabs, goal editing, preview Back and Escape preserve chat drafts without model work', { timeout: 5000 }, async () => {
+  const terminal = actualTerminal(90, 32, false); const tui = terminal.tui;
+  try {
+    for (const [type, expected, panel] of [['top-workflows', '/workflow library', 'workflows'], ['top-goals', '/saved-goals', 'goals']]) {
+      const pending = terminal.ask('bzzy › '); await Promise.resolve(); tui.render();
+      const hit = tui.hitTargets.find(row => row.type === type); assert.ok(hit); tui.mouse(0, hit.left, hit.row);
+      const command = await pending; assert.equal(command, expected); await terminal.settingsCommand(command);
+      assert.equal(tui.panel, panel); tui.key('', { name: 'escape' }); assert.equal(tui.panel, 'chat');
+    }
+    await terminal.settingsCommand('/saved-goals');
+    let pending = terminal.ask('bzzy › '); await Promise.resolve(); tui.render();
+    const hit = tui.hitTargets.find(row => row.type === 'goal-action' && row.action === 'save'); assert.ok(hit);
+    tui.mouse(0, hit.left, hit.row); const command = await pending;
+    pending = terminal.settingsCommand(command); await new Promise(setImmediate); tui.render();
+    assert.ok(tui.promptDraft); assert.ok(tui.hitTargets.some(row => row.type === 'confirm'));
+    tui.value = 'Explicitly saved through the Goals tab'; tui.cursor = tui.value.length; tui.key('', { name: 'return' });
+    await pending; tui.render();
+    pending = terminal.ask('bzzy › '); await Promise.resolve(); tui.render();
+    const entry = tui.hitTargets.find(row => row.type === 'goal-action' && row.action.startsWith('view:')); assert.ok(entry);
+    tui.mouse(0, entry.left, entry.row); await terminal.settingsCommand(await pending);
+    assert.equal(terminal.goalPreview.objective, 'Explicitly saved through the Goals tab');
+    tui.key('', { name: 'escape' }); assert.equal(terminal.goalPreview, null); assert.equal(tui.panel, 'goals');
+    tui.key('', { name: 'escape' }); assert.equal(tui.panel, 'chat');
+    assert.equal(tui.value, 'Keep the unsent draft 你🐝'); assert.equal(tui.cursor, 7);
+    assert.equal(tui.history.length, 0); assert.equal(tui.inputQueue.length, 0);
+    assert.equal(listRecords('execution').length, 0);
+  } finally { terminal.close(); }
+});
+
+
+test('Goals paging and focus reveal each page from its top and damaged templates leave Back available', async () => {
+  for (let index = 0; index < 23; index++) saved(`Explicit goal ${index}`);
+  const terminal = actualTerminal(80, 24, false), tui = terminal.tui;
+  try {
+    openGoals(terminal); tui.render();
+    assert.ok(tui.hitTargets.some(row => row.type === 'goal-action' && row.action === 'save'));
+    for (let index = 0; index < 24; index++) { tui.key('', { name: 'down' }); tui.render(); }
+    await goalAction('next', terminal); tui.render();
+    assert.equal(terminal.goalOffset, 20);
+    assert.ok(tui.hitTargets.some(row => row.type === 'goal-action' && row.action === 'close'));
+    assert.equal(goalRows(terminal).filter(row => row.action?.startsWith('view:')).length, 3);
+    const template = listRecords('core.goal.template')[0];
+    putRecord('core.goal.template', template.id, { ...template, objective: 'Damaged objective' });
+    terminal.goalOffset = 0; terminal.goalPreview = null;
+    assert.ok(goalRows(terminal).some(row => row.action === 'close'));
+  } finally { terminal.close(); }
 });

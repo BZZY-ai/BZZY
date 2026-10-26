@@ -12,8 +12,8 @@ existing iPhone connections remain compatible.
 
 ## Terminal flow
 
-On BZZY 1, open **Skills**, **Agents**, **Workflows (`/workflows`)** or
-**Saved goals (`/goal`) → Export**, check names, then choose
+On BZZY 1, open **Skills**, **Agents**, **Workflows** or
+**Goals → Export**, check names, then choose
 **Export**. The private screen displays **EXPORT CODE** and a **Copy code**
 button. Click it or press **C**; no Enter is required. Native clipboard success,
 terminal clipboard requests and copy failures have distinct feedback.
@@ -23,7 +23,11 @@ connection/authorization, a download bar based on actual received bytes, package
 integrity checks and installation. It installs/enables only missing definitions
 and lists only newly installed names. Existing names and ON/OFF states are
 preserved. No second selection or manual fingerprint entry is needed.
-Saved-goal Import is available even with an empty list. Goal labels show readable
+Goals and Workflows also open from their top-bar tabs. Bare `/goal` is a quick
+picker of manually saved/imported objectives; `/goal <objective>` executes without
+auto-saving a Library entry. Goals offers **Save new goal** and **Save current
+goal** explicitly. Execution history stays durable separately and is excluded
+from goal exports. Saved-goal Import is available even with an empty list. Goal labels show readable
 objective text; same-label exports have a short identity suffix. Only objective
 text is transferred, with no old goal outcome or evidence. Workflows keep their
 project/Core scopes, and importing them does not change the selected workflow.

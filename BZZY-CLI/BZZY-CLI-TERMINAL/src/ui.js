@@ -2,7 +2,8 @@ import { updateCommand } from './update-checker.js';
 import { skillsCommand } from './skills-ui.js';
 import { createDefinitionCommand } from './definition-creator-ui.js';
 import { subagentsCommand } from './subagents-ui.js';
-import { openWorkflows, workflowAction } from './workflow-ui.js';
+import { openWorkflows, chooseWorkflow, workflowAction } from './workflow-ui.js';
+import { openGoals, goalAction } from './saved-goals-ui.js';
 import { libraryCommand } from './library-ui.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { knowledgeCommand } from './knowledge-ui.js';
@@ -177,16 +178,27 @@ export class UI {
       catch (error) { this.event('error', { message: error.message }); }
       return true;
     }
-    const workflow = /^\/workflows?(?:\s|$)/.exec(input.trim());
+    const goals = /^\/saved-goals(?:\s|$)/.exec(input.trim());
+    if (goals) {
+      const action = input.trim().slice(goals[0].length).trim();
+      if (!action) openGoals(this);
+      else if (this.tui?.panel === 'goals') await goalAction(action, this);
+      return true;
+    }
+    const workflow = /^\/workflow(?:\s|$)/.exec(input.trim());
     if (workflow) {
       const action = input.trim().slice(workflow[0].length).trim();
-      if (!action) openWorkflows(this);
+      if (!action) {
+        try { await chooseWorkflow(this); }
+        catch (error) { this.event('error', { message: error.message }); }
+      }
+      else if (action === 'library') openWorkflows(this, { origin: 'chat' });
       else {
         // Keep displayed row/context pins intact until the action validates
         // them. Reopening first would replace those pins with the new session.
         if (this.tui?.panel !== 'workflows') {
           if (!['create', 'load', 'import', 'export'].includes(action)) {
-            this.event('error', { message: 'Reopen /workflows before choosing an action.' }); return true;
+            this.event('error', { message: 'Reopen /workflow before choosing an action.' }); return true;
           }
           if (!openWorkflows(this)) return true;
         }

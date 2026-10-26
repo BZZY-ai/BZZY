@@ -120,7 +120,7 @@ Native clipboard success shows **Code copied**. SSH terminal clipboard requests
 and failures have distinct feedback. Full-session transfers retain their separate
 review and fingerprint approval, and legacy codes remain available via `/library import`.
 
-**Saved goals (`/goal`)** and **Workflows (`/workflows`)** have the same plain
+**Goals** and **Workflows** in the top bar have the same plain
 **Import** and **Export** actions. Check names once to export, then copy the
 generated code. On the receiving BZZY, paste into **ENTER CODE** and follow the
 download/check/install progress. Only new entries appear in the result; existing
@@ -129,10 +129,11 @@ text in the checkbox list and installation result. Import remains available when
 there are no saved goals. Imports neither start goals nor change the terminal's
 selected workflow. **Load workflow from a text file** remains a separate action.
 
-Use `/workflows` to choose one reusable goal pre-prompt, like the model picker.
+Use `/workflow` to choose one reusable goal pre-prompt, like the model picker.
 Choose **None** to turn it off; chat shows the selected workflow's name. Create,
-load, inspect and edit definitions through this list or its links in Skills and
-Agents. Selection belongs to the current terminal session. A new `/goal` loads
+load, inspect and edit definitions from the **Workflows** top tab. `/workflows`
+is no longer a slash command; administrative `bzzy workflows` commands remain
+available. Selection belongs to the current terminal session. A new `/goal` loads
 the complete workflow before model work and keeps that version when resumed;
 later selection changes affect future goals. Loading or selecting starts no
 model work. See [goal workflows](../../BZZY-CORE/docs/WORKFLOWS.md).
@@ -148,9 +149,9 @@ conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
-`bzzy` opens a Codex-style terminal chat with three fixed sections: a one-row
-top bar for Open Sessions, New Session, Skills, Agents, Metrics, host CPU/RAM and
-Settings; the live chat transcript; and a compact composer with the current model, effort, token count,
+`bzzy` opens a Codex-style terminal chat with three fixed sections: a responsive
+top bar for Open Sessions, New Session, Skills, Agents, Workflows, Goals, Metrics
+and Settings, with host CPU/RAM on a compact second row when necessary; the live chat transcript; and a compact composer with the current model, effort, token count,
 `HH:MM:SS` runtime and color-coded goal state. User turns and agent replies use
 separate labeled rails, and the latest user request stays pinned directly below
 the top bar while a long reply streams. Open Sessions deploys an anchored
@@ -339,17 +340,14 @@ It keeps the same goal and objective, resets the recurring-blocker audit and
 retains spent tokens. A completed goal cannot resume; an exhausted token budget
 requires an explicitly increased total.
 
-Plain `/goal` opens **Saved goals**. Core already retains submitted terminal
-goals, including earlier replaced or cleared goals. The picker lists distinct
-objectives across this host's retained terminal chats, newest first, with the
-source chat/project and older/newer pages. Use arrows and Enter to start the
-selected objective as a **new goal in the current terminal**; Back or Esc cancels.
-The current model, selected workflow and permissions apply. Original outcomes,
-evidence, budgets and permissions are not restored. Replacing unfinished work
-still opens the existing confirmation with No selected.
-Use `/goal status` to inspect the current goal and `/goal resume` to continue its
-checkpoint. Deleted chats, imported untrusted history, Agent and worker goals do
-not populate this local-owner picker; opening it starts no model work.
+Plain `/goal` opens a quick list of **manually saved goals**. `/goal <objective>`
+executes that objective and never auto-saves it to the Library. Open the **Goals**
+top tab and choose **Save new goal** or **Save current goal** to save explicitly;
+Escape cancels the edit. Imports also add saved templates. Execution and replacement
+history remain durable for recovery and metrics but are excluded from this list
+and goal exports. Choosing a saved objective starts a fresh goal with this
+terminal's current model, workflow and permissions, including the existing
+replacement confirmation. Original outcomes, evidence and constraints are not reused.
 
 Settings now includes **Default models** alongside API keys, the default folder,
 Pair iPhone and BZZY Core. Open it to edit a table of **Role | Provider | Model |

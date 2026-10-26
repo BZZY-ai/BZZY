@@ -25,12 +25,13 @@ Implemented:
   do not duplicate chats, and later snapshots append missing immutable history
   without overwriting local sessions/goals. Source metadata versions and scoped
   knowledge revision history remain historical. See [project sharing](docs/PROJECT-SHARING.md).
-- Local-owner saved-goal browsing over existing terminal goals and their durable
-  replacement/clear history. The CLI's plain `/goal` picker deduplicates objectives
-  and starts a fresh goal through normal input admission. Listing is read-only;
-  old outcomes, evidence, workflows and permissions are never reused as authority.
-  Deleted, imported-untrusted, Agent and worker sources are excluded. No scoped
-  session endpoint or model tool exposes this host-wide history.
+- Explicitly saved/imported goal templates in Core's Library. The CLI Goals tab
+  saves objectives manually; bare `/goal` chooses one and starts a fresh goal
+  through normal input admission. `/goal <objective>` does not auto-save a template.
+  Library listing and export exclude execution/replacement history, which remains
+  durable separately. Templates never reuse outcomes, evidence, workflows or
+  permissions as authority. No scoped session endpoint or model tool exposes
+  this host-wide Library.
 - Durable session/goal usage metrics from model skill-load receipts and accepted
   specialist/worker assignments, with separate follow-up counts and explicit
   coverage limits for older history. Actual worker skill receipts also reach

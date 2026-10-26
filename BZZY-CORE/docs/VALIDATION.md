@@ -1,3 +1,35 @@
+# Workflow and Goals tabs; manually saved goal Library (2026-10-26)
+
+Node.js 24/macOS: **760 Core tests passed, 2 skipped** (762 total) and
+**734 CLI tests passed, 21 skipped** (755 total), zero failures in the final
+full runs. The final picker/context regression run passes all 28 cases;
+the final Core template/Library regression passes all 29 cases. Syntax and
+whitespace checks pass.
+
+The terminal exposes Workflows and Goals beside Skills and Agents. Compact
+headers retain all actions down to 40 columns, wrapping controls and moving
+host metrics to another row when needed. Mouse/keyboard checks cover these
+sizes, Back/Escape, unsent drafts and nested goal editing. Bare `/workflow`
+opens a direct dropdown including None; plural `/workflows` is removed from
+slash dispatch/help/completion, while owner `bzzy workflows` commands remain.
+Selections pin context and revisions and never start model work.
+
+The Goals tab explicitly saves new/current objectives into Core's existing
+immutable template registry. Bare `/goal` lists only saved/imported templates;
+`/goal <objective>` executes normally without adding a Library entry. Execution
+and replacement history remain durable and separate. Tests cover exact multiline
+reuse, status/resume objectives as data, paging, cancellation, stale contexts,
+manual deduplication, read-only browsing, normal replacement/permission checks,
+and Library export/import excluding execution history. Importing matching text
+from an executed goal still installs a missing saved template. Original evidence,
+outcomes, models and permissions never become template authority.
+
+The real PTY `/validate` regressions pass with the attached terminal's current
+composer labels. One initial concurrent runtime identity-reuse fixture mismatch
+passed in its isolated 15-case file and the subsequent full CLI run without
+runtime code changes. No live provider request, target testing, service restart
+or running-installation update was performed.
+
 # Portable bug bounty workflow and specialist pack (2026-10-26)
 
 Node.js 24/macOS: **756 Core tests passed, 2 skipped** (758 total), zero failures.

@@ -5,9 +5,9 @@ import { listWorkflows, getWorkflow, saveWorkflow, importWorkflow, deleteWorkflo
 
 const sessionFor = ui => ui.sessionId && loadSession(ui.sessionId);
 const cwdFor = ui => sessionFor(ui)?.cwd || ui.tui?.cwd || process.cwd();
-const context = ui => JSON.stringify([home(), ui.sessionId || null, ui.activeTab || null, cwdFor(ui)]);
+const context = ui => JSON.stringify([home(), ui.sessionId || null, ui.activeTab || null, cwdFor(ui), ui.nextSession?.id || null]);
 const contextToken = ui => createHash('sha256').update(context(ui)).digest('hex');
-const check = (ui, expected) => { if (context(ui) !== expected) throw new Error('The terminal conversation or project changed. Reopen Workflows before acting.'); };
+const check = (ui, expected) => { if (ui.closed || ui.coreLifecycleInterrupted || home() !== JSON.parse(expected)[0] || context(ui) !== expected) throw new Error('The terminal conversation or project changed. Reopen Workflows before acting.'); };
 const refresh = ui => {
   if (!ui.tui) return;
   const actions = workflowRows(ui).filter(row => row.action), current = ui.workflowPreview ? -1 : actions.findIndex(row => /^✓ /.test(row.text));
@@ -23,6 +23,36 @@ function preview(ui, row) { ui.workflowPreview = row; ui.workflowPreviewContext 
 export function workflowChatLabel(ui) {
   try { const state = selection(ui); return state.selected ? `${state.selected.name}${state.available ? '' : ' · unavailable'}` : 'None'; }
   catch { ui.workflowSelectionState = null; return 'Unavailable'; }
+}
+
+export async function chooseWorkflow(ui) {
+  const before = context(ui), shownSelection = selection(ui), entries = new Map();
+  let offset = 0;
+  do {
+    const page = listWorkflows({ cwd: cwdFor(ui), offset, limit: 100 });
+    for (const row of page.workflows) entries.set(row.id, row);
+    offset = page.nextOffset;
+  } while (offset !== null);
+  const chosen = await prompt(ui, 'chooseOne', 'Workflow', {
+    description: 'Choose one workflow for future goals in this terminal. Selecting starts no model work.',
+    choices: [{ value: 'none', label: 'None', selected: !shownSelection.selected },
+      ...[...entries.values()].map(row => ({ value: row.id, label: row.name, description: `${row.scope === 'global' ? 'BZZY Core' : 'This project'} · ${row.description}`,
+        selected: shownSelection.available && shownSelection.selected?.id === row.id }))],
+  }, { presentation: 'dropdown', kind: 'workflow', scope: 'workflow-picker' });
+  if (chosen == null) return true;
+  check(ui, before);
+  const shown = entries.get(chosen);
+  if (chosen !== 'none' && !shown) throw new Error('Choose a workflow from the current list.');
+  if (shown) {
+    const current = getWorkflow(shown.name, { cwd: cwdFor(ui), scope: shown.scope });
+    if (current.id !== shown.id || current.version !== shown.version || current.revision !== shown.revision) throw new Error('Workflow changed. Reopen /workflow before selecting it.');
+  }
+  if (!ui.sessionId && chosen === 'none') return true;
+  const id = await ensureSession(ui), current = selection(ui);
+  selectWorkflow(id, shown?.name || null, { ...(shown ? { scope: shown.scope, expectedWorkflowRevision: shown.revision } : {}),
+    expectedRevision: shownSelection.sessionId ? shownSelection.revision : current.revision });
+  ui.event('info', { message: shown ? `${shown.name} selected for future /goal requests in this terminal.` : 'Workflow set to None for future goals.' });
+  ui.tui?.schedule(); return true;
 }
 
 export function openWorkflows(ui, { origin = ui.tui?.panel || 'chat' } = {}) {

@@ -5,10 +5,10 @@ evidence requirements, reporting conventions and stop conditions. Core stores
 project and global definitions independently of the selected model. The text
 does not grant tools, account access, network scope or execution permissions.
 
-Open **Workflows / pre-prompts** from Skills or Agents Library, or type
-`/workflows` (`/workflow` is an alias). Create instructions manually or load a
-UTF-8 text file, inspect the result and select it for this conversation.
-Like `/models`, choosing a name selects it directly. Exactly one workflow can be
+Open the **Workflows** top tab to create instructions manually, load a UTF-8
+text file, inspect or edit definitions. Bare `/workflow` opens a quick dropdown
+like `/effort`; choosing a name selects it directly for this terminal. The old
+plural `/workflows` slash command is removed. Exactly one workflow can be
 selected; **None** clears it. The picker marks the selection and the chat status
 shows its name. Creating, loading or selecting starts no model work.
 

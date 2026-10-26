@@ -11,7 +11,7 @@ import { newGoal } from '../src/engine/goals.js';
 import { importSkill, inspectSkill, readSkill, createSkill, setSkillEnabled } from '../src/engine/skills.js';
 import { saveSubagentDefinition, getSubagentDefinition } from '../src/engine/subagent-definitions.js';
 import { saveWorkflow, getWorkflow } from '../src/engine/workflows.js';
-import { listSavedGoals, getSavedGoal } from '../src/engine/saved-goals.js';
+import { listGoalTemplates as listSavedGoals, getSavedGoalTemplate as getSavedGoal } from '../src/engine/goal-templates.js';
 import { normalizeGoalTemplate, saveGoalTemplate, getGoalTemplate } from '../src/engine/goal-templates.js';
 import { previewLibraryExport, buildLibraryArchive, previewLibraryImport, importLibraryBundle,
   readDefinitionBundleFile, discardDefinitionBundleReview, previewDefinitionImport, libraryImportEntryIndexes } from '../src/engine/definition-bundle.js';
@@ -47,7 +47,7 @@ function workflow(name = 'shared-flow', scope = 'project') {
 function goal(objective = 'Inspect supplied HTTP responses\nKeep Unicode Ω and complete criteria.', target = cwd) {
   const session = createSession(provider, target, 'sender-only-model', 'Private sender alias');
   session.goal = newGoal(objective); session.goal.status = 'complete'; session.goal.evidence = ['sender-only-evidence'];
-  saveSession(session); return session;
+  saveSession(session); session.templateId = 'template:' + saveGoalTemplate({ objective }).id; return session;
 }
 function output() {
   const folder = path.join(process.env.BZZY_HOME, 'relay', 'shares', randomUUID()); fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
@@ -151,7 +151,7 @@ test('all four portable resource kinds retain exact resources and remap scopes w
   assert.deepEqual(getSavedGoal(choices.goals[0].id, { revision: choices.goals[0].revision }), choices.goals[0]);
 });
 
-test('only-missing import skips changed recipient definitions and existing historical goal text without overwriting', () => {
+test('only-missing import skips changed recipient definitions and explicitly saved goal text without overwriting', () => {
   skill(); agent(); workflow(); goal('An already saved objective'); const { file } = bundle(), target = recipient();
   const keptSkill = createSkill({ name: 'shared-checks', description: 'Keep local behavior.', instructions: 'Keep the recipient instructions.' }, { scope: 'global' });
   const keptAgent = saveSubagentDefinition({ name: 'shared-reviewer', description: 'Keep local reviewer.', instructions: 'Keep the existing reviewer implementation.' }, { cwd: target, scope: 'project' });
@@ -166,7 +166,7 @@ test('only-missing import skips changed recipient definitions and existing histo
   assert.equal(getWorkflow('shared-flow', { cwd: target }).version, keptFlow.version);
   assert.equal(inspectSkill('shared-checks').enabled, false, 'an existing disabled skill stays disabled even when new imports are enabled');
   assert.deepEqual(snapshot().events, before.events);
-  assert.equal(listRecords('core.goal.template').length, 0);
+  assert.equal(listRecords('core.goal.template').length, 1);
 });
 
 test('reviewed enable is atomic, audit-preserving and exact accepted retries cannot toggle the recipient again', () => {
@@ -245,10 +245,10 @@ test('Library archives reject extra authority, model settings, modified inventor
 test('private saved goals require explicit pinned exclusion and never appear in archives or diagnostic details', () => {
   skill(); const safe = goal('A safe reusable objective'), privateGoal = goal('Use /Users/private-owner/private-task to inspect the records');
   let blocked;
-  try { previewLibraryExport({ cwd }); assert.fail('Private history must not be silently omitted'); }
+  try { previewLibraryExport({ cwd }); assert.fail('Private saved templates must not be silently omitted'); }
   catch (error) { blocked = error; }
   assert.equal(blocked.code, 'LIBRARY_BLOCKED_GOALS');
-  assert.deepEqual(blocked.blockedGoals.map(row => row.id), [`${privateGoal.id}:${privateGoal.goal.id}`]);
+  assert.deepEqual(blocked.blockedGoals.map(row => row.id), [privateGoal.templateId]);
   assert.ok(!JSON.stringify({ message: blocked.message, blockedGoals: blocked.blockedGoals }).includes('/Users/private-owner'));
   const excludeGoalIds = blocked.blockedGoals.map(row => row.id), review = remember(previewLibraryExport({ cwd, excludeGoalIds }));
   assert.deepEqual(review.excludeGoalIds, excludeGoalIds); assert.equal(review.excludedGoals.length, 1); assert.equal(review.totals.goals, 1);
@@ -257,7 +257,7 @@ test('private saved goals require explicit pinned exclusion and never appear in 
   assert.ok(!archive.includes(privateGoal.id)); assert.ok(!archive.includes('/Users/private-owner')); assert.ok(!archive.includes(safe.id));
   const goalIndex = review.entries.findIndex(row => row.kind === 'goal');
   assert.ok(readDefinitionBundleFile(review, { cwd, entryIndex: goalIndex, file: 'definition.json' }).text.includes('A safe reusable objective'));
-  const safeExcluded = remember(previewLibraryExport({ cwd, excludeGoalIds: [...excludeGoalIds, `${safe.id}:${safe.goal.id}`] }));
+  const safeExcluded = remember(previewLibraryExport({ cwd, excludeGoalIds: [...excludeGoalIds, safe.templateId] }));
   assert.notEqual(review.sourceDigest, safeExcluded.sourceDigest);
   assert.throws(() => buildLibraryArchive(output(), { cwd, expectedDigest: review.sourceDigest, excludeGoalIds: safeExcluded.excludeGoalIds }), { code: 'STALE_REVIEW' });
   assert.throws(() => previewLibraryExport({ cwd, excludeGoalIds: ['invalid-reference'] }), /bounded list/);
@@ -299,4 +299,16 @@ test('resource path metadata cannot carry private account identifiers in source 
     assert.throws(() => previewLibraryImport(changed, { cwd: target }), /private|account|credential/);
   }
   assert.equal(listRecords('core.skill').length, 0); assert.equal(listRecords('core.library.import').length, 0);
+});
+
+
+test('executed objectives alone do not suppress a separately imported saved-goal template', () => {
+  goal('An objective explicitly shared by its owner'); const { file } = bundle(), target = recipient();
+  const session = createSession(provider, target, 'offline-model');
+  session.goal = { ...newGoal('An objective explicitly shared by its owner'), status: 'complete' }; saveSession(session);
+  assert.equal(listSavedGoals().total, 0);
+  const imported = importLibraryBundle(remember(previewLibraryImport(file, { cwd: target })), { cwd: target });
+  assert.equal(imported.goals.length, 1); assert.equal(listSavedGoals().total, 1);
+  assert.equal(listRecords('execution').length, 0);
+  assert.equal(getRecord('session', session.id).goal.id, session.goal.id);
 });

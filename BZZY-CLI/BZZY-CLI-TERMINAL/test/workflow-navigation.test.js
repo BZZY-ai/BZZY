@@ -40,12 +40,14 @@ function clickBack() {
 }
 function assertDraft() { assert.equal(ui.tui.value, 'Retain the unsent chat draft'); assert.equal(ui.tui.cursor, 7); }
 
-test('both workflow aliases are discoverable and all workflow administration stays out of chat command history', { timeout: 5000 }, async () => {
+test('the singular workflow command is discoverable and all workflow administration stays out of chat command history', { timeout: 5000 }, async () => {
   const suggestions = commandSuggestions('/workfl');
-  for (const name of ['/workflows', '/workflow']) {
+  for (const name of ['/workflow']) {
     assert.ok(suggestions.some(row => row.command === name));
     assert.equal(privateChatCommand(name), true); assert.equal(privateChatCommand(name + ' load private-location.txt'), true);
   }
+  assert.equal(commandSuggestions('/workflows').length, 0);
+  assert.equal(privateChatCommand('/workflows'), false);
   assert.equal(privateChatCommand('/workflow-example'), false); assert.match(chatHelp, /future goals/);
   const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.finish('/workflow load private-location.txt');
   assert.equal(ui.tui.history.length, 0); return answer;
@@ -77,7 +79,7 @@ test('the selected workflow name stays visible and clickable in ordinary chat, i
   for (const minimal of [false, true]) {
     ui.minimal = minimal; ui.tui.render(); assert.match(frame(), /Workflow: response-process/);
     const hit = ui.tui.hitTargets.find(item => item.type === 'workflow-open'); assert.ok(hit);
-    ui.tui.mouse(0, hit.left, hit.row); assert.equal(dispatched.shift(), '/workflows'); assertDraft();
+    ui.tui.mouse(0, hit.left, hit.row); assert.equal(dispatched.shift(), '/workflow'); assertDraft();
   }
   openWorkflows(ui); await workflowAction(actions().find(action => action.startsWith('none:')), ui);
   ui.tui.setPanel('chat'); ui.tui.render(); assert.doesNotMatch(frame(), /Workflow: response-process/); assertDraft();
@@ -89,9 +91,9 @@ test('mouse and keyboard activate only workflow actions while arrows retain the 
   const dispatched = []; ui.tui.localCommand = command => dispatched.push(command);
   const rows = actions(), start = ui.tui.workflowFocus || 0;
   ui.tui.key('', { name: 'down' }); assert.equal(ui.tui.workflowFocus, (start + 1) % rows.length);
-  ui.tui.key('', { name: 'return' }); assert.equal(dispatched.shift(), '/workflows ' + rows[ui.tui.workflowFocus]);
+  ui.tui.key('', { name: 'return' }); assert.equal(dispatched.shift(), '/workflow ' + rows[ui.tui.workflowFocus]);
   ui.tui.render(); const hit = ui.tui.hitTargets.find(item => item.type === 'workflow-action' && item.action.startsWith('view:'));
-  assert.ok(hit); ui.tui.mouse(0, hit.left, hit.row); assert.equal(dispatched.shift(), '/workflows ' + hit.action);
+  assert.ok(hit); ui.tui.mouse(0, hit.left, hit.row); assert.equal(dispatched.shift(), '/workflow ' + hit.action);
   ui.tui.key('x', { name: 'x' }); assertDraft(); assert.equal(ui.tui.inputQueue.length, 0);
 });
 

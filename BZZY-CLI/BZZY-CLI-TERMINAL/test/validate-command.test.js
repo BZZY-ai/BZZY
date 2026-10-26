@@ -149,7 +149,7 @@ def started():
     linked = links()
     return linked and db.execute("SELECT 1 FROM records WHERE kind='execution' AND json_extract(data,'$.sessionId')=? LIMIT 1", (linked[-1]['sessionId'],)).fetchone()
 try:
-    until(lambda: 'fixture-validate-command' in visible() and ('Read-only session' in visible() or 'Ask BZZY to do anything' in visible()))
+    until(lambda: 'fixture-validate-command' in visible() and any(label in visible() for label in ('Read-only session', 'Ask BZZY to do anything', 'Send a message to continue here')))
     os.write(master, b'/validate\r')
     if sys.argv[5] == 'started':
         until(started)

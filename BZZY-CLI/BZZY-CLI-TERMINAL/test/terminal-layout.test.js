@@ -18,14 +18,20 @@ test('terminal chat retains branding, menus, history and composer across compact
   const screen = terminal(), { ui, output } = screen;
   try {
     ui.event('message.user', { text: 'Original user request' }); ui.event('text', { text: 'Preserved assistant answer.' });
-    for (const [columns, rows] of [[150, 42], [100, 32], [72, 24]]) {
+    for (const [columns, rows] of [[150, 42], [100, 32], [72, 24], [60, 24], [40, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.value = 'Keep this unsent draft'; ui.tui.cursor = 9; ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /bzzy/); assert.match(frame, /terminal-fixture/);
+      assert.match(frame, /bzzy/);
+      if (columns >= 72) assert.match(frame, /terminal-fixture/);
       assert.match(frame, /Original user request/); assert.match(frame, /Preserved assistant answer/); assert.match(frame, /Keep this unsent draft/);
-      for (const type of ['top-sessions', 'top-skills', 'top-agents', 'top-settings', 'model-control', 'confirm']) {
+      for (const type of ['top-sessions', 'top-skills', 'top-agents', 'top-workflows', 'top-goals', 'top-settings', 'model-control', 'confirm']) {
         assert.ok(ui.tui.hitTargets.some(hit => hit.type === type), `${type} remains accessible at ${columns} columns`);
       }
+      const dispatched = [], originalDispatch = ui.tui.localCommand;
+      ui.tui.localCommand = command => dispatched.push(command);
+      for (const type of ['top-workflows', 'top-goals']) { const hit = ui.tui.hitTargets.find(row => row.type === type); ui.tui.mouse(0, hit.left, hit.row); }
+      ui.tui.localCommand = originalDispatch;
+      assert.deepEqual(dispatched, ['/workflow library', '/saved-goals']);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
       assert.doesNotMatch(frame, /Right-click \/ F10|Esc returns to the canvas|Connect models/);
     }

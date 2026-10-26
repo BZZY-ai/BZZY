@@ -317,7 +317,8 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       ui.tui.render();
       const chat = ui.tui.lastFrame.map(clean);
       assert.doesNotMatch(chat[0], /bzzy|◉◉/);
-      assert.match(chat[0], /(?:Open Sessions|Sessions).*(?:\+ New Session|\+ New).*CPU\s*12%.*4\.0\/16(?: GB|G).*Skills.*Metrics.*⚙ Settings/);
+      assert.match(chat[0], /(?:Open Sessions|Sessions).*(?:\+ New Session|\+ New).*Skills.*Agents.*Workflows.*Goals.*Metrics.*⚙ Settings/);
+      assert.match(chat.slice(0, 2).join(' '), /CPU\s*12%.*4\.0\/16(?: GB|G)/);
       assert.match(chat.join('\n'), /chosen-model.*effort high/);
       assert.match(chat.join('\n'), /1,234 tokens.*\d{2}:\d{2}:\d{2}/);
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-sessions'));

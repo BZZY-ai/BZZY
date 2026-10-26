@@ -349,6 +349,7 @@ for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-
   const { saveWorkflow } = await import('../src/engine/workflows.js');
   const { createSession, saveSession } = await import('../src/engine/store.js');
   const { newGoal } = await import('../src/engine/goals.js');
+  const { saveGoalTemplate } = await import('../src/engine/goal-templates.js');
   const { BUILTINS } = await import('../src/engine/providers.js');
   const { previewLibraryExport, discardDefinitionBundleReview } = await import('../src/engine/definition-bundle.js');
   const { runtimeInfo, runtimeRequest } = await import('../src/engine/runtime.js');
@@ -362,6 +363,7 @@ for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-
   saveWorkflow({ name: 'response-workflow', description: 'Structured response review', instructions: 'Read the stated objective and inspect supplied response evidence.' }, { cwd: f.source, scope: 'project' });
   const session = createSession(BUILTINS.codex, f.source, 'source-model');
   session.goal = { ...newGoal('Review synthetic HTTP responses'), status: 'complete', evidence: ['old-source-only-evidence'] }; saveSession(session);
+  saveGoalTemplate({ objective: session.goal.objective });
   const review = previewLibraryExport({ cwd: f.source });
   const gateway = new RelayGateway({ identity: f.identity, url: f.relay.audience, allowInsecureLocal: true, autoReconnect: false });
   let child;

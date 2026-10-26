@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createSession, saveSession, loadSession } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
 import { prepareTask } from '../src/task.js';
+import { saveGoalTemplate, listGoalTemplates } from '@bzzy/core/engine/goal-templates.js';
 import { newGoal } from '../src/goals.js';
 import { listRecords } from '../src/database.js';
 import { runtimeInfo, runtimeRequest } from '../src/runtime.js';
@@ -46,6 +47,7 @@ function terminal(name, objective) {
     session.contract.constraints.push('SOURCE_ONLY_CONSTRAINT');
     session.acceptance = { passed: true, sourceOnly: true }; saveSession(session);
   }
+  if (objective && name === 'source') session.templateId = 'template:' + saveGoalTemplate({ objective }).id;
   return session;
 }
 
@@ -107,8 +109,8 @@ test('a saved multiline objective creates a fresh goal with this terminal model 
   selectWorkflow(target.id, workflow.name, { expectedRevision: 0, expectedWorkflowRevision: workflow.revision });
   const ui = scriptedUI(['/goal', () => waitForNewGoal(target)], (title, content) => {
     assert.equal(title, 'Saved goals');
-    const choice = content.choices.find(row => row.value === `${source.id}:${source.goal.id}`);
-    assert.ok(choice, 'The saved objective must be offered by source identity.'); return choice.value;
+    const choice = content.choices.find(row => row.value === source.templateId);
+    assert.ok(choice, 'The saved objective must be offered by template identity.'); return choice.value;
   });
   assert.equal(await attachSession(target, {}, ui), 0);
   assert.ok(!ui.seen.some(item => item.type === 'error'), JSON.stringify(ui.seen.filter(item => item.type === 'error')));
@@ -127,7 +129,7 @@ for (const objective of ['status', 'resume']) {
   test(`a saved objective literally named ${objective} starts a new goal instead of invoking a goal control`, { timeout: 25000 }, async () => {
     const source = terminal('source', objective), target = terminal('destination');
     const ui = scriptedUI(['/goal', () => waitForNewGoal(target)], (title, content) => {
-      assert.equal(title, 'Saved goals'); return content.choices.find(row => row.value === `${source.id}:${source.goal.id}`).value;
+      assert.equal(title, 'Saved goals'); return content.choices.find(row => row.value === source.templateId).value;
     });
     assert.equal(await attachSession(target, {}, ui), 0);
     assert.ok(!ui.seen.some(item => item.type === 'error'), JSON.stringify(ui.seen.filter(item => item.type === 'error')));
@@ -142,7 +144,7 @@ test('choosing a saved objective retains the existing default-No replacement con
   const source = terminal('source', 'A reusable saved objective'), target = terminal('destination', 'Keep this paused objective');
   Object.assign(target.goal, { status: 'paused', reason: 'user_pause' }); target.executionState = 'paused'; saveSession(target);
   const before = structuredClone(target.goal), ui = scriptedUI(['/goal', '/exit'], (title, content) => {
-    if (title === 'Saved goals') return content.choices.find(row => row.value === `${source.id}:${source.goal.id}`).value;
+    if (title === 'Saved goals') return content.choices.find(row => row.value === source.templateId).value;
     assert.equal(title, 'Replace current goal?'); assert.equal(content.choices[0].selected, true); return 'no';
   });
   assert.equal(await attachSession(target, {}, ui), 0);
@@ -152,9 +154,20 @@ test('choosing a saved objective retains the existing default-No replacement con
 
 test('a read-only session view cannot execute a selected saved goal', { timeout: 15000 }, async () => {
   const source = terminal('source', 'Read-only selection must not execute'), target = terminal('destination');
-  const ui = scriptedUI(['/goal', '/exit'], (_title, content) => content.choices.find(row => row.value === `${source.id}:${source.goal.id}`).value);
+  const ui = scriptedUI(['/goal', '/exit'], (_title, content) => content.choices.find(row => row.value === source.templateId).value);
   assert.equal(await viewSession(target, { follow: true }, ui), 0);
   assert.equal(loadSession(target.id).goal, null); assert.equal(listRecords('execution').length, 0);
   assert.ok(ui.seen.some(item => /read-only|opened read-only|observation only/i.test(item.message || '')));
   assert.equal(fs.existsSync(path.join(directory, 'backend.jsonl')), false);
+});
+
+
+test('/goal objective executes the text without saving a reusable Library entry', { timeout: 25000 }, async () => {
+  const target = terminal('manual-only'), ui = scriptedUI(['/goal Inspect this supplied fixture', () => waitForNewGoal(target)]);
+  assert.equal(await attachSession(target, {}, ui), 0);
+  assert.equal(loadSession(target.id).goal.objective, 'Inspect this supplied fixture');
+  assert.equal(loadSession(target.id).goal.status, 'complete');
+  assert.equal(listRecords('execution', { sessionId: target.id }).length, 1);
+  assert.equal(listGoalTemplates().total, 0);
+  assert.equal(ui.menus.length, 0);
 });

@@ -1,5 +1,5 @@
 import { home, loadSession } from '@bzzy/core/engine/store.js';
-import { listSavedGoals, getSavedGoal } from '@bzzy/core/engine/saved-goals.js';
+import { listGoalTemplates as listSavedGoals, getSavedGoalTemplate as getSavedGoal, saveGoalTemplate } from '@bzzy/core/engine/goal-templates.js';
 import { transferLibraryTab } from './library-ui.js';
 
 const pageSize = 20;
@@ -36,7 +36,7 @@ export async function chooseSavedGoal(ui, { sessionId = ui.activeTab || ui.sessi
     }
     const entries = new Map(page.goals.map(goal => [goal.id, goal]));
     const pageLabel = page.goals.length ? `Saved goals ${offset + 1}–${offset + page.goals.length} of ${page.total}`
-      : 'No saved goals yet. Import a code or start one with /goal <objective>; Core keeps it for reuse.';
+      : 'No saved goals yet. Save one manually in the Goals tab or import a code.';
     const selected = await ui.chooseOne('Saved goals', {
       description: `${pageLabel}\nChoose an objective to start a NEW goal in this terminal. Its current model, workflow and permissions apply.`,
       descriptionRows: 6,
@@ -67,4 +67,51 @@ export async function chooseSavedGoal(ui, { sessionId = ui.activeTab || ui.sessi
     }
     return current;
   }
+}
+
+export function openGoals(ui) {
+  ui.openTerminal?.(); ui.goalPreview = null; ui.goalOffset = 0; ui.tui?.setPanel('goals'); return true;
+}
+export function goalRows(ui) {
+  try {
+    if (ui.goalPreview) return [{ text: '← Back to goals', action: 'back' }, { text: 'SAVED GOAL', tone: 'accent' }, { text: ui.goalPreview.objective }];
+    const page = listSavedGoals({ offset: ui.goalOffset || 0, limit: pageSize });
+    ui.goalEntries = new Map(page.goals.map(goal => [goal.id, goal]));
+    return [{ text: '← Back to chat', action: 'close' }, { text: 'GOALS · manually saved objectives', tone: 'accent' },
+      { text: 'Running /goal does not add to this library. Use /goal without text to choose a saved objective.', tone: 'muted' },
+      { text: 'Save new goal', action: 'save' },
+      ...(ui.sessionId && loadSession(ui.sessionId)?.goal ? [{ text: 'Save current goal', action: 'save-current' }] : []),
+      { text: 'Import', action: 'import' }, { text: 'Export', action: 'export', disabled: !page.total },
+      ...page.goals.map(goal => ({ text: goal.objective.replace(/\s+/gu, ' ').trim(), action: 'view:' + goal.id })),
+      ...(!page.total ? [{ text: 'No manually saved goals yet.', tone: 'muted' }] : []),
+      ...(ui.goalOffset ? [{ text: '← Newer goals', action: 'previous' }] : []),
+      ...(page.nextOffset != null ? [{ text: 'Older goals →', action: 'next' }] : [])];
+  } catch (error) {
+    ui.goalEntries = new Map();
+    return [{ text: '← Back to chat', action: 'close' }, { text: error.message, tone: 'warning' }];
+  }
+}
+export async function goalAction(action, ui, { transfer = transferLibraryTab } = {}) {
+  const sourceHome = home();
+  const context = () => JSON.stringify([home(), ui.sessionId, ui.activeTab, ui.nextSession?.id, ui.sessionId && loadSession(ui.sessionId)?.cwd || ui.tui?.cwd]);
+  const before = context();
+  const check = () => { if (home() !== sourceHome || ui.closed || ui.coreLifecycleInterrupted || before !== context()) throw unavailable(); };
+  try {
+    if (action === 'close') ui.tui?.setPanel('chat');
+    else if (action === 'back') ui.goalPreview = null;
+    else if (['save', 'save-current'].includes(action)) {
+      const initialValue = action === 'save-current' ? loadSession(ui.sessionId)?.goal?.objective || '' : '';
+      const objective = await ui.ask('Save goal · objective text · Esc cancels', { initialValue }); check();
+      if (objective?.trim()) { saveGoalTemplate({ objective }); ui.goalPreview = null; ui.event('info', { message: 'Goal saved to Library. No goal was started.' }); }
+    } else if (action === 'import' || action === 'export') {
+      await transfer(action, 'goal', ui.sessionId && loadSession(ui.sessionId)?.cwd || ui.tui?.cwd || process.cwd(), ui); check();
+    } else if (action === 'next' || action === 'previous') ui.goalOffset = Math.max(0, (ui.goalOffset || 0) + (action === 'next' ? pageSize : -pageSize));
+    else if (action.startsWith('view:')) {
+      const shown = ui.goalEntries?.get(action.slice(5));
+      if (!shown) throw unavailable();
+      ui.goalPreview = getSavedGoal(shown.id, { revision: shown.revision });
+    } else throw new Error('Choose an action from Goals.');
+  } catch (error) { ui.event('error', { message: error.message }); }
+  finally { if (ui.tui) { ui.tui.bodyCache = null; ui.tui.scroll = 0; ui.tui.goalFocus = 0; ui.tui.goalTopRequested = true; ui.tui.goalEnsureFocus = true; ui.tui.schedule(); } }
+  return true;
 }

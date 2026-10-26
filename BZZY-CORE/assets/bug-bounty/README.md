@@ -35,7 +35,7 @@ validation badge. The supervisor preserves the exact admitted criteria as
 evidence for later review instead of substituting a newer Library definition.
 
 Import `bug-bounty-methodology.md` as a global workflow named
-`bug-bounty-methodology`. Select it through `/workflows` before submitting a new
+`bug-bounty-methodology`. Select it through `/workflow` before submitting a new
 `/goal`; existing goals retain their original pinned workflow. The coordinator
 routes bounded hypotheses to matching enabled specialists and reviews their
 actual evidence. Independent work may run concurrently within Core's limits;

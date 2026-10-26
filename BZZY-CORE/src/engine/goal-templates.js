@@ -1,7 +1,7 @@
 import { database, transaction, getRecord, putRecord, digest, now } from './database.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 
-// Imported reusable objectives are private owner data, never historical goal
+// Explicitly saved/imported reusable objectives are private owner data, never historical goal
 // outcomes or executable sessions. Selecting one still needs new-goal admission.
 export const GOAL_TEMPLATE_KIND = 'core.goal.template';
 export const GOAL_TEMPLATE_BYTES = 16 * 1024;
@@ -41,7 +41,32 @@ export function getGoalTemplate(id) {
 export function goalTemplateEntry(record) {
   return { id: `template:${record.id}`, revision: digest({ id: record.id, objective: record.objective,
     createdAt: record.createdAt, revision: record.revision }), goalId: null, sessionId: null, cwd: null,
-    alias: 'Imported goal', createdAt: record.createdAt, objective: record.objective, status: null, source: 'template' };
+    alias: 'Saved goal', createdAt: record.createdAt, objective: record.objective, status: null, source: 'template' };
+}
+
+// Library reads intentionally exclude execution and goal-history records.
+export function listGoalTemplates(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['offset', 'limit'].includes(key))) fail('Choose a saved-goal page using offset and limit.', 'INVALID_REQUEST');
+  const { offset = 0, limit = 20 } = options;
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('Saved-goal offset must be nonnegative and limit must be 1–100.', 'INVALID_REQUEST');
+  const read = db => {
+    const filter = "kind=? AND json_extract(data,'$.deletedAt') IS NULL";
+    const { total } = db.prepare(`SELECT count(*) AS total FROM records WHERE ${filter}`).get(GOAL_TEMPLATE_KIND);
+    const goals = db.prepare(`SELECT id FROM records WHERE ${filter} ORDER BY json_extract(data,'$.createdAt') DESC,id LIMIT ? OFFSET ?`).all(GOAL_TEMPLATE_KIND, limit, offset).map(row => goalTemplateEntry(getGoalTemplate(row.id)));
+    return { goals, total, nextOffset: offset + goals.length < total ? offset + goals.length : null };
+  };
+  return database().isTransaction ? read(database()) : transaction(read, { readOnly: true });
+}
+export function getSavedGoalTemplate(id, options = {}) {
+  if (typeof id !== 'string' || !/^template:[a-f0-9]{64}$/.test(id) || !options || typeof options !== 'object' || Array.isArray(options) ||
+      Object.keys(options).some(key => key !== 'revision') || options.revision !== undefined && (typeof options.revision !== 'string' || !/^[a-f0-9]{64}$/.test(options.revision))) fail('Choose a saved goal from the current list.', 'INVALID_REQUEST');
+  const goal = goalTemplateEntry(getGoalTemplate(id.slice(9)));
+  if (options.revision !== undefined && options.revision !== goal.revision) fail('This saved goal changed. Reopen /goal.', 'CONFLICT');
+  return goal;
+}
+export function hasGoalTemplateObjective(objective) {
+  const id = digest(normalizedText({ objective })), record = getRecord(GOAL_TEMPLATE_KIND, id);
+  return record && !record.deletedAt ? Boolean(getGoalTemplate(id)) : false;
 }
 
 export function saveGoalTemplate(input) {

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { openWorkflows, workflowRows, workflowAction, workflowChatLabel } from '../src/workflow-ui.js';
+import { chooseWorkflow, openWorkflows, workflowRows, workflowAction, workflowChatLabel } from '../src/workflow-ui.js';
 import { createChatSession } from '@bzzy/core/engine/host-commands.js';
 import { getProvider } from '@bzzy/core/engine/providers.js';
 import { loadSession, saveSession } from '@bzzy/core/engine/store.js';
@@ -165,4 +165,38 @@ test('workflow Import and Export reuse typed Relay transfer and preserve workflo
   assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('run').length, 0);
   await workflowAction('import', ui, { transfer: async () => { ui.activeTab = randomUUID(); } });
   assert.ok(notices.some(row => row.type === 'error' && /changed/.test(row.message)));
+});
+
+
+test('quick workflow dropdown selects one definition, cancels unchanged and clears with None without executing work', async () => {
+  const workflow = saveWorkflow(definition(), { cwd: directory });
+  ui.chooseOne = async (title, menu, options) => {
+    assert.equal(title, 'Workflow'); assert.equal(options.presentation, 'dropdown');
+    assert.equal(menu.choices[0].value, 'none'); return workflow.id;
+  };
+  await chooseWorkflow(ui); assert.equal(workflowSelection(session.id).selected.id, workflow.id);
+  ui.chooseOne = async () => null; const before = workflowSelection(session.id);
+  await chooseWorkflow(ui); assert.deepEqual(workflowSelection(session.id), before);
+  ui.chooseOne = async () => 'none'; await chooseWorkflow(ui);
+  assert.equal(workflowSelection(session.id).selected, null);
+  ui.sessionId = null; await chooseWorkflow(ui); assert.equal(listRecords('session').length, 1);
+  assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('run').length, 0);
+  assert.equal(ui.tui.value, 'Retain this draft');
+});
+
+test('quick workflow choices reject changed definitions, concurrent selection and interrupted terminal contexts', async () => {
+  const first = saveWorkflow(definition(), { cwd: directory }), second = saveWorkflow(definition('other-process'), { cwd: directory });
+  ui.chooseOne = async () => {
+    saveWorkflow(definition(first.name, 'Revised supplied controls.'), { cwd: directory, expectedRevision: first.revision }); return first.id;
+  };
+  await assert.rejects(chooseWorkflow(ui), /changed/);
+  ui.chooseOne = async () => { selectWorkflow(session.id, second.name, { expectedRevision: 0 }); return first.id; };
+  await assert.rejects(chooseWorkflow(ui), /changed|revision/i);
+  assert.equal(workflowSelection(session.id).selected.id, second.id);
+  for (const mutate of [() => { ui.activeTab = randomUUID(); }, () => { ui.coreLifecycleInterrupted = true; }, () => { ui.closed = true; }, () => { ui.nextSession = { id: randomUUID() }; }]) {
+    delete ui.activeTab; delete ui.coreLifecycleInterrupted; delete ui.closed; delete ui.nextSession;
+    ui.chooseOne = async () => { mutate(); return first.id; };
+    await assert.rejects(chooseWorkflow(ui), /changed/);
+  }
+  assert.equal(listRecords('execution').length, 0);
 });
