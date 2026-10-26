@@ -1,7 +1,8 @@
 # Reusable specialist subagents
 
 Specialist definitions belong to Core. CLI **Agents** in the top bar (or
-`/agents`) opens the library, definition editor and this conversation's invocation
+`/agents`) opens the library and definition editor, with plain Import and Export
+actions for specialists only. `/agents runs` opens this conversation's invocation
 history. These are reusable worker definitions, separate from persistent iPhone
 Agents. Manual editing, inspecting or choosing **Use in chat** starts no model
 work; Use in chat fills an editable draft.
@@ -33,10 +34,10 @@ the same portability policy used by sharing, and publishes it ON without startin
 an assignment. It inherits the invoking model and can immediately be discovered
 and shared through Library. Creation cannot replace an existing name or override
 a local definition; cancellation or changed host/chat/project/model prevents saving.
-The model-assisted menu creator also uses this guide and retains its draft preview.
+Creation stays in this command, outside the library tab's Import/Export controls.
 
-In **Agents**, create `http-response-analyzer`, give it a description and
-instructions such as:
+Use `/create-agent` to describe a specialist, then name it
+`http-response-analyzer`. Its requirements might be:
 
 > Inspect the supplied HTTP evidence. Distinguish observed behavior from hypotheses.
 > Identify authorization and input-handling questions worth checking. Return evidence

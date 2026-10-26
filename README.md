@@ -36,9 +36,9 @@ existing goals retain their original workflow across resume and model changes.
 [Session history memory](BZZY-CORE/docs/SESSION-MEMORY.md) adds a bounded index of
 each terminal's own conversation across model and mode changes. Its background
 compactor shares one configurable model with validation consensus, inheriting the
-BZZY Core model by default. Skills and Agents libraries also
-offer creators that draft definitions with the terminal's current model for
-review before saving.
+BZZY Core model by default. `/create-skill` and `/create-agent` use the terminal's
+current model and publish validated global definitions enabled for use. The
+Skills and Agents tabs keep plain Import and Export actions beside their libraries.
 
 Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALIDATION.md)
 after `/validate` checks the original requirements and recorded evidence. The

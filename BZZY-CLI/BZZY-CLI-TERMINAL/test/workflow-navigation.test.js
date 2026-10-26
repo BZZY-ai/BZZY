@@ -98,7 +98,7 @@ test('mouse and keyboard activate only workflow actions while arrows retain the 
 test('Skills and Agents open the workflow library and Back returns to the originating library before chat', async () => {
   for (const [name, command, rows] of [['skills', skillsCommand, skillRows], ['agents', subagentsCommand, subagentRows]]) {
     await command('/' + name, ui);
-    assert.ok(rows(ui).some(row => row.action === 'workflows' && /Workflows/.test(row.text)));
+    assert.ok(!rows(ui).some(row => row.action === 'workflows'));
     await command('/' + name + ' workflows', ui); assert.equal(ui.tui.panel, 'workflows');
     clickBack(); await Promise.resolve(); assert.equal(ui.tui.panel, name); assertDraft();
     ui.tui.setPanel('chat');

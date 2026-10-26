@@ -1,3 +1,23 @@
+# Simple Skills/Agents tabs and type-specific ZIPs (2026-10-25)
+
+Node.js 24/macOS full suites: **734 Core tests passed, 2 skipped** (736 total)
+and **697 CLI tests passed, 21 skipped** (718 total), zero failures. Both syntax
+checks pass. The final library/navigation changes were rechecked with **57 tests
+passed**, including reopening Skills after a Codex-import view. Whitespace checks
+pass. Tests use private temporary homes on the internal disk; no running product
+installation, private Library entry, model or Relay invitation was changed.
+
+Skills and Agents show plain Import/Export controls and their Library entries.
+Workflow, creator, manual-create and Relay shortcuts are hidden from those tabs;
+creation uses `/create-skill` and `/create-agent`. Existing command routes remain
+compatible. Type-specific export inventories omit the other resource type and
+retain that selection through filename changes and source revalidation. Selected
+imports validate the complete ZIP before installing only the reviewed type.
+Tests cover actual Core export/import, resources/scopes, mixed-file compatibility,
+wrong-type/empty selection, malformed selectors, tampered review kinds, corrupt
+unselected resources and old backends ignoring the requested type. No scripts,
+models or agents execute during these operations.
+
 # Native Core creators and portable skill repairs (2026-10-25)
 
 Final Node.js 24/macOS suites: **732 Core tests passed, 2 skipped** (734 total)

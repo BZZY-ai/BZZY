@@ -57,7 +57,7 @@ test('Skill Creator is accessible, reviews the selected-model draft and saves on
   try {
     ui.tui.value = 'unsent chat draft'; ui.tui.cursor = 5;
     await skillsCommand('/skills', ui);
-    assert.ok(skillRows(ui).some(row => row.action === 'creator'));
+    assert.ok(!skillRows(ui).some(row => row.action === 'creator'));
     answerForm(ui);
     await skillsCommand('/skills creator', ui, { generateDefinition: generate });
     const rows = skillRows(ui);
@@ -130,7 +130,7 @@ test('Skills creator prompts render their question and Escape restores the libra
     ui.tui.render(); const frame = clean(ui.tui.lastFrame.join('\n'));
     assert.match(frame, /Skill Creator.*name/); assert.match(frame, /Confirm/);
     ui.tui.key('', { name: 'escape' }); await pending;
-    assert.equal(ui.tui.panel, 'skills'); assert.ok(skillRows(ui).some(row => row.action === 'creator'));
+    assert.equal(ui.tui.panel, 'skills'); assert.ok(!skillRows(ui).some(row => row.action === 'creator'));
   } finally { ui.close(); }
 });
 

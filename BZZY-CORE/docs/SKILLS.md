@@ -23,16 +23,16 @@ the checked skill globally and enables it atomically; it is immediately availabl
 through `list_skills`/`read_skill` and Library sharing. It does not execute the
 skill. Existing names are never replaced. Escape, changed host/project/session
 or model selection, invalid output and portability failures prevent publication.
-The menu creator below retains its draft/review/Save flow.
+The Skills tab keeps plain Import and Export controls; creation uses this command.
 
-In CLI, open **Skills** or type `/skills`. Import one skill directory or a ZIP
-containing one skill directory, or create a skill by entering its name,
-description and instructions. To copy existing Codex workflows, choose **Sync
-Codex skills**, type `/skills sync`, or run `bzzy skills sync` from your project
+In CLI, open **Skills** or type `/skills`. **Import** reads a definition ZIP and
+installs only its skills; **Export** packages only skills. `/skills import` also
+accepts one skill directory or a ZIP containing one skill directory. To copy
+existing Codex workflows, type `/skills sync` or run `bzzy skills sync` from your project
 directory (`--cwd DIR` selects another project). Sync is local and one-way; it
 does not require Codex login or start inference. Imports and newly created skills
-start disabled. New CLI imports/creation default to the current project, with an
-explicit global option. Legacy host-global packages that contain raw evidence or
+start disabled. Single-folder imports default to the current project; definition
+ZIPs preserve explicit project/global scope. Legacy host-global packages that contain raw evidence or
 run records require scope review before they are exposed to models.
 Open a skill to read its instructions and text resources, then explicitly enable
 it for all models. Disabling takes effect on subsequent Core reads and the next
@@ -94,9 +94,11 @@ one SQLite transaction. These administration APIs are not model tools.
 
 ## Skills and agents ZIP
 
-The CLI Skills and Agents libraries can also export/import one combined,
-versioned definition ZIP. The archive contains the current project's and global
-portable skill packages and reusable specialist definitions, with an exact
+The CLI Skills and Agents libraries export/import versioned definition ZIPs.
+Each tab exports its own type and imports only that type, including from older
+combined archives. The entire archive is validated before the selected entries
+can be installed. Archives contain the current project's and global
+portable definitions, with an exact
 file/hash manifest for review. It contains no sessions, accounts, runtime state
 or execution history. Private case/evidence packages and unsafe files are
 blocked. Export writes a new file in the selected terminal's original directory

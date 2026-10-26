@@ -379,7 +379,7 @@ export function skillRows(ui) {
   };
   if (ui.skillView === 'import') {
     const shown = ui.tui?.value || ui.skillImportDraft || ui.skillImportDirectory;
-    const rows = [tabs, { text: 'Workflows / pre-prompts', action: 'workflows', tone: 'accent' }, { text: '' }, { text: 'CODEX SKILLS DIRECTORY', tone: 'accent' },
+    const rows = [tabs, { text: '' }, { text: 'CODEX SKILLS DIRECTORY', tone: 'accent' },
       { text: '  ' + (shown || 'Type or paste a directory below'), tone: 'text' },
       { text: '  [ Save directory ]    [ Refresh ]', segments: [
         { text: '  [ Save directory ]', tone: 'accent', action: 'save-directory' },
@@ -398,9 +398,8 @@ export function skillRows(ui) {
     return rows;
   }
   const page = listSkills({ ...currentContext(ui), offset: ui.skillOffset || 0, limit: 30 });
-  const rows = [tabs, { text: 'Click ON/OFF · ↑/↓ or Tab select · Space toggles · Enter opens', tone: 'muted' },
-    { text: 'Workflows / pre-prompts', action: 'workflows', tone: 'accent' }, { text: '' }, { text: 'Skill Creator · use current model', action: 'creator', tone: 'accent' },
-    { text: 'Create skill manually', action: 'create' }, ...bundleLibraryRows(), { text: '' }];
+  const rows = [{ text: 'SKILLS', tone: 'accent' }, ...bundleLibraryRows(), { text: '' },
+    { text: 'Click ON/OFF · ↑/↓ or Tab select · Space toggles · Enter opens', tone: 'muted' }];
   const projectSkills = page.skills.filter(skill => skill.scope === 'project');
   const globalSkills = page.skills.filter(skill => skill.scope !== 'project');
   ui.skillLibraryContext = contextKey(ui);
@@ -419,8 +418,6 @@ export function skillRows(ui) {
   else rows.push({ text: '  No Core/global skills installed.', tone: 'muted' });
   if (ui.skillSyncResult) {
     rows.push({ text: '' }, { text: '  ' + skillSyncSummary(ui.skillSyncResult), tone: 'muted' });
-    if (ui.skillSyncResult.conflicts || ui.skillSyncResult.rejected || ui.skillSyncResult.unavailable)
-      rows.push({ text: '  View import details', action: 'sync-details', tone: 'accent' });
   }
   if (ui.skillOffset) rows.push({ text: 'Previous page', action: 'previous' });
   if (page.nextOffset != null) rows.push({ text: 'Next page', action: 'next' });
@@ -440,11 +437,11 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
   try {
     if (action === 'workflows') await openWorkflows(ui, { origin: 'skills' });
     else if (action.startsWith('bundle-')) {
-      if (['bundle-export', 'bundle-import'].includes(action)) { resetViews(ui); setSkillView(ui, 'library'); }
+      if (['bundle-export', 'bundle-import', 'bundle-export-type', 'bundle-import-type'].includes(action)) { resetViews(ui); setSkillView(ui, 'library'); }
       await definitionBundleAction(action, ui, 'skills', { api: bundleApi });
     }
     else if (action.startsWith('knowledge:')) await knowledgeAction(action.slice(10), ui);
-    else if (!action) resetViews(ui);
+    else if (!action) { resetViews(ui); setSkillView(ui, 'library'); }
     else if (action === 'library') returnToSkillLibrary(ui);
     else if (action === 'creator') { resetViews(ui); setSkillView(ui, 'library'); await startCreator(ui, 'skill', { generate: generateDefinition }); }
     else if (action === 'creator-cancel') ui.cancelDefinitionAuthoring?.();

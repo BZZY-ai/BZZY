@@ -83,8 +83,8 @@ function writeFile(directory, relative, data) {
   const target = path.join(directory, relative); privateDir(path.dirname(target));
   fs.writeFileSync(target, data, { mode: 0o600, flag: 'wx' });
 }
-function outputAt(context, requested) {
-  const value = requested || `bzzy-definitions-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.zip`;
+function outputAt(context, requested, label = 'definitions') {
+  const value = requested || `bzzy-${label}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.zip`;
   const outputPath = path.resolve(context.cwd, value), basename = path.basename(outputPath);
   if (path.dirname(outputPath) !== context.cwd || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}\.zip$/i.test(basename)) fail('Export a ZIP filename directly in the current project directory.');
   if (fs.existsSync(outputPath) || (() => { try { fs.lstatSync(outputPath); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } })()) fail('That export destination already exists. Choose another ZIP filename.', 'CONFLICT');
@@ -256,8 +256,14 @@ process.once('exit', () => {
   }
 });
 
-export function previewDefinitionExport({ cwd = process.cwd(), outputPath } = {}) {
-  const context = capture(cwd), destination = outputAt(context, outputPath), content = collect(context), directory = stage();
+function definitionKinds(kinds = ['skill', 'agent']) {
+  if (!Array.isArray(kinds) || !kinds.length || kinds.length > 2 || new Set(kinds).size !== kinds.length ||
+    [...kinds].some(kind => !['skill', 'agent'].includes(kind))) fail('Choose skills, agents or both for this ZIP.');
+  return [...kinds].sort();
+}
+export function previewDefinitionExport({ cwd = process.cwd(), outputPath, kinds } = {}) {
+  kinds = definitionKinds(kinds);
+  const context = capture(cwd), destination = outputAt(context, outputPath, kinds.length === 1 ? kinds[0] + 's' : 'definitions'), content = collect(context, { kinds }), directory = stage();
   try {
     const manifest = { format: 'bzzy-definitions', version: 1, createdAt: new Date().toISOString(), skills: content.skills, agents: content.agents };
     const data = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
@@ -268,13 +274,13 @@ export function previewDefinitionExport({ cwd = process.cwd(), outputPath } = {}
     const entries = [...content.skills.map(item => contentEntry('skill', item)), ...content.agents.map(item => contentEntry('agent', { ...item, files: [{ path: 'definition.json', bytes: item.bytes, sha256: item.sha256 }] },
       JSON.parse(content.files.find(file => file.path === item.file).data.toString('utf8'))))];
     const totals = { skills: content.skills.length, agents: content.agents.length, files: content.files.length, bytes: content.files.reduce((sum, item) => sum + item.data.length, 0) };
-    return storeReview({ kind: 'definition-export', version: 1, entries, totals, outputPath: destination }, { context, directory, pins: content.pins, manifest, inventory });
+    return storeReview({ kind: 'definition-export', version: 1, kinds, entries, totals, outputPath: destination }, { context, directory, pins: content.pins, manifest, inventory });
   } catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
 }
 export function exportDefinitionBundle(review, { cwd = process.cwd(), outputPath = review?.outputPath } = {}) {
   const saved = reviewed(review, 'definition-export', cwd);
   if (outputPath !== review.outputPath) fail('Preview the chosen ZIP destination before exporting.', 'STALE_REVIEW');
-  const current = collect(saved.context);
+  const current = collect(saved.context, { kinds: saved.public.kinds });
   if (digest(current.pins) !== digest(saved.pins) || digest([current.skills, current.agents]) !== digest([saved.manifest.skills, saved.manifest.agents])) fail('A source definition changed. Preview the export again.', 'STALE_REVIEW');
   outputAt(saved.context, outputPath);
   const published = archive({ operation: 'create', cwd: saved.context.cwd, fingerprint: saved.context.fingerprint, name: path.basename(outputPath), source: saved.directory, files: saved.inventory });
@@ -327,17 +333,19 @@ function destination(entry, context) {
   const existing = getRecord(entry.kind === 'skill' ? 'core.skill' : 'core.subagent.definition', id);
   return { kind: entry.kind, name: entry.name, scope: entry.scope, id, conflict: Boolean(existing), revision: existing?.revision || 0, version: existing?.version || null };
 }
-export function previewDefinitionImport(file, { cwd = process.cwd() } = {}) {
+export function previewDefinitionImport(file, { cwd = process.cwd(), kinds } = {}) {
+  kinds = definitionKinds(kinds);
   const context = capture(cwd), source = path.resolve(cwd, file), data = regular(source, DEFINITION_BUNDLE_LIMITS.bytes), directory = stage();
   try {
     const archiveSha256 = digest(data), archivePath = path.join(directory, 'input.zip'), payload = path.join(directory, 'payload');
     fs.writeFileSync(archivePath, data, { mode: 0o600, flag: 'wx' }); privateDir(payload);
     const extracted = archive({ operation: 'extract', source: archivePath, target: payload }).files;
     let manifest; try { manifest = JSON.parse(regular(path.join(payload, 'manifest.json')).toString('utf8')); } catch { fail('The ZIP has no valid bounded definitions manifest.'); }
-    const entries = validateManifest(manifest, extracted, payload, context), destinations = entries.map(entry => destination(entry, context));
+    const entries = validateManifest(manifest, extracted, payload, context).filter(entry => kinds.includes(entry.kind)), destinations = entries.map(entry => destination(entry, context));
+    if (!entries.length) fail('This ZIP contains no definitions of the selected type.');
     const conflicts = destinations.filter(item => item.conflict).map(({ kind, name, scope }) => ({ kind, name, scope }));
-    const totals = { skills: manifest.skills.length, agents: manifest.agents.length, files: entries.reduce((sum, entry) => sum + entry.files.length, 0), bytes: entries.reduce((sum, entry) => sum + entry.files.reduce((bytes, file) => bytes + file.bytes, 0), 0) };
-    return storeReview({ kind: 'definition-import', version: 1, archiveSha256, entries, conflicts, totals }, { context, directory, source, archiveSha256, manifest, extracted, payload, destinations });
+    const totals = { skills: entries.filter(entry => entry.kind === 'skill').length, agents: entries.filter(entry => entry.kind === 'agent').length, files: entries.reduce((sum, entry) => sum + entry.files.length, 0), bytes: entries.reduce((sum, entry) => sum + entry.files.reduce((bytes, file) => bytes + file.bytes, 0), 0) };
+    return storeReview({ kind: 'definition-import', version: 1, kinds, archiveSha256, entries, conflicts, totals }, { context, directory, source, archiveSha256, manifest, extracted, payload, destinations });
   } catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
 }
 export function importDefinitionBundle(review, { cwd = process.cwd(), skipConflicts = false } = {}) {

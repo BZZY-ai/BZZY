@@ -52,6 +52,31 @@ function zip(entries, label = randomUUID()) {
 }
 const records = kind => listRecords(kind).map(row => JSON.stringify(row)).sort();
 
+test('type-specific ZIP exports contain only the requested type and do not scan unrelated packages', () => {
+  skill('private-other-type', 'global', { 'references/private.txt': 'password: fixture-private-value' }); agent('selected-agent');
+  const review = previewDefinitionExport({ cwd: project, kinds: ['agent'] }); reviews.push(review);
+  assert.deepEqual(review.kinds, ['agent']); assert.equal(review.totals.skills, 0); assert.equal(review.totals.agents, 1);
+  assert.match(path.basename(review.outputPath), /^bzzy-agents-/);
+  assert.throws(() => exportDefinitionBundle({ ...review, kinds: ['skill'] }, { cwd: project }), { code: 'STALE_REVIEW' });
+  const output = exportDefinitionBundle(review, { cwd: project });
+  assert.ok(Object.keys(unzip(output.path)).every(file => file === 'manifest.json' || file.startsWith('agents/')));
+  for (const kinds of [[], null, ['skill', 'skill'], ['workflow'], new Array(1)]) assert.throws(() => previewDefinitionExport({ cwd: project, kinds }));
+});
+
+test('selected imports validate the entire ZIP but install only the reviewed type and reject empty or tampered selections', () => {
+  skill('selected-skill'); agent('selected-agent'); const output = exportBundle(), original = unzip(output.path), cwd = recipient();
+  const selected = previewDefinitionImport(output.path, { cwd, kinds: ['agent'] }); reviews.push(selected);
+  assert.deepEqual(selected.kinds, ['agent']); assert.equal(selected.totals.skills, 0); assert.equal(selected.totals.agents, 1);
+  assert.throws(() => importDefinitionBundle({ ...selected, kinds: ['skill'] }, { cwd }), { code: 'STALE_REVIEW' });
+  const result = importDefinitionBundle(selected, { cwd });
+  assert.equal(result.skills.length, 0); assert.equal(result.agents.length, 1); assert.equal(listRecords('core.skill').length, 0);
+  const manifest = JSON.parse(original['manifest.json']); manifest.skills[0].files[0].sha256 = '0'.repeat(64);
+  assert.throws(() => previewDefinitionImport(zip({ ...original, 'manifest.json': Buffer.from(JSON.stringify(manifest)) }), { cwd, kinds: ['agent'] }), /hash/);
+  const agentOnly = previewDefinitionExport({ cwd, kinds: ['agent'] }); reviews.push(agentOnly);
+  const agentArchive = exportDefinitionBundle(agentOnly, { cwd });
+  assert.throws(() => previewDefinitionImport(agentArchive.path, { cwd, kinds: ['skill'] }), /no definitions of the selected type/);
+});
+
 test('a damaged registry inventory cannot export a ZIP that omits immutable package resources', () => {
   const installed = skill('complete-inventory', 'global', { 'references/required.txt': 'A required control.' });
   const saved = getRecord('core.skill', installed.id);

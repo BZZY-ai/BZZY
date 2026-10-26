@@ -42,19 +42,14 @@ with `npm install -g ./bzzy-cli-0.2.0.tgz`, or extract it and run `./install.sh`
 A bundled release needs no sibling directories and its installer does not invoke
 npm. A terminal-only source checkout is no longer a complete installation.
 
-The top-bar **Agents** option manages reusable specialist subagents: create a
-project/global definition, inherit the current model or select one from Core's
-catalog, and choose **Use in chat** to fill an editable invocation draft. Models
+The top-bar **Agents** option lists reusable specialist subagents with plain
+**Import** and **Export** actions. Create one with `/create-agent`, inspect or edit
+an existing entry, and choose **Use in chat** to fill an editable invocation draft. Models
 can invoke these specialists from normal chats and goals, with independent worker
 contexts, progress, follow-ups and evidence review. `/agents` opens the same
 library; `bzzy subagents list|show|create|update|delete` provides JSON management.
 See [subagent instructions and limits](../../BZZY-CORE/docs/SUBAGENTS.md). These
 definitions are separate from persistent iPhone Agents.
-
-**Skill Creator** and **Agent Creator** draft reusable definitions with the current
-terminal model and effort. Describe the behavior, review the generated draft and
-choose Save; skills remain inactive until enabled. Escape cancels generation or
-returns from a preview without saving.
 
 From chat, `/create-skill <requirements>` and `/create-agent <requirements>` ask
 for a lowercase hyphenated name and use that chat's current provider, model and
@@ -93,17 +88,16 @@ state, while worker skill loads also appear in the main session. These rows show
 names and status, without copying task prompts or reports. Loading a skill or
 finishing a worker does not establish goal completion.
 
-Both libraries offer **Export skills & agents ZIP** and **Import skills & agents
-ZIP**. Export reviews the current project's and global portable definitions,
+Both libraries offer plain **Import** and **Export**. Skills operates on skills;
+Agents operates on specialist agents. Export reviews the current project's and global portable definitions of that type,
 including skill resources, then writes a dated archive in the terminal's original
-working directory. Import reviews the same ZIP, preserves global/project scopes
+working directory. Import reviews a definition ZIP, selects only the tab's type, preserves global/project scopes
 in the receiving project, and never overwrites existing names. Skills import
 disabled; reviewed agent definitions are added without starting agents or models.
 Private bindings, history and case/evidence packages are excluded from this
 portable format. Unsafe packages are blocked rather than silently stripped.
 
-For Mac-to-Linux transfer without moving ZIP files, use **Transfer Library via
-Relay** in either menu, or `/library`. It includes skills, specialist agents,
+For Mac-to-Linux transfer without moving ZIP files, use `/library`. It includes skills, specialist agents,
 workflows and saved goal text. `bzzy library share` generates an expiring
 `BZZY-LIBRARY-…` code; `bzzy library import` asks for hidden code entry on the
 receiving host. Compare fingerprints and approve the recipient on the sender.

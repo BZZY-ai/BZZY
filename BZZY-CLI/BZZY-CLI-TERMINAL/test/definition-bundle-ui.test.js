@@ -8,7 +8,7 @@ import { UI } from '../src/ui.js';
 import { skillsCommand, skillRows } from '../src/skills-ui.js';
 import { subagentsCommand, subagentRows } from '../src/subagents-ui.js';
 import { definitionBundleAction } from '../src/definition-bundle-ui.js';
-import { createSession } from '../src/store.js';
+import { createSession, loadSession } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
 import { listRecords } from '../src/database.js';
 import { clean } from '../src/terminal-format.js';
@@ -47,11 +47,56 @@ const command = (panel, action) => (panel === 'skills' ? skillsCommand : subagen
 const back = () => { ui.tui.render(); const hit = ui.tui.hitTargets.find(item => item.type === 'back'); assert.ok(hit); input.write(`\x1b[<0;${hit.left};${hit.row}M`); };
 const rowsFor = panel => panel === 'skills' ? skillRows(ui) : subagentRows(ui);
 
+test('plain Import and Export operate only on the current tab type through actual Core ZIP previews and installation', async () => {
+  const sourceHome = process.env.BZZY_HOME, sourceSession = ui.sessionId;
+  const folder = path.join(directory, 'typed-skill'); fs.mkdirSync(folder);
+  fs.writeFileSync(path.join(folder, 'SKILL.md'), '---\nname: typed-skill\ndescription: Review supplied controls.\n---\nCompare the supplied controls and retain uncertainty.\n');
+  importSkill(folder, { scope: 'global' });
+  saveSubagentDefinition({ name: 'typed-agent', description: 'Review supplied evidence.', instructions: 'Compare supplied evidence and report limitations.' }, { scope: 'global' });
+  api = undefined;
+  for (const panel of ['skills', 'agents']) {
+    process.env.BZZY_HOME = sourceHome; ui.setSession(sourceSession);
+    ui.updateSession(loadSession(sourceSession));
+    const kind = panel === 'skills' ? 'skill' : 'agent';
+    await command(panel, 'bundle-export-type');
+    assert.deepEqual(ui.definitionBundleDraft.review.kinds, [kind]);
+    assert.ok(ui.definitionBundleDraft.review.entries.every(entry => entry.kind === kind));
+    assert.equal(ui.definitionBundleDraft.review.totals[panel === 'skills' ? 'agents' : 'skills'], 0);
+    assert.match(path.basename(ui.definitionBundleDraft.review.outputPath), new RegExp(`^bzzy-${panel}-`));
+    ui.ask = async () => `typed-${panel}.zip`;
+    await command(panel, 'bundle-output');
+    assert.deepEqual(ui.definitionBundleDraft.review.kinds, [kind]);
+    const archive = ui.definitionBundleDraft.review.outputPath;
+    await command(panel, 'bundle-confirm'); assert.equal(fs.existsSync(archive), true);
+    process.env.BZZY_HOME = path.join(directory, panel + '-recipient');
+    const recipient = createSession(BUILTINS.codex, project); ui.setSession(recipient.id); ui.updateSession(recipient);
+    ui.ask = async () => archive;
+    await command(panel, 'bundle-import-type');
+    assert.deepEqual(ui.definitionBundleDraft.review.kinds, [kind]);
+    assert.ok(ui.definitionBundleDraft.review.entries.every(entry => entry.kind === kind));
+    await command(panel, 'bundle-confirm');
+    assert.equal(listRecords('core.skill').length, panel === 'skills' ? 1 : 0);
+    assert.equal(listRecords('core.subagent.definition').length, panel === 'agents' ? 1 : 0);
+    assert.equal(listRecords('execution').length, 0);
+  }
+});
+
+test('a Core backend ignoring the selected tab type cannot expose or write a mixed export', async () => {
+  for (const panel of ['skills', 'agents']) {
+    await command(panel, 'bundle-export-type');
+    assert.deepEqual(calls.filter(call => call[0] === 'preview-export').at(-1)[1].kinds, [panel === 'skills' ? 'skill' : 'agent']);
+    assert.equal(ui.definitionBundleDraft, null);
+  }
+  assert.equal(calls.filter(call => call[0] === 'export').length, 0);
+});
+
 test('both libraries offer the same ZIP review, exact manifest, and explicit write without model work', async () => {
   for (const panel of ['skills', 'agents']) {
     await command(panel, 'library');
-    assert.ok(rowsFor(panel).some(row => row.text === 'Export skills & agents ZIP' && row.action === 'bundle-export'));
-    assert.ok(rowsFor(panel).some(row => row.text === 'Import skills & agents ZIP' && row.action === 'bundle-import'));
+    if (panel === 'skills') { await command(panel, 'tab:import'); await command(panel, ''); }
+    assert.ok(rowsFor(panel).some(row => row.text === 'Export' && row.action === 'bundle-export-type'));
+    assert.ok(rowsFor(panel).some(row => row.text === 'Import' && row.action === 'bundle-import-type'));
+    assert.ok(!rowsFor(panel).some(row => ['creator', 'create', 'workflows', 'bundle-relay', 'tab:import'].includes(row.action)));
     await command(panel, 'bundle-export');
     assert.equal(calls.filter(call => call[0] === 'export').length, panel === 'skills' ? 0 : 1);
     const text = rowsFor(panel).map(row => row.text).join('\n');

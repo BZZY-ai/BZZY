@@ -29,9 +29,14 @@ export function cancelDefinitionBundle(ui, panel) {
 }
 
 export function bundleLibraryRows() {
-  return [{ text: 'Export skills & agents ZIP', action: 'bundle-export' },
-    { text: 'Import skills & agents ZIP', action: 'bundle-import' },
-    { text: 'Transfer Library via Relay', action: 'bundle-relay' }];
+  return [{ text: 'Import', action: 'bundle-import-type' }, { text: 'Export', action: 'bundle-export-type' }];
+}
+const bundleLabel = draft => draft.kinds ? draft.panel === 'skills' ? 'skills' : 'agents' : 'skills & agents';
+function checkTypes(review, kinds) {
+  if (kinds && (!Array.isArray(review?.kinds) || JSON.stringify(review.kinds) !== JSON.stringify(kinds) ||
+      !review.entries?.length || review.entries.some(entry => !kinds.includes(entry.kind)))) {
+    throw new Error('Update BZZY Core and CLI together to import or export one Library type.');
+  }
 }
 
 export function returnFromDefinitionBundle(ui, panel) {
@@ -52,7 +57,7 @@ export function definitionBundleRows(ui, panel) {
     cancelDefinitionBundle(ui, panel);
     return [{ text: changedMessage, tone: 'warning' }, { text: '← Back to library', action: 'library' }];
   }
-  if (draft.loading) return [{ text: 'Skills & agents ZIP', tone: 'accent' },
+  if (draft.loading) return [{ text: `Import / export ${bundleLabel(draft)}`, tone: 'accent' },
     { text: draft.operation === 'export' ? 'Checking portable packages for export…' : 'Checking the ZIP and destination conflicts…', tone: 'muted' },
     { text: '← Back to library', action: 'bundle-cancel' }];
   const review = draft.review;
@@ -72,12 +77,13 @@ export function definitionBundleRows(ui, panel) {
   }
   const importing = draft.operation === 'import', conflicts = review.conflicts || [];
   const rows = [{ text: '← Back to library', action: 'bundle-cancel' },
-    { text: importing ? 'Import skills & agents ZIP · review' : 'Export skills & agents ZIP · review', tone: 'accent' },
+    { text: `${importing ? 'Import' : 'Export'} ${bundleLabel(draft)} · review`, tone: 'accent' },
     { text: draft.path || review.outputPath },
     { text: `${counted(review.totals.skills, 'skill')} · ${counted(review.totals.agents, 'agent')} · ${counted(review.totals.files, 'file')} · ${counted(review.totals.bytes, 'byte')}` },
     { text: 'Portable registered definitions only. Account bindings, sessions and persistent iPhone Agents are excluded.', tone: 'muted' },
     ...(importing ? [{ text: 'Project definitions go into this terminal’s project. Global definitions remain Core/global.', tone: 'muted' },
-      { text: 'Skills import disabled; agent definitions are added, with no agent/model started.', tone: 'muted' }]
+      { text: draft.kinds ? draft.panel === 'skills' ? 'Skills import disabled for review; no execution starts.' : 'Agents are added without starting an agent or model.'
+        : 'Skills import disabled; agent definitions are added, with no agent/model started.', tone: 'muted' }]
       : [{ text: 'The ZIP is written in this terminal’s current directory. Existing files are never overwritten.', tone: 'muted' }]),
     { text: '' }];
   for (const entry of review.entries) {
@@ -126,8 +132,9 @@ export async function definitionBundleAction(action, ui, panel, { api, loadApi =
     refresh(ui); return true;
   }
   if (action === 'bundle-files-back') { if (ui.definitionBundleDraft?.panel === panel) ui.definitionBundleDraft.filePreview = null; refresh(ui); return true; }
-  const starting = action === 'bundle-export' || action === 'bundle-import', requestedContext = contextFor(ui);
-  const requestedDraft = starting ? { context: requestedContext, panel, operation: action === 'bundle-export' ? 'export' : 'import', loading: true } : ui.definitionBundleDraft;
+  const starting = ['bundle-export', 'bundle-import', 'bundle-export-type', 'bundle-import-type'].includes(action), requestedContext = contextFor(ui);
+  const requestedDraft = starting ? { context: requestedContext, panel, operation: action.startsWith('bundle-export') ? 'export' : 'import', loading: true,
+    ...(action.endsWith('-type') ? { kinds: [panel === 'skills' ? 'skill' : 'agent'] } : {}) } : ui.definitionBundleDraft;
   if (!requestedDraft || requestedDraft.panel !== panel) throw new Error('Open and review the ZIP first.');
   if (starting) { discard(ui.definitionBundleDraft); ui.definitionBundleDraft = requestedDraft; refresh(ui); }
   let backend;
@@ -140,8 +147,9 @@ export async function definitionBundleAction(action, ui, panel, { api, loadApi =
     let file;
     if (operation === 'import') {
       const recent = ui.definitionBundleLastPath;
-      const initialValue = recent?.context === JSON.stringify(context) ? recent.path : path.join(context.cwd, 'bzzy-skills-agents.zip');
-      try { file = (await prompt(context, 'Import skills & agents ZIP · file path · Esc cancels', { initialValue }))?.trim(); }
+      const initialValue = recent?.context === JSON.stringify(context) && JSON.stringify(recent.kinds) === JSON.stringify(draft.kinds)
+        ? recent.path : path.join(context.cwd, `bzzy-${draft.kinds ? panel : 'skills-agents'}.zip`);
+      try { file = (await prompt(context, `Import ${bundleLabel(draft)} · ZIP file path · Esc cancels`, { initialValue }))?.trim(); }
       catch (error) { if (ui.definitionBundleDraft === draft) cancelDefinitionBundle(ui, panel); refresh(ui); throw error; }
       if (ui.definitionBundleDraft !== draft || ui.tui.panel !== panel) return true;
       if (!file) { ui.definitionBundleDraft = null; refresh(ui); return true; }
@@ -150,9 +158,11 @@ export async function definitionBundleAction(action, ui, panel, { api, loadApi =
     draft.path = file; refresh(ui);
     let review;
     try {
-      review = operation === 'export' ? await backend.previewDefinitionExport({ cwd: context.cwd })
-        : await backend.previewDefinitionImport(file, { cwd: context.cwd });
+      const options = { cwd: context.cwd, ...(draft.kinds ? { kinds: draft.kinds } : {}) };
+      review = operation === 'export' ? await backend.previewDefinitionExport(options)
+        : await backend.previewDefinitionImport(file, options);
       checkContext(ui, context);
+      checkTypes(review, draft.kinds);
       if (ui.definitionBundleDraft !== draft) { discard({ review, backend }); return true; }
       draft.review = review; draft.loading = false; draft.section = 'review'; refresh(ui);
     } catch (error) { discard({ review, backend }); if (ui.definitionBundleDraft === draft) ui.definitionBundleDraft = null; refresh(ui); throw error; }
@@ -179,8 +189,9 @@ export async function definitionBundleAction(action, ui, panel, { api, loadApi =
     if (!value) return true;
     const outputPath = path.resolve(draft.context.cwd, value);
     if (path.dirname(outputPath) !== draft.context.cwd || path.extname(outputPath).toLowerCase() !== '.zip') throw new Error('Choose a .zip filename in this terminal’s current directory.');
-    const review = await backend.previewDefinitionExport({ cwd: draft.context.cwd, outputPath });
+    const review = await backend.previewDefinitionExport({ cwd: draft.context.cwd, outputPath, ...(draft.kinds ? { kinds: draft.kinds } : {}) });
     checkContext(ui, draft.context);
+    try { checkTypes(review, draft.kinds); } catch (error) { discard({ review, backend }); throw error; }
     if (ui.definitionBundleDraft === draft) { discard(draft); draft.review = review; refresh(ui); }
     else discard({ review, backend });
     return true;
@@ -191,7 +202,7 @@ export async function definitionBundleAction(action, ui, panel, { api, loadApi =
     if (action !== 'bundle-confirm') throw new Error('Choose Write reviewed ZIP here.');
     result = await backend.exportDefinitionBundle(draft.review, { cwd: draft.context.cwd, outputPath: draft.review.outputPath });
     checkContext(ui, draft.context);
-    ui.definitionBundleLastPath = { context: JSON.stringify(draft.context), path: result.path };
+    ui.definitionBundleLastPath = { context: JSON.stringify(draft.context), path: result.path, ...(draft.kinds ? { kinds: draft.kinds } : {}) };
     ui.event('info', { message: `Exported ${result.skills} skills and ${result.agents} agents to ${result.path}.` });
   } else {
     const skipConflicts = action === 'bundle-confirm-skip';

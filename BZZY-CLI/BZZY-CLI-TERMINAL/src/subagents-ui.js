@@ -76,11 +76,7 @@ export function subagentRows(ui) {
   const rows = [{ text: 'AGENTS · reusable specialists', tone: 'accent' },
     { text: 'Use these specialists from any supported chat model or goal.', tone: 'muted' },
     { text: 'Click ON/OFF · ↑/↓ or Tab select · Space toggles · Enter opens', tone: 'muted' },
-    { text: 'Workflows / pre-prompts', action: 'workflows', tone: 'accent' },
-    { text: 'Agent Creator · use current model', action: 'creator', tone: 'accent' },
-    { text: 'Create specialist manually', action: 'create' },
-    ...bundleLibraryRows(),
-    ...(parent ? [{ text: 'View invocations in this chat', action: 'runs' }] : []), { text: '' }];
+    ...bundleLibraryRows(), { text: '' }];
   ui.subagentLibraryContext = context;
   ui.subagentLibraryEntries = new Map(page.subagents.map(agent => [`${agent.scope}:${agent.name}`, { ...agent }]));
   for (const agent of page.subagents) {
@@ -148,7 +144,7 @@ export async function subagentsCommand(text, ui, { generateDefinition, bundleApi
   try {
     if (action === 'workflows') await openWorkflows(ui, { origin: 'agents' });
     else if (action.startsWith('bundle-')) {
-      if (['bundle-export', 'bundle-import'].includes(action)) reset(ui);
+      if (['bundle-export', 'bundle-import', 'bundle-export-type', 'bundle-import-type'].includes(action)) reset(ui);
       await definitionBundleAction(action, ui, 'agents', { api: bundleApi });
     }
     else if (!action || action === 'library') reset(ui);

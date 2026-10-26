@@ -31,7 +31,7 @@ test('Skills sync imports from Codex into the shared library and stays idle unti
  try {
   ui.tui.cwd = directory;
   const before = listRecords('execution').length;
-  assert.ok(skillRows(ui).some(row => row.segments?.some(segment => segment.action === 'tab:import')));
+  assert.ok(skillRows(ui).some(row => row.action === 'bundle-import-type' && row.text === 'Import'));
   assert.ok(skillRows(ui).some(row => row.text.includes('THIS CHAT / PROJECT')));
   await skillsCommand('/skills sync', ui, { sync: input => syncCodexSkills({ ...input, userHome: path.join(directory, 'empty-home'), codexHome: null, bzzyCodexHome: null, adminRoot: path.join(directory, 'empty-admin') }) });
   assert.equal(ui.skillSyncResult.imported, 1); assert.equal(inspectSkill('synced-ui-skill').enabled, false);
@@ -147,7 +147,7 @@ test('the shared skills view reads instructions and explicitly enables a disable
  const { ui, input } = terminal();
  try {
   await ui.settingsCommand('/skills'); ui.tui.render();
-  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /IMPORT.*LIBRARY/);
+  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /SKILLS.*Import.*Export/s);
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /THIS CHAT \/ PROJECT.*BZZY CORE \/ GLOBAL/s);
   await ui.settingsCommand('/skills view:' + skill.name); ui.tui.render();
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Back to library[\s\S]*Inspect the layout[\s\S]*Skill · Esc goes back/);

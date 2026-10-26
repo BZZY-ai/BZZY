@@ -45,8 +45,9 @@ choice starts models, agents, scripts, hooks or dependency installation.
 
 Inside BZZY, `/library` opens the same controls. `/share library` shares the Library;
 `/library import` receives it. `/import` accepts Library and full-session codes,
-asking for hidden entry when no code is supplied. Skills and Agents menus include
-the Relay actions beside existing ZIP actions. QR invitation text is supported
+asking for hidden entry when no code is supplied. Skills and Agents tabs keep
+plain Import/Export controls for their own ZIP types; Relay transfer uses these
+chat commands. QR invitation text is supported
 as protocol text; no invitation URL is created.
 
 ## Contents and difference rules
