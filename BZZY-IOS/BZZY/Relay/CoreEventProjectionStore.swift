@@ -162,6 +162,7 @@ public final class CoreEventProjectionStore {
         browsingHistory = false; displayed = saved.events; olderAvailable = saved.hasOlder ?? false
         historyWindowShifted = false
     }
+    public func holdHistoryWindow() { browsingHistory = true }
 
     public func clearHistoryWindowShifted() { historyWindowShifted = false }
 

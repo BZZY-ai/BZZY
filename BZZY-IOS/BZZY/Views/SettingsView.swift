@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var showConnection = false
     @State private var showNotifications = false
     @State private var showDefaults = false
+    @State private var showVoice = false
     @State private var confirmUpdate = false
     @State private var updateTarget: String?
     @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var recognitionLanguage = SpeechLanguage.preferred.rawValue
@@ -53,6 +54,10 @@ struct SettingsView: View {
                     }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable)
                         .accessibilityIdentifier("model-defaults-settings")
                     Eyebrow(text: "Voice")
+                    Button { showVoice = true } label: {
+                        HStack { Label("Open voice chat", systemImage: "waveform").bzzyFont(14); Spacer(); Image(systemName: "chevron.right").bzzyFont(11) }.panel()
+                    }.buttonStyle(.plain).disabled(!AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
+                        .accessibilityIdentifier("open-voice-chat")
                     VStack(alignment: .leading, spacing: 20) {
                         languagePicker("Listening language · STT", selection: $recognitionLanguage, identifier: "speech-recognition-language")
                         languagePicker("Speaking voice · TTS", selection: $synthesisLanguage, identifier: "speech-synthesis-language")
@@ -108,6 +113,7 @@ struct SettingsView: View {
                 }
                 .sheet(isPresented: $showDefaults) { CoreDefaultsEditor() }
                 .sheet(isPresented: $showNotifications) { NotificationsView() }
+                .voiceChatScreen(isPresented: $showVoice)
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
     }
     private func languagePicker(_ label: String, selection: Binding<String>, identifier: String) -> some View {

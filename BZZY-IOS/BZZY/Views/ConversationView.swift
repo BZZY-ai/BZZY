@@ -47,7 +47,7 @@ struct ConversationCanvas: View {
     @State private var showDetails = false
     @State private var showActivity = false
     @State private var composerCaretRequest = 0
-    @State private var visibleMessageLimit = 200
+    @State private var historyWindow = ConversationHistoryWindow()
     @State private var pagingHistory = false
     @State private var followingLatest = true
     @State private var initialPositioned = false
@@ -86,9 +86,9 @@ struct ConversationCanvas: View {
         return store.conversationMessages(conversationID)
     }
 
-    private var visibleMessages: [LocalMessage] { Array(messages.suffix(visibleMessageLimit)) }
+    private var visibleMessages: [LocalMessage] { historyWindow.visible(in: messages) }
     private var hasEarlierMessages: Bool {
-        messages.count > visibleMessageLimit || isLive && relay.coreSessionID == conversationID && relay.coreHistoryHasOlder
+        historyWindow.hasEarlier(in: messages) || isLive && relay.coreSessionID == conversationID && relay.coreHistoryHasOlder
     }
     private var chatConnectionStatus: String {
         guard isLive else { return isDemo ? "Demo · On device" : "Not connected" }
@@ -163,9 +163,9 @@ struct ConversationCanvas: View {
                                     Text("Earlier messages").bzzyFont(11, weight: .medium)
                                 }.frame(maxWidth: .infinity, minHeight: 44)
                             }.buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent)
-                                .disabled(pagingHistory || relay.coreHistoryLoading || (messages.count <= visibleMessageLimit && !relay.isCoreSessionReady(conversationID)))
+                                .disabled(pagingHistory || relay.coreHistoryLoading || (!historyWindow.hasEarlier(in: messages) && !relay.isCoreSessionReady(conversationID)))
                                 .accessibilityIdentifier("load-earlier-messages")
-                                .id(visibleMessages.first?.id)
+                                .id("earlier-\(visibleMessages.first?.id.uuidString ?? "empty")")
                                 .onAppear {
                                     if initialPositioned && !followingLatest { Task { await loadEarlierHistory(reader) } }
                                 }
@@ -210,6 +210,7 @@ struct ConversationCanvas: View {
                             })
                     }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
                 }.scrollIndicators(.hidden).scrollDismissesKeyboard(.interactively)
+                    .accessibilityIdentifier("conversation-history").accessibilityValue("\(visibleMessages.count) messages")
                     .coordinateSpace(name: "conversation-scroll")
                     .background(GeometryReader { geometry in
                         Color.clear.onAppear { scrollViewportHeight = geometry.size.height }
@@ -217,11 +218,24 @@ struct ConversationCanvas: View {
                     })
                     .onPreferenceChange(ConversationBottomPreference.self) { bottom in
                         guard initialPositioned, !pagingHistory, let bottom, scrollViewportHeight > 0 else { return }
-                        followingLatest = bottom >= 0 && bottom <= scrollViewportHeight + 72
+                        let atLatest = bottom >= 0 && bottom <= scrollViewportHeight + 72 && historyWindow.includesLatest(in: messages)
+                            && !(isLive && relay.coreHistoryHasNewer)
+                        if atLatest && !followingLatest {
+                            historyWindow.showLatest(); followingLatest = true
+                            if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
+                            scrollToLatest(reader, force: true)
+                        }
+                        else {
+                            if !atLatest && followingLatest {
+                                historyWindow.freeze(in: messages)
+                                if isLive { relay.holdCoreHistory(sessionID: conversationID) }
+                            }
+                            followingLatest = atLatest
+                        }
                     }
                     .defaultScrollAnchor(.bottom)
                     .task(id: conversationID) {
-                        visibleMessageLimit = 200; followingLatest = true; initialPositioned = false
+                        historyWindow.showLatest(); followingLatest = true; initialPositioned = false
                         await Task.yield()
                         scrollToLatest(reader)
                         initialPositioned = true
@@ -242,7 +256,7 @@ struct ConversationCanvas: View {
                             Button {
                                 Task {
                                     if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
-                                    visibleMessageLimit = 200; followingLatest = true
+                                    historyWindow.showLatest(); followingLatest = true
                                     await Task.yield()
                                     scrollToLatest(reader, force: true)
                                 }
@@ -476,7 +490,7 @@ struct ConversationCanvas: View {
 
     private func prepareForSubmission() {
         if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
-        visibleMessageLimit = 200; followingLatest = true
+        historyWindow.showLatest(); followingLatest = true
     }
 
     private func scrollToLatest(_ reader: ScrollViewProxy, force: Bool = false) {
@@ -489,19 +503,24 @@ struct ConversationCanvas: View {
     private func loadEarlierHistory(_ reader: ScrollViewProxy) async {
         guard !pagingHistory, !relay.coreHistoryLoading, hasEarlierMessages else { return }
         pagingHistory = true; followingLatest = false
+        defer { pagingHistory = false }
+        historyWindow.freeze(in: messages)
+        if isLive { relay.holdCoreHistory(sessionID: conversationID) }
         let anchor = visibleMessages.first?.id
-        let previousCount = messages.count
-        if messages.count > visibleMessageLimit { visibleMessageLimit += 200 }
-        else if isLive {
-            await relay.loadOlderCoreHistory(sessionID: conversationID)
-            visibleMessageLimit += max(0, messages.count - previousCount)
+        let host = relay.activeHostID
+        if !historyWindow.revealEarlier(in: messages), isLive {
+            for _ in 0..<3 {
+                guard relay.isCoreSessionReady(conversationID), relay.coreHistoryHasOlder else { break }
+                await relay.loadOlderCoreHistory(sessionID: conversationID)
+                guard !Task.isCancelled, relay.activeHostID == host else { return }
+                if historyWindow.revealEarlier(in: messages) { break }
+            }
         }
         await Task.yield()
         if let anchor {
             var transaction = Transaction(); transaction.disablesAnimations = true
             withTransaction(transaction) { reader.scrollTo(anchor, anchor: .top) }
         }
-        pagingHistory = false
     }
 
     private func goalShortcut(_ title: String, icon: String, id: String, enabled: Bool, action: @escaping () -> Void) -> some View {
@@ -566,6 +585,7 @@ private struct TranscriptBlock<Content: View>: View {
     let speaker: String
     var isUser = false
     var pending = false
+    var accent: Color? = nil
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -574,13 +594,13 @@ private struct TranscriptBlock<Content: View>: View {
                 Text(isUser ? "YOU" : "AGENT")
                 if !isUser { Text("·"); Text(speaker).lineLimit(1).truncationMode(.middle) }
             }.bzzyFont(11, weight: .semibold)
-                .foregroundStyle(isUser ? BZZYTheme.user : BZZYTheme.agent)
+                .foregroundStyle(isUser ? BZZYTheme.user : accent ?? BZZYTheme.agent)
                 .accessibilityHidden(true)
             content().frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.horizontal, 12).padding(.vertical, 10)
             .background(isUser ? BZZYTheme.userSurface : BZZYTheme.agentSurface)
             .overlay(alignment: .leading) {
-                Rectangle().fill(isUser ? BZZYTheme.user.opacity(pending ? 0.35 : 0.85) : BZZYTheme.agent.opacity(0.8)).frame(width: 2)
+                Rectangle().fill(isUser ? BZZYTheme.user.opacity(pending ? 0.35 : 0.85) : (accent ?? BZZYTheme.agent).opacity(0.8)).frame(width: 2)
             }
     }
 }
@@ -617,8 +637,17 @@ private struct TranscriptMessageRow: View {
     let speaker: String
     private var content: ChatContent { ChatContent.parse(message.text) }
     var body: some View {
+        if let step = message.invocation {
+            let tint = step.kind == .skill ? BZZYTheme.accent : invocationColor(step.accentIndex)
+            (Text("\(step.kind == .skill ? "◆ Skill" : "◇ Agent") · \(step.name)").foregroundColor(tint)
+             + Text(" · \(step.label)").foregroundColor(BZZYTheme.secondary))
+                .bzzyFont(11, weight: .medium).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+                .accessibilityIdentifier("chat-invocation-\(step.id)")
+        } else {
         VStack(alignment: .leading, spacing: 7) {
-            TranscriptBlock(speaker: message.isUser ? "you" : speaker, isUser: message.isUser) {
+            TranscriptBlock(speaker: message.isUser ? "you" : speaker, isUser: message.isUser,
+                            accent: message.accentIndex.map(invocationColor)) {
                 if message.isUser {
                     Text(verbatim: message.text).bzzyFont(15).lineSpacing(4).textSelection(.enabled)
                         .foregroundStyle(BZZYTheme.userText)
@@ -634,7 +663,13 @@ private struct TranscriptMessageRow: View {
                     .accessibilityIdentifier("saved-draft")
             }
         }
+        }
     }
+}
+
+private func invocationColor(_ index: Int) -> Color {
+    let colors = [BZZYTheme.accent, BZZYTheme.success, BZZYTheme.amber, BZZYTheme.agent, BZZYTheme.yolo, Color(hex: 0x8EBAFF)]
+    return colors[(index % colors.count + colors.count) % colors.count]
 }
 
 struct WorkspaceDetailsView: View {

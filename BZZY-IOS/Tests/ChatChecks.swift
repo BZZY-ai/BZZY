@@ -3,6 +3,8 @@ import Foundation
 @main
 struct ChatChecks {
     @MainActor static func main() throws {
+        checkHistoryWindow()
+        try checkInvocationTranscript()
         for demo in DemoConversation.samples.values {
             require(demo.messages.contains(where: \.isUser) && demo.messages.contains(where: { !$0.isUser }), "Demos need both speakers")
             for message in demo.messages where !message.isUser {
@@ -149,4 +151,78 @@ struct ChatChecks {
         print("PASS: rich message examples, nested styles, tables, escapes, code, malformed/untrusted markup rejection, demo isolation, smooth gaze, approval projection")
     }
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) { precondition(condition(), message) }
+}
+
+@MainActor private func checkHistoryWindow() {
+    func require(_ condition: @autoclosure () -> Bool, _ message: String) { precondition(condition(), message) }
+    func message(_ number: Int) -> LocalMessage {
+        .init(id: UUID(), text: "Message \(number)", kind: .assistant, createdAt: Date(timeIntervalSince1970: Double(number)))
+    }
+    let initial = (1...225).map(message), incoming = (226...235).map(message)
+    var window = ConversationHistoryWindow()
+    require(window.visible(in: initial).map(\.text) == Array(initial.suffix(20)).map(\.text), "Opening history shows exactly the latest 20 cached messages")
+    window.freeze(in: initial)
+    require(window.visible(in: initial + incoming) == Array(initial.suffix(20)), "Incoming messages cannot shift the older reading window")
+    require(window.revealEarlier(in: initial + incoming) && window.count == 40, "Earlier loads one 20-message page")
+    require(window.visible(in: initial + incoming).first?.id == initial[185].id && window.visible(in: initial + incoming).last?.id == initial.last?.id, "Paging preserves the original tail boundary and stable IDs")
+    let earlier = (-40 ... -1).map(message), backfilled = earlier + initial + incoming
+    require(window.revealEarlier(in: backfilled) && window.visible(in: backfilled).first?.id == initial[165].id, "Prepending Core events does not invalidate the visible anchor")
+    for _ in 0..<20 { window.revealEarlier(in: backfilled) }
+    require(window.count <= 200 && window.visible(in: backfilled).first?.id == earlier.first?.id, "Backward browsing stays bounded while reaching the earliest message")
+    require(!window.includesLatest(in: backfilled), "A bounded older window cannot claim to be at the latest reply")
+    window.showLatest()
+    require(window.visible(in: backfilled) == Array(backfilled.suffix(20)), "Latest returns to the newest 20 messages")
+    print("PASS: 20-message windows, anchored live updates, older paging, bounded rendering and Latest")
+}
+
+@MainActor private func checkInvocationTranscript() throws {
+    let store = WorkspaceStore(includeSamples: false), session = UUID().uuidString.lowercased()
+    let job = UUID().uuidString.lowercased(), otherJob = UUID().uuidString.lowercased()
+    func event(_ sequence: Int, _ type: String, _ data: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["version": 1, "id": "\(session):\(sequence)", "seq": sequence,
+            "sessionId": session, "createdAt": "2026-10-25T12:00:00Z", "type": type, "data": data])
+    }
+    try store.applyLiveSnapshot(JSONSerialization.data(withJSONObject: ["session": ["id": session]]))
+    let original = "<message version=\"1\"><p>Original <b>HTTP</b> reply Ω.</p></message>"
+    let firstReport = "The returned response preserved its security headers.\nEvidence remains unchanged."
+    let secondReport = "The follow-up checked the supplied negative control."
+    let events = try [
+        event(1, "message.user", ["text": "Check supplied responses"]), event(2, "text", ["text": original]),
+        event(3, "core.usage", ["id": "receipt-1", "kind": "skill", "name": "header-checks", "sessionId": session]),
+        event(4, "assignment.created", ["id": job, "parentSessionId": session, "subagentDefinition": ["name": "http-reviewer"]]),
+        event(5, "assignment.started", ["id": job, "round": 1]),
+        event(6, "core.usage", ["id": "receipt-1", "kind": "skill", "name": "header-checks", "sessionId": UUID().uuidString, "rootSessionId": session]),
+        event(7, "assignment.finished", ["id": job, "round": 1, "state": "awaiting_review", "report": ["summary": firstReport]]),
+        event(8, "assignment.followup", ["id": job, "round": 2]),
+        event(9, "assignment.finished", ["id": job, "round": 2, "state": "awaiting_review", "report": ["summary": secondReport]]),
+        event(10, "assignment.reviewed", ["id": job, "round": 2, "outcome": "accepted"]),
+        event(11, "assignment.started", ["id": job, "round": 1]),
+        event(12, "text", ["text": "The main assistant's actual final response."]),
+        event(13, "core.usage", ["id": "foreign-receipt", "kind": "skill", "name": "foreign-skill", "sessionId": UUID().uuidString]),
+        event(14, "assignment.created", ["id": otherJob, "parentSessionId": session, "subagentDefinition": ["name": "android-reviewer"]]),
+        event(15, "assignment.failed", ["id": otherJob, "round": 1, "error": "The supplied artifact was unavailable."])
+    ]
+    for count in 1...events.count { store.applyLiveEvents(Array(events.prefix(count))) }
+    let messages = store.liveMessages, steps = messages.compactMap(\.invocation)
+    precondition(steps.filter { $0.kind == .skill }.count == 1, "Skill receipts deduplicate across forwarded worker events")
+    precondition(steps.filter { $0.kind == .agent }.count == 2 && Set(steps.filter { $0.kind == .agent }.map(\.accentIndex)).count == 2, "Agents keep stable separate identities and colors")
+    precondition(steps.first { $0.id == job }?.state == "accepted" && steps.first { $0.id == job }?.round == 2, "Late worker lifecycle events cannot regress a reviewed outcome")
+    precondition(messages.contains { $0.text == original } && messages.contains { $0.text == firstReport } && messages.contains { $0.text == secondReport }, "Main replies and actual returned agent text remain verbatim")
+    precondition(!steps.contains { $0.name == "foreign-skill" }, "Foreign skill scope cannot leak into this terminal")
+    store.applyLiveEvents(events + events)
+    precondition(store.liveMessages == messages, "Replay cannot duplicate invocation steps or returned messages")
+    let partial = WorkspaceStore(includeSamples: false)
+    try partial.applyLiveSnapshot(JSONSerialization.data(withJSONObject: ["session": ["id": session]]))
+    partial.applyLiveEvents(Array(events[6...9]))
+    precondition(partial.liveMessages.contains { $0.text == firstReport } && partial.liveMessages.contains { $0.text == secondReport }, "A recent page retains returned text even when creation is outside the cache")
+    precondition(partial.liveMessages.compactMap(\.invocation).first?.name.hasPrefix("Worker ") == true, "Missing cached names use an honest worker label")
+    precondition(Set(partial.liveMessages.map(\.id)).count == partial.liveMessages.count, "Fallback steps and returned messages have distinct stable IDs")
+    let partialStepID = partial.liveMessages.first { $0.invocation?.id == job }?.id
+    partial.applyLiveEvents(Array(events.prefix(10)))
+    precondition(partial.liveMessages.compactMap(\.invocation).first { $0.kind == .agent }?.name == "http-reviewer", "Older creation history restores the actual agent name")
+    precondition(partial.liveMessages.first { $0.invocation?.id == job }?.id == partialStepID, "Filling missing creation metadata preserves the reading anchor")
+    try store.applyLiveSnapshot(JSONSerialization.data(withJSONObject: ["session": ["id": UUID().uuidString.lowercased()]]))
+    store.applyLiveEvents(events)
+    precondition(store.liveMessages.isEmpty, "Changing conversation scope cannot retain old invocation rows")
+    print("PASS: skill/agent steps, receipt replay, follow-ups, stable colors, exact messages and scope isolation")
 }

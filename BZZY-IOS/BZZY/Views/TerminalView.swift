@@ -22,8 +22,12 @@ struct TerminalView: View {
                         Text(relay.coreCatalogAvailable ? "Your terminals" : "Saved terminals · Offline").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         Spacer()
                         Button { relay.performHostAction { await relay.refreshCoreSessions() } } label: {
-                            Label(relay.coreCatalogRefreshing ? "Checking…" : "Refresh", systemImage: "arrow.clockwise")
-                        }.bzzyFont(12).disabled(!relay.coreActionsAvailable || relay.coreCatalogRefreshing).accessibilityIdentifier("refresh-terminals")
+                            Group {
+                                if relay.coreCatalogRefreshing { ProgressView().controlSize(.small) }
+                                else { Image(systemName: "arrow.clockwise").bzzyFont(13) }
+                            }.frame(width: 44, height: 44)
+                        }.buttonStyle(.plain).foregroundStyle(BZZYTheme.secondary).disabled(!relay.coreActionsAvailable || relay.coreCatalogRefreshing)
+                            .accessibilityLabel("Refresh terminals").accessibilityIdentifier("refresh-terminals")
                     }
                     if relay.coreSessionAttachmentPending {
                         Button("Cancel pending attachment") { relay.cancelCoreSessionAttachment() }.bzzyFont(12)

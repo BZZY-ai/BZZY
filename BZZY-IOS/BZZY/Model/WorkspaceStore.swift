@@ -71,13 +71,54 @@ struct AgentProfile: Identifiable, Codable, Hashable {
 }
 
 struct LocalMessage: Identifiable, Codable, Equatable {
-    enum Kind: String, Codable { case user, assistant, sample }
+    enum Kind: String, Codable { case user, assistant, sample, invocation }
     let id: UUID
     let text: String
     let kind: Kind
     let createdAt: Date
     var speaker: String? = nil
+    var invocation: ConversationInvocation? = nil
+    var accentIndex: Int? = nil
     var isUser: Bool { kind == .user }
+}
+
+struct ConversationInvocation: Codable, Equatable {
+    enum Kind: String, Codable { case skill, agent }
+    let id: String
+    let kind: Kind
+    let name: String
+    var state: String
+    var round: Int
+    var sequence: Int64
+    let accentIndex: Int
+    var label: String {
+        switch state {
+        case "loaded": return "Loaded"
+        case "starting", "running": return "Invoked"
+        case "needs_context": return "Needs context"
+        case "awaiting_followup": return "Ready for follow-up"
+        case "awaiting_review", "finished": return "Returned · review pending"
+        case "accepted": return "Review accepted"
+        case "rejected": return "Review rejected"
+        case "inconclusive": return "Inconclusive"
+        case "abandoned": return "Abandoned"
+        case "paused": return "Paused"
+        case "interrupted": return "Interrupted"
+        case "cancelled": return "Cancelled"
+        case "timed_out": return "Timed out"
+        case "budget_limited": return "Budget reached"
+        case "failed": return "Failed"
+        default: return "Status unavailable"
+        }
+    }
+    var settled: Bool { ["accepted", "rejected", "inconclusive", "abandoned"].contains(state) }
+    var phase: Int {
+        if settled { return 4 }
+        if ["needs_context", "awaiting_followup", "paused", "interrupted", "cancelled", "failed", "timed_out", "budget_limited"].contains(state) { return 3 }
+        if ["awaiting_review", "finished"].contains(state) { return 2 }
+        if state == "running" { return 1 }
+        return state == "starting" ? 0 : 3
+    }
 }
 
 private struct LiveReplyIdentity: Hashable {
@@ -112,6 +153,9 @@ struct TerminalPreview: Identifiable {
     var activity: [LiveActivity] = []
     var activeReply: (identity: LiveReplyIdentity, index: Int)?
     var peerReplies: [LiveReplyIdentity: Int] = [:]
+    var invocationRows: [String: Int] = [:]
+    var skillReceipts = Set<String>()
+    var agentCount = 0
     private struct DecodedEvent {
         let sessionID: String
         let id: String
@@ -152,6 +196,53 @@ struct TerminalPreview: Identifiable {
             let id = event.id, seq = event.seq, type = event.type, payload = event.payload, date = event.date
             // Sequence is durable and unique within this explicitly scoped conversation.
             let uuid = UUID(uuidString: String(format: "20000000-0000-4000-8000-%012llx", UInt64(seq) & 0xffffffffffff))!
+            if type == "core.usage", payload["kind"] as? String == "skill",
+               payload["sessionId"] as? String == sessionID || payload["rootSessionId"] as? String == sessionID,
+               let receipt = payload["id"] as? String, !receipt.isEmpty, receipt.count <= 192,
+               let name = payload["name"] as? String, !name.isEmpty, name.count <= 120,
+               skillReceipts.insert(receipt).inserted {
+                let step = ConversationInvocation(id: receipt, kind: .skill, name: name, state: "loaded", round: 1, sequence: seq, accentIndex: 0)
+                projected.append(.init(id: uuid, text: "", kind: .invocation, createdAt: date, invocation: step))
+                activeReply = nil
+            } else if type.hasPrefix("assignment."), let assignmentID = (payload["assignmentId"] ?? payload["id"]) as? String, UUID(uuidString: assignmentID) != nil {
+                let definition = payload["subagentDefinition"] as? [String: Any]
+                let role = payload["role"] as? String
+                let reportedName = definition?["name"] as? String ?? (["executor", "reviewer"].contains(role ?? "") ? role?.capitalized : nil)
+                let name = reportedName.flatMap { !$0.isEmpty && $0.count <= 120 ? $0 : nil } ?? "Worker \(assignmentID.prefix(6))"
+                let lifecycle = ["assignment.created", "assignment.started", "assignment.followup", "assignment.needs_context",
+                    "assignment.context_answered", "assignment.failed", "assignment.interrupted", "assignment.cancelled",
+                    "assignment.paused", "assignment.finished", "assignment.reviewed"].contains(type)
+                let parent = payload["parentSessionId"] as? String
+                if invocationRows[assignmentID] == nil, lifecycle, parent == nil || parent == sessionID {
+                    // A recent page may begin after creation. Preserve the actual
+                    // result and identify the worker honestly until older history loads.
+                    let step = ConversationInvocation(id: assignmentID, kind: .agent, name: name, state: "starting", round: 1, sequence: seq - 1, accentIndex: agentCount)
+                    agentCount += 1; invocationRows[assignmentID] = projected.count
+                    let rowID = UUID(uuidString: assignmentID)!
+                    projected.append(.init(id: rowID, text: "", kind: .invocation, createdAt: date, invocation: step)); activeReply = nil
+                }
+                if let index = invocationRows[assignmentID], var step = projected[index].invocation, !step.settled {
+                    let round = payload["round"] as? Int ?? payload["currentRound"] as? Int ?? 1
+                    let states = ["assignment.started": "running", "assignment.followup": "starting", "assignment.needs_context": "needs_context",
+                        "assignment.context_answered": "awaiting_followup", "assignment.failed": "failed", "assignment.interrupted": "interrupted",
+                        "assignment.cancelled": "cancelled", "assignment.paused": "paused"]
+                    let outcome = payload["outcome"] as? String ?? "unknown", finish = payload["state"] as? String ?? "unknown"
+                    let reviewed = ["accepted", "rejected", "inconclusive", "abandoned"].contains(outcome) ? outcome : "unknown"
+                    let finished = ["awaiting_review", "needs_context", "failed", "cancelled", "timed_out", "budget_limited", "interrupted", "paused"].contains(finish) ? finish : "unknown"
+                    let state = type == "assignment.reviewed" ? reviewed : type == "assignment.finished" ? finished : states[type]
+                    if let state, round >= step.round, seq > step.sequence {
+                        var next = step; next.state = state; next.round = round; next.sequence = seq
+                        guard round > step.round || next.phase >= step.phase else { continue }
+                        step = next
+                        var row = projected[index]; row.invocation = step; projected[index] = row
+                        let report = payload["report"] as? [String: Any]
+                        let body = type == "assignment.finished" ? report?["summary"] as? String : type == "assignment.failed" ? payload["error"] as? String : nil
+                        if let body, !body.isEmpty {
+                            projected.append(.init(id: uuid, text: body, kind: .assistant, createdAt: date, speaker: step.name, accentIndex: step.accentIndex)); activeReply = nil
+                        }
+                    }
+                }
+            }
             if type == "question", payload["kind"] as? String == "approval", let questionID = payload["id"] as? String { approvalIDs.insert(questionID) }
             // Match terminal chat entries, including boundaries kept only in
             // Activity on iOS. Telemetry/backend events do not split deltas.
@@ -197,7 +288,7 @@ struct TerminalPreview: Identifiable {
         for (index, segments) in textSegments {
             let message = projected[index]
             projected[index] = .init(id: message.id, text: segments.joined(), kind: message.kind,
-                createdAt: message.createdAt, speaker: message.speaker)
+                createdAt: message.createdAt, speaker: message.speaker, invocation: message.invocation, accentIndex: message.accentIndex)
         }
         let retained = Set(data)
         decoded = decoded.filter { retained.contains($0.key) }
@@ -276,6 +367,23 @@ final class WorkspaceStore {
                         text: String(format: "History entry %03d", index), kind: index.isMultiple(of: 2) ? .assistant : .user,
                         createdAt: Date(timeIntervalSince1970: Double(index)))
                 }
+            }
+            if CommandLine.arguments.contains("--invocation-ui-testing") {
+                let session = AgentProfile.samples[0].id.uuidString
+                let job = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+                try? store.applyLiveSnapshot(JSONSerialization.data(withJSONObject: ["session": ["id": session, "alias": "Invocation fixture", "model": "Fixture"]]))
+                let values: [(String, [String: Any])] = [
+                    ("message.user", ["text": "Review the supplied HTTP response."]),
+                    ("text", ["text": "I will inspect the supplied response and preserve the evidence."]),
+                    ("core.usage", ["id": "ui-skill-receipt", "kind": "skill", "name": "header-checks", "sessionId": session]),
+                    ("assignment.created", ["id": job, "parentSessionId": session, "subagentDefinition": ["name": "http-reviewer"]]),
+                    ("assignment.finished", ["id": job, "round": 1, "state": "awaiting_review", "report": ["summary": "The actual HTTP response headers were preserved.\nThe supplied control returned the expected result."]]),
+                    ("assignment.reviewed", ["id": job, "round": 1, "outcome": "accepted"])
+                ]
+                store.applyLiveEvents(values.enumerated().compactMap { index, value in
+                    try? JSONSerialization.data(withJSONObject: ["version": 1, "id": "\(session):\(index + 1)", "seq": index + 1,
+                        "sessionId": session, "createdAt": "2026-10-25T12:00:00Z", "type": value.0, "data": value.1])
+                })
             }
             return store
         }

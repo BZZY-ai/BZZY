@@ -1,3 +1,33 @@
+# iOS compact footer, recorded invocations and 20-entry history (2026-10-25)
+
+Build **Debug 0.1.0 (22)** passes the **86-test native Swift suite** plus one
+new cache-hold regression (**87 distinct cases**), model/message-format checks,
+and **7 focused UI cases** across simulator runs. UI results cover the compact
+footer and invocation rows, paging through 225 messages and returning to Latest,
+normal/accessibility text, offline locking, voice access in Settings, repeated
+Back/sheet/gesture transitions, drafts and relaunch. Screenshots were inspected.
+
+Opening chat renders the latest 20 cached entries; older reads reveal batches
+of 20 with stable message anchors and bounded rendering. Incoming events remain
+saved and acknowledged while the reading window is held. Latest restores the
+current tail. The existing protected raw-event cache and authoritative Core
+history remain separate; caches never establish connectivity or permissions.
+
+Skill rows require actual Core load receipts. Agent rows use scoped assignment
+events, preserve returned report text, keep follow-up/review ordering and dedupe
+replay. A missing cached creation event retains the actual result under a generic
+worker label; backfill restores the name without changing the row identity.
+Loaded instructions and an accepted assignment review do not establish a verified
+goal outcome. iOS adds no live token/time counters or generated summaries.
+
+The signed app passes development APNs metadata/entitlement, privacy, signature
+and existing app/device identity checks. It was installed in place on the paired
+iPhone; CoreDevice confirms **0.1.0 (22)**. Automatic launch was blocked by the
+phone lock. No uninstall, app-data reset, pairing
+reset or running CLI/Core update was performed. Fixtures use synthetic events and
+private internal-disk temporary directories. Real provider work, physical speech
+capture and a live phone agent invocation were not exercised by these UI tests.
+
 # Paste-once Library codes, Copy button and import progress (2026-10-25)
 
 Node.js 24/macOS full suites: **748 Core tests passed, 2 skipped** (750 total)

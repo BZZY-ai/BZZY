@@ -122,10 +122,6 @@ struct WorkspaceView: View {
                 NavigationStack {
                     VStack(spacing: 0) {
                         workspaceHeader
-                        if relay.coreActionsAvailable {
-                            HostMetricsBar(metrics: relay.hostMetrics, status: relay.hostMetricsStatus)
-                                .padding(.horizontal, 16).padding(.bottom, 8)
-                        }
                         if store.selectedTab == .agents {
                             AgentsView(store: store, showCreate: $showCreate)
                         } else {
@@ -382,14 +378,17 @@ private struct CoreConnectionFooter: View {
                 Text("CORE").bzzyFont(10, weight: .semibold).foregroundStyle(BZZYTheme.secondary)
                 Text(relay.connectionOnline ? "Online" : "Offline").bzzyFont(11, weight: .medium)
                     .accessibilityIdentifier("connection-status-label")
-                Spacer()
+                HostMetricsBar(metrics: relay.connectionOnline ? relay.hostMetrics : nil, status: relay.hostMetricsStatus)
+                    .frame(maxWidth: .infinity)
                 Button {
                     checking = true
                     Task { await relay.checkConnection(); checking = false }
                 } label: {
-                    Label(checking ? "Checking…" : "Refresh", systemImage: "arrow.clockwise").bzzyFont(10)
+                    if checking { ProgressView().controlSize(.mini) }
+                    else { Image(systemName: "arrow.clockwise").bzzyFont(13) }
                 }.frame(minWidth: 44, minHeight: 44).disabled(checking).buttonStyle(.plain).foregroundStyle(BZZYTheme.secondary)
                     .accessibilityIdentifier("refresh-connection")
+                    .accessibilityLabel(checking ? "Checking connection" : "Refresh connection")
             }.padding(.horizontal, 16).frame(minHeight: 44).background(BZZYTheme.background)
                 .accessibilityElement(children: .contain).accessibilityIdentifier("connection-status")
         }
@@ -400,17 +399,17 @@ private struct HostMetricsBar: View {
     let metrics: CoreHostMetrics?
     let status: String
     var body: some View {
-        HStack(spacing: 12) {
-            if let metrics {
-                Text("Host CPU \(metrics.hostCPUPercent.map { String(format: "%.0f%%", $0) } ?? "Warming up")")
-                Text("RAM \(ByteCountFormatter.string(fromByteCount: metrics.memoryUsedBytes, countStyle: .memory))/\(ByteCountFormatter.string(fromByteCount: metrics.memoryTotalBytes, countStyle: .memory))")
-                Spacer(minLength: 0)
-                Text(metrics.sampledAt, style: .relative).foregroundStyle(BZZYTheme.muted)
-            } else {
-                Text(status)
-                Spacer(minLength: 0)
-            }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { Text(cpu); Text(memory) }.fixedSize()
+            VStack(spacing: 1) { Text(cpu); Text(memory) }
         }.bzzyFont(10, design: .monospaced).foregroundStyle(BZZYTheme.secondary)
             .accessibilityElement(children: .combine).accessibilityIdentifier("host-metrics")
+            .accessibilityLabel("Host usage").accessibilityValue(metrics == nil ? status : "\(cpu), \(memory)")
+    }
+    private var cpu: String { "CPU \(metrics?.hostCPUPercent.map { String(format: "%.0f%%", $0) } ?? "—")" }
+    private var memory: String {
+        guard let metrics else { return "RAM —" }
+        let gib = 1024.0 * 1024 * 1024, total = Double(metrics.memoryTotalBytes) / gib
+        return "RAM " + String(format: total >= 10 ? "%.1f/%.0fG" : "%.1f/%.1fG", Double(metrics.memoryUsedBytes) / gib, total)
     }
 }

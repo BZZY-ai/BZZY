@@ -4,6 +4,36 @@ Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The current
 appearance follows the CLI: dark flat surfaces, compact monospaced prompt rows,
 cyan controls, teal user messages and lavender assistant messages.
 
+Build **Debug 0.1.0 (22)** puts host CPU/RAM in the home connection footer,
+between Core status and the compact Refresh icon. Agents shows the list and
+New Agent; voice chat remains available in **Settings → Voice**. Agents and
+Terminal use small Refresh icons with accessible touch targets.
+
+Chats open the latest **20 cached transcript entries**, reveal older entries in
+batches of 20, and keep the reading position while new events are saved. **Latest**
+returns to the live tail. The existing protected cache retains a bounded recent
+event history; Core still owns the complete history. Rendering stays bounded to
+200 entries while browsing older pages.
+
+The transcript displays recorded skill loads and agent invocations with compact
+terminal rows and distinct agent colors. Actual main replies and returned worker
+report text are preserved; iOS adds no live token/time counters or generated
+summaries. If the recent cache lacks a worker's creation event, its returned text
+still appears with a generic worker label until older history restores its name.
+**Loaded** records that skill instructions were read; **Review accepted** is an
+assignment review, not proof that the overall goal has been achieved. Cached
+activity never grants permissions or establishes a live Core connection.
+
+Validation for build 22: the **86 native Swift tests** plus the new cache-hold
+regression pass (**87 distinct cases**), along with model/message-format checks
+and **7 focused UI regressions** across simulator runs. Checks cover 225-message
+paging, Latest, invocation replay/follow-ups/missing creation metadata, exact
+returned text, offline controls, drafts, Back navigation and normal/large text.
+The signed app passed development APNs/privacy/signature checks and was installed
+in place on the connected iPhone; CoreDevice confirms **0.1.0 (22)**. App data and
+pairing were retained. Automatic launch was blocked while the phone was locked.
+See the [validation record](../BZZY-CORE/docs/VALIDATION.md).
+
 Build **Debug 0.1.0 (21)** extends that terminal treatment across home, chats,
 settings, connection, sharing and voice controls. Headers and lists use compact
 separators and rectangular controls, while touch targets and Dynamic Type remain
@@ -98,7 +128,8 @@ snapshot metadata. Reopening shows cached messages before the network response;
 the forward subscription fetches missing events and deduplicates their exact IDs.
 New conversations can bootstrap from the latest page, and scrolling back fetches
 older pages from Core without advancing the live acknowledgment cursor. Only the
-latest 200 projected messages render initially. Reading older history stays in
+latest 20 projected entries render initially in the current build (build 15
+rendered 200). Reading older history stays in
 place while new text streams; **Latest** returns to the current tail. Core remains
 the authoritative full history. Revoking/forgetting a host removes its cache.
 Older Core versions retain their forward-replay fallback; update Core through the
@@ -229,7 +260,7 @@ Approval cards now appear directly in chat with command details and green
 drafts stay intact, and Core rechecks question identity, expiry and ownership.
 The composer also shows authoritative goal progress/completion/stall colors.
 
-Every agent and terminal opens the same native chat at its most recent message, without an animated trip through old history. Late Core history also lands at the bottom. Turquoise user bubbles sit on the right and dark assistant bubbles on the left, with a compact header and composer. COOL, Signal, Subscriptions, Design review and Research contain fictional conversations. The examples demonstrate native tables, normal/bold/italic text, three text sizes, colored highlights, lists, quotes and literal code blocks. Sending in a Demo chat adds a predefined local reply. Created agent drafts remain separate and never receive these fake responses.
+Every agent and terminal opens the same native chat at its most recent message, without an animated trip through old history. Late Core history also lands at the bottom. Compact terminal transcript rows distinguish user, main assistant and worker replies with colored labels and rails, above the prompt composer. COOL, Signal, Subscriptions, Design review and Research contain fictional conversations. The examples demonstrate native tables, normal/bold/italic text, three text sizes, colored highlights, lists, quotes and literal code blocks. Sending in a Demo chat adds a predefined local reply. Created agent drafts remain separate and never receive these fake responses.
 
 Hold the microphone beside Send to dictate using on-device Apple Speech. Partial results update the message field as available; release stops audio and briefly awaits final words. Existing typed text is preserved, and the result stays editable until the user presses Send. Unsupported languages/denied permissions keep typing available. Backgrounding, navigation and lost authorization cancel capture; releasing during a permission prompt cannot start a late recording.
 

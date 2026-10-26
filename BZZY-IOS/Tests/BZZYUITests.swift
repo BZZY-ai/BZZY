@@ -1,6 +1,32 @@
 import XCTest
 
 final class BZZYUITests: XCTestCase {
+    func testCompactFooterAndRecordedInvocationMessages() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing", "--invocation-ui-testing"]
+        app.launch()
+        XCTAssertTrue(app.buttons["create-agent"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["open-voice-chat"].exists)
+        XCTAssertFalse(app.staticTexts["Talk to BZZY"].exists)
+        let status = app.staticTexts["connection-status-label"], refresh = app.buttons["refresh-connection"]
+        let metrics = app.descendants(matching: .any)["host-metrics"]
+        XCTAssertTrue(metrics.exists)
+        XCTAssertGreaterThan(metrics.frame.midX, status.frame.maxX)
+        XCTAssertLessThan(metrics.frame.midX, refresh.frame.minX)
+        let agentRefresh = app.buttons["refresh-agents"]
+        XCTAssertLessThanOrEqual(agentRefresh.frame.width, 48)
+        XCTAssertEqual(agentRefresh.staticTexts.count, 0)
+        attach(app, name: "Compact footer with centered host metrics and icon refresh")
+        app.buttons["agent-COOL"].tap()
+        XCTAssertTrue(app.staticTexts["chat-invocation-ui-skill-receipt"].waitForExistence(timeout: 5))
+        let skill = app.staticTexts["chat-invocation-ui-skill-receipt"]
+        XCTAssertTrue(skill.label.contains("header-checks")); XCTAssertTrue(skill.label.contains("Loaded"))
+        let agent = app.staticTexts["chat-invocation-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]
+        XCTAssertTrue(agent.label.contains("http-reviewer")); XCTAssertTrue(agent.label.contains("Review accepted"))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "The actual HTTP response headers were preserved.")).firstMatch.exists)
+        attach(app, name: "Terminal-style skill and agent steps retain actual returned text")
+    }
     func testRepeatedChatBackAndSheetTransitionsKeepChromeAndUnsentDraftsInTheRightScreen() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -129,17 +155,13 @@ final class BZZYUITests: XCTestCase {
         app.buttons["agent-COOL"].tap()
         XCTAssertTrue(app.staticTexts["History entry 225"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["History entry 225"].isHittable)
+        XCTAssertEqual(app.scrollViews["conversation-history"].value as? String, "20 messages")
         let scroll = app.scrollViews.firstMatch
         let earlier = app.buttons["load-earlier-messages"]
         let first = app.staticTexts["History entry 001"]
-        for _ in 0..<60 {
+        for _ in 0..<80 {
             if first.exists && first.isHittable { break }
-            if earlier.exists && earlier.isHittable { break }
-            scroll.swipeDown(velocity: .fast)
-        }
-        if earlier.exists && earlier.isHittable { earlier.tap() }
-        for _ in 0..<10 {
-            if first.exists && first.isHittable { break }
+            if earlier.exists && earlier.isHittable && earlier.isEnabled { earlier.tap() }
             scroll.swipeDown(velocity: .fast)
         }
         XCTAssertTrue(first.isHittable)
@@ -226,7 +248,9 @@ final class BZZYUITests: XCTestCase {
         app.buttons["refresh-connection"].tap()
         XCTAssertTrue(app.staticTexts["BZZY"].exists)
         XCTAssertEqual(app.staticTexts["connection-status-label"].label, "Offline")
-        XCTAssertFalse(app.descendants(matching: .any)["host-metrics"].exists)
+        let unavailableMetrics = app.descendants(matching: .any)["host-metrics"]
+        XCTAssertTrue(unavailableMetrics.exists)
+        XCTAssertEqual(unavailableMetrics.value as? String, "Waiting for Core", "Offline metrics remain placeholders rather than stale host readings")
         XCUIDevice.shared.press(.home)
         app.activate()
         XCTAssertTrue(app.staticTexts["BZZY"].waitForExistence(timeout: 5))
@@ -418,6 +442,8 @@ final class BZZYUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--reset-ui-testing"]
         app.launch()
+        XCTAssertFalse(app.buttons["open-voice-chat"].exists)
+        app.buttons["Settings"].tap()
         XCTAssertTrue(app.buttons["open-voice-chat"].waitForExistence(timeout: 10))
         app.buttons["open-voice-chat"].tap()
         let voice = app.descendants(matching: .any)["voice-only-chat"]
@@ -426,6 +452,7 @@ final class BZZYUITests: XCTestCase {
         attach(app, name: "Voice-only minimal interface")
         XCTAssertEqual(voice.staticTexts.count, 0, "The voice screen must not display transcripts, labels or text status: \(voice.debugDescription)")
         app.buttons["Close voice chat"].tap()
+        app.buttons["Close"].firstMatch.tap()
         app.buttons["agent-COOL"].tap()
         let latest = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "We can keep it focused.")).firstMatch
         XCTAssertTrue(latest.waitForExistence(timeout: 5)); XCTAssertTrue(latest.isHittable, "Opening an agent chat must land at the newest message")

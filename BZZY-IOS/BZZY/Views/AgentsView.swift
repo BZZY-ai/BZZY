@@ -5,7 +5,6 @@ struct AgentsView: View {
     @Environment(RelayConnection.self) private var relay
     @Bindable var store: WorkspaceStore
     @Binding var showCreate: Bool
-    @State private var showVoice = false
     @State private var createdAgent: AgentProfile?
     @State private var openedAgent: AgentProfile?
     @State private var editingHostAgent: HostAgentRecord?
@@ -20,9 +19,13 @@ struct AgentsView: View {
                     if BZZYTheme.showsMascot {
                         FlyEyes().frame(maxWidth: .infinity).padding(.horizontal, -14)
                     }
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 12) { agentsHeading; Spacer(minLength: 8); voiceButton }
-                        VStack(alignment: .leading, spacing: 8) { agentsHeading; voiceButton }
+                    HStack {
+                        agentsHeading
+                        Spacer()
+                        Button { relay.performHostAction { await relay.refreshCoreAgents() } } label: {
+                            Image(systemName: "arrow.clockwise").bzzyFont(13).frame(width: 44, height: 44)
+                        }.buttonStyle(.plain).foregroundStyle(BZZYTheme.secondary).disabled(!relay.coreActionsAvailable)
+                            .accessibilityLabel("Refresh agents").accessibilityIdentifier("refresh-agents")
                     }
                     Rectangle().fill(BZZYTheme.line).frame(height: 0.5)
                 }.padding(.top, 8).padding(.bottom, 16)
@@ -32,8 +35,6 @@ struct AgentsView: View {
                         HStack {
                             Text(relay.coreAgentsAvailable ? "On demand" : "Saved agents · Offline").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                             Spacer()
-                            Button { relay.performHostAction { await relay.refreshCoreAgents() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                                .bzzyFont(12).disabled(!relay.coreActionsAvailable)
                         }
                         if relay.coreAgentsAvailable && !store.hostAgentsConfigured {
                             Text("Configure the default Agents workspace on your host to create agents.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
@@ -98,7 +99,6 @@ struct AgentsView: View {
                     } }
                 }
             }
-            .voiceChatScreen(isPresented: $showVoice)
             .navigationDestination(item: $openedAgent) { agent in ConversationView(store: store, agent: agent) }
             .navigationDestination(item: $notificationAgent) { agent in HostAgentConversationView(store: store, agent: agent) }
             .onChange(of: store.notificationAgentID) { _, id in
@@ -130,12 +130,6 @@ struct AgentsView: View {
         }.padding(.vertical, 12).frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
     }
 
-    private var voiceButton: some View {
-        Button { showVoice = true } label: {
-            Label("Talk to BZZY", systemImage: "waveform").bzzyFont(12, weight: .medium)
-        }.buttonStyle(BZZYActionStyle()).accessibilityLabel("Open voice").accessibilityIdentifier("open-voice-chat")
-            .disabled(!AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
-    }
 }
 
 struct AgentRow: View {

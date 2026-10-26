@@ -134,6 +134,23 @@ final class CoreApplicationTests: XCTestCase {
         XCTAssertEqual(restored.cursor, 5051); XCTAssertFalse(restored.events.contains(where: { $0.seq == 1 }))
     }
 
+    @MainActor func testHoldingCachedHistoryPreservesReadingWhileNewEventsAreSaved() async throws {
+        let h = CoreHarness(), directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CoreEventProjectionStore(directory: directory, hostID: "host", resource: "resource", sessionID: h.session)
+        try store.apply(CoreEventBatch(h.batch([1, 2]), resource: "resource", sessionID: h.session, cursor: 0))
+        store.holdHistoryWindow()
+        try store.apply(CoreEventBatch(h.batch([3, 4]), resource: "resource", sessionID: h.session, cursor: 2))
+        XCTAssertEqual(store.events.map(\.seq), [1, 2]); XCTAssertEqual(store.cursor, 4)
+        XCTAssertTrue(store.hasNewerHistory)
+        let reopened = try CoreEventProjectionStore(directory: directory, hostID: "host", resource: "resource", sessionID: h.session)
+        XCTAssertEqual(reopened.events.map(\.seq), [1, 2, 3, 4]); XCTAssertEqual(reopened.cursor, 4)
+        store.showLatestHistory()
+        XCTAssertEqual(store.events.map(\.seq), [1, 2, 3, 4]); XCTAssertFalse(store.hasNewerHistory)
+        try store.apply(CoreEventBatch(h.batch([5]), resource: "resource", sessionID: h.session, cursor: 4))
+        XCTAssertEqual(store.events.last?.seq, 5)
+    }
+
     @MainActor func testChunkedHistoryReassemblesExactEnvelopeAndChecksDigest() async throws {
         let h = CoreHarness(timeout: 2_000_000_000); try await h.bind()
         var snapshot = h.result!.object!, capabilities = snapshot["capabilities"]!.object!

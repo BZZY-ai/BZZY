@@ -1296,6 +1296,10 @@ public final class RelayConnection {
         projection.showLatestHistory()
         publishCoreEvents()
     }
+    public func holdCoreHistory(sessionID: String) {
+        guard sessionID == coreSessionID else { return }
+        coreProjection?.holdHistoryWindow()
+    }
 
     public func loadOlderCoreHistory(sessionID: String) async {
         guard isCoreSessionReady(sessionID), !coreHistoryLoading, let client = coreClient,

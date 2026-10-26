@@ -1,5 +1,37 @@
 import Foundation
 
+// Display windows are independent of Core's durable event cursor and private
+// replay cache. Anchoring IDs keeps incoming replies from moving older reading.
+struct ConversationHistoryWindow {
+    static let pageSize = 20
+    static let maximumVisible = 200
+    private var firstID: UUID?
+    private(set) var count = pageSize
+
+    func range(in messages: [LocalMessage]) -> Range<Int> {
+        if let firstID {
+            let start = messages.firstIndex { $0.id == firstID } ?? 0
+            return start..<min(messages.count, start + count)
+        }
+        return max(0, messages.count - count)..<messages.count
+    }
+    func visible(in messages: [LocalMessage]) -> [LocalMessage] { Array(messages[range(in: messages)]) }
+    func hasEarlier(in messages: [LocalMessage]) -> Bool { range(in: messages).lowerBound > 0 }
+    func includesLatest(in messages: [LocalMessage]) -> Bool { range(in: messages).upperBound == messages.count }
+    mutating func showLatest() { firstID = nil; count = Self.pageSize }
+    mutating func freeze(in messages: [LocalMessage]) {
+        if firstID == nil { firstID = visible(in: messages).first?.id }
+    }
+    @discardableResult mutating func revealEarlier(in messages: [LocalMessage]) -> Bool {
+        let current = range(in: messages)
+        guard current.lowerBound > 0 else { return false }
+        let start = max(0, current.lowerBound - Self.pageSize)
+        firstID = messages[start].id
+        count = min(Self.maximumVisible, current.count + current.lowerBound - start)
+        return true
+    }
+}
+
 // Presentation only: this document cannot carry commands or runtime permissions.
 enum ChatTextSize: String { case small, normal, large }
 enum ChatTextColor: String { case mint, amber, coral, blue, lavender, muted }
