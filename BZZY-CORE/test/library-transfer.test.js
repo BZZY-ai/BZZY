@@ -261,7 +261,7 @@ test('a mismatched inner transfer kind is rejected before any Library importer r
   await until(() => f.service.status(share.shareId).state === 'revoked');
 });
 
-for (const enable of [false, true, 'cancel']) test(`four-kind Library uses an independent recipient Core home (review ${enable})`, { timeout: 30000 }, async t => {
+for (const enable of [false, true, 'subset', 'cancel']) test(`four-kind Library uses an independent recipient Core home (review ${enable})`, { timeout: 30000 }, async t => {
   const f = await fixture(t);
   await f.client.close();
   const { RelayGateway } = await import('../src/relay/gateway.js');
@@ -312,6 +312,7 @@ for (const enable of [false, true, 'cancel']) test(`four-kind Library uses an in
           onReview: review => {
             process.send({ type: 'review', totals: review.totals });
             if (input.enable === 'cancel') { setTimeout(() => abort.abort(), 5); return new Promise(() => {}); }
+            if (input.enable === 'subset') return { approved: true, enable: true, entryIndexes: [review.entries.findIndex(row => row.kind === 'skill')] };
             return { approved: true, enable: input.enable };
           }
         });
@@ -345,6 +346,12 @@ for (const enable of [false, true, 'cancel']) test(`four-kind Library uses an in
     await until(() => gateway.projectShareStatus(share.shareId).state === 'revoked');
     assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'relay', 'shares', share.shareId)), false);
     return;
+  }
+  if (enable === 'subset') {
+    assert.equal(imported.skills.length, 1); assert.equal(imported.skills[0].enabled, true);
+    assert.equal(imported.agents.length, 0); assert.equal(imported.workflows.length, 0); assert.equal(imported.goals.length, 0);
+    assert.equal(imported.executions, 0); assert.equal(imported.sessions, 0);
+    assert.equal(gateway.projectShareStatus(share.shareId).state, 'complete'); return;
   }
   assert.equal(imported.skills.length, 1); assert.equal(imported.agents.length, 1);
   assert.equal(imported.skills[0].enabled, enable); assert.equal(imported.agents[0].enabled, enable);

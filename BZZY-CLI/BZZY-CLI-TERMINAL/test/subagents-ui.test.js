@@ -142,7 +142,7 @@ test('create and use a specialist without starting inference or binding it to th
     assert.equal(listRecords('execution').length, 0);
     session.provider = 'deepseek'; session.model = 'fixture-alternative'; saveSession(session); ui.updateSession(session);
     await subagentsCommand('/agents', ui);
-    assert.match(text(ui), /http-analyst/); assert.match(text(ui), /Inherit the invoking chat/);
+    assert.match(text(ui), /http-analyst/); assert.doesNotMatch(text(ui), /Inherit the invoking chat|Analyze observed HTTP responses/);
   } finally { ui.close(); }
 });
 

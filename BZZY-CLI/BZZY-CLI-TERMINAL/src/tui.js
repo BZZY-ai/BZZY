@@ -520,6 +520,7 @@ export class TerminalChat {
     if (choice.disabled) { picker.error = choice.description || 'This option is unavailable.'; this.schedule(); return; }
     if (picker.single) this.finishSelection(picker.selectEffort ? { value: choice.value, effort: picker.efforts.get(choice.value) } : choice.value);
     else if (picker.selected.size) this.finishSelection([...picker.selected]);
+    else if (picker.emptyMessage) { picker.error = picker.emptyMessage; this.schedule(); }
     else { picker.error = 'Select at least one option.'; this.schedule(); }
   }
   selectedText() {
@@ -1022,6 +1023,7 @@ export class TerminalChat {
       const effortDetail = picker.selectEffort ? focused?.efforts?.length ? `Effort: ${picker.efforts.get(focused.value)}${focused.defaultEffort ? ` · provider default: ${focused.defaultEffort}` : ''}. ` : focused?.supportsEffort === false ? 'This model has no effort setting. ' : '' : '';
       const details = picker.single ? effortDetail + (focused?.description || picker.description || '') : picker.description || 'Every participant reviews the same fixed reply independently.';
       const detailLines = details ? wrap(details, width - 5, compact ? 1 : picker.descriptionRows || 2) : [];
+      if (picker.columnHeader) put('        ' + picker.columnHeader, palette.muted);
       const available = Math.max(1, (this.selectionHeight || 16) - lines.length - detailLines.length - 1 - (compact ? 0 : 1) - (picker.error ? 1 : 0));
       const offset = Math.max(0, Math.min(picker.focus - Math.floor(available / 2), picker.choices.length - available));
       for (let index = offset; index < Math.min(picker.choices.length, offset + available); index++) {
@@ -1039,8 +1041,10 @@ export class TerminalChat {
       if (!compact) put('');
       for (const line of detailLines) put('  ' + line, palette.muted);
       if (!picker.locked || !picker.loading) {
-        this.contentHits.push({ type: 'confirm', row: lines.length, left: 3, right: 13 }, { type: 'cancel', row: lines.length, left: 17, right: 26 });
-        put('  [ Confirm ]   [ Cancel ]', palette.accent);
+        const confirm = `[ ${picker.confirmLabel || 'Confirm'} ]`, cancel = `[ ${picker.cancelLabel || 'Cancel'} ]`;
+        this.contentHits.push({ type: 'confirm', row: lines.length, left: 3, right: 2 + cellWidth(confirm) },
+          { type: 'cancel', row: lines.length, left: 6 + cellWidth(confirm), right: 5 + cellWidth(confirm + cancel) });
+        put('  ' + confirm + '   ' + cancel, palette.accent);
       }
     } else if (this.panel === 'settings') {
       const tightMain = this.ui.settings.page === 'main' && (this.output.rows || 24) <= 24 && this.ui.settings.rows().filter(row => row.card).length > 4;

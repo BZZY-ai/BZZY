@@ -25,13 +25,18 @@ skill. Existing names are never replaced. Escape, changed host/project/session
 or model selection, invalid output and portability failures prevent publication.
 The Skills tab keeps plain Import and Export controls; creation uses this command.
 
-In CLI, open **Skills** or type `/skills`. **Import** reads a definition ZIP and
-installs only its skills; **Export** packages only skills. `/skills import` also
+In CLI, open **Skills** or type `/skills`. The list shows names and ON/OFF
+controls. **Export** opens name checkboxes and generates an expiring Relay code;
+**Import** accepts a code and installs/enables the selected missing skills after
+fingerprint approval. Resources and project/global scopes survive; existing
+names and availability are preserved. See [Library sharing](LIBRARY-SHARING.md).
+`/skills import` separately
 accepts one skill directory or a ZIP containing one skill directory. To copy
 existing Codex workflows, type `/skills sync` or run `bzzy skills sync` from your project
 directory (`--cwd DIR` selects another project). Sync is local and one-way; it
-does not require Codex login or start inference. Imports and newly created skills
-start disabled. Single-folder imports default to the current project; definition
+does not require Codex login or start inference. Folder/ZIP imports and sync
+start disabled; `/create-skill` and the tab's explicit Relay import enable their
+validated results. Single-folder imports default to the current project; definition
 ZIPs preserve explicit project/global scope. Legacy host-global packages that contain raw evidence or
 run records require scope review before they are exposed to models.
 Open a skill to read its instructions and text resources, then explicitly enable
@@ -94,9 +99,9 @@ one SQLite transaction. These administration APIs are not model tools.
 
 ## Skills and agents ZIP
 
-The CLI Skills and Agents libraries export/import versioned definition ZIPs.
-Each tab exports its own type and imports only that type, including from older
-combined archives. The entire archive is validated before the selected entries
+Core retains versioned definition ZIP APIs and legacy CLI action routes;
+the primary tab buttons use Relay codes. Type-specific ZIP operations can
+read older combined archives. The entire archive is validated before selected entries
 can be installed. Archives contain the current project's and global
 portable definitions, with an exact
 file/hash manifest for review. It contains no sessions, accounts, runtime state

@@ -91,16 +91,16 @@ export function shareLibraryBundle(cwd, review, ui, options = {}) {
   return sharePortable({ cwd }, ui, { ...options, library: review });
 }
 
-async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/core/relay'), copy = copyText, library, assertContext = () => {} } = {}) {
+async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/core/relay'), copy = copyText, library, compact = false, assertContext = () => {} } = {}) {
   privateTerminal(ui);
   assertContext();
-  const label = library ? 'Library' : 'terminal';
+  const label = library ? compact ? library.kinds?.[0] === 'skill' ? 'skills' : 'agents' : 'Library' : 'terminal';
   if (ui.sessionMode === 'VIEW') throw new Error('Attach with control before sharing this terminal.');
   if ((!library && !session?.id) || !path.isAbsolute(session.cwd || '')) throw new Error('Choose an existing terminal project before sharing.');
   let service, share, state, cancelled = false;
   try {
-    return await privateView(ui, `Share ${label}`, async view => {
-      changeView(ui, view, { lines: [
+    return await privateView(ui, compact ? `Export ${label}` : `Share ${label}`, async view => {
+      changeView(ui, view, { lines: compact ? [`${library.entries.length} ${label} selected. Preparing your code…`] : [
         `Project: ${session.cwd}`,
         library ? 'Reviewed skills, specialist agents, workflows and saved goal text.' : 'Includes project files, full chats, .bzzy notes, memory and related execution/evidence context.',
         'Credentials, account bindings, device identities and live permissions are excluded.',
@@ -122,7 +122,7 @@ async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/co
         throw new Error('Invalid private invitation');
       }
       let qr = qrLines(share.terminalQR || (typeof share.renderQR === 'function' ? await share.renderQR() : ''));
-      let showQR = true, polling = false;
+      let showQR = !compact, polling = false;
       const refresh = async () => {
         assertContext();
         if (polling) return;
@@ -137,7 +137,7 @@ async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/co
             ui.reader?.close(); return;
           }
           const privateLines = [
-            `Project: ${session.cwd}`,
+            ...(!compact ? [`Project: ${session.cwd}`] : []),
             `Sender fingerprint: ${share.senderFingerprint}`,
             state.state === 'approved' ? 'Recipient approved · encrypted transfer in progress'
               : `Expires: ${new Date(share.expiresAt).toLocaleTimeString()} · ${state.state}`,

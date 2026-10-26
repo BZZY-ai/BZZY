@@ -82,8 +82,7 @@ export function subagentRows(ui) {
   for (const agent of page.subagents) {
     rows.push(libraryToggleRow({ name: agent.name, scope: agent.scope, enabled: agent.enabled !== false,
       viewAction: `view:${agent.scope}:${agent.name}`,
-      toggleAction: `toggle-row:${agent.scope}:${agent.name}:${agent.revision}:${agent.enabled !== false ? '1' : '0'}` }, ui.tui?.output?.columns || 80),
-      { text: agent.description }, { text: selectionLabel(agent), tone: 'muted' }, { text: '' });
+      toggleAction: `toggle-row:${agent.scope}:${agent.name}:${agent.revision}:${agent.enabled !== false ? '1' : '0'}` }, ui.tui?.output?.columns || 80));
   }
   if (!page.subagents.length) rows.push({ text: 'No specialists created yet.', tone: 'muted' },
     { text: 'For example: an HTTP response analyst, XSS tester or IDOR reviewer.', tone: 'muted' });
@@ -144,7 +143,7 @@ export async function subagentsCommand(text, ui, { generateDefinition, bundleApi
   try {
     if (action === 'workflows') await openWorkflows(ui, { origin: 'agents' });
     else if (action.startsWith('bundle-')) {
-      if (['bundle-export', 'bundle-import', 'bundle-export-type', 'bundle-import-type'].includes(action)) reset(ui);
+      if (['bundle-export', 'bundle-import', 'bundle-export-type', 'bundle-import-type', 'bundle-export-zip-type', 'bundle-import-zip-type'].includes(action)) reset(ui);
       await definitionBundleAction(action, ui, 'agents', { api: bundleApi });
     }
     else if (!action || action === 'library') reset(ui);

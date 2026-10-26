@@ -407,7 +407,7 @@ export function skillRows(ui) {
   const appendSkill = skill => {
     const id = skill.id || skill.name;
     rows.push(libraryToggleRow({ name: skill.name, scope: skill.scope, enabled: skill.enabled,
-      suffix: skill.provenance?.kind === 'learning' ? ' · learned' : '', viewAction: `view:${id}`,
+      viewAction: `view:${id}`,
       toggleAction: `toggle-row:${id}|${skill.revision}|${skill.version}|${skill.enabled ? '1' : '0'}` }, ui.tui?.output?.columns || 80));
   };
   rows.push({ text: 'THIS CHAT / PROJECT', tone: 'accent' });
@@ -437,7 +437,7 @@ export async function skillsCommand(text, ui, { sync, discover = codexSkillDirec
   try {
     if (action === 'workflows') await openWorkflows(ui, { origin: 'skills' });
     else if (action.startsWith('bundle-')) {
-      if (['bundle-export', 'bundle-import', 'bundle-export-type', 'bundle-import-type'].includes(action)) { resetViews(ui); setSkillView(ui, 'library'); }
+      if (['bundle-export', 'bundle-import', 'bundle-export-type', 'bundle-import-type', 'bundle-export-zip-type', 'bundle-import-zip-type'].includes(action)) { resetViews(ui); setSkillView(ui, 'library'); }
       await definitionBundleAction(action, ui, 'skills', { api: bundleApi });
     }
     else if (action.startsWith('knowledge:')) await knowledgeAction(action.slice(10), ui);

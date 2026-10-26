@@ -412,17 +412,18 @@ export function importLibraryShare(input = {}) {
         options.signal?.addEventListener('abort', cancel, { once: true });
         Promise.resolve().then(() => onReview(review)).then(finish(resolve), finish(reject));
       });
-      let enable = false;
+      let enable = false, entryIndexes;
       if (decision !== true) {
         if (!decision || typeof decision !== 'object' || decision.approved !== true) fail('CANCELLED', 'Library import cancelled.');
-        object(decision, ['approved', 'enable']);
+        object(decision, ['approved', 'enable', 'entryIndexes']);
         if (decision.enable !== undefined && typeof decision.enable !== 'boolean') fail('INVALID_REQUEST', 'Choose whether to enable the reviewed Library.');
         enable = decision.enable === true;
+        if (decision.entryIndexes !== undefined) entryIndexes = library.libraryImportEntryIndexes(decision.entryIndexes, review.entries.length);
       }
       options.signal?.throwIfAborted();
       await authorize();
       options.signal?.throwIfAborted();
-      return library.importLibraryBundle(review, { cwd, enable });
+      return library.importLibraryBundle(review, { cwd, enable, ...(entryIndexes ? { entryIndexes } : {}) });
     } finally { if (review) library.discardDefinitionBundleReview(review); }
   } });
 }

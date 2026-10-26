@@ -45,10 +45,18 @@ choice starts models, agents, scripts, hooks or dependency installation.
 
 Inside BZZY, `/library` opens the same controls. `/share library` shares the Library;
 `/library import` receives it. `/import` accepts Library and full-session codes,
-asking for hidden entry when no code is supplied. Skills and Agents tabs keep
-plain Import/Export controls for their own ZIP types; Relay transfer uses these
-chat commands. QR invitation text is supported
+asking for hidden entry when no code is supplied. QR invitation text is supported
 as protocol text; no invitation URL is created.
+
+For a simpler transfer, open **Skills** or **Agents** and choose **Export**.
+The table shows names with checkboxes, without descriptions or file details.
+Space toggles names; **Export** or Enter creates the Relay code automatically.
+The compact code screen keeps fingerprint approval and expiry; `q` shows its QR.
+On the receiver, choose **Import** in the matching tab and enter the code. After
+fingerprint approval, check the missing names and choose **Import**. This explicit
+action enables those selected entries for use without starting any work.
+Project/Core suffixes appear only when names collide. Existing entries are
+skipped, and other resource types in a combined code are not installed.
 
 ## Contents and difference rules
 
@@ -88,7 +96,11 @@ rejects links, traversal, duplicate/extra files and excessive sizes. Registry
 changes, availability audits and a durable receipt commit atomically; failures
 roll back new package directories. An accepted archive retry returns its recorded
 result without recreating deleted entries or overriding later owner choices.
-New shares compare the current destination again.
+New shares compare the current destination again. Name-based export pins exact
+source identities/revisions before preparing the code. Selective import validates
+the complete archive, binds selected indexes to its immutable review and checks
+only those destination entries at commit. Each selected subset has its own durable
+receipt; retries cannot re-enable entries or recreate later deletions.
 
 Bounds: 1,024 definitions, 4,096 archive entries, 1 MiB per resource, 60 MiB payload
 and a 64 MiB ZIP. Existing v1 skills/agents ZIPs keep their previous limits and

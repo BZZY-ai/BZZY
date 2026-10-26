@@ -47,7 +47,7 @@ const command = (panel, action) => (panel === 'skills' ? skillsCommand : subagen
 const back = () => { ui.tui.render(); const hit = ui.tui.hitTargets.find(item => item.type === 'back'); assert.ok(hit); input.write(`\x1b[<0;${hit.left};${hit.row}M`); };
 const rowsFor = panel => panel === 'skills' ? skillRows(ui) : subagentRows(ui);
 
-test('plain Import and Export operate only on the current tab type through actual Core ZIP previews and installation', async () => {
+test('legacy typed ZIP actions preserve Core previews and installation', async () => {
   const sourceHome = process.env.BZZY_HOME, sourceSession = ui.sessionId;
   const folder = path.join(directory, 'typed-skill'); fs.mkdirSync(folder);
   fs.writeFileSync(path.join(folder, 'SKILL.md'), '---\nname: typed-skill\ndescription: Review supplied controls.\n---\nCompare the supplied controls and retain uncertainty.\n');
@@ -58,7 +58,7 @@ test('plain Import and Export operate only on the current tab type through actua
     process.env.BZZY_HOME = sourceHome; ui.setSession(sourceSession);
     ui.updateSession(loadSession(sourceSession));
     const kind = panel === 'skills' ? 'skill' : 'agent';
-    await command(panel, 'bundle-export-type');
+    await command(panel, 'bundle-export-zip-type');
     assert.deepEqual(ui.definitionBundleDraft.review.kinds, [kind]);
     assert.ok(ui.definitionBundleDraft.review.entries.every(entry => entry.kind === kind));
     assert.equal(ui.definitionBundleDraft.review.totals[panel === 'skills' ? 'agents' : 'skills'], 0);
@@ -71,7 +71,7 @@ test('plain Import and Export operate only on the current tab type through actua
     process.env.BZZY_HOME = path.join(directory, panel + '-recipient');
     const recipient = createSession(BUILTINS.codex, project); ui.setSession(recipient.id); ui.updateSession(recipient);
     ui.ask = async () => archive;
-    await command(panel, 'bundle-import-type');
+    await command(panel, 'bundle-import-zip-type');
     assert.deepEqual(ui.definitionBundleDraft.review.kinds, [kind]);
     assert.ok(ui.definitionBundleDraft.review.entries.every(entry => entry.kind === kind));
     await command(panel, 'bundle-confirm');
@@ -81,9 +81,21 @@ test('plain Import and Export operate only on the current tab type through actua
   }
 });
 
+test('plain Import and Export route directly to the current tab Relay transfer', async () => {
+  const transfers = [];
+  for (const panel of ['skills', 'agents']) for (const operation of ['import', 'export']) {
+    await definitionBundleAction(`bundle-${operation}-type`, ui, panel, { api, transfer: async (...args) => { transfers.push(args); } });
+    const [actual, kind, cwd, frontend, options] = transfers.at(-1);
+    assert.equal(actual, operation); assert.equal(kind, panel === 'skills' ? 'skill' : 'agent');
+    assert.equal(cwd, project); assert.equal(frontend, ui); assert.equal(await options.loadBundle(), api);
+    assert.ok(ui.definitionBundleDraft == null);
+  }
+  assert.equal(calls.length, 0); assert.equal(listRecords('execution').length, 0);
+});
+
 test('a Core backend ignoring the selected tab type cannot expose or write a mixed export', async () => {
   for (const panel of ['skills', 'agents']) {
-    await command(panel, 'bundle-export-type');
+    await command(panel, 'bundle-export-zip-type');
     assert.deepEqual(calls.filter(call => call[0] === 'preview-export').at(-1)[1].kinds, [panel === 'skills' ? 'skill' : 'agent']);
     assert.equal(ui.definitionBundleDraft, null);
   }

@@ -6,11 +6,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { UI } from '../src/ui.js';
-import { shareLibrary, importLibrary, importRelayShare, libraryCommand } from '../src/library-ui.js';
+import { shareLibrary, importLibrary, importRelayShare, libraryCommand, transferLibraryTab } from '../src/library-ui.js';
 import { forgetPrivateImportInput } from '../src/share-ui.js';
 import { privateChatCommand } from '../src/terminal-commands.js';
 import { createSession } from '@bzzy/core/engine/store.js';
 import { listRecords } from '@bzzy/core/engine/database.js';
+import * as libraryBackend from '@bzzy/core/engine/definition-bundle.js';
+import { createSkill, setSkillEnabled } from '@bzzy/core/engine/skills.js';
 
 const code = 'BZZY-LIBRARY-' + 'L'.repeat(43), terminalCode = 'BZZY-TERMINAL-' + 'T'.repeat(43);
 const sender = 's'.repeat(43), recipient = 'r'.repeat(43), sourceDigest = 'e'.repeat(64);
@@ -75,6 +77,80 @@ function sourceTransport(calls, { state = 'complete' } = {}) {
   } };
 }
 const imported = { skills: [{}], agents: [{}], workflows: [{}], goals: [{}], skipped: [{ kind: 'skill', name: 'kept-local' }] };
+
+test('tab export checks names only and generates a Relay code for exactly the selected packages', async () => {
+  const definition = name => ({ name, description: 'Detailed fixture description.', instructions: 'Detailed fixture instructions.' });
+  createSkill(definition('first-checks'), { scope: 'global' }); createSkill(definition('second-checks'), { scope: 'global' });
+  const transport = [], ui = mockUI({ typeChoices: [(_title, choices) => [choices.find(row => row.label === 'second-checks').value]] });
+  await transferLibraryTab('export', 'skill', cwd, ui, { loadBundle: async () => libraryBackend, relayLoader: async () => sourceTransport(transport) });
+  assert.equal(ui.typeMenus.length, 1); assert.equal(ui.menus.length, 0);
+  assert.deepEqual(ui.typeMenus[0].choices.map(row => row.label), ['first-checks', 'second-checks']);
+  assert.equal(ui.typeMenus[0].options.columnHeader, 'NAME'); assert.equal(ui.typeMenus[0].options.confirmLabel, 'Export');
+  assert.ok(!JSON.stringify(ui.typeMenus).includes('Detailed fixture'));
+  const request = transport.find(call => call.operation === 'create').input;
+  assert.deepEqual(request.kinds, ['skill']); assert.equal(request.expectedDigest.length, 64);
+  assert.deepEqual(request.excludeEntries.map(row => row.name), ['first-checks']);
+  assert.ok(ui.frames.some(frame => frame.includes('Export skills')));
+  assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.events.length, 0);
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('cancelled name selection or stale selected revision cannot create a Relay invitation', async () => {
+  const source = createSkill({ name: 'chosen-checks', description: 'Inspect supplied controls.', instructions: 'Inspect offline controls.' }, { scope: 'global' });
+  let loads = 0;
+  for (const selected of [null, []]) {
+    assert.equal(await transferLibraryTab('export', 'skill', cwd, mockUI({ typeChoices: [selected] }), { loadBundle: async () => libraryBackend, relayLoader: async () => { loads++; } }), null);
+  }
+  const ui = mockUI({ typeChoices: [(_title, choices) => { setSkillEnabled(source.id, true, source.revision); return choices.map(row => row.value); }] });
+  await assert.rejects(transferLibraryTab('export', 'skill', cwd, ui, { loadBundle: async () => libraryBackend, relayLoader: async () => { loads++; } }), { code: 'STALE_REVIEW' });
+  assert.equal(loads, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('tab import offers only missing names of its type and commits the checked immutable review indexes', async () => {
+  const value = review();
+  value.entries.push({ ...value.entries[0], name: 'other-skill', description: 'Do not display full definition.' });
+  value.conflicts = [{ ...value.entries[0] }];
+  const ui = mockUI({ answers: [sender] }); let decision;
+  const result = await transferLibraryTab('import', 'skill', cwd, ui, { loadBundle: async () => libraryBackend,
+    relayLoader: async () => ({ importLibraryShare: async request => { request.onIdentity({ recipientFingerprint: recipient }); decision = await request.onReview(value); return { skills: [{}], skipped: [] }; } }) });
+  assert.deepEqual(decision, { approved: true, enable: true, entryIndexes: [4] });
+  assert.deepEqual(ui.typeMenus[0].choices.map(row => row.label), ['other-skill']);
+  assert.equal(ui.typeMenus[0].options.confirmLabel, 'Import'); assert.equal(ui.menus.length, 0);
+  assert.ok(!JSON.stringify(ui.typeMenus).includes('Do not display')); assert.equal(ui.usedHiddenInput, true);
+  assert.equal(result.skills.length, 1); assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft');
+});
+
+test('tab import distinguishes duplicate scoped names and rejects codes for another tab', async () => {
+  const value = review(); value.entries.push({ ...value.entries[1], scope: 'global' });
+  const ui = mockUI({ answers: [sender], typeChoices: [(_title, choices) => [choices.find(row => row.label.endsWith('(Core)')).value]] });
+  let decision;
+  await transferLibraryTab('import', 'agent', cwd, ui, { loadBundle: async () => libraryBackend, relayLoader: async () => ({ importLibraryShare: async request => {
+    decision = await request.onReview(value); return { agents: [{}], skipped: [] };
+  } }) });
+  assert.deepEqual(ui.typeMenus[0].choices.map(row => row.label), ['reviewed-agent (project)', 'reviewed-agent (Core)']);
+  assert.deepEqual(decision.entryIndexes, [4]);
+  await assert.rejects(transferLibraryTab('import', 'agent', cwd, mockUI({ answers: [sender] }), { loadBundle: async () => libraryBackend,
+    relayLoader: async () => ({ importLibraryShare: async request => request.onReview({ ...value, entries: value.entries.filter(row => row.kind === 'skill') }) }) }), /no entries for the selected tab/);
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('tab import cancels unchecked names and treats already installed entries as skips', async () => {
+  for (const existing of [false, true]) {
+    const value = review(); if (existing) value.conflicts = [value.entries[0]];
+    const ui = mockUI({ answers: [sender], typeChoices: [null] }); let decision;
+    const result = await transferLibraryTab('import', 'skill', cwd, ui, { loadBundle: async () => libraryBackend,
+      relayLoader: async () => ({ importLibraryShare: async request => {
+        decision = await request.onReview(value);
+        if (!decision) throw Object.assign(new Error('Owner cancelled'), { code: 'CANCELLED' });
+        return { skills: [], skipped: [{ kind: 'skill', name: 'reviewed-skill' }] };
+      } }) });
+    if (existing) {
+      assert.deepEqual(decision, { approved: true, enable: true, entryIndexes: [0] }); assert.equal(ui.typeMenus.length, 0);
+      assert.equal(result.skipped.length, 1);
+    } else { assert.equal(decision, null); assert.equal(result, null); }
+    assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft');
+  }
+});
 
 test('source code creation requires concrete four-kind review and forwards exact digest and explicit exclusions', async () => {
   const ui = mockUI({ choices: ['share'] }), value = review(), transport = [], bundle = backend(value);
@@ -383,6 +459,30 @@ test('actual terminal type checkboxes use Space and Enter to review only agents 
     ui.tui.key('', { name: 'escape' }); assert.equal(await task, null);
     assert.equal(transportLoads, 0); assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.cursor, 5);
     assert.equal(listRecords('execution').length, 0);
+  } finally { ui.reader?.close(); ui.tui.finishSelection(null); await task?.catch(() => {}); ui.close(); input.destroy(); output.destroy(); }
+});
+
+test('actual tab table uses name checkboxes, an Export button, mouse input and preserves the draft', async () => {
+  createSkill({ name: 'first-checks', description: 'Private detailed fixture.', instructions: 'Inspect supplied offline controls.' }, { scope: 'global' });
+  createSkill({ name: 'second-checks', description: 'Private detailed fixture.', instructions: 'Inspect supplied offline controls.' }, { scope: 'global' });
+  const session = createSession({ id: 'codex', backend: 'codex' }, cwd, 'offline-checkbox-fixture');
+  const input = new PassThrough(); Object.assign(input, { isTTY: true, setRawMode() {} });
+  const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 24, columns: 80 }); output.resume();
+  const ui = new UI({ input, output, error: output, pet: false }); ui.setSession(session.id);
+  Object.assign(ui.tui, { value: 'Unsent draft', cursor: 5 }); const transport = []; let task;
+  try {
+    task = transferLibraryTab('export', 'skill', cwd, ui, { loadBundle: async () => libraryBackend, relayLoader: async () => sourceTransport(transport) });
+    for (let attempt = 0; !ui.tui.selection && attempt < 500; attempt++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(ui.tui.selection?.scope, 'library-export');
+    const rendered = ui.tui.content(70).join('\n');
+    assert.match(rendered, /NAME/); assert.match(rendered, /\[ Export \].*\[ Back \]/);
+    assert.doesNotMatch(rendered, /Private detailed fixture|Every participant reviews|Confirm|Create expiring/);
+    ui.tui.key(' ', { name: 'space' });
+    assert.equal(ui.tui.selection.selected.size, 1);
+    ui.tui.render(); const button = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(button);
+    ui.tui.mouse(0, button.left, button.row); await task;
+    assert.deepEqual(transport.find(call => call.operation === 'create').input.excludeEntries.map(row => row.name), ['first-checks']);
+    assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.cursor, 5); assert.equal(listRecords('execution').length, 0);
   } finally { ui.reader?.close(); ui.tui.finishSelection(null); await task?.catch(() => {}); ui.close(); input.destroy(); output.destroy(); }
 });
 

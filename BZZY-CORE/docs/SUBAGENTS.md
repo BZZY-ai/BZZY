@@ -91,7 +91,12 @@ definitions and project evidence/account bindings separately.
 
 ## Portable definition ZIP
 
-CLI Skills and Agents both provide combined ZIP export/import. The reviewed
+CLI Agents shows names and ON/OFF controls. Its Export button opens name
+checkboxes and generates an expiring Relay code; Import accepts a code and lets
+the owner install/enable selected missing agents. Existing names and availability
+stay unchanged. Open an entry for full details. See [Library sharing](LIBRARY-SHARING.md).
+
+Core retains combined ZIP APIs and legacy CLI routes. The reviewed
 archive contains current-project and global portable skills and specialist
 definitions, including optional provider/model/effort and narrower runtime
 limits. It excludes private bindings, sessions, run history and case/evidence

@@ -10,7 +10,7 @@ import { importSkill, setSkillEnabled } from '../src/engine/skills.js';
 import { saveSubagentDefinition } from '../src/engine/subagent-definitions.js';
 import { saveWorkflow } from '../src/engine/workflows.js';
 import { saveGoalTemplate } from '../src/engine/goal-templates.js';
-import { previewLibraryExport, buildLibraryArchive, readDefinitionBundleFile, discardDefinitionBundleReview } from '../src/engine/definition-bundle.js';
+import { previewLibraryExport, listLibraryExportChoices, previewSelectedLibraryExport, buildLibraryArchive, readDefinitionBundleFile, discardDefinitionBundleReview } from '../src/engine/definition-bundle.js';
 
 let directory, cwd, previousHome, reviews;
 test.beforeEach(() => {
@@ -58,6 +58,31 @@ function archive(file) {
   const result = spawnSync('python3', ['-c', 'import json,sys,zipfile\nwith zipfile.ZipFile(sys.argv[1]) as z: print(json.dumps({i.filename:z.read(i).decode() for i in z.infolist()}))', file], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
 }
+
+test('name selection uses metadata only and excludes unreadable unselected packages and later additions', () => {
+  const kept = skill('chosen-checks'), broken = skill('broken-checks'); agent();
+  fs.rmSync(path.join(process.env.BZZY_HOME, 'skills', broken.name, broken.version), { recursive: true });
+  const catalog = listLibraryExportChoices({ cwd, kinds: ['skill'] });
+  assert.deepEqual(catalog.entries.map(row => row.name), ['broken-checks', 'chosen-checks']);
+  for (const entry of catalog.entries) assert.deepEqual(Object.keys(entry).sort(), [...pinFields].sort());
+  const later = skill('later-checks');
+  const review = previewSelectedLibraryExport({ cwd, kinds: ['skill'], selectedEntries: catalog.entries.filter(row => row.id === kept.id) }); reviews.push(review);
+  assert.deepEqual(review.entries.map(row => row.name), ['chosen-checks']);
+  assert.deepEqual(review.excludeEntries.map(row => row.id).sort(), [broken.id, later.id].sort());
+  const files = archive(build(review));
+  assert.deepEqual(Object.keys(files).sort(), ['manifest.json', 'skills/global/chosen-checks/SKILL.md']);
+  assert.ok(!JSON.stringify(files).includes('broken-checks')); assert.ok(!JSON.stringify(files).includes('later-checks'));
+});
+
+test('name selection rejects stale, unknown, empty and duplicate pins before export', () => {
+  const source = skill('chosen-checks');
+  const { entries } = listLibraryExportChoices({ cwd, kinds: ['skill'] });
+  for (const selectedEntries of [[], [entries[0], entries[0]], [{ ...entries[0], name: 'unknown-checks' }]]) {
+    assert.throws(() => previewSelectedLibraryExport({ cwd, kinds: ['skill'], selectedEntries }));
+  }
+  setSkillEnabled(source.id, true, source.revision);
+  assert.throws(() => previewSelectedLibraryExport({ cwd, kinds: ['skill'], selectedEntries: entries }), { code: 'STALE_REVIEW' });
+});
 
 test('only selected kinds are scanned, so unrelated broken or private entries cannot prevent agent sharing', () => {
   const source = skill('unreadable-checks'); agent();

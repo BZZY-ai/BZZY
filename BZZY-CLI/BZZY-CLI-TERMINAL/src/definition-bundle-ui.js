@@ -3,7 +3,7 @@ import path from 'node:path';
 import { home } from './files.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { resolveProjectIdentity } from '@bzzy/core/engine/project-identity.js';
-import { libraryCommand } from './library-ui.js';
+import { libraryCommand, transferLibraryTab } from './library-ui.js';
 
 const changedMessage = 'The host or terminal project changed. Reopen the ZIP review before acting.';
 const hostKey = () => { const value = path.resolve(home()); return fs.existsSync(value) ? fs.realpathSync(value) : value; };
@@ -112,8 +112,13 @@ export function definitionBundleRows(ui, panel) {
   return rows;
 }
 
-export async function definitionBundleAction(action, ui, panel, { api, loadApi = () => import('@bzzy/core/engine/definition-bundle.js') } = {}) {
+export async function definitionBundleAction(action, ui, panel, { api, loadApi = () => import('@bzzy/core/engine/definition-bundle.js'), transfer = transferLibraryTab } = {}) {
   if (!action.startsWith('bundle-')) return false;
+  if (['bundle-export-type', 'bundle-import-type'].includes(action)) {
+    const context = contextFor(ui); cancelDefinitionBundle(ui, panel);
+    await transfer(action === 'bundle-export-type' ? 'export' : 'import', panel === 'skills' ? 'skill' : 'agent', context.cwd, ui, { loadBundle: async () => api || loadApi() });
+    checkContext(ui, context); refresh(ui); return true;
+  }
   if (['bundle-relay', 'bundle-share-relay', 'bundle-import-relay'].includes(action)) {
     const context = contextFor(ui); cancelDefinitionBundle(ui, panel);
     await libraryCommand(action === 'bundle-relay' ? '' : action === 'bundle-share-relay' ? 'share' : 'import', context.cwd, ui);
@@ -132,7 +137,7 @@ export async function definitionBundleAction(action, ui, panel, { api, loadApi =
     refresh(ui); return true;
   }
   if (action === 'bundle-files-back') { if (ui.definitionBundleDraft?.panel === panel) ui.definitionBundleDraft.filePreview = null; refresh(ui); return true; }
-  const starting = ['bundle-export', 'bundle-import', 'bundle-export-type', 'bundle-import-type'].includes(action), requestedContext = contextFor(ui);
+  const starting = ['bundle-export', 'bundle-import', 'bundle-export-zip-type', 'bundle-import-zip-type'].includes(action), requestedContext = contextFor(ui);
   const requestedDraft = starting ? { context: requestedContext, panel, operation: action.startsWith('bundle-export') ? 'export' : 'import', loading: true,
     ...(action.endsWith('-type') ? { kinds: [panel === 'skills' ? 'skill' : 'agent'] } : {}) } : ui.definitionBundleDraft;
   if (!requestedDraft || requestedDraft.panel !== panel) throw new Error('Open and review the ZIP first.');

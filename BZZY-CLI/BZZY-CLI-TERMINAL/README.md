@@ -88,16 +88,18 @@ state, while worker skill loads also appear in the main session. These rows show
 names and status, without copying task prompts or reports. Loading a skill or
 finishing a worker does not establish goal completion.
 
-Both libraries offer plain **Import** and **Export**. Skills operates on skills;
-Agents operates on specialist agents. Export reviews the current project's and global portable definitions of that type,
-including skill resources, then writes a dated archive in the terminal's original
-working directory. Import reviews a definition ZIP, selects only the tab's type, preserves global/project scopes
-in the receiving project, and never overwrites existing names. Skills import
-disabled; reviewed agent definitions are added without starting agents or models.
-Private bindings, history and case/evidence packages are excluded from this
-portable format. Unsafe packages are blocked rather than silently stripped.
+Both libraries show names and ON/OFF controls, with plain **Import** and
+**Export**. Export opens a name-only checkbox table for that tab's project and
+Core entries. Space toggles names; Enter or **Export** automatically creates an
+expiring Relay code. Import accepts a code, compares fingerprints, then shows
+only that tab's missing names. Check names and choose **Import** to install and
+enable them. Matching names never overwrite existing definitions or their ON/OFF
+state. Duplicate project/Core names have a scope suffix. Complete skill resources
+and scopes are preserved; private bindings, history and case/evidence packages
+are excluded. Unsafe selected packages block export. Neither operation starts
+agents, models or scripts. Open an entry to read its full details.
 
-For Mac-to-Linux transfer without moving ZIP files, use `/library`. It includes skills, specialist agents,
+For combined transfers, use `/library`. It includes skills, specialist agents,
 workflows and saved goal text. `bzzy library share` generates an expiring
 `BZZY-LIBRARY-…` code; `bzzy library import` asks for hidden code entry on the
 receiving host. Compare fingerprints and approve the recipient on the sender.
@@ -400,9 +402,11 @@ project alias in the top bar to rename it inline; Enter/Save name confirms and
 Esc/Cancel returns. Core's own provider, model and effort remain independent in
 its Default models row.
 
-Open **Skills** from the top bar or type `/skills` to view project skills and
-Core/global skills, create or import one skill folder/ZIP, and explicitly enable
-workflows for every model. A skill uses the same package shape as Codex: one
+Open **Skills** from the top bar or type `/skills` to view project and
+Core/global skills. Use `/create-skill` to create one, or the tab's Import/Export
+actions to transfer selected names through Relay. `/skills import` still accepts
+one skill folder/ZIP; local folder imports stay disabled for review. A skill uses
+the same package shape as Codex: one
 directory per skill with a required `SKILL.md` plus optional `scripts/`,
 `references/`, `assets/`, and `agents/openai.yaml`, per the
 [official skill-building guide](https://learn.chatgpt.com/docs/build-skills).

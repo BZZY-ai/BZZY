@@ -16,6 +16,7 @@ function shareKinds(values) {
 const count = value => Array.isArray(value) ? value.length : Number.isSafeInteger(value) && value >= 0 ? value : 0;
 const summary = totals => ['skills', 'agents', 'workflows', 'goals'].map(kind => `${count(totals?.[kind])} ${kind}`).join(' · ');
 const safeImportErrors = {
+  WRONG_LIBRARY_KIND: 'This code contains no entries for the selected tab.',
   INVITE_EXPIRED: 'The Library code expired. Ask the sender for a new one.',
   INVITE_UNAVAILABLE: 'The Library code was already used or is unavailable. Ask the sender for a new one.',
   HOST_MISMATCH: 'The sender does not match the fingerprint you confirmed.',
@@ -32,6 +33,7 @@ const safeImportErrors = {
   UNCERTAIN: 'Library transfer status is uncertain. Inspect the destination Library before retrying.',
 };
 const localErrors = new Set(['The host or terminal changed. Reopen Library transfer.', 'The terminal project changed. Reopen Library transfer.',
+  'Update BZZY Core and CLI together to select Library entries.',
   'Use a BZZY-LIBRARY code from the sender’s Library share screen.', 'Compare and enter the complete sender fingerprint before importing.']);
 
 function terminal(ui) {
@@ -52,6 +54,61 @@ function check(ui, before) {
     || before.session && loadSession(before.session)?.cwd !== before.root) throw new Error('The terminal project changed. Reopen Library transfer.');
 }
 async function checked(ui, before, operation) { check(ui, before); const result = await operation(); check(ui, before); return result; }
+
+function tabKind(kind) {
+  if (!['skill', 'agent'].includes(kind)) throw new Error('Choose the Skills or Agents tab.');
+  return kind;
+}
+const entryKey = entry => JSON.stringify([entry.kind, entry.scope || 'global', entry.name]);
+async function selectNames(ui, before, operation, kind, entries) {
+  const counts = new Map();
+  for (const { entry } of entries) counts.set(entry.name, (counts.get(entry.name) || 0) + 1);
+  const choices = entries.map(({ entry, index }) => ({ value: String(index),
+    label: entry.name + (counts.get(entry.name) > 1 ? ` (${entry.scope === 'global' ? 'Core' : 'project'})` : ''), selected: true }));
+  const selected = await checked(ui, before, () => ui.chooseMany(`${operation} ${shareTypes[kind].toLowerCase()}`, choices, {
+    scope: `library-${operation.toLowerCase()}`, columnHeader: 'NAME', confirmLabel: operation, cancelLabel: 'Back',
+    emptyMessage: 'Select at least one name.', hint: `Space toggles · Enter ${operation.toLowerCase()}s · Esc back`,
+    description: operation === 'Import' ? 'Import enables the selected entries for use.' : 'Only checked names will be shared.',
+  }));
+  if (!selected?.length) return null;
+  const allowed = new Map(choices.map(choice => [choice.value, Number(choice.value)]));
+  if (!Array.isArray(selected) || new Set(selected).size !== selected.length || selected.some(value => !allowed.has(value))) throw new Error('The selection changed. Reopen Import or Export.');
+  return selected.map(value => allowed.get(value));
+}
+
+export async function transferLibraryTab(operation, kind, cwd, ui, { loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), ...options } = {}) {
+  tabKind(kind);
+  if (operation === 'import') return importLibrary('', cwd, ui, { ...options, loadBundle, selectionKind: kind });
+  if (operation !== 'export') throw new Error('Choose Import or Export.');
+  terminal(ui); const before = context(ui, cwd), backend = await checked(ui, before, loadBundle);
+  if (typeof backend.listLibraryExportChoices !== 'function' || typeof backend.previewSelectedLibraryExport !== 'function') throw new Error('Update BZZY Core and CLI together to select Library entries.');
+  const catalog = await checked(ui, before, () => backend.listLibraryExportChoices({ cwd: before.root, kinds: [kind] }));
+  if (!Array.isArray(catalog.entries) || catalog.entries.some(entry => entry.kind !== kind)) throw new Error('The Library list changed. Reopen Export.');
+  if (!catalog.entries.length) { ui.event('info', { message: `No ${shareTypes[kind].toLowerCase()} to export.` }); return null; }
+  const indexes = await selectNames(ui, before, 'Export', kind, catalog.entries.map((entry, index) => ({ entry, index })));
+  if (!indexes) return null;
+  const selectedEntries = indexes.map(index => catalog.entries[index]);
+  let review;
+  try {
+    review = await checked(ui, before, () => backend.previewSelectedLibraryExport({ cwd: before.root, kinds: [kind], selectedEntries }));
+    if (!Array.isArray(review.kinds) || JSON.stringify(review.kinds) !== JSON.stringify([kind]) ||
+      JSON.stringify(review.entries.map(entryKey).sort()) !== JSON.stringify(selectedEntries.map(entryKey).sort())) throw new Error('The selected Library entries changed. Reopen Export.');
+    return await shareLibraryBundle(before.root, review, ui, { ...options, compact: true, assertContext: () => check(ui, before) });
+  } finally { if (review) backend.discardDefinitionBundleReview(review); }
+}
+
+async function selectImports(ui, before, backend, review, kind) {
+  const matches = review.entries.map((entry, index) => ({ entry, index })).filter(row => row.entry.kind === kind);
+  if (!matches.length) throw Object.assign(new Error('This code contains no entries for this tab.'), { code: 'WRONG_LIBRARY_KIND' });
+  const existing = new Set((review.conflicts || []).map(entryKey)), missing = matches.filter(row => !existing.has(entryKey(row.entry)));
+  if (!missing.length) {
+    ui.tui?.notice('These entries are already installed.');
+    return { approved: true, enable: true, entryIndexes: matches.map(row => row.index) };
+  }
+  const indexes = await selectNames(ui, before, 'Import', kind, missing);
+  if (!indexes) return null;
+  return { approved: true, enable: true, entryIndexes: backend.libraryImportEntryIndexes(indexes, review.entries.length) };
+}
 
 const blockedDetails = entry => `${entry.file || 'Package'}${entry.line ? ':' + entry.line : ''}\n${entry.reason}`;
 async function inspectBlockedEntry(ui, before, entry) {
@@ -178,9 +235,10 @@ export async function shareLibrary(cwd, ui, { loadBundle = () => import('@bzzy/c
   } finally { backend.discardDefinitionBundleReview(review); }
 }
 
-export async function importLibrary(value, cwd, ui, { relayLoader = () => import('@bzzy/core/relay'), loadBundle = () => import('@bzzy/core/engine/definition-bundle.js') } = {}) {
+export async function importLibrary(value, cwd, ui, { relayLoader = () => import('@bzzy/core/relay'), loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), selectionKind } = {}) {
+  if (selectionKind !== undefined) tabKind(selectionKind);
   terminal(ui); const before = context(ui, cwd), previous = ui.privateView;
-  const view = { title: 'Import BZZY Library', lines: ['Skills · specialist agents · workflows · saved goals', `Project destination: ${before.root}`, 'Only missing entries are installed. Existing definitions are never overwritten.'], qr: [], onCancel: null };
+  const view = { title: selectionKind ? `Import ${shareTypes[selectionKind].toLowerCase()}` : 'Import BZZY Library', lines: selectionKind ? ['Enter the sender’s Relay code.'] : ['Skills · specialist agents · workflows · saved goals', `Project destination: ${before.root}`, 'Only missing entries are installed. Existing definitions are never overwritten.'], qr: [], onCancel: null };
   let code = String(value || '').trim();
   ui.privateView = view; ui.tui?.schedule();
   try {
@@ -192,6 +250,7 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
     if (!fingerprint(sender)) throw new Error('Compare and enter the complete sender fingerprint before importing.');
     const abort = new AbortController(); view.onCancel = () => abort.abort();
     const backend = await checked(ui, before, loadBundle), relay = await checked(ui, before, relayLoader);
+    if (selectionKind && typeof backend.libraryImportEntryIndexes !== 'function') throw new Error('Update BZZY Core and CLI together to select Library entries.');
     const result = await relay.importLibraryShare({ code, cwd: before.root, expectedSenderFingerprint: sender, signal: abort.signal,
       onIdentity({ recipientFingerprint }) {
         check(ui, before);
@@ -207,12 +266,12 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
         // the ordinary selection dialog owns keyboard/mouse input.
         if (ui.privateView === view) ui.privateView = previous;
         ui.tui?.schedule();
-        try { return await checked(ui, before, () => reviewLibrary(ui, before, backend, review, { importing: true })); }
+        try { return await checked(ui, before, () => selectionKind ? selectImports(ui, before, backend, review, selectionKind) : reviewLibrary(ui, before, backend, review, { importing: true })); }
         finally { if (ui.privateView === previous) ui.privateView = view; ui.tui?.schedule(); }
       },
     });
     check(ui, before);
-    ui.event('info', { message: `${result.alreadyImported ? 'Library already installed' : 'Library installed'}: ${summary(result)}.${result.skipped?.length ? ` Skipped ${result.skipped.length} existing entries.` : ''} No execution started.` });
+    ui.event('info', { message: `${result.alreadyImported ? 'Library already installed' : 'Library installed'}: ${selectionKind ? count(result[selectionKind + 's']) + ' ' + shareTypes[selectionKind].toLowerCase() : summary(result)}.${result.skipped?.length ? ` Skipped ${result.skipped.length} existing entries.` : ''} No execution started.` });
     return result;
   } catch (error) {
     if (error?.name === 'AbortError' || error?.code === 'CANCELLED') { ui.tui?.notice('Library import cancelled.'); return null; }

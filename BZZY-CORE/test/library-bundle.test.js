@@ -14,7 +14,7 @@ import { saveWorkflow, getWorkflow } from '../src/engine/workflows.js';
 import { listSavedGoals, getSavedGoal } from '../src/engine/saved-goals.js';
 import { normalizeGoalTemplate, saveGoalTemplate, getGoalTemplate } from '../src/engine/goal-templates.js';
 import { previewLibraryExport, buildLibraryArchive, previewLibraryImport, importLibraryBundle,
-  readDefinitionBundleFile, discardDefinitionBundleReview, previewDefinitionImport } from '../src/engine/definition-bundle.js';
+  readDefinitionBundleFile, discardDefinitionBundleReview, previewDefinitionImport, libraryImportEntryIndexes } from '../src/engine/definition-bundle.js';
 
 let directory, cwd, sourceHome, previousHome, reviews;
 test.beforeEach(() => {
@@ -75,6 +75,36 @@ function snapshot() {
   return { records: database().prepare('SELECT * FROM records ORDER BY kind,id').all(),
     events: database().prepare('SELECT * FROM events ORDER BY seq').all() };
 }
+
+test('selected imports install only chosen entries with independent durable receipts and retained owner choices', () => {
+  skill(); agent(); workflow(); goal(); const { file } = bundle(), target = recipient();
+  const preview = () => remember(previewLibraryImport(file, { cwd: target }));
+  const review = preview(), selected = review.entries.findIndex(row => row.kind === 'skill');
+  const first = importLibraryBundle(review, { cwd: target, enable: true, entryIndexes: [selected] });
+  assert.deepEqual([first.skills.length, first.agents.length, first.workflows.length, first.goals.length], [1, 0, 0, 0]);
+  assert.equal(listRecords('core.subagent.definition').length, 0); assert.equal(listRecords('core.workflow.definition').length, 0);
+  const saved = first.skills[0]; setSkillEnabled(saved.id, false, saved.revision);
+  assert.deepEqual(importLibraryBundle(preview(), { cwd: target, enable: true, entryIndexes: [selected] }), first);
+  assert.equal(inspectSkill('shared-checks', { scope: 'global' }).enabled, false);
+  const other = review.entries.findIndex(row => row.kind === 'agent');
+  const second = importLibraryBundle(preview(), { cwd: target, enable: true, entryIndexes: [other] });
+  assert.equal(second.agents.length, 1); assert.equal(second.skills.length, 0);
+  assert.equal(listRecords('core.library.import').length, 2);
+  assert.equal(listRecords('core.goal.template').length, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('invalid import selections cannot mutate registries and all-entry selection retains the legacy receipt', () => {
+  skill(); agent(); const { file } = bundle(), target = recipient(), review = remember(previewLibraryImport(file, { cwd: target }));
+  const before = snapshot();
+  for (const entryIndexes of [[], [0, 0], [-1], [2], [0.5], ['0'], new Array(1), null]) {
+    assert.throws(() => importLibraryBundle(review, { cwd: target, entryIndexes })); assert.deepEqual(snapshot(), before);
+  }
+  const input = [1, 0], normalized = libraryImportEntryIndexes(input, 2); input[0] = 9;
+  assert.deepEqual(normalized, [0, 1]);
+  const first = importLibraryBundle(review, { cwd: target, entryIndexes: normalized });
+  assert.deepEqual(importLibraryBundle(remember(previewLibraryImport(file, { cwd: target })), { cwd: target }), first);
+  assert.equal(listRecords('core.library.import').length, 1);
+});
 
 test('all four portable resource kinds retain exact resources and remap scopes without sender identity or execution', () => {
   skill(); skill('project-checks', 'project'); agent(); agent('global-reviewer', 'global'); workflow(); workflow('global-flow', 'global');

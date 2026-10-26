@@ -138,6 +138,30 @@ function definitionExclusions(value = [], kinds) {
     return Object.fromEntries(excludedEntryFields.map(field => [field, entry[field]]));
   }).sort((a, b) => entryKey(a).localeCompare(entryKey(b)));
 }
+// Local-owner metadata only. Resource bytes are checked after the owner selects
+// names, so an unrelated blocked package cannot prevent a selective export.
+export function listLibraryExportChoices({ cwd = process.cwd(), kinds } = {}) {
+  const context = capture(cwd); kinds = definitionKinds(kinds);
+  const entries = [];
+  for (const selected of ['global', 'project']) {
+    if (kinds.includes('skill')) for (const item of pageAll(offset => listSkills({ projectRoot: context.projectRoot, scope: selected, offset, limit: 100 }), 'skills', LIBRARY_BUNDLE_LIMITS.definitions)) {
+      entries.push(definitionPin('skill', selected, item));
+    }
+    if (kinds.includes('agent')) for (const item of pageAll(offset => listSubagentDefinitions({ cwd: context.cwd, scope: selected, offset, limit: 100 }), 'subagents', LIBRARY_BUNDLE_LIMITS.definitions)) {
+      entries.push(definitionPin('agent', selected, item));
+    }
+  }
+  return { kinds, entries: definitionExclusions(entries, kinds) };
+}
+export function previewSelectedLibraryExport({ cwd = process.cwd(), kinds, selectedEntries } = {}) {
+  kinds = definitionKinds(kinds);
+  if (!Array.isArray(selectedEntries) || !selectedEntries.length) fail('Select at least one entry to export.');
+  const selected = definitionExclusions(selectedEntries, kinds), current = listLibraryExportChoices({ cwd, kinds }).entries;
+  const available = new Map(current.map(entry => [entryKey(entry), entry]));
+  for (const entry of selected) if (digest(available.get(entryKey(entry)) || null) !== digest(entry)) fail('A selected entry changed. Open Export again.', 'STALE_REVIEW');
+  const selectedKeys = new Set(selected.map(entryKey));
+  return previewLibraryExport({ cwd, kinds, excludeEntries: current.filter(entry => !selectedKeys.has(entryKey(entry))) });
+}
 const definitionPin = (kind, scope, record) => ({ kind, scope, name: record.name, id: record.id || record.name,
   revision: record.revision, version: record.version });
 function omitDefinition(pin, state, pins) {
@@ -603,12 +627,21 @@ export function previewLibraryImport(file, { cwd = process.cwd() } = {}) {
   } catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
 }
 
-export function importLibraryBundle(review, { cwd = process.cwd(), enable = false } = {}) {
+export function libraryImportEntryIndexes(value, count) {
+  if (!Number.isSafeInteger(count) || count < 1 || count > LIBRARY_BUNDLE_LIMITS.definitions) fail('Invalid Library entry count.');
+  if (value === undefined) return Array.from({ length: count }, (_, index) => index);
+  if (!Array.isArray(value) || !value.length || value.length > count || new Set(value).size !== value.length ||
+      [...value].some(index => !Number.isSafeInteger(index) || index < 0 || index >= count)) fail('Choose entries from this exact Library review.');
+  return [...value].sort((a, b) => a - b);
+}
+export function importLibraryBundle(review, { cwd = process.cwd(), enable = false, entryIndexes } = {}) {
   const saved = reviewed(review, 'library-import', cwd);
+  const indexes = libraryImportEntryIndexes(entryIndexes, review.entries.length), entries = indexes.map(index => review.entries[index]);
   if (typeof enable !== 'boolean') fail('Choose whether to enable the reviewed imported skills and agents.');
   if (digest(regular(saved.source, LIBRARY_BUNDLE_LIMITS.bytes)) !== saved.archiveSha256) fail('The downloaded Library changed. Preview it again.', 'STALE_REVIEW');
   validateLibraryManifest(saved.manifest, saved.extracted, saved.payload, saved.context);
-  const receiptId = digest([saved.archiveSha256, saved.context.cwd, saved.context.projectId]), created = [];
+  const receiptId = digest([saved.archiveSha256, saved.context.cwd, saved.context.projectId,
+    ...(indexes.length === review.entries.length ? [] : [indexes])]), created = [];
   let result;
   try {
     result = transaction(db => {
@@ -618,10 +651,10 @@ export function importLibraryBundle(review, { cwd = process.cwd(), enable = fals
         if (previous.enable !== enable) fail('This Library archive was already imported with a different availability choice.', 'CONFLICT');
         return structuredClone(previous.result);
       }
-      const destinations = review.entries.map(entry => libraryDestination(entry, saved.context, saved.payload));
-      if (digest(destinations) !== digest(saved.destinations)) fail('A destination Library entry changed. Preview the import again.', 'STALE_REVIEW');
+      const destinations = entries.map(entry => libraryDestination(entry, saved.context, saved.payload));
+      if (digest(destinations) !== digest(indexes.map(index => saved.destinations[index]))) fail('A destination Library entry changed. Preview the import again.', 'STALE_REVIEW');
       const imported = { skills: [], agents: [], workflows: [], goals: [], skipped: [], enabled: enable };
-      for (const [index, entry] of review.entries.entries()) {
+      for (const [index, entry] of entries.entries()) {
         if (entry.kind !== 'skill' || destinations[index].conflict) continue;
         const target = skillDirectory({ ...entry, projectId: saved.context.projectId }); libraryPathSafe(target);
         if (fs.existsSync(target)) {
@@ -629,7 +662,7 @@ export function importLibraryBundle(review, { cwd = process.cwd(), enable = fals
           if (checked.name !== entry.name || checked.description !== entry.description) fail('An existing immutable skill package does not match the reviewed Library import.');
         }
       }
-      for (const [index, entry] of review.entries.entries()) {
+      for (const [index, entry] of entries.entries()) {
         if (destinations[index].conflict) { imported.skipped.push({ kind: entry.kind, name: entry.name, scope: entry.scope }); continue; }
         if (entry.kind === 'skill') {
           const target = skillDirectory({ ...entry, projectId: saved.context.projectId }); libraryPathSafe(target);
@@ -652,7 +685,7 @@ export function importLibraryBundle(review, { cwd = process.cwd(), enable = fals
         }
       }
       putRecord('core.library.import', receiptId, { archiveSha256: saved.archiveSha256, cwd: saved.context.cwd,
-        projectId: saved.context.projectId, enable, result: imported, importedAt: now() }, db);
+        projectId: saved.context.projectId, enable, entryIndexes: indexes, result: imported, importedAt: now() }, db);
       return imported;
     });
   } catch (error) { for (const directory of created.reverse()) fs.rmSync(directory, { recursive: true, force: true }); throw error; }

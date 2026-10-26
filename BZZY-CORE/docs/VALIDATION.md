@@ -1,3 +1,29 @@
+# Name-only Skills/Agents and Relay checkbox transfers (2026-10-25)
+
+Node.js 24/macOS full suites: **739 Core tests passed, 2 skipped** (741 total)
+and **704 CLI tests passed, 21 skipped** (725 total), zero failures. Both syntax
+checks and whitespace checks pass. Fixtures use private temporary homes on the
+internal disk. No running installation, user Library entry, live model or
+production Relay invitation was changed.
+
+Primary Import/Export actions now use Relay with name-only checkbox tables.
+Export automatically prepares a code for the exact checked source versions;
+unselected broken packages do not block it. Import validates the entire archive
+and commits only checked missing names of that tab's type, enabling those entries
+without execution. Existing names and ON/OFF states remain untouched. Exact
+subset retries preserve owner decisions using separate durable receipts, while
+all-entry imports retain legacy receipt identity. Legacy ZIP APIs/routes remain
+compatible. Main Library rows omit descriptions and model details; opening an
+entry still provides its complete definition and provenance.
+
+Tests cover source pin changes, additions after listing, malformed selections,
+subset receipts, duplicate scoped names, wrong-type codes, cancellation, existing
+entries and real terminal checkbox/button input with draft retention. A real
+encrypted local Relay transfer into a separate recipient process imports one
+selected skill from a four-kind archive and creates no other definitions or
+executions. Fingerprint approval, expiry, revocation and private code handling
+remain enforced. This does not establish deployed Relay or Mac-to-Linux readiness.
+
 # Simple Skills/Agents tabs and type-specific ZIPs (2026-10-25)
 
 Node.js 24/macOS full suites: **734 Core tests passed, 2 skipped** (736 total)

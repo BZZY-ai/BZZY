@@ -46,8 +46,9 @@ Implemented:
   Native `/create-skill` and `/create-agent` commands ask for a name and publish
   portable global definitions enabled for use, through Core's internal creator
   guides and validated atomic registration. Creation does not start a task.
-- Reviewed type-specific ZIP import/export in Skills and Agents, with combined
-  ZIP compatibility, preserving resources and scopes without bindings or execution.
+- Name-only checkbox Import/Export in Skills and Agents using expiring Relay
+  codes, exact version pins and selected missing-entry imports. Resources and
+  scopes survive without bindings or execution; existing ZIP APIs stay compatible.
 - Background learning publishes reusable project skills directly to Library,
   enabled with source/history, conflict-safe names and Disable/Delete controls.
   Committed skill and agent creations queue concise iOS alerts for the full

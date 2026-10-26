@@ -38,7 +38,9 @@ each terminal's own conversation across model and mode changes. Its background
 compactor shares one configurable model with validation consensus, inheriting the
 BZZY Core model by default. `/create-skill` and `/create-agent` use the terminal's
 current model and publish validated global definitions enabled for use. The
-Skills and Agents tabs keep plain Import and Export actions beside their libraries.
+Skills and Agents tabs show names and ON/OFF controls, with plain Import and
+Export actions. Check names to export an expiring Relay code, or enter a code
+and check missing names to import.
 
 Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALIDATION.md)
 after `/validate` checks the original requirements and recorded evidence. The
