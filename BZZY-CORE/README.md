@@ -12,6 +12,13 @@ the same engine and private state.
 
 Implemented:
 
+- Read-only execution-process observations on authenticated session snapshots.
+  Identity-checked liveness is sampled at most every two seconds per unchanged
+  process/state and returned separately from model output. Unknown, legacy or
+  stopped processes never assert liveness. This is no progress/completion claim,
+  durable heartbeat or new permission. The CLI combines it with actual event
+  timestamps and native tool lifecycle events for live feedback.
+
 - An optional [bug bounty pack](assets/bug-bounty/README.md) with 25 self-contained
   specialist authoring definitions, embedded per-class criteria, a compact goal
   workflow and a portable reporting skill. These assets use existing Core Library

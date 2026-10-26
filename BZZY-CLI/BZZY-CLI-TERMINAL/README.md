@@ -162,13 +162,27 @@ Settings page to chat. Esc also closes other menu screens; when a prompt,
 picker or skill preview is open, it cancels that view first and preserves the
 unsent chat draft.
 
-Normal chat shows an animated **Cooking…** status while Core's admitted execution
-is running, including tool or specialist work within that reply. **Queued…**,
-**Starting…**, **Stopping…** and **Needs your input** distinguish the other states.
-The indicator disappears when execution finishes, fails, pauses or is cancelled;
-typing a draft starts no indicator. This works in ordinary and minimal layouts
-without adding synthetic messages or invocation counts. Goal runs retain their
-Pursuing/Verifying/Validating status.
+Chat keeps its **Cooking…**, Pursuing, Verifying and Validating badges and adds
+an animated activity row beside the current action: waiting for model output,
+receiving text, running a tool or receiving worker activity. A per-action timer
+and last-output/activity age advance independently from Core polling. Native
+tool completion clears the active command; the response's completed/paused/stopped
+label freezes its elapsed time. These rows do not add synthetic chat messages or
+invocation counts and preserve drafts in normal and minimal layouts.
+
+Core supplies a recent, identity-checked execution-process observation, sampled
+at most once every two seconds for the same process/state. **Process alive**
+means that process was observed; it does not prove the model is advancing.
+Quiet periods show their actual age, approval waits say **Waiting for your input**,
+and missing processes, stale checks or connection loss cannot keep a healthy
+process label. No tokens or progress percentages are invented.
+
+Skills, Agents, Workflows and Goals share spaced Import/Export button toolbars,
+visible keyboard focus and separate name/ON-OFF actions. Controls wrap in narrow
+terminals; disabled controls cannot be clicked or selected. Library browsing
+hides the chat draft and restores it when returning. Save/create/load actions use
+the same button styling. Import/export authorization and manual-only goal saving
+retain their existing behavior.
 
 **Option+Delete** on Mac (**Alt+Backspace**) and **Ctrl+W** delete the previous
 word at the cursor, preserving text to its right. **Ctrl+Backspace** also works

@@ -486,7 +486,8 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           break;
         }
         if (!reconnectable(error)) throw error;
-        ui.tui?.notice('Reconnecting to Core… Active work continues.');
+        ui.executionConnection?.(false);
+        ui.tui?.notice('Reconnecting to Core… Checking execution status.');
         await delay(500);
       }
     }

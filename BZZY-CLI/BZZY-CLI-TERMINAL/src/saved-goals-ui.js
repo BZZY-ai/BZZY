@@ -78,10 +78,11 @@ export function goalRows(ui) {
     const page = listSavedGoals({ offset: ui.goalOffset || 0, limit: pageSize });
     ui.goalEntries = new Map(page.goals.map(goal => [goal.id, goal]));
     return [{ text: '← Back to chat', action: 'close' }, { text: 'GOALS · manually saved objectives', tone: 'accent' },
-      { text: 'Running /goal does not add to this library. Use /goal without text to choose a saved objective.', tone: 'muted' },
-      { text: 'Save new goal', action: 'save' },
-      ...(ui.sessionId && loadSession(ui.sessionId)?.goal ? [{ text: 'Save current goal', action: 'save-current' }] : []),
-      { text: 'Import', action: 'import' }, { text: 'Export', action: 'export', disabled: !page.total },
+      { text: 'Saved manually. Reuse with /goal.', tone: 'muted' },
+      { text: 'Save new goal', action: 'save', buttonGroup: 'save', buttonIcon: '+' },
+      ...(ui.sessionId && loadSession(ui.sessionId)?.goal ? [{ text: 'Save current goal', action: 'save-current', buttonGroup: 'save' }] : []),
+      { text: 'Import', action: 'import', buttonGroup: 'transfer', buttonIcon: '↓' },
+      { text: 'Export', action: 'export', buttonGroup: 'transfer', buttonIcon: '↑', disabled: !page.total },
       ...page.goals.map(goal => ({ text: goal.objective.replace(/\s+/gu, ' ').trim(), action: 'view:' + goal.id })),
       ...(!page.total ? [{ text: 'No manually saved goals yet.', tone: 'muted' }] : []),
       ...(ui.goalOffset ? [{ text: '← Newer goals', action: 'previous' }] : []),

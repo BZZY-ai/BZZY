@@ -153,7 +153,10 @@ export class ClaudeEngine {
             if (!goal && this.options.tokenBudget != null && priorTokens + tokens >= this.options.tokenBudget) this.interrupt('token_limit').catch(() => {});
           }
         } else if (event.type === 'user') {
-          for (const block of event.message?.content || []) if (block.type === 'tool_result') this.traffic.complete(block.tool_use_id, Boolean(block.is_error));
+          for (const block of event.message?.content || []) if (block.type === 'tool_result') {
+            this.traffic.complete(block.tool_use_id, Boolean(block.is_error));
+            this.ui.event('backend', { method: 'tool.completed', params: { id: block.tool_use_id, failed: Boolean(block.is_error) } });
+          }
         } else if (event.type === 'system' && event.subtype === 'init') {
           this.session.engineThreadId = event.session_id;
           if (event.model) this.session.resolvedModel = event.model;

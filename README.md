@@ -50,9 +50,11 @@ opens the saved-objective quick picker. Goals and Workflows provide the same
 Import/Export flow. Goal exports show readable objective text; imports save
 templates without starting goals or changing the selected workflow.
 
-Ordinary CLI chat displays **Cooking…** while its admitted Core execution is
-running. Queue, startup, stopping and input waits have separate labels; existing
-goal and validation status indicators retain their meaning.
+CLI chat shows the current action with an animated indicator, its own timer,
+last-output age and a recent Core process observation. Quiet periods, approval
+waits and lost connections remain explicit; process liveness does not claim
+model progress. Skills, Agents, Workflows and Goals share spaced button toolbars
+and visible keyboard focus.
 
 Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALIDATION.md)
 after `/validate` checks the original requirements and recorded evidence. The

@@ -1,3 +1,41 @@
+# Live execution feedback and shared Library buttons (2026-10-26)
+
+Node.js 24/macOS full suites: **763 Core tests passed, 2 skipped** (765 total),
+**742 CLI tests passed, 21 skipped** (763 total), zero failures. Final focused
+checks cover 49 CLI cases and 13 Core cases after the lifecycle refinements.
+Syntax and whitespace checks pass.
+
+Normal and minimal terminal chat now paint an animated action row with a
+per-phase timer, last-output/activity age, worker activity and recent process
+observations. Polling/animation never become model progress or synthetic history.
+Tests cover quiet output, elapsed time, command completion, overlapping tools,
+Claude tool lifecycle records, stale/duplicate replay, queued-turn transitions,
+new executions and conversation changes, explicit input waits, missing/stale
+process observations, disconnects and frozen completion timers. The actual PTY
+Validate command still starts independent review and retains missing-source
+errors without a false validated badge.
+
+Core session snapshots add only an authenticated read-only observation of the
+selected execution: identity-checked runner liveness, execution ID and observation
+time. Sampling is cached for two seconds per unchanged identity/state; malformed,
+legacy, absent or stopped identities never assert liveness. An isolated child
+process test observes its actual exit and rejects a mismatched birth identity.
+This detects process presence, not model reasoning progress or verified completion.
+No durable heartbeat, permission change or provider call is added.
+
+Skills, Agents, Workflows and Goals share terminal button layout with spaced
+Import/Export toolbars, focus backgrounds, narrow-width wrapping, disabled-button
+handling and exact clickable cells. Gaps cannot trigger adjacent transfers.
+Name/toggle actions, revision/context pins, manual goal saves and existing typed
+Relay transfers remain authoritative. Chat drafts are hidden during browsing and
+preserved on return. Tests exercise all four real libraries at 40/60/90/120
+columns, plus smaller synthetic layouts, keyboard ordering and Unicode switches.
+Rendered 100-column previews were also inspected for the four tabs and live chat.
+
+No live model request, target test, running-installation update or service restart
+was performed. Preview images and synthetic private homes are outside the repo;
+user reference folders and private account bindings are excluded from publication.
+
 # Workflow and Goals tabs; manually saved goal Library (2026-10-26)
 
 Node.js 24/macOS: **760 Core tests passed, 2 skipped** (762 total) and

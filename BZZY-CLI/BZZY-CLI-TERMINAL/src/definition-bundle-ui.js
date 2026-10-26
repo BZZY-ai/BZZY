@@ -29,7 +29,8 @@ export function cancelDefinitionBundle(ui, panel) {
 }
 
 export function bundleLibraryRows() {
-  return [{ text: 'Import', action: 'bundle-import-type' }, { text: 'Export', action: 'bundle-export-type' }];
+  return [{ text: 'Import', action: 'bundle-import-type', buttonGroup: 'transfer', buttonIcon: '↓' },
+    { text: 'Export', action: 'bundle-export-type', buttonGroup: 'transfer', buttonIcon: '↑' }];
 }
 const bundleLabel = draft => draft.kinds ? draft.panel === 'skills' ? 'skills' : 'agents' : 'skills & agents';
 function checkTypes(review, kinds) {

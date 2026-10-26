@@ -56,6 +56,8 @@ test('Core and a trusted host client discover the same daemon without exposing i
   assert.ok((await core.sessions()).some(item => item.id === session.id));
   const fromCLI = await runtimeRequest(host, 'GET', `/v1/sessions/${session.id}`);
   assert.equal(fromCLI.session.id, session.id);
+  assert.equal(fromCLI.observation.executionId, null); assert.equal(fromCLI.observation.runnerAlive, null);
+  assert.ok(Number.isFinite(Date.parse(fromCLI.observation.observedAt)));
 });
 
 test('two clients and lost acknowledgments still queue exactly one execution', async () => {

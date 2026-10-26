@@ -92,12 +92,13 @@ export function workflowRows(ui) {
       { text: `Selected for this terminal: ${state.selected ? `${state.selected.name} · ${state.selected.scope}${state.available ? '' : ' · unavailable'}` : 'None'}`, tone: state.available ? 'accent' : 'warning' },
       ...(!state.available ? [{ text: state.reason, tone: 'warning' }] : []),
       ...(goal?.workflow ? [{ text: `Current goal keeps ${goal.workflow.name} · ${goal.workflow.version.slice(0, 8)}`, tone: 'muted' }] : []),
-      { text: 'Pick one workflow for this terminal. /goal loads its full text before model work.', tone: 'muted' },
-      { text: 'Import', action: 'import', tone: 'accent' }, { text: 'Export', action: 'export', tone: 'accent' },
-      { text: 'Create workflow', action: 'create', tone: 'accent' }, { text: 'Load workflow from a text file', action: 'load' }, { text: '' },
+      { text: 'One workflow per terminal. /goal loads its full instructions.', tone: 'muted' },
+      { text: 'Import', action: 'import', buttonGroup: 'transfer', buttonIcon: '↓' }, { text: 'Export', action: 'export', buttonGroup: 'transfer', buttonIcon: '↑' },
+      { text: 'Create workflow', action: 'create', buttonGroup: 'create', buttonIcon: '+' },
+      { text: 'Load workflow from a text file', action: 'load', buttonLabel: 'Load file', buttonGroup: 'create' }, { text: '' },
       { text: `${state.selected ? '  ' : '✓ '}None · no workflow`, action: `none:${state.revision}:${token}`, tone: 'accent' },
       ...page.workflows.flatMap(row => [{ text: `${state.available && state.selected?.id === row.id ? '✓ ' : '  '}${row.name} · ${row.scope}`, action: `select:${row.scope}:${row.name}:${row.revision}:${state.revision}:${token}`, tone: 'accent' },
-        { text: row.description, tone: 'muted' }, { text: `  Inspect / edit ${row.name}`, action: `view:${row.scope}:${row.name}:${row.revision}:${token}` }]),
+        { text: `  Inspect / edit ${row.name}`, action: `view:${row.scope}:${row.name}:${row.revision}:${token}` }]),
       ...(!page.workflows.length ? [{ text: 'No workflows saved for this project. Create one or load reusable text.', tone: 'muted' }] : []),
       ...(ui.workflowOffset ? [{ text: 'Previous workflows', action: 'previous' }] : []), ...(page.nextOffset != null ? [{ text: 'More workflows', action: 'next' }] : [])];
   } catch (error) { return [{ text: error.message, tone: 'warning' }, { text: backLabel(ui), action: 'close' }]; }
