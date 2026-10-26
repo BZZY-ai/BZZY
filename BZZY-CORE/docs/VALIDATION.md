@@ -1,3 +1,28 @@
+# Experiential manual effort controls (2026-10-26)
+
+Node.js 24/macOS full suites: **754 Core tests passed, 2 skipped** (756 total)
+and **725 CLI tests passed, 21 skipped** (746 total), zero failures. Both syntax
+checks and whitespace checks pass. The focused provider/model/default-settings
+and terminal dropdown checks pass (14 Core and 41 CLI cases).
+
+Experiential effort editing now uses Core-owned manual request levels: None,
+Minimal, Low, Medium, High and Max, plus Default. It requires no catalog lookup
+or credentials and works with stale disabled, empty or narrow saved capability
+metadata. Model selectors retain an explicit manual effort while preserving
+actual catalog metadata separately. All six values save through independent
+Core and Consensus & Compactor APIs and reach Codex's Responses launch
+configuration unchanged. Default adds no implicit effort; saved xhigh remains
+compatible. Other providers retain their existing restrictions.
+
+Tests cover an unavailable catalog with zero HTTP requests during effort editing,
+an empty private credential store, real terminal mouse selection, cancellation,
+invalid levels and unchanged actual context/modality metadata. Full catalog
+discovery, credential isolation and sanitized error handling remain covered.
+Fixtures use private temporary homes, synthetic keys and local HTTP servers.
+No running installation or production account settings changed. No paid inference
+was sent; the gateway's effective effort, adjustment or rejection is not verified
+by these fixtures.
+
 # Experiential selected-model effort refresh (2026-10-26)
 
 Node.js 24/macOS full suites: **754 Core tests passed, 2 skipped** (756 total)

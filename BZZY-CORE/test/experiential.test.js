@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { BUILTINS, getProvider, providerModelCapabilities, saveKey, saveConfig, config, credentialStatus } from '../src/engine/providers.js';
+import { BUILTINS, getProvider, providerModelCapabilities, saveKey, saveConfig, config, credentialStatus, providerEffortPolicy, providerEffortCapabilities } from '../src/engine/providers.js';
 import { availableModels, modelEffortCapabilities } from '../src/engine/models.js';
 import { createSession } from '../src/engine/store.js';
 import { codexLaunch } from '../src/engine/engines/codex.js';
@@ -98,7 +98,7 @@ test('authenticated rich catalog pages use slugs and per-model capabilities, exc
   assert.deepEqual(mixed.capabilities.supportedEfforts, ['low', 'high']); assert.equal(mixed.capabilities.defaultEffort, undefined);
   const disjoint = catalog.models.find(model => model.id === 'disjoint');
   assert.equal(disjoint.capabilities.supportsEffort, false);
-  assert.throws(() => reasoningEffort({ provider: 'experiential', model: disjoint.id, selectedEffort: 'high', modelCapabilities: disjoint.capabilities }), /does not support/);
+  assert.equal(reasoningEffort({ provider: 'experiential', model: disjoint.id, selectedEffort: 'high', modelCapabilities: disjoint.capabilities }), 'high', 'Gateway request controls do not claim every route implements this effort');
   assert.ok(catalog.models.some(model => model.id === 'owner-private-model'));
   assert.doesNotMatch(JSON.stringify(catalog), new RegExp(secret)); assert.match(catalog.description, /checked.*each request/);
 });
@@ -133,15 +133,15 @@ test('Experiential default, discovered, non-reasoning and unknown manual launche
     return catalog;
   };
   const known = launchModel(provider.model);
-  assert.equal(known.context_window, 1050000); assert.equal(known.default_reasoning_level, 'medium');
-  assert.deepEqual(known.supported_reasoning_levels.map(value => value.effort), ['none', 'low', 'medium', 'high', 'xhigh']);
+  assert.equal(known.context_window, 1050000); assert.equal(known.default_reasoning_level, null);
+  assert.deepEqual(known.supported_reasoning_levels.map(value => value.effort), ['none', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh']);
   const discovered = launchModel('new-model', { contextWindow: 48000, inputModalities: ['text', 'image'], supportedEfforts: ['low', 'high'], defaultEffort: 'high' });
-  assert.equal(discovered.context_window, 48000); assert.equal(discovered.default_reasoning_level, 'high'); assert.deepEqual(discovered.input_modalities, ['text', 'image']);
+  assert.equal(discovered.context_window, 48000); assert.equal(discovered.default_reasoning_level, null); assert.deepEqual(discovered.input_modalities, ['text', 'image']);
   const plain = launchModel(provider.model, { supportsEffort: false });
-  assert.equal(plain.default_reasoning_level, null); assert.deepEqual(plain.supported_reasoning_levels, []);
+  assert.equal(plain.default_reasoning_level, null); assert.ok(plain.supported_reasoning_levels.some(row => row.effort === 'max'));
   const manual = launchModel('unknown-private-model');
   assert.equal(manual.context_window, 32768); assert.deepEqual(manual.input_modalities, ['text']);
-  assert.equal(manual.default_reasoning_level, null); assert.deepEqual(manual.supported_reasoning_levels, []);
+  assert.equal(manual.default_reasoning_level, null); assert.ok(manual.supported_reasoning_levels.some(row => row.effort === 'minimal'));
   assert.equal(reasoningEffort({ provider: 'experiential', model: 'unknown-private-model' }), undefined);
 });
 
@@ -170,58 +170,55 @@ test('catalog auth errors and redirects remain sanitized without sending credent
 });
 
 
-test('effort discovery reads one selected model, refreshes stale flags and reaches Codex with the chosen effort', async t => {
-  const calls = [], slug = 'owner/future-model';
-  await catalogServer(t, (request, response) => {
-    calls.push({ path: request.url, auth: request.headers.authorization });
-    const detail = entry(slug, {}, { supports_reasoning: true, supported_reasoning_efforts: ['low', 'high', 'max'], reasoning_default_effort: 'high' });
-    delete detail.default_provider_ids;
-    detail.default_waterfall = [{ model_provider_id: 'route-' + slug, status: 'active' }];
-    detail.providers.push({ id: 'unused-route', status: 'active', routable: true, capabilities: { supports_tools: true, supports_streaming: true, supports_reasoning: false } });
-    response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(detail));
-  });
-  const provider = getProvider('experiential');
-  const current = createSession(provider, directory, slug); current.modelCapabilities = { supportsEffort: false };
-  const capabilities = await modelEffortCapabilities(current);
-  assert.deepEqual(calls, [{ path: '/api/models/owner%2Ffuture-model', auth: 'Bearer ' + secret }]);
-  assert.deepEqual(capabilities.supportedEfforts, ['low', 'high', 'max']); assert.equal(capabilities.defaultEffort, 'high');
-  assert.notEqual(capabilities.supportsEffort, false); assert.equal(current.modelCapabilities.supportsEffort, false, 'Discovery alone does not mutate a saved session');
-  const launch = codexLaunch(provider, { ...current, selectedEffort: 'max', modelCapabilities: capabilities });
-  assert.ok(launch.args.includes('model_reasoning_effort="max"'));
-  assert.equal(listRecords('execution').length, 0); assert.doesNotMatch(JSON.stringify(capabilities), new RegExp(secret));
-});
+const manualLevels = ['none', 'minimal', 'low', 'medium', 'high', 'max'];
 
-test('selected effort metadata is sanitized and respects explicit non-reasoning models', async t => {
-  let reasoning = true;
-  await catalogServer(t, (_request, response) => {
-    const detail = entry('fresh-model', {}, { supports_reasoning: reasoning, supported_reasoning_efforts: ['low', 'high', 'max', 'invalid level', 1, 'high'], reasoning_default_effort: 'invalid level' });
-    response.end(JSON.stringify(detail));
-  });
-  const session = { provider: 'experiential', model: 'fresh-model', modelCapabilities: { supportedEfforts: ['old'], supportsEffort: true } };
-  assert.deepEqual((await modelEffortCapabilities(session)).supportedEfforts, ['low', 'high', 'max']);
-  assert.equal((await modelEffortCapabilities(session)).defaultEffort, undefined);
-  reasoning = false;
-  assert.equal((await modelEffortCapabilities(session)).supportsEffort, false);
-});
-
-test('selected-model lookup rejects mismatches, redirects, slow responses and authentication errors without stale effort or secret leakage', async t => {
-  let mode = 'mismatch', leaked = false;
-  const receiver = http.createServer(() => { leaked = true; }); await new Promise(resolve => receiver.listen(0, '127.0.0.1', resolve));
-  t.after(async () => { receiver.closeAllConnections(); await new Promise(resolve => receiver.close(resolve)); });
-  await catalogServer(t, (_request, response) => {
-    if (mode === 'timeout') return;
-    if (mode === 'redirect') { response.writeHead(302, { Location: `http://127.0.0.1:${receiver.address().port}/credentials` }); response.end(); return; }
-    if (mode === 'auth') { response.statusCode = 401; response.end(secret); return; }
-    response.end(JSON.stringify(entry('wrong-model')));
-  });
-  const current = { provider: 'experiential', model: 'selected-model', modelCapabilities: { supportedEfforts: ['max'] } };
-  for (mode of ['mismatch', 'redirect', 'timeout', 'auth']) {
-    await assert.rejects(modelEffortCapabilities(current, { timeoutMs: mode === 'timeout' ? 50 : 1000 }), error => {
-      assert.doesNotMatch(error.message, new RegExp(secret));
-      return /Could not verify|rejected the API key/.test(error.message);
-    });
+test('Experiential manual efforts work without catalog, authentication or fresh model metadata', async t => {
+  assert.deepEqual(credentialStatus('experiential'), { environment: false, saved: false });
+  assert.deepEqual((await modelEffortCapabilities({ provider: 'experiential', model: 'unverified-owner-model' })).supportedEfforts, manualLevels);
+  let calls = 0;
+  await catalogServer(t, (_request, response) => { calls++; response.statusCode = 503; response.end('Unavailable'); });
+  const current = { provider: 'experiential', model: 'unverified-owner-model', modelCapabilities: { supportsEffort: false, supportedEfforts: [] } };
+  for (const model of ['gpt-5.6-sol', 'deepseek-v4.1-flash-1017', 'unverified-owner-model']) {
+    const capabilities = await modelEffortCapabilities({ ...current, model });
+    assert.equal(capabilities.supportsEffort, true); assert.deepEqual(capabilities.supportedEfforts, manualLevels);
+    assert.equal(capabilities.defaultEffort, undefined);
   }
-  const abort = new AbortController(); abort.abort();
-  await assert.rejects(modelEffortCapabilities(current, { signal: abort.signal }), { name: 'AbortError' });
-  assert.equal(leaked, false);
+  assert.equal(calls, 0); assert.equal(current.modelCapabilities.supportsEffort, false);
+  const cancelled = new AbortController(); cancelled.abort();
+  await assert.rejects(modelEffortCapabilities(current, { signal: cancelled.signal }), { name: 'AbortError' });
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('all six manual efforts pass through stale non-reasoning metadata into Codex without local substitution', () => {
+  saveKey('experiential', secret); const provider = getProvider('experiential');
+  for (const model of [provider.model, 'deepseek-v4.1-flash-1017']) for (const effort of manualLevels) {
+    const session = createSession(provider, directory, model);
+    session.modelCapabilities = { supportsEffort: false, supportedEfforts: ['low'] }; session.selectedEffort = effort;
+    assert.equal(reasoningEffort(session), effort);
+    assert.equal(providerSelection({ provider: provider.id, model, effort }).effort, effort);
+    const launch = codexLaunch(provider, session);
+    assert.ok(launch.args.includes('model_reasoning_effort=' + JSON.stringify(effort)));
+    assert.ok(launch.args.includes('model_providers.bzzy_api.wire_api="responses"'));
+    const catalog = JSON.parse(fs.readFileSync(path.join(process.env.BZZY_HOME, 'runtime', session.id + '-models.json'))).models[0];
+    assert.ok(catalog.supported_reasoning_levels.some(row => row.effort === effort));
+    assert.equal(catalog.default_reasoning_level, null);
+  }
+  assert.equal(reasoningEffort({ provider: provider.id, model: provider.model, selectedEffort: 'default' }, { effort: 'high' }), undefined);
+  assert.equal(reasoningEffort({ provider: provider.id, model: provider.model }), undefined);
+  assert.equal(reasoningEffort({ provider: provider.id, model: provider.model, selectedEffort: 'xhigh' }), 'xhigh', 'Previously saved xhigh remains compatible');
+  assert.throws(() => reasoningEffort({ provider: provider.id, model: 'manual-model', selectedEffort: 'ultra' }), /does not support/);
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('manual effort policy is confined to Experiential and does not replace other provider or model limits', async () => {
+  for (const id of ['codex', 'claude', 'deepseek', 'abliteration', 'orcarouter']) {
+    const provider = getProvider(id), saved = { supportsEffort: false, supportedEfforts: [] };
+    assert.equal(providerEffortPolicy(provider), null);
+    assert.deepEqual(providerEffortCapabilities(provider, provider.model, saved), providerModelCapabilities(provider, provider.model, saved));
+    assert.throws(() => reasoningEffort({ provider: id, model: provider.model, selectedEffort: 'high', modelCapabilities: saved }), /does not support/);
+  }
+  assert.throws(() => providerSelection({ provider: 'deepseek', effort: 'minimal' }), { code: 'INVALID_REQUEST' });
+  assert.throws(() => providerSelection({ provider: 'experiential', effort: 'ultra' }), { code: 'INVALID_REQUEST' });
+  const first = await modelEffortCapabilities({ provider: 'experiential', model: 'manual-model' }); first.supportedEfforts.pop();
+  assert.deepEqual((await modelEffortCapabilities({ provider: 'experiential', model: 'manual-model' })).supportedEfforts, manualLevels);
 });

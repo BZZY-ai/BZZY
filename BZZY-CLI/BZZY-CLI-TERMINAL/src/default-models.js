@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { CoreAssistant } from '@bzzy/core';
 import { modelDefaultSettings, configureModelDefault } from '@bzzy/core/engine/model-defaults.js';
 import { backgroundModelSettings, configureBackgroundModel } from '@bzzy/core/engine/background-model.js';
-import { providers, getProvider, providerModelCapabilities } from '@bzzy/core/engine/providers.js';
+import { providers, getProvider, providerModelCapabilities, providerEffortCapabilities, providerEffortPolicy } from '@bzzy/core/engine/providers.js';
 import { availableModels, normalizeModel } from '@bzzy/core/engine/models.js';
 import { home } from '@bzzy/core/engine/files.js';
 import { chooseEffort } from './model-controls.js';
@@ -21,7 +21,9 @@ const clone = value => structuredClone(value);
 const publicSelection = value => value ? { provider: value.provider, model: value.model ?? null, effort: value.effort || 'default',
   ...(value.capabilities ? { capabilities: clone(value.capabilities) } : {}) } : null;
 const effortCapabilities = selection => {
-  const accepted = providerModelCapabilities(getProvider(selection.provider), selection.model), discovered = selection.capabilities || {};
+  const provider = getProvider(selection.provider);
+  if (providerEffortPolicy(provider)) return providerEffortCapabilities(provider, selection.model, selection.capabilities);
+  const accepted = providerModelCapabilities(provider, selection.model), discovered = selection.capabilities || {};
   const capabilities = { ...accepted, ...discovered };
   if (accepted.supportsEffort === false || discovered.supportsEffort === false) return { ...capabilities, supportsEffort: false, supportedEfforts: [] };
   if (accepted.supportedEfforts?.length) {
@@ -168,7 +170,7 @@ export class DefaultModels {
       selected = { ...prior, ...selected, provider: prior.provider };
       if (field === 'model') {
         const capabilities = ['core', 'background'].includes(target) ? effortCapabilities(selected)
-          : providerModelCapabilities(getProvider(selected.provider), selected.model, selected.capabilities || {});
+          : providerEffortCapabilities(getProvider(selected.provider), selected.model, selected.capabilities || {});
         const retained = prior.effort === 'default' || capabilities.supportsEffort !== false && capabilities.supportedEfforts?.includes(prior.effort);
         selected.effort = selected.model === prior.model && retained ? prior.effort : 'default';
       }

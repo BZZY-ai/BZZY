@@ -75,6 +75,19 @@ test('effort dropdowns list only the selected model capabilities and support dir
   tui.key('', { name: 'escape' }); assert.equal(await fixed, null);
 });
 
+test('Experiential effort dropdown opens without credentials and mouse selection applies a manual level', async t => {
+  const { ui, tui, input } = terminal(t);
+  const selected = chooseEffort({ provider: 'experiential', model: 'unverified-model', selectedEffort: 'default',
+    modelCapabilities: { supportsEffort: false, supportedEfforts: [] } }, ui);
+  await new Promise(resolve => setImmediate(resolve)); tui.render();
+  assert.deepEqual(tui.selection.choices.map(choice => choice.value), ['default', 'none', 'minimal', 'low', 'medium', 'high', 'max']);
+  assert.match(tui.selection.description, /Requested effort/);
+  const max = tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 6); assert.ok(max);
+  input.write(`\x1b[<0;${max.left + 2};${max.row}M`);
+  assert.equal((await selected).effort, 'max'); assert.equal(tui.value, 'an unsent draft');
+  assert.equal(tui.entries.filter(entry => entry.kind === 'user').length, 1);
+});
+
 test('Send, top Settings and Back controls react to actual SGR clicks', async t => {
   const { ui, tui, input } = terminal(t);
   const click = hit => { assert.ok(hit); input.write(`\x1b[<0;${hit.left + 1};${hit.row}M`); };

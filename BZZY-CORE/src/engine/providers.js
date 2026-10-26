@@ -65,6 +65,25 @@ export function providerModelCapabilities(provider, model, discovered) {
   return result;
 }
 
+// These are request controls for this gateway, not claims about a model's
+// reasoning implementation. The gateway applies its own downshift/drop policy.
+export function providerEffortPolicy(provider) {
+  return provider.id === 'experiential' ? {
+    levels: ['none', 'minimal', 'low', 'medium', 'high', 'max'],
+    legacyLevels: ['xhigh'],
+    description: 'Requested effort. Experiential may lower, drop or reject it depending on the model.',
+  } : null;
+}
+export function providerEffortCapabilities(provider, model, discovered) {
+  const capabilities = providerModelCapabilities(provider, model, discovered), policy = providerEffortPolicy(provider);
+  if (policy) {
+    capabilities.supportsEffort = true;
+    capabilities.supportedEfforts = [...policy.levels, ...policy.legacyLevels];
+    delete capabilities.defaultEffort;
+  }
+  return capabilities;
+}
+
 export function config() {
   return readJson(path.join(home(), 'config.json'), { version: 1, defaultProvider: null, providers: {} });
 }

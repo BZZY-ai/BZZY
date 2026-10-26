@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { launch, root, version, assertCodexVersion, backendCommand } from '../process.js';
 import { home, privateDir, writeJson, saveSession } from '../store.js';
-import { apiKey, providerModelCapabilities } from '../providers.js';
+import { apiKey, providerModelCapabilities, providerEffortPolicy, providerEffortCapabilities } from '../providers.js';
 import { Rpc } from '../rpc.js';
 import { backendIsolation } from '../policy.js';
 import { taskTools } from '../tools.js';
@@ -104,9 +104,10 @@ export function codexLaunch(provider, session, options = {}) {
       catalog.default_reasoning_level = null; catalog.supported_reasoning_levels = [];
       catalog.supports_reasoning_summary_parameter = false; catalog.supports_reasoning_summaries = false;
     }
-    if (capabilities?.defaultEffort) catalog.default_reasoning_level = capabilities.defaultEffort;
-    const supported = capabilities?.supportedEfforts || provider.supportedEfforts;
-    if (capabilities?.supportsEffort === false && provider.catalogFormat === 'experiential') {
+    const effortPolicy = providerEffortPolicy(provider), effortCapabilities = providerEffortCapabilities(provider, session.model, session.modelCapabilities);
+    if (capabilities?.defaultEffort && !effortPolicy) catalog.default_reasoning_level = capabilities.defaultEffort;
+    const supported = effortCapabilities?.supportedEfforts || provider.supportedEfforts;
+    if (capabilities?.supportsEffort === false && provider.catalogFormat === 'experiential' && !effortPolicy) {
       catalog.default_reasoning_level = null; catalog.supported_reasoning_levels = [];
     } else if (supported?.length) {
       catalog.supported_reasoning_levels = supported.map(effort => ({ effort, description: effort }));

@@ -20,11 +20,10 @@ this credential. Never put keys in chat, skills, reusable agents, shared project
 or source control. See [authentication](https://platform.experientiallabs.ai/docs/authentication).
 
 The default model is `gpt-5.6-sol`, the upstream Codex example. Its fallback profile
-uses a 1,050,000-token context window, text/image input, and medium reasoning by
-default. The fallback effort choices are none, low, medium, high and xhigh: the
-intersection of its default provider routes when this integration was added.
-Those capabilities apply only to that exact slug. They are not guarantees for
-every gateway model or future route configuration.
+uses a 1,050,000-token context window and text/image input. Those capabilities
+apply only to that exact slug. They are not guarantees for every gateway model
+or future route configuration. Default effort leaves reasoning to the gateway;
+Core adds no implicit effort for this provider.
 
 Core discovers model metadata through authenticated, same-origin
 `GET /api/models?limit=50&offset=…` catalog pages. This documented rich catalog
@@ -32,18 +31,27 @@ includes public models and the organization's own models, with per-model context
 modalities and deployment capabilities. Inference uses each model's exact `slug`,
 never its catalog UUID or an upstream vendor's ID. Explicitly inactive models,
 non-text outputs, and models whose listed routes cannot stream or use tools are omitted.
-Known effort lists are intersected across the listed default routes; an empty
-intersection leaves only provider-default reasoning. Missing metadata does not
-invent effort levels. Live metadata takes precedence over the exact-model
-fallback. See the [model catalog](https://platform.experientiallabs.ai/docs/models).
+Known effort metadata remains intersected across the listed default routes;
+live metadata takes precedence over the exact-model fallback. The explicit
+effort request controls below are separate from these capability observations.
+See the [model catalog](https://platform.experientiallabs.ai/docs/models).
 
-The CLI's **Effort** dropdown and `/effort` refresh only the selected model via
-authenticated `GET /api/models/<slug>`, including its current default waterfall.
-They do not need the full paginated catalog to finish first. This also replaces
-stale saved effort flags when a route's capabilities change. Only advertised
-common reasoning levels appear; explicit non-reasoning models keep Default only.
-Unknown or failed detail reads show a loading error rather than inventing levels
-or silently keeping stale choices. Effort discovery starts no model inference.
+For **Experiential only**, the CLI's **Effort** dropdown and `/effort` always offer
+**Default, None, Minimal, Low, Medium, High and Max**. Opening this list requires
+no catalog request or API key, and starts no inference. Saved non-reasoning flags,
+missing metadata and narrower route lists cannot hide these manual choices.
+The same controls apply to model selection and saved defaults, including Core
+and the shared Consensus & Compactor model. Other providers retain their existing
+model-specific restrictions.
+
+These are **requested effort** levels, not a guarantee that every model implements
+them. Core forwards the explicit selection unchanged through the Codex Responses
+adapter's reasoning configuration (`reasoning.effort` on the Responses wire).
+The gateway may lower, drop or reject the requested effort according to its
+route policy, reporting adjustments in `x-experiential-ignored-parameters`.
+Default/unset adds no reasoning override. Previously saved `xhigh` values remain
+accepted for compatibility but are not offered as new manual choices.
+See [request compatibility](https://platform.experientiallabs.ai/llms.txt).
 
 Discovery is bounded to 2,000 source entries, 40 pages, 4 MiB per page and 16 MiB
 in total, within the existing discovery deadline. Incomplete pages, repeated
@@ -56,8 +64,9 @@ request.
 Manual IDs remain supported. An unknown model without live metadata gets a local
 32,768-token planning budget, text-only input and no implicit reasoning setting.
 That budget is an estimate, not a claim about the upstream model's capacity.
-An explicit manual effort still needs to be supported by the gateway. The adapter
-does not inherit the template ChatGPT model's image or reasoning capabilities.
+The adapter does not inherit the template ChatGPT model's image or reasoning
+capabilities. Selecting effort does not verify model access or authentication;
+actual execution still requires this host's valid private credentials.
 
 Experiential documents Responses streaming, function/custom tools, reasoning and
 continuations. Some capabilities vary by route; custom-tool grammars translated
@@ -79,8 +88,9 @@ permissions use the same Core paths. Adding the provider grants no new tool,
 filesystem, network, account or YOLO permissions.
 
 Validation uses synthetic keys and isolated HTTP catalog fixtures for pagination,
-metadata, effort selection, launch configuration, credential isolation and
-sanitized errors/redirect rejection. The installed Codex parser also accepted the
-unknown-model catalog with no reasoning levels in an empty temporary home,
-using initialization/model listing only. No live model inference or account
-credentials were used; paid tool-call compatibility is not claimed by fixtures.
+metadata, launch configuration, credential isolation and sanitized errors/redirect
+rejection. Offline and actual terminal mouse tests cover the manual effort list;
+configuration tests cover all six selections despite stale disabled metadata,
+unchanged forwarding, Default and legacy values, and other-provider restrictions.
+No live model inference or account credentials were used; paid tool-call
+compatibility and the gateway's effective effort are not claimed by fixtures.

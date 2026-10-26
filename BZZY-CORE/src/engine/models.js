@@ -3,7 +3,7 @@ import { launch } from './process.js';
 import { Rpc } from './rpc.js';
 import { stopProcess } from './policy.js';
 import { subscriptionEnvironment } from './auth.js';
-import { apiKey, getProvider, providerModelCapabilities } from './providers.js';
+import { apiKey, getProvider, providerModelCapabilities, providerEffortPolicy, providerEffortCapabilities } from './providers.js';
 import { getRecord, listRecords } from './database.js';
 import { identityAlive } from './recovery.js';
 
@@ -189,29 +189,14 @@ function apiModel(provider, model) {
     description: model.description || [cyber ? 'Cyber' : '', capabilities.contextWindow ? capabilities.contextWindow.toLocaleString() + ' context tokens' : '', capabilities.inputModalities?.join(' + ')].filter(Boolean).join(' · '), capabilities };
 }
 
-// Effort selection belongs to one model. Do not wait for every catalog page,
-// or trust a stale saved capability flag after the gateway changes its routes.
+// Manual gateway request controls stay usable offline, even when a saved
+// model has stale or explicitly non-reasoning metadata.
 export async function modelEffortCapabilities(session, { signal, timeoutMs = 8000 } = {}) {
   const provider = getProvider(session.provider), model = session.model || session.resolvedModel || provider.model;
-  if (provider.catalogFormat === 'experiential') {
-    const bounded = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
-    try {
-      if (!validId(model) || model === '.' || model === '..') throw new Error('Invalid model.');
-      bounded.throwIfAborted();
-      const url = new URL('/api/models/' + encodeURIComponent(model), provider.baseUrl);
-      const { value } = await apiCatalogPage(provider, url, bounded, 4 * 1024 * 1024);
-      if (value?.model?.slug !== model || !Array.isArray(value.providers)) throw new Error('Invalid model metadata.');
-      const defaults = Array.isArray(value.default_provider_ids) ? value.default_provider_ids
-        : Array.isArray(value.default_waterfall) ? value.default_waterfall.filter(row => row && (!row.status || row.status === 'active'))
-          .map(row => row.model_provider_id).filter(id => typeof id === 'string' && id) : undefined;
-      const selected = experientialModel({ ...value, default_provider_ids: defaults });
-      if (!selected) throw new Error('This model has no compatible route.');
-      return apiModel(provider, selected).capabilities;
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      throw new Error(error.code === 'MODEL_AUTH' ? 'Experiential rejected the API key. Run bzzy auth experiential.'
-        : 'Could not verify reasoning levels for this Experiential model. Retry the effort picker or choose another model.');
-    }
+  const policy = providerEffortPolicy(provider);
+  if (policy) {
+    signal?.throwIfAborted();
+    return { ...providerEffortCapabilities(provider, model, session.modelCapabilities), supportedEfforts: [...policy.levels] };
   }
   let capabilities = providerModelCapabilities(provider, model, session.modelCapabilities);
   if (!capabilities.supportedEfforts?.length && capabilities.supportsEffort !== false) {

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { chooseEffort } from '../src/model-controls.js';
 import { DefaultModels, defaultModelGroups, chooseDefaultModel } from '../src/default-models.js';
 import { CoreAssistant } from '@bzzy/core';
 import { createSession, loadSession, saveSession } from '@bzzy/core/engine/store.js';
@@ -204,15 +205,18 @@ test('refreshing the same model retains a supported effort and resets an effort 
 });
 
 
-test('Core and shared background effort validation uses fresh picker metadata instead of stale disabled flags', async () => {
-  new CoreAssistant().configure({ source: 'core', provider: 'experiential', model: 'future-gateway', effort: 'default' }, { expectedRevision: 0, requestId: randomUUID() });
-  configureBackgroundModel({ source: 'custom', provider: 'experiential', model: 'future-gateway', effort: 'default' }, { expectedRevision: 0 });
-  const { controller } = settings();
-  for (const target of ['core', 'background']) {
+test('Core and shared background save all six manual Experiential efforts despite stale disabled metadata', async () => {
+  const model = getProvider('experiential').model;
+  new CoreAssistant().configure({ source: 'core', provider: 'experiential', model, effort: 'default' }, { expectedRevision: 0, requestId: randomUUID() });
+  configureBackgroundModel({ source: 'custom', provider: 'experiential', model, effort: 'default' }, { expectedRevision: 0 });
+  const { controller, ui } = settings({ effortPicker: chooseEffort });
+  for (const target of ['core', 'background']) for (const effort of ['none', 'minimal', 'low', 'medium', 'high', 'max']) {
     controller.drafts.get(target).agents[0].capabilities = { supportsEffort: false, supportedEfforts: [] };
-    controller.effortPicker = async () => ({ effort: 'high', capabilities: { supportedEfforts: ['low', 'high', 'max'] } });
+    ui.chooseOne = async (_title, choices) => {
+      const picker = await choices; assert.ok(picker.choices.some(row => row.value === effort)); return effort;
+    };
     await controller.run(`defaults:effort:${target}:0`); await controller.run(`defaults:save:${target}`);
-    assert.equal(target === 'core' ? new CoreAssistant().settings().selection.effort : backgroundModelSettings().selection.effort, 'high');
+    assert.equal(target === 'core' ? new CoreAssistant().settings().selection.effort : backgroundModelSettings().selection.effort, effort);
   }
   assert.equal(listRecords('execution').length, 0);
 });

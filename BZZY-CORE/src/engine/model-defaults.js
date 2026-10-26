@@ -1,5 +1,5 @@
 import { object, fail } from '../validation.js';
-import { defaultSelection, modeDefault, getProvider, providerModelCapabilities, selectionFromSession,
+import { defaultSelection, modeDefault, getProvider, providerEffortCapabilities, selectionFromSession,
   saveDefaultSelection, saveModeDefault, modelDefaultRevision } from './providers.js';
 
 const targetName = target => {
@@ -28,7 +28,7 @@ function checkedSelection(input) {
   const capabilities = publicCapabilities(input.capabilities);
   const selection = selectionFromSession({ provider: input.provider, model: input.model,
     selectedEffort: input.effort ?? 'default', modelCapabilities: capabilities });
-  const supported = providerModelCapabilities(getProvider(selection.provider), selection.model, capabilities || {});
+  const supported = providerEffortCapabilities(getProvider(selection.provider), selection.model, capabilities || {});
   if (selection.effort !== 'default' && (supported.supportsEffort === false || supported.supportedEfforts?.length && !supported.supportedEfforts.includes(selection.effort))) {
     fail('INVALID_REQUEST', 'Choose an effort supported by this model.');
   }

@@ -109,7 +109,8 @@ Implemented:
   [Abliteration setup](docs/ABLITERATION.md).
 
 - Built-in Experiential Labs support through the Responses adapter, private
-  API-key setup and authenticated model/capability discovery. See
+  API-key setup and authenticated model/capability discovery. Its manual effort
+  controls are available offline, independent of route metadata. See
   [Experiential setup](docs/EXPERIENTIAL.md).
 
 - Central session input admission for CLI and iOS, with authenticated handoff,

@@ -267,9 +267,10 @@ Experiential Labs is built in. Run `bzzy auth experiential`, then choose it in
 `gpt-5.6-sol`; Core discovers other chat models and their capabilities from the
 authenticated catalog. `EXPLABS_API_KEY` is the alternative host environment
 setting. See [Experiential setup](../../BZZY-CORE/docs/EXPERIENTIAL.md).
-For Experiential, `/effort` and the Effort dropdown refresh the selected model
-directly, without waiting for its entire catalog. Reopening the picker refreshes
-old saved effort metadata. Available levels remain model/route-specific.
+For Experiential only, `/effort` and the Effort dropdown immediately offer
+Default, None, Minimal, Low, Medium, High and Max without a catalog request or
+key check. These are requested levels: the gateway may lower, drop or reject
+them. Saved non-reasoning metadata cannot hide these manual controls.
 
 CLI stays terminal-oriented; persistent Agent management lives in iPhone.
 The terminal header shows Core host CPU and used/total RAM, refreshed roughly
@@ -435,7 +436,8 @@ history and frame caches; the complete pairing QR and quiet zone still fit 80×2
 The model control at the bottom opens a floating searchable dropdown over the
 current chat. Click a model once to apply it; use the mouse wheel or arrows to
 browse, type to filter, and click outside or press Esc to cancel. The adjacent
-effort dropdown lists the selected model's supported reasoning levels. Defaults
+effort dropdown lists the selected model's supported reasoning levels, with the
+manual requested levels described above for Experiential. Defaults
 for normal chat, Core and every mode are under Settings → Default models.
 Other selectors use floating dialogs with explicit
 Confirm/Cancel controls, preserving approval confirmations. Double-click the

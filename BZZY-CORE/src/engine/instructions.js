@@ -1,7 +1,7 @@
 import { messageFormatInstructions } from '../message-format.js';
 import { contextFor } from './recovery.js';
 import { getRecord } from './database.js';
-import { providers, providerModelCapabilities } from './providers.js';
+import { providers, providerEffortCapabilities, providerEffortPolicy } from './providers.js';
 import { supervisorProtocol, executorProtocol } from './delegation-protocol.js';
 import { bestieProtocol } from './besties-protocol.js';
 import fs from 'node:fs';
@@ -13,15 +13,15 @@ export function structuredWork(session, options = {}) {
 }
 export function reasoningEffort(session, options = {}) {
   const provider = providers()[session.provider] || {};
-  const capabilities = providerModelCapabilities(provider, session.model, session.modelCapabilities);
-  const supported = capabilities.supportedEfforts;
+  const capabilities = providerEffortCapabilities(provider, session.model, session.modelCapabilities);
+  const supported = capabilities.supportedEfforts, policy = providerEffortPolicy(provider);
   if (session.selectedEffort === 'default') return undefined;
   const selected = session.selectedEffort || options.effort;
   if (selected) {
-    if (session.modelCapabilities?.supportsEffort === false || supported?.length && !supported.includes(selected)) throw new Error(`This model does not support effort ${selected}.${supported?.length ? ' Choose ' + supported.join(', ') + '.' : ''}`);
+    if ((!policy && session.modelCapabilities?.supportsEffort === false) || supported?.length && !supported.includes(selected)) throw new Error(`This model does not support effort ${selected}.${supported?.length ? ' Choose ' + supported.join(', ') + '.' : ''}`);
     return selected;
   }
-  if (structuredWork(session, options) || session.modelCapabilities?.supportsEffort === false) return undefined;
+  if (structuredWork(session, options) || session.modelCapabilities?.supportsEffort === false || policy) return undefined;
   if (provider.catalogFormat === 'experiential' && !supported?.length) return undefined;
   return supported?.length && !supported.includes('medium') ? supported.includes('low') ? 'low' : undefined : 'medium';
 }

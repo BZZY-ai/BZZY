@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import { availableModels, chooseModel, normalizeModel } from '../src/models.js';
-import { chooseEffort } from '../src/model-controls.js';
+import { chooseEffort, chooseUnifiedModel } from '../src/model-controls.js';
 import { BUILTINS, saveConfig, saveKey, addProvider, chooseProvider, ensureApiKey, apiKey, defaultSelection, saveDefaultSelection, setDefault } from '../src/providers.js';
 import { root } from '../src/process.js';
 import { reasoningEffort } from '../src/instructions.js';
@@ -226,25 +226,51 @@ test('changing a provider inside another mode preserves the normal chat preset',
 });
 
 
-test('Experiential effort picker refreshes one-model metadata and saves supported choices rather than keeping stale flags', async t => {
+test('Experiential manual effort picker has all six request levels without catalog reads or inference', async t => {
   const paths = [], server = http.createServer((request, response) => {
     paths.push(request.url);
-    response.setHeader('Content-Type', 'application/json');
-    response.end(JSON.stringify({ model: { slug: 'current-gateway-model', status: 'active', supported_params: { tools: true, reasoning: true } },
-      default_waterfall: [{ model_provider_id: 'active-route' }], providers: [{ id: 'active-route', status: 'active', routable: true,
-        capabilities: { supports_tools: true, supports_streaming: true, supports_reasoning: true, supported_reasoning_efforts: ['low', 'high', 'max'] } }] }));
+    response.statusCode = 503; response.end('Unavailable');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   saveConfig({ version: 1, providers: { experiential: { ...BUILTINS.experiential, baseUrl: `http://127.0.0.1:${server.address().port}/v1` } } });
-  saveKey('experiential', 'synthetic-effort-fixture');
   const current = { provider: 'experiential', model: 'current-gateway-model', modelCapabilities: { supportsEffort: false }, cwd: directory };
   const ui = { async chooseOne(_title, choices) {
-    const picker = await choices; assert.deepEqual(picker.choices.map(choice => choice.value), ['default', 'low', 'high', 'max']); return 'max';
+    const picker = await choices; assert.deepEqual(picker.choices.map(choice => choice.value), ['default', 'none', 'minimal', 'low', 'medium', 'high', 'max']);
+    assert.match(picker.description, /Requested effort.*lower, drop or reject/); return 'max';
   } };
   const selected = await chooseEffort(current, ui);
-  assert.equal(selected.effort, 'max'); assert.deepEqual(selected.capabilities.supportedEfforts, ['low', 'high', 'max']);
-  assert.deepEqual(paths, ['/api/models/current-gateway-model']);
+  assert.equal(selected.effort, 'max'); assert.deepEqual(selected.capabilities.supportedEfforts, ['none', 'minimal', 'low', 'medium', 'high', 'max']);
+  assert.deepEqual(paths, []);
   ui.chooseOne = async (_title, choices) => { await choices; return 'ultra'; };
   await assert.rejects(chooseEffort(current, ui), /supported by this model/);
+});
+
+test('Experiential model selectors retain manual effort even when the catalog says reasoning is disabled', async t => {
+  const model = 'current-gateway-model', levels = ['none', 'minimal', 'low', 'medium', 'high', 'max'];
+  const server = http.createServer((_request, response) => {
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ total: 1, offset: 0, models: [{
+      model: { slug: model, status: 'active', supported_params: { tools: true } },
+      default_provider_ids: ['active-route'], providers: [{ id: 'active-route', status: 'active', routable: true,
+        capabilities: { supports_tools: true, supports_streaming: true, supports_reasoning: false } }],
+    }] }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  saveConfig({ version: 1, providers: { experiential: { ...BUILTINS.experiential, baseUrl: `http://127.0.0.1:${server.address().port}/v1` } } });
+  saveKey('experiential', 'synthetic-model-fixture');
+  const current = { ...session('experiential'), model, selectedEffort: 'max', modelCapabilities: { supportsEffort: false } };
+  for (const unified of [false, true]) {
+    const value = unified ? JSON.stringify(['experiential', model]) : model;
+    const ui = { async chooseOne(_title, choices) {
+      const picker = await choices, selected = picker.choices.find(choice => choice.value === value);
+      assert.deepEqual(selected.efforts, levels); assert.equal(selected.supportsEffort, true); assert.equal(selected.effort, 'max');
+      return { value, effort: 'max' };
+    } };
+    const selected = await (unified ? chooseUnifiedModel(current, ui) : chooseModel(current, '', ui));
+    assert.equal(selected.effort, 'max'); assert.equal(selected.capabilities.supportsEffort, false, 'Actual catalog metadata remains separate from request controls');
+    assert.equal(reasoningEffort({ ...current, modelCapabilities: selected.capabilities, selectedEffort: selected.effort }), 'max');
+  }
+  assert.equal(current.modelCapabilities.supportsEffort, false);
 });
