@@ -12,51 +12,55 @@ existing iPhone connections remain compatible.
 
 ## Terminal flow
 
-On the Mac, from the source project:
+On BZZY 1, open **Skills** or **Agents → Export**, check names, then choose
+**Export**. The private screen displays **EXPORT CODE** and a **Copy code**
+button. Click it or press **C**; no Enter is required. Native clipboard success,
+terminal clipboard requests and copy failures have distinct feedback.
 
-```sh
-bzzy library share
-```
+On BZZY 2, open the matching tab's **Import → ENTER CODE** and paste. BZZY shows
+connection/authorization, a download bar based on actual received bytes, package
+integrity checks and installation. It installs/enables only missing definitions
+and lists only newly installed names. Existing names and ON/OFF states are
+preserved. No second selection or manual fingerprint entry is needed.
 
-Choose the types to include using Space and Enter, then review the bundle and
-select **Create expiring Relay code**. To share only agents and skills directly:
+The source Core must remain online; leaving the export screen keeps the code
+alive for up to ten minutes. **Revoke code** cancels it. A code is single use and
+carries only the sender-selected immutable Library archive. Both hosts need the
+current Core/CLI. The existing Relay's LIBRARY support is sufficient; this code
+approval mode does not add a Relay server operation.
+
+Combined transfers use `/library`, `/library share` and `/library import`, or:
 
 ```sh
 bzzy library share agents skills
-```
-
-The private screen
-shows a `BZZY-LIBRARY-…` code, source fingerprint, expiry and recipient requests.
-Keep the Mac online. `c` copies the code; `a` approves the exact recipient after
-comparing its full fingerprint with the receiving terminal.
-
-On Linux, from the receiving project:
-
-```sh
 bzzy library import
 ```
 
-Paste the code into hidden entry and compare the source fingerprint. The Linux
-terminal shows its recipient fingerprint for approval on the Mac. After the
-encrypted download, review the exact files and destination conflicts. Select
-**Install missing & enable reviewed skills/agents**, or install them disabled.
-Workflows remain unselected and goals remain saved text in `/goal`. Neither
-choice starts models, agents, scripts, hooks or dependency installation.
+Source type/file review remains available for combined exports. New CLI exports
+use the same paste-once codes. `/import` routes Library and full-session codes.
+Legacy Library codes and invitation QR protocol text still work through
+`/library import` with their previous review/fingerprint flow. Main Skills and
+Agents Import buttons request a new export when given an obsolete code.
+Full-session transfers retain their separate explicit approval. No share URL is
+created, and no model, script, hook, goal or specialist starts during import.
 
-Inside BZZY, `/library` opens the same controls. `/share library` shares the Library;
-`/library import` receives it. `/import` accepts Library and full-session codes,
-asking for hidden entry when no code is supplied. QR invitation text is supported
-as protocol text; no invitation URL is created.
+## Code authorization
 
-For a simpler transfer, open **Skills** or **Agents** and choose **Export**.
-The table shows names with checkboxes, without descriptions or file details.
-Space toggles names; **Export** or Enter creates the Relay code automatically.
-The compact code screen keeps fingerprint approval and expiry; `q` shows its QR.
-On the receiver, choose **Import** in the matching tab and enter the code. After
-fingerprint approval, check the missing names and choose **Import**. This explicit
-action enables those selected entries for use without starting any work.
-Project/Core suffixes appear only when names collide. Existing entries are
-skipped, and other resource types in a combined code are not installed.
+A versioned `BZZY-LIBRARY-2.…` code contains the Relay token, sender fingerprint,
+a separate Core-generated 256-bit secret and the immutable ZIP hash. The secret
+never enters Relay invitation metadata. A recipient proves possession inside the
+encrypted connection, bound to its exact grant, identity and archive. Before that
+proof, even a Relay token holder cannot read the manifest or a byte of the ZIP.
+The sender certificate and archive must match the code's pins. Provisional grants
+expire after 15 seconds; authorized transfers retain their bounded transfer TTL.
+Only portable/import authority is issued, with no pairing, execution or live
+session access. The current source approval mode is an explicit local-owner
+option; existing remote sharing and full-session approval contracts are unchanged.
+
+Core queues concurrent code claims behind its bounded active transfer. Stop,
+revocation, expiry and shutdown during approval prevent late grants from reviving
+released archives. The capability is kept only in the private screen/clipboard;
+it is never a chat message, logged command or package resource.
 
 ## Contents and difference rules
 
@@ -104,7 +108,7 @@ receipt; retries cannot re-enable entries or recreate later deletions.
 
 Bounds: 1,024 definitions, 4,096 archive entries, 1 MiB per resource, 60 MiB payload
 and a 64 MiB ZIP. Existing v1 skills/agents ZIPs keep their previous limits and
-behavior. Codes last at most ten minutes and require fingerprint approval.
+behavior. Codes last at most ten minutes; new Library codes authorize a single recipient through the proof described above.
 Grants allow portable import only, with no execution, pairing or live observation.
 
 Relay transports encrypted chunks and cannot read the archive. Library source

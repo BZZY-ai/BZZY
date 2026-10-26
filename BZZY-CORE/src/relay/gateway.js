@@ -25,6 +25,7 @@ import { RelayClient, verifyCertificate, encodeInvitation, renderInvitationQR } 
 import { DEFAULT_RELAY_URL, loadRelayIdentity, privateRelayDirectory } from './identity.js';
 import { revokeLocalRelayGrant } from './revocation.js';
 import { ProjectTransferService, libraryShareSelection } from './project-transfer.js';
+import { libraryApproval } from './library-code.js';
 import { PROTOCOL, VERSION, LIMITS, COMMANDS, OPERATIONS, validateRequest, permissionFor,
   boundedInteger, boundedPayload, sanitize, response, errorResponse } from './protocol.js';
 
@@ -434,7 +435,8 @@ export class RelayGateway extends EventEmitter {
   }
   async createLibraryShare(input) {
     this.#check(); if (!this.#started) fail('GATEWAY_OFFLINE', 'Connect the host gateway first.');
-    object(input, ['cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries']);
+    object(input, ['cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries', 'approval']);
+    libraryApproval(input.approval);
     if (typeof input.cwd !== 'string' || !path.isAbsolute(input.cwd) || !/^[a-f0-9]{64}$/.test(input.expectedDigest || '')) fail('INVALID_REQUEST', 'Review the current Library before sharing.');
     const requestedCwd = input.cwd, cwd = fs.realpathSync(requestedCwd), pin = fs.statSync(cwd);
     const expectedDigest = input.expectedDigest, selection = libraryShareSelection(input);

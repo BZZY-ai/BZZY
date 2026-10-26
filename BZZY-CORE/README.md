@@ -13,8 +13,8 @@ the same engine and private state.
 Implemented:
 
 - Encrypted Relay Library codes transfer skills, specialist agents, workflows
-  and saved goal templates between execution hosts. Concrete terminal review,
-  missing-only installation, optional enablement and durable import receipts
+  and saved goal templates between execution hosts. Source selection, pinned
+  single-use code authorization, missing-only installation and durable receipts
   preserve existing definitions and owner choices. See [Library sharing](docs/LIBRARY-SHARING.md).
 - Full-session Relay imports retain a trusted-source journal: accepted retries
   do not duplicate chats, and later snapshots append missing immutable history
@@ -46,8 +46,8 @@ Implemented:
   Native `/create-skill` and `/create-agent` commands ask for a name and publish
   portable global definitions enabled for use, through Core's internal creator
   guides and validated atomic registration. Creation does not start a task.
-- Name-only checkbox Import/Export in Skills and Agents using expiring Relay
-  codes, exact version pins and selected missing-entry imports. Resources and
+- Name-only checkbox Export and paste-once Import in Skills and Agents using
+  expiring Relay codes, exact version pins and missing-entry imports. Resources and
   scopes survive without bindings or execution; existing ZIP APIs stay compatible.
 - Background learning publishes reusable project skills directly to Library,
   enabled with source/history, conflict-safe names and Disable/Delete controls.

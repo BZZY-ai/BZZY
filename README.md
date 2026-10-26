@@ -39,8 +39,9 @@ compactor shares one configurable model with validation consensus, inheriting th
 BZZY Core model by default. `/create-skill` and `/create-agent` use the terminal's
 current model and publish validated global definitions enabled for use. The
 Skills and Agents tabs show names and ON/OFF controls, with plain Import and
-Export actions. Check names to export an expiring Relay code, or enter a code
-and check missing names to import.
+Export actions. Select names once and copy the generated code. On another BZZY,
+Import asks **ENTER CODE**, then downloads, checks and installs missing entries
+with visible progress. Completion lists only newly installed names.
 
 Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALIDATION.md)
 after `/validate` checks the original requirements and recorded evidence. The
@@ -54,7 +55,7 @@ See [usage metrics](BZZY-CORE/docs/METRICS.md).
 Transfer the [BZZY Library](BZZY-CORE/docs/LIBRARY-SHARING.md) between Mac and
 Linux with `bzzy library share` and `bzzy library import`. Expiring Relay codes
 carry skills, specialist agents, workflows and saved goal text; the receiver
-reviews and installs only missing entries. `/share` separately transfers a full
+validates and installs only missing entries. `/share` separately transfers a full
 terminal project and its saved context/history; later imports preserve existing chats.
 
 ## Install Core and CLI

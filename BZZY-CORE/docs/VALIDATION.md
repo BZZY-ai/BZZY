@@ -1,3 +1,39 @@
+# Paste-once Library codes, Copy button and import progress (2026-10-25)
+
+Node.js 24/macOS full suites: **748 Core tests passed, 2 skipped** (750 total)
+and **710 CLI tests passed, 21 skipped** (731 total), zero failures. Both product
+syntax checks and whitespace checks pass. Focused transfer suites passed **39
+Core tests** and **55 CLI tests**. Fixtures use private temporary homes on the
+internal disk, synthetic identities and local Relay servers. No running user
+installation, real clipboard, private Library entry or production share changed.
+
+The source selects names once and receives EXPORT CODE with a clickable Copy
+code button and immediate C shortcut. Clipboard failures cannot claim success;
+native copy and OSC52 request feedback differ. The recipient pastes into ENTER
+CODE and sees authorization, actual-byte download progress, package validation
+and installation. No second picker/fingerprint input is needed for new Library
+codes. Completion lists only new names; existing entries and availability remain
+unchanged. Accepted receipt metadata prevents retries from reporting old entries
+as newly installed. Back leaves a code owned by Core until its ten-minute expiry;
+explicit Revoke remains available.
+
+New code approval is a Library-only owner option. A Core-generated secret, sender
+pin and archive hash travel in the private code, with an encrypted HMAC proof
+bound to the exact recipient/grant/archive. Tests deny manifest access to a
+Relay-token holder without proof, reject altered secrets/archive pins/wrong
+kinds, exercise 15-second provisional expiry, queue concurrent transfers and
+revoke late grants during Core shutdown. Secret/code/plaintext bytes do not enter
+Relay invitation/grant metadata, audit fixtures or observed host wire frames.
+Legacy manual codes and full-session approval retain their existing behavior.
+
+An actual encrypted multichunk transfer through a real local Relay into an
+independent recipient process imports the new agent/workflow/goal and skips the
+recipient's existing disabled skill unchanged, without manual approval or model
+execution. Terminal tests exercise mouse Copy/Revoke, C without Enter, masked
+paste, progress stages, new-name-only results, cancellation and draft/cursor
+preservation. Deployed cross-host testing of this new code mode remains a user
+update check; its Relay wire operations are unchanged.
+
 # Remove obsolete terminal GUI fallbacks (2026-10-25)
 
 Node.js 24/macOS: **705 CLI tests passed, 21 skipped** (726 total), zero

@@ -160,6 +160,22 @@ AUTHORIZATION AND EXECUTION
 
 SAFE SHARING AND IMPORT
 
+- Current Library exports can explicitly authorize a single recipient through a
+  private expiring code. Core generates a separate 256-bit secret outside Relay;
+  the code pins the signed sender and immutable archive hash. Relay approves only
+  a provisional portable/import grant. Core releases no manifest or archive bytes
+  until an encrypted proof binds that secret to the exact grant, recipient and
+  archive. Unproved grants expire after 15 seconds. This grants no pairing, live
+  session access, account bindings or execution rights. Full-session transfers and
+  legacy Library offers retain their separate fingerprint approval.
+- Pasting a current Library code into Import authorizes installing its validated
+  missing definitions, with skills/agents enabled. Core validates the complete
+  archive and checks destination revisions atomically. Existing names and ON/OFF
+  choices survive; durable receipts distinguish committed retries. Import never
+  executes scripts, invokes agents, selects workflows or starts goals. Capability
+  codes and their secrets stay outside prompts, chat/history, logs and portable
+  archives; the user can explicitly copy a code to the system clipboard.
+
 - A complete-context copy includes the explicitly selected project's files,
   conversations, .bzzy notes, memory, evidence and history after deterministic
   validation and an exact data preview. This private content is shared only with

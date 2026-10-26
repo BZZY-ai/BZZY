@@ -27,8 +27,8 @@ The Skills tab keeps plain Import and Export controls; creation uses this comman
 
 In CLI, open **Skills** or type `/skills`. The list shows names and ON/OFF
 controls. **Export** opens name checkboxes and generates an expiring Relay code;
-**Import** accepts a code and installs/enables the selected missing skills after
-fingerprint approval. Resources and project/global scopes survive; existing
+**Import** asks ENTER CODE, then downloads, validates and installs/enables missing
+skills with progress. Selection happens only on the sender. Resources and project/global scopes survive; existing
 names and availability are preserved. See [Library sharing](LIBRARY-SHARING.md).
 `/skills import` separately
 accepts one skill directory or a ZIP containing one skill directory. To copy

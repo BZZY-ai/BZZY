@@ -106,6 +106,18 @@ test('invalid import selections cannot mutate registries and all-entry selection
   assert.equal(listRecords('core.library.import').length, 1);
 });
 
+test('receipt reporting distinguishes an accepted retry without rewriting owner choices or compatibility results', () => {
+  skill(); const { file } = bundle(), target = recipient();
+  const preview = () => remember(previewLibraryImport(file, { cwd: target }));
+  const first = importLibraryBundle(preview(), { cwd: target, enable: true, reportReceipt: true });
+  assert.equal(first.alreadyImported, false); const imported = first.skills[0]; setSkillEnabled(imported.id, false, imported.revision);
+  const review = preview(), before = snapshot();
+  const retry = importLibraryBundle(review, { cwd: target, enable: true, reportReceipt: true });
+  assert.equal(retry.alreadyImported, true); assert.deepEqual(retry.skills, first.skills); assert.deepEqual(snapshot(), before);
+  const legacy = importLibraryBundle(preview(), { cwd: target, enable: true });
+  assert.equal(legacy.alreadyImported, undefined); assert.equal(inspectSkill(imported.id, { scope: 'global' }).enabled, false);
+});
+
 test('all four portable resource kinds retain exact resources and remap scopes without sender identity or execution', () => {
   skill(); skill('project-checks', 'project'); agent(); agent('global-reviewer', 'global'); workflow(); workflow('global-flow', 'global');
   const sourceGoal = goal(), other = path.join(directory, 'another-project'); fs.mkdirSync(other); goal('resume', other);

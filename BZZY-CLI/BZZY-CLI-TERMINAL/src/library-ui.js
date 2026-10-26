@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { home, loadSession } from '@bzzy/core/engine/store.js';
-import { shareLibraryBundle, importTerminal, forgetPrivateImportInput } from './share-ui.js';
+import { shareLibraryBundle, importTerminal, forgetPrivateImportInput, enterShareCode } from './share-ui.js';
 import { wrap } from './terminal-format.js';
 
 const codePattern = /^BZZY-LIBRARY-[A-Za-z0-9_-]{43}$/;
+const automaticCodePattern = /^BZZY-LIBRARY-2(?:\.[A-Za-z0-9_-]{43}){4}$/;
 const fingerprint = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const names = { skill: 'Skill', agent: 'Specialist agent', workflow: 'Workflow', goal: 'Goal' };
 const shareTypes = { skill: 'Skills', agent: 'Agents', workflow: 'Workflows', goal: 'Goals' };
@@ -16,6 +17,7 @@ function shareKinds(values) {
 const count = value => Array.isArray(value) ? value.length : Number.isSafeInteger(value) && value >= 0 ? value : 0;
 const summary = totals => ['skills', 'agents', 'workflows', 'goals'].map(kind => `${count(totals?.[kind])} ${kind}`).join(' · ');
 const safeImportErrors = {
+  LEGACY_LIBRARY_CODE: 'This is an older code. Update the sender and create a new export code.',
   WRONG_LIBRARY_KIND: 'This code contains no entries for the selected tab.',
   INVITE_EXPIRED: 'The Library code expired. Ask the sender for a new one.',
   INVITE_UNAVAILABLE: 'The Library code was already used or is unavailable. Ask the sender for a new one.',
@@ -97,17 +99,10 @@ export async function transferLibraryTab(operation, kind, cwd, ui, { loadBundle 
   } finally { if (review) backend.discardDefinitionBundleReview(review); }
 }
 
-async function selectImports(ui, before, backend, review, kind) {
-  const matches = review.entries.map((entry, index) => ({ entry, index })).filter(row => row.entry.kind === kind);
+function automaticImports(backend, review, kind) {
+  const matches = review.entries.map((entry, index) => ({ entry, index })).filter(row => !kind || row.entry.kind === kind);
   if (!matches.length) throw Object.assign(new Error('This code contains no entries for this tab.'), { code: 'WRONG_LIBRARY_KIND' });
-  const existing = new Set((review.conflicts || []).map(entryKey)), missing = matches.filter(row => !existing.has(entryKey(row.entry)));
-  if (!missing.length) {
-    ui.tui?.notice('These entries are already installed.');
-    return { approved: true, enable: true, entryIndexes: matches.map(row => row.index) };
-  }
-  const indexes = await selectNames(ui, before, 'Import', kind, missing);
-  if (!indexes) return null;
-  return { approved: true, enable: true, entryIndexes: backend.libraryImportEntryIndexes(indexes, review.entries.length) };
+  return { approved: true, enable: true, entryIndexes: backend.libraryImportEntryIndexes(matches.map(row => row.index), review.entries.length) };
 }
 
 const blockedDetails = entry => `${entry.file || 'Package'}${entry.line ? ':' + entry.line : ''}\n${entry.reason}`;
@@ -238,53 +233,74 @@ export async function shareLibrary(cwd, ui, { loadBundle = () => import('@bzzy/c
 export async function importLibrary(value, cwd, ui, { relayLoader = () => import('@bzzy/core/relay'), loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), selectionKind } = {}) {
   if (selectionKind !== undefined) tabKind(selectionKind);
   terminal(ui); const before = context(ui, cwd), previous = ui.privateView;
-  const view = { title: selectionKind ? `Import ${shareTypes[selectionKind].toLowerCase()}` : 'Import BZZY Library', lines: selectionKind ? ['Enter the sender’s Relay code.'] : ['Skills · specialist agents · workflows · saved goals', `Project destination: ${before.root}`, 'Only missing entries are installed. Existing definitions are never overwritten.'], qr: [], onCancel: null };
+  const view = { title: 'ENTER CODE', lines: [], qr: [], onCancel: null };
   let code = String(value || '').trim();
   ui.privateView = view; ui.tui?.schedule();
   try {
-    if (!code) code = (await checked(ui, before, () => ui.secret('BZZY-LIBRARY code · hidden · Esc cancels › ')))?.trim() || '';
+    if (!code) code = (await checked(ui, before, () => ui.secret('ENTER CODE · Enter continues · Esc back')))?.trim() || '';
     if (!code) return null;
-    if (!codePattern.test(code) && !code.startsWith('BZZY:INVITE:1:')) throw new Error('Use a BZZY-LIBRARY code from the sender’s Library share screen.');
-    const sender = (await checked(ui, before, () => ui.ask('Sender fingerprint from the Mac’s share screen · Esc cancels › ')))?.trim();
-    if (!sender) return null;
-    if (!fingerprint(sender)) throw new Error('Compare and enter the complete sender fingerprint before importing.');
+    const automatic = automaticCodePattern.test(code);
+    if (!automatic && !codePattern.test(code) && !code.startsWith('BZZY:INVITE:1:')) throw new Error('Use a BZZY-LIBRARY code from the sender’s Library share screen.');
+    if (selectionKind && !automatic) throw Object.assign(new Error('Create a new export code.'), { code: 'LEGACY_LIBRARY_CODE' });
+    let sender;
+    if (!automatic) {
+      view.title = 'VERIFY SENDER'; view.lines = ['On the sender, open Verification to compare its fingerprint.']; ui.tui?.schedule();
+      sender = (await checked(ui, before, () => ui.ask('Sender fingerprint · Enter continues · Esc back')))?.trim();
+      if (!sender) return null;
+      if (!fingerprint(sender)) throw new Error('Compare and enter the complete sender fingerprint before importing.');
+    }
     const abort = new AbortController(); view.onCancel = () => abort.abort();
+    view.title = 'IMPORT'; view.lines = []; view.progress = { label: 'Connecting to Relay…' }; ui.tui?.schedule();
     const backend = await checked(ui, before, loadBundle), relay = await checked(ui, before, relayLoader);
-    if (selectionKind && typeof backend.libraryImportEntryIndexes !== 'function') throw new Error('Update BZZY Core and CLI together to select Library entries.');
-    const result = await relay.importLibraryShare({ code, cwd: before.root, expectedSenderFingerprint: sender, signal: abort.signal,
+    if ((selectionKind || automatic) && typeof backend.libraryImportEntryIndexes !== 'function') throw new Error('Update BZZY Core and CLI together to select Library entries.');
+    const result = await relay.importLibraryShare({ code, cwd: before.root, ...(sender ? { expectedSenderFingerprint: sender } : {}), signal: abort.signal,
       onIdentity({ recipientFingerprint }) {
         check(ui, before);
         if (!fingerprint(recipientFingerprint)) { abort.abort(); return; }
-        view.lines = [`Project destination: ${before.root}`, `Verified sender: ${sender}`, `Your recipient fingerprint: ${recipientFingerprint}`,
-          'Compare this fingerprint on the sender and approve there. Waiting for the encrypted Library…', 'Esc cancels.']; ui.tui?.schedule();
+        view.progress = { label: automatic ? 'Authorizing secure transfer…' : 'Waiting for sender approval…' };
+        view.lines = automatic ? [] : [`Recipient fingerprint: ${recipientFingerprint}`, 'Compare on the sender and choose Approve recipient.']; ui.tui?.schedule();
+      },
+      onPhase(phase) {
+        const labels = { connecting: 'Connecting to Relay…', downloading: 'Downloading encrypted Library…', checking: 'Checking package integrity…', installing: 'Installing new entries…' };
+        if (!abort.signal.aborted && ui.privateView === view && labels[phase]) { view.lines = []; view.progress = { label: labels[phase] }; ui.tui?.render?.(); ui.tui?.schedule(); }
       },
       onProgress({ received, total }) {
-        if (Number.isSafeInteger(received) && Number.isSafeInteger(total) && received >= 0 && total >= received) { view.notice = `Receiving Library: ${received} / ${total} bytes`; ui.tui?.schedule(); }
+        if (!abort.signal.aborted && ui.privateView === view && Number.isSafeInteger(received) && Number.isSafeInteger(total) && received >= 0 && total >= received) {
+          view.lines = []; view.progress = { label: 'Downloading encrypted Library…', received, total }; ui.tui?.schedule();
+        }
       },
       onReview: async review => {
+        if (automatic) { check(ui, before); return automaticImports(backend, review, selectionKind); }
         // A private transport screen has no composer reader. Release it while
         // the ordinary selection dialog owns keyboard/mouse input.
         if (ui.privateView === view) ui.privateView = previous;
         ui.tui?.schedule();
-        try { return await checked(ui, before, () => selectionKind ? selectImports(ui, before, backend, review, selectionKind) : reviewLibrary(ui, before, backend, review, { importing: true })); }
+        try {
+          const decision = await checked(ui, before, () => reviewLibrary(ui, before, backend, review, { importing: true }));
+          view.lines = []; view.progress = { label: decision?.approved ? 'Installing selected entries…' : 'Cancelling import…' };
+          return decision;
+        }
         finally { if (ui.privateView === previous) ui.privateView = view; ui.tui?.schedule(); }
       },
     });
     check(ui, before);
-    ui.event('info', { message: `${result.alreadyImported ? 'Library already installed' : 'Library installed'}: ${selectionKind ? count(result[selectionKind + 's']) + ' ' + shareTypes[selectionKind].toLowerCase() : summary(result)}.${result.skipped?.length ? ` Skipped ${result.skipped.length} existing entries.` : ''} No execution started.` });
+    if (automatic) {
+      const installed = result.alreadyImported ? [] : ['skill', 'agent', 'workflow', 'goal'].flatMap(kind => (result[kind + 's'] || []).map(entry => ({ kind, name: entry.name || entry.id })));
+      ui.event('info', { message: installed.length ? 'Installed:\n' + [...new Set(installed.map(entry => `${names[entry.kind]} · ${entry.name}`))].join('\n') : 'Already installed. Nothing new was added.' });
+    } else ui.event('info', { message: `${result.alreadyImported ? 'Library already installed' : 'Library installed'}: ${summary(result)}.${result.skipped?.length ? ` Skipped ${result.skipped.length} existing entries.` : ''} No execution started.` });
     return result;
   } catch (error) {
     if (error?.name === 'AbortError' || error?.code === 'CANCELLED') { ui.tui?.notice('Library import cancelled.'); return null; }
     if (error?.code === 'RELAY_UPGRADE_REQUIRED') throw new Error('Update BZZY Relay to support Library codes, then create a new code.');
     if (localErrors.has(error?.message)) throw error;
     throw new Error(safeImportErrors[error?.code] || 'Library transfer failed. Check Core/Relay, fingerprints and the reviewed package.');
-  } finally { code = ''; view.lines = []; view.qr = []; view.onCancel = null; if (ui.privateView === view) ui.privateView = previous; ui.tui?.schedule(); }
+  } finally { code = ''; view.lines = []; view.qr = []; view.progress = null; view.onCancel = null; if (ui.privateView === view) ui.privateView = previous; ui.tui?.schedule(); }
 }
 
 export async function importRelayShare(value, cwd, ui, options = {}) {
   terminal(ui); let code = String(value || '').trim();
   try {
-    if (!code) code = (await ui.secret('BZZY-LIBRARY or BZZY-TERMINAL code · hidden · Esc cancels › '))?.trim() || '';
+    if (!code) code = (await enterShareCode(ui))?.trim() || '';
     if (!code) return null;
     let library = /^BZZY-LIBRARY-/.test(code);
     if (code.startsWith('BZZY:INVITE:1:')) {

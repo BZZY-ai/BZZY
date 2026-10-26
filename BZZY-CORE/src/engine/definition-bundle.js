@@ -634,20 +634,21 @@ export function libraryImportEntryIndexes(value, count) {
       [...value].some(index => !Number.isSafeInteger(index) || index < 0 || index >= count)) fail('Choose entries from this exact Library review.');
   return [...value].sort((a, b) => a - b);
 }
-export function importLibraryBundle(review, { cwd = process.cwd(), enable = false, entryIndexes } = {}) {
+export function importLibraryBundle(review, { cwd = process.cwd(), enable = false, entryIndexes, reportReceipt = false } = {}) {
   const saved = reviewed(review, 'library-import', cwd);
   const indexes = libraryImportEntryIndexes(entryIndexes, review.entries.length), entries = indexes.map(index => review.entries[index]);
-  if (typeof enable !== 'boolean') fail('Choose whether to enable the reviewed imported skills and agents.');
+  if (typeof enable !== 'boolean' || typeof reportReceipt !== 'boolean') fail('Choose whether to enable the reviewed imported skills and agents.');
   if (digest(regular(saved.source, LIBRARY_BUNDLE_LIMITS.bytes)) !== saved.archiveSha256) fail('The downloaded Library changed. Preview it again.', 'STALE_REVIEW');
   validateLibraryManifest(saved.manifest, saved.extracted, saved.payload, saved.context);
   const receiptId = digest([saved.archiveSha256, saved.context.cwd, saved.context.projectId,
     ...(indexes.length === review.entries.length ? [] : [indexes])]), created = [];
-  let result;
+  let result, alreadyImported = false;
   try {
     result = transaction(db => {
       assertContext(saved.context, cwd);
       const previous = getRecord('core.library.import', receiptId);
       if (previous) {
+        alreadyImported = true;
         if (previous.enable !== enable) fail('This Library archive was already imported with a different availability choice.', 'CONFLICT');
         return structuredClone(previous.result);
       }
@@ -689,5 +690,5 @@ export function importLibraryBundle(review, { cwd = process.cwd(), enable = fals
       return imported;
     });
   } catch (error) { for (const directory of created.reverse()) fs.rmSync(directory, { recursive: true, force: true }); throw error; }
-  discardDefinitionBundleReview(review); return result;
+  discardDefinitionBundleReview(review); return reportReceipt ? { ...result, alreadyImported } : result;
 }

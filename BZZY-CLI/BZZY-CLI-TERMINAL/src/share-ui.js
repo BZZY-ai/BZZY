@@ -7,7 +7,7 @@ import { copyText } from './clipboard.js';
 
 const fingerprint = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const terminalCode = value => typeof value === 'string' && /^BZZY-TERMINAL-[A-Za-z0-9_-]{43}$/.test(value);
-const libraryCode = value => typeof value === 'string' && /^BZZY-LIBRARY-[A-Za-z0-9_-]{43}$/.test(value);
+const libraryCode = value => typeof value === 'string' && /^BZZY-LIBRARY-2(?:\.[A-Za-z0-9_-]{43}){4}$/.test(value);
 const finished = state => ['complete', 'revoked', 'expired'].includes(state);
 
 export function relayImportArgument(value) { return typeof value === 'string' && /^BZZY(?:-|:)/i.test(value.trim()); }
@@ -74,10 +74,13 @@ async function privateView(ui, title, action) {
   ui.privateView = view; ui.tui?.schedule();
   try { return await action(view); }
   finally {
-    view.lines = []; view.qr = []; view.onCancel = null;
+    view.lines = []; view.qr = []; view.code = ''; view.actions = []; view.actionMode = false; view.progress = null; view.onCancel = null;
     if (ui.privateView === view) ui.privateView = previous;
     if (ui.tui) { ui.tui.lastFrame = []; ui.tui.schedule(); }
   }
+}
+export async function enterShareCode(ui) {
+  return privateView(ui, 'ENTER CODE', () => ui.secret('ENTER CODE · Enter continues · Esc back'));
 }
 function qrLines(value) {
   if (typeof value !== 'string' || value.length > 32_768) return [];
@@ -115,14 +118,15 @@ async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/co
       share = library ? await service.createLibraryShare({ cwd: session.cwd, expectedDigest: library.sourceDigest,
         ...(library.kinds ? { kinds: library.kinds } : {}),
         ...(library.excludeEntries?.length ? { excludeEntries: library.excludeEntries } : {}),
-        ...(library.excludeGoalIds?.length ? { excludeGoalIds: library.excludeGoalIds } : {}), ttlSeconds: 600 })
+        ...(library.excludeGoalIds?.length ? { excludeGoalIds: library.excludeGoalIds } : {}), approval: 'code', ttlSeconds: 600 })
         : await service.createShare({ sessionId: session.id, ttlSeconds: 600 });
       assertContext();
       if (!(library ? libraryCode : terminalCode)(share?.code) || !fingerprint(share?.senderFingerprint) || !Number.isSafeInteger(share?.expiresAt) || share.expiresAt <= Date.now()) {
         throw new Error('Invalid private invitation');
       }
       let qr = qrLines(share.terminalQR || (typeof share.renderQR === 'function' ? await share.renderQR() : ''));
-      let showQR = !compact, polling = false;
+      let showQR = false, showVerification = false, polling = false, closed = false;
+      view.onCancel = () => { closed = true; ui.reader?.close(); };
       const refresh = async () => {
         assertContext();
         if (polling) return;
@@ -133,36 +137,46 @@ async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/co
           // Large copies can outlive the invitation's ten-minute lifetime.
           if (state.state !== 'approved' && !finished(state.state) && Date.now() >= share.expiresAt) {
             state = { state: 'expired', pending: [] };
-            changeView(ui, view, { lines: [`This ${label} share expired. Generate a new code to share again.`], qr: [] });
+            changeView(ui, view, { code: '', actions: [], lines: [`This ${label} share expired. Generate a new code to share again.`], qr: [] });
             ui.reader?.close(); return;
           }
-          const privateLines = [
-            ...(!compact ? [`Project: ${session.cwd}`] : []),
-            `Sender fingerprint: ${share.senderFingerprint}`,
-            state.state === 'approved' ? 'Recipient approved · encrypted transfer in progress'
-              : `Expires: ${new Date(share.expiresAt).toLocaleTimeString()} · ${state.state}`,
-          ];
-          if (!finished(state.state) && state.state !== 'approved') privateLines.push(share.code);
-          if (state.pending?.length) privateLines.push('A recipient is waiting. Compare the full fingerprint on their device before approving.');
-          for (const request of state.pending || []) if (fingerprint(request.fingerprint)) privateLines.push(`Requesting recipient: ${request.fingerprint}`);
-          changeView(ui, view, { lines: privateLines, qr: showQR && !finished(state.state) && state.state !== 'approved' ? qr : [] });
+          const available = !finished(state.state) && state.state !== 'approved';
+          const automatic = library && share.approval === 'code';
+          const privateLines = automatic ? [] : showVerification ? [`Sender fingerprint: ${share.senderFingerprint}`,
+            `Expires: ${new Date(share.expiresAt).toLocaleTimeString()}`] : [];
+          if (!automatic && state.pending?.length) privateLines.push('A recipient is waiting. Choose Approve recipient.');
+          if (!automatic && showVerification) for (const request of state.pending || []) if (fingerprint(request.fingerprint)) privateLines.push(`Recipient fingerprint: ${request.fingerprint}`);
+          const actions = available ? [{ value: 'c', label: 'Copy code' }, ...(automatic ? [{ value: '/cancel', label: 'Revoke code' }]
+            : [{ value: 'v', label: 'Verification' }, { value: 'q', label: 'QR' }, ...(state.pending?.length ? [{ value: 'a', label: 'Approve recipient' }] : [])])]
+            : state.state === 'approved' ? [{ value: '/cancel', label: 'Cancel transfer' }] : [];
+          changeView(ui, view, { title: 'EXPORT CODE', code: available ? share.code : '', actions,
+            progress: state.state === 'approved' ? { label: 'Sending encrypted transfer…' } : null,
+            lines: privateLines, qr: showQR && available ? qr : [] });
           if (finished(state.state)) ui.reader?.close();
         } finally { polling = false; }
       };
       await refresh();
-      while (!finished(state?.state)) {
+      while (!closed && !finished(state?.state)) {
         const timer = setInterval(() => { void refresh().catch(() => changeView(ui, view, { notice: 'Status unavailable; the code retains its expiration.' })); }, 1500);
         timer.unref?.();
         let action;
-        try { action = (await ui.ask('Enter refresh · c copy code · q QR · a approve recipient · /cancel › '))?.trim().toLowerCase(); }
-        finally { clearInterval(timer); }
+        try { view.actionMode = true; ui.tui?.schedule(); action = (await ui.ask(library ? 'Copy code · Paste on the other BZZY · Esc back' : 'Click an action · C copies · V verification · Q QR · Esc back'))?.trim().toLowerCase(); }
+        finally { view.actionMode = false; clearInterval(timer); }
         if (finished(state?.state)) break;
         if (action == null) break;
         if (action === '/cancel') { cancelled = true; break; }
         assertContext();
-        if (action === 'c') { await copy(share.code); changeView(ui, view, { notice: 'Code copied. It expires automatically.' }); }
+        if (action === 'c' && state.state !== 'approved' && Date.now() < share.expiresAt) {
+          let result;
+          try { result = await copy(share.code, ui.output); } catch { result = { copied: false }; }
+          const notice = result?.copied ? result.method === 'osc52' ? 'Copy request sent. Allow clipboard access in your terminal.' : 'Code copied.'
+            : 'Could not copy. Enable clipboard access or use your terminal’s Copy command on the displayed code.';
+          changeView(ui, view, { notice, noticeTone: result?.copied ? 'success' : 'warning' });
+        }
+        else if (action === 'v') showVerification = !showVerification;
         else if (action === 'q') showQR = !showQR;
         else if (action === 'a') {
+          showVerification = true;
           await refresh();
           const confirmed = (await ui.ask('Enter the full recipient fingerprint from their device · Esc cancels › '))?.trim();
           if (confirmed) {
@@ -178,7 +192,7 @@ async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/co
     });
   } catch (error) { throw safeFailure(error, Boolean(library)); }
   finally {
-    if (service && share && state?.state !== 'complete' && (cancelled || state?.state !== 'approved')) await service.revokeShare(share.shareId).catch(() => {});
+    if (service && share && state?.state !== 'complete' && (cancelled || share.approval !== 'code' && state?.state !== 'approved')) await service.revokeShare(share.shareId).catch(() => {});
     await Promise.resolve(service?.close()).catch(() => {});
   }
 }
@@ -243,16 +257,16 @@ export async function importTerminal(value, cwd, ui, { relayLoader = () => impor
   try {
     if (chooseDestination) context = importContext(cwd, ui);
     const check = () => context?.check();
-    const result = await privateView(ui, 'Import terminal', async view => {
-      changeView(ui, view, { lines: [
+    const result = await privateView(ui, 'ENTER CODE', async view => {
+      if (!code) code = (await ui.secret('ENTER CODE · Enter continues · Esc back'))?.trim() || '';
+      check();
+      if (!code) return null;
+      if (!terminalCode(code) && !code.startsWith('BZZY:INVITE:1:')) throw Object.assign(new Error(), { code: 'WRONG_PURPOSE' });
+      changeView(ui, view, { title: 'Import terminal', lines: [
         `Destination: ${path.resolve(cwd)}`,
         'Import the complete project and conversation into this directory. Existing files will not be overwritten.',
         'The copy stays paused. Scripts, hooks, goals and agents are not started by import.',
       ] });
-      if (!code) code = (await ui.secret('BZZY-TERMINAL code · hidden · Esc cancels › '))?.trim() || '';
-      check();
-      if (!code) return null;
-      if (!terminalCode(code) && !code.startsWith('BZZY:INVITE:1:')) throw Object.assign(new Error(), { code: 'WRONG_PURPOSE' });
       if (context) {
         const selected = await ui.ask('Destination folder · new folder for first import; previous import folder for updates · Esc cancels › ', { initialValue: context.suggested });
         check(); if (selected == null) return null;
@@ -270,6 +284,7 @@ export async function importTerminal(value, cwd, ui, { relayLoader = () => impor
       check(); if (!/^import$/i.test(confirmed?.trim() || '')) return null;
       const abort = new AbortController();
       view.onCancel = () => abort.abort();
+      changeView(ui, view, { progress: { label: 'Connecting to Relay…' } });
       const module = await relayLoader();
       check(); abort.signal.throwIfAborted();
       if (typeof module.importTerminalShare !== 'function') throw new Error('Terminal importer unavailable.');
@@ -281,12 +296,16 @@ export async function importTerminal(value, cwd, ui, { relayLoader = () => impor
           check();
           if (!fingerprint(recipientFingerprint)) { abort.abort(); return; }
           changeView(ui, view, { lines: [`Destination: ${destination}`, `Verified sender: ${sender}`,
-            `Your recipient fingerprint: ${recipientFingerprint}`, 'Give this full fingerprint to the sender for approval. Waiting for the source host…', 'Esc cancels.'] });
+            `Your recipient fingerprint: ${recipientFingerprint}`, 'Give this full fingerprint to the sender for approval.'], progress: { label: 'Waiting for sender approval…' } });
+        },
+        onPhase: phase => {
+          const labels = { connecting: 'Connecting to Relay…', downloading: 'Downloading encrypted project…', checking: 'Checking package integrity…', installing: 'Installing project…' };
+          if (labels[phase] && !abort.signal.aborted) changeView(ui, view, { progress: { label: labels[phase] } });
         },
         onProgress: ({ received, total }) => {
           check();
           if (Number.isSafeInteger(received) && Number.isSafeInteger(total) && received >= 0 && total >= received) {
-            changeView(ui, view, { notice: `Receiving encrypted project: ${received} / ${total} bytes` });
+            changeView(ui, view, { progress: { label: 'Downloading encrypted project…', received, total } });
           }
         },
       }); } finally { clearInterval(monitor); }

@@ -92,8 +92,8 @@ definitions and project evidence/account bindings separately.
 ## Portable definition ZIP
 
 CLI Agents shows names and ON/OFF controls. Its Export button opens name
-checkboxes and generates an expiring Relay code; Import accepts a code and lets
-the owner install/enable selected missing agents. Existing names and availability
+checkboxes and generates an expiring Relay code with a Copy code button. Import
+accepts one paste and installs/enables missing agents with progress. Existing names and availability
 stay unchanged. Open an entry for full details. See [Library sharing](LIBRARY-SHARING.md).
 
 Core retains combined ZIP APIs and legacy CLI routes. The reviewed

@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { fork } from 'node:child_process';
 import { startRelay } from '@bzzy/relay/server';
 import { RelayClient, createIdentity } from '../src/relay/sdk.js';
 import { CoreTerminalSharing, ProjectTransferService, libraryShareSelection, importProjectShare, importTerminalShare, importLibraryShare, classifyProjectShareCode } from '../src/relay/project-transfer.js';
+import { decodeLibraryCode } from '../src/relay/library-code.js';
 
 const sdk = pathToFileURL(createRequire(import.meta.url).resolve('@bzzy/relay'));
 const { RelayStore } = await import(new URL('./store.js', sdk));
@@ -56,6 +58,82 @@ function receive(f, share, importArchive, extra = {}) {
     onIdentity: extra.onIdentity, importArchive, ...extra });
 }
 
+test('one pasted Library capability verifies sender and archive, authorizes once and transfers without fingerprint prompts', async t => {
+  const f = await fixture(t), share = await f.service.createShare({ ...f.input, approval: 'code' }, f.options);
+  const parsed = decodeLibraryCode(share.code), phases = [], progress = [];
+  assert.equal(classifyProjectShareCode(share.code), 'LIBRARY'); assert.equal(parsed.fingerprint, f.identity.certificate.id);
+  const result = await importProjectShare({ expectedKind: 'LIBRARY', code: share.code, cwd: f.recipient,
+    url: f.relay.audience, allowInsecureLocal: true, onPhase: phase => phases.push(phase), onProgress: value => progress.push(value),
+    importArchive(file) { assert.deepEqual(fs.readFileSync(file), f.payload); return { installed: true }; } });
+  assert.deepEqual(result, { installed: true }); assert.deepEqual(phases, ['connecting', 'downloading', 'checking']);
+  assert.equal(progress.at(-1).received, f.payload.length); assert.equal(progress.at(-1).total, f.payload.length);
+  assert.equal(f.service.status(share.shareId).state, 'complete');
+  const exposed = JSON.stringify([f.wire, f.audit, f.store.db.prepare('SELECT data FROM invitations').all(), f.store.db.prepare('SELECT data FROM grants').all()]);
+  assert.ok(!exposed.includes(parsed.secret)); assert.ok(!exposed.includes(share.code)); assert.ok(!exposed.includes('PRIVATE_LIBRARY_TRANSFER_MARKER_739128'));
+  await assert.rejects(importProjectShare({ expectedKind: 'LIBRARY', code: share.code, cwd: f.recipient, url: f.relay.audience,
+    allowInsecureLocal: true, importArchive() { assert.fail('A code cannot be reused'); } }), { code: 'INVITE_UNAVAILABLE' });
+});
+
+for (const field of [3, 4]) test(`altered code ${field === 3 ? 'secret' : 'archive pin'} cannot read even the manifest`, async t => {
+  const f = await fixture(t), share = await f.service.createShare({ ...f.input, approval: 'code' }, f.options);
+  const parts = share.code.split('.'); parts[field] = Buffer.alloc(32, 42).toString('base64url'); let read = false;
+  await assert.rejects(importProjectShare({ expectedKind: 'LIBRARY', code: parts.join('.'), cwd: f.recipient,
+    url: f.relay.audience, allowInsecureLocal: true, onProgress() { read = true; }, importArchive() { read = true; } }), { code: 'FORBIDDEN' });
+  assert.equal(read, false); await until(() => f.service.status(share.shareId).state === 'revoked');
+  assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'relay', 'shares', share.shareId)), false);
+});
+
+test('malformed capabilities and wrong resource kinds fail locally without granting authority', async t => {
+  const f = await fixture(t), share = await f.service.createShare({ ...f.input, approval: 'code' }, f.options);
+  for (const value of [share.code + '.extra', share.code.slice(0, -1), share.code.replace('.','..')]) {
+    assert.throws(() => classifyProjectShareCode(value), { code: 'INVALID_REQUEST' });
+  }
+  await assert.rejects(importTerminalShare({ code: share.code, cwd: f.recipient, url: f.relay.audience, allowInsecureLocal: true }), { code: 'FORBIDDEN' });
+  const parsed = decodeLibraryCode(share.code);
+  await assert.rejects(importProjectShare({ expectedKind: 'LIBRARY', code: share.code, cwd: f.recipient,
+    expectedSenderFingerprint: createIdentity().certificate.id, importArchive() {}, url: f.relay.audience, allowInsecureLocal: true }), { code: 'FORBIDDEN' });
+  assert.equal(f.service.status(share.shareId).state, 'open'); assert.ok(parsed.secret);
+});
+
+test('a Relay-token holder without the private code proof receives no archive metadata and loses its provisional grant', async t => {
+  const f = await fixture(t), share = await f.service.createShare({ ...f.input, approval: 'code' }, f.options);
+  const recipient = new RelayClient({ url: f.relay.audience, identity: createIdentity(), allowInsecureLocal: true, autoReconnect: false });
+  f.cleanup(() => recipient.close()); await recipient.connect();
+  const claim = await recipient.claim(decodeLibraryCode(share.code).code);
+  const decision = await until(async () => { const value = await recipient.claimStatus(claim.claimId); return value.state === 'approved' && value; });
+  recipient.trustPeer(f.identity.certificate);
+  const reply = once(recipient, 'message', { signal: AbortSignal.timeout(3000) });
+  await recipient.send(decision.grant.id, { v: 1, protocol: 'bzzy-project-transfer', type: 'request', id: randomUUID(), op: 'manifest', params: {} });
+  const response = (await reply)[0].payload;
+  assert.equal(response.ok, false); assert.equal(response.error.code, 'FORBIDDEN'); assert.equal(response.result, undefined);
+  const original = Date.now; Date.now = () => original() + 16000;
+  try { await until(() => f.service.status(share.shareId).state === 'expired'); }
+  finally { Date.now = original; }
+  assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'relay', 'shares', share.shareId)), false);
+});
+
+test('simultaneous code imports queue behind the bounded active transfer without overlapping imports', async t => {
+  const f = await fixture(t), shares = await Promise.all([f.service.createShare({ ...f.input, approval: 'code' }, f.options), f.service.createShare({ ...f.input, approval: 'code' }, f.options)]);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(); let active = 0, maximum = 0, calls = 0;
+  const tasks = shares.map(share => importProjectShare({ expectedKind: 'LIBRARY', code: share.code, cwd: f.recipient,
+    url: f.relay.audience, allowInsecureLocal: true, async importArchive() {
+      active++; calls++; maximum = Math.max(maximum, active); entered.resolve(); await release.promise; active--; return { installed: true };
+    } }));
+  await entered.promise; await delay(100); assert.equal(calls, 1); release.resolve();
+  assert.deepEqual(await Promise.all(tasks), [{ installed: true }, { installed: true }]); assert.equal(maximum, 1);
+});
+
+test('Core stop during code approval revokes the late grant and cannot revive the released archive', async t => {
+  const f = await fixture(t), share = await f.service.createShare({ ...f.input, approval: 'code' }, f.options);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), approve = f.client.approve.bind(f.client);
+  f.client.approve = async (...args) => { const result = await approve(...args); entered.resolve(); await release.promise; return result; };
+  const recipient = new RelayClient({ url: f.relay.audience, identity: createIdentity(), allowInsecureLocal: true, autoReconnect: false });
+  f.cleanup(() => recipient.close()); await recipient.connect(); await recipient.claim(decodeLibraryCode(share.code).code);
+  await entered.promise; await f.service.close(); release.resolve();
+  await until(() => f.store.grantsFor(f.identity.certificate.id).length === 0);
+  assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'relay', 'shares', share.shareId)), false);
+});
+
 test('typed Library shares require trusted registries and cannot be received by terminal or unreviewed importers', async t => {
   const f = await fixture(t);
   await assert.rejects(f.service.createShare(f.input), { code: 'OPERATION_DENIED' });
@@ -84,6 +162,7 @@ test('local Library selection rejects malformed pins before runtime, export or i
   const marker = 'PRIVATE_INVALID_SELECTION_738164';
   const invalid = [
     { kinds: null }, { kinds: [] }, { kinds: ['agent', 'agent'] }, { kinds: [marker] }, { kinds: Array(1) },
+    { approval: null }, { approval: true }, { approval: 'always' },
     { excludeGoalIds: null }, { excludeGoalIds: Array(1) }, { kinds: ['agent'], excludeGoalIds: ['template:' + 'a'.repeat(64)] },
     { excludeEntries: null }, { excludeEntries: Array(1) }, { excludeEntries: Array(1025).fill(entry) },
     { excludeEntries: [{ ...entry, revision: 0 }] }, { excludeEntries: [{ ...entry, version: marker }] },
@@ -261,7 +340,7 @@ test('a mismatched inner transfer kind is rejected before any Library importer r
   await until(() => f.service.status(share.shareId).state === 'revoked');
 });
 
-for (const enable of [false, true, 'subset', 'cancel']) test(`four-kind Library uses an independent recipient Core home (review ${enable})`, { timeout: 30000 }, async t => {
+for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-kind Library uses an independent recipient Core home (review ${enable})`, { timeout: 30000 }, async t => {
   const f = await fixture(t);
   await f.client.close();
   const { RelayGateway } = await import('../src/relay/gateway.js');
@@ -295,24 +374,28 @@ for (const enable of [false, true, 'subset', 'cancel']) test(`four-kind Library 
     for (let i = 0; i < 100 && info && identityAlive(info.identity); i++) await delay(20);
   });
   await gateway.start();
-  const share = await gateway.createLibraryShare({ cwd: f.source, expectedDigest: review.sourceDigest });
+  const share = await gateway.createLibraryShare({ cwd: f.source, expectedDigest: review.sourceDigest, ...(enable === 'automatic' ? { approval: 'code' } : {}) });
   const childFile = path.join(f.directory, 'receive.mjs');
   const transportURL = new URL('../src/relay/project-transfer.js', import.meta.url).href;
   const databaseURL = new URL('../src/engine/database.js', import.meta.url).href;
   const savedURL = new URL('../src/engine/saved-goals.js', import.meta.url).href;
+  const skillsURL = new URL('../src/engine/skills.js', import.meta.url).href;
   fs.writeFileSync(childFile, `
     import { importLibraryShare } from ${JSON.stringify(transportURL)};
     import { listRecords } from ${JSON.stringify(databaseURL)};
     import { listSavedGoals } from ${JSON.stringify(savedURL)};
+    import { createSkill } from ${JSON.stringify(skillsURL)};
     process.once('message', async input => {
       const abort = new AbortController();
       try {
+        if (input.enable === 'automatic') createSkill({ name: 'response-review', description: 'Keep local controls.', instructions: 'Keep this recipient behavior.' }, { scope: 'global' });
         const result = await importLibraryShare({ ...input, signal: abort.signal,
           onIdentity: value => process.send({ type: 'identity', ...value }),
           onReview: review => {
             process.send({ type: 'review', totals: review.totals });
             if (input.enable === 'cancel') { setTimeout(() => abort.abort(), 5); return new Promise(() => {}); }
             if (input.enable === 'subset') return { approved: true, enable: true, entryIndexes: [review.entries.findIndex(row => row.kind === 'skill')] };
+            if (input.enable === 'automatic') return { approved: true, enable: true };
             return { approved: true, enable: input.enable };
           }
         });
@@ -335,11 +418,13 @@ for (const enable of [false, true, 'subset', 'cancel']) test(`four-kind Library 
   child.on('message', value => { messages.push(value); if (['result', 'cancelled'].includes(value.type)) received.resolve(value); if (value.type === 'error') received.reject(new Error(JSON.stringify(value))); });
   child.on('error', received.reject);
   child.on('exit', code => { if (code !== 0) received.reject(new Error(`Recipient exited ${code}: ${stderr}`)); });
-  child.send({ code: share.code, cwd: f.recipient, expectedSenderFingerprint: f.identity.certificate.id,
+  child.send({ code: share.code, cwd: f.recipient, ...(enable === 'automatic' ? {} : { expectedSenderFingerprint: f.identity.certificate.id }),
     url: f.relay.audience, allowInsecureLocal: true, enable });
-  const pending = await until(() => gateway.projectShareStatus(share.shareId).pending[0]);
-  assert.equal(pending.fingerprint, messages.find(value => value.type === 'identity')?.recipientFingerprint);
-  await gateway.approveProjectShare({ shareId: share.shareId, claimId: pending.claimId, confirmedFingerprint: pending.fingerprint });
+  if (enable !== 'automatic') {
+    const pending = await until(() => gateway.projectShareStatus(share.shareId).pending[0]);
+    assert.equal(pending.fingerprint, messages.find(value => value.type === 'identity')?.recipientFingerprint);
+    await gateway.approveProjectShare({ shareId: share.shareId, claimId: pending.claimId, confirmedFingerprint: pending.fingerprint });
+  }
   const imported = await received.promise;
   if (enable === 'cancel') {
     assert.deepEqual(imported, { type: 'cancelled', skills: 0, agents: 0, goals: 0, executions: 0 });
@@ -352,6 +437,14 @@ for (const enable of [false, true, 'subset', 'cancel']) test(`four-kind Library 
     assert.equal(imported.agents.length, 0); assert.equal(imported.workflows.length, 0); assert.equal(imported.goals.length, 0);
     assert.equal(imported.executions, 0); assert.equal(imported.sessions, 0);
     assert.equal(gateway.projectShareStatus(share.shareId).state, 'complete'); return;
+  }
+  if (enable === 'automatic') {
+    assert.equal(imported.skills.length, 1); assert.equal(imported.skills[0].enabled, false); assert.equal(imported.skills[0].description, 'Keep local controls.');
+    assert.equal(imported.result.skills.length, 0); assert.equal(imported.result.agents.length, 1); assert.equal(imported.result.skipped.length, 1);
+    assert.equal(imported.agents.length, 1); assert.equal(imported.agents[0].enabled, true);
+    assert.equal(imported.workflows.length, 1); assert.equal(imported.goals.length, 1);
+    assert.equal(imported.executions, 0); assert.equal(imported.sessions, 0);
+    assert.equal(imported.result.alreadyImported, false); assert.equal(gateway.projectShareStatus(share.shareId).state, 'complete'); return;
   }
   assert.equal(imported.skills.length, 1); assert.equal(imported.agents.length, 1);
   assert.equal(imported.skills[0].enabled, enable); assert.equal(imported.agents[0].enabled, enable);

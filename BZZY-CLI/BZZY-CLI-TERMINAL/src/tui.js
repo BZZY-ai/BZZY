@@ -87,6 +87,11 @@ export class TerminalChat {
     this.timer = setTimeout(tick, animationInterval); this.timer.unref();
   }
   writeFrame(frame) { if (frame && !this.output.write(frame)) this.outputBlocked = true; }
+  privateAction(value) {
+    const view = this.ui.privateView;
+    if (!view?.actionMode || !this.resolveInput || !view.actions?.some(action => action.value === value && !action.disabled)) return;
+    this.finish(value);
+  }
   setCopyMode(active) {
     if (active === Boolean(this.copyMode) || active && (this.hidden || this.selection)) return;
     this.textSelection = null; this.copyMode = active;
@@ -660,6 +665,7 @@ export class TerminalChat {
     else if (hit?.type === 'settings-back') { if (!this.ui.settings.busy) { if (!this.ui.settings.back()) { if (this.ui.settingsOnly) this.finish(null); else this.setPanel('chat'); } } }
     else if (hit?.type === 'qr-back') { this.ui.settings.qrView = false; this.lastFrame = []; this.schedule(); }
     else if (hit?.type === 'private-cancel') { if (this.resolveInput) this.finish(null); else this.ui.privateView?.onCancel?.(); }
+    else if (hit?.type === 'private-action') this.privateAction(hit.action);
     else if (hit?.type === 'tab') this.ui.onSelectTab?.(hit.id);
     else if (hit?.type === 'command') this.completeCommand(hit.choice);
     else if (hit?.type === 'choice' && this.selection && !this.selection.loading) {
@@ -775,6 +781,20 @@ export class TerminalChat {
     if (this.ui.privateView && !this.resolveInput) {
       key.bzzyHandled = true;
       if (key.name === 'escape' || key.ctrl && key.name === 'c') this.ui.privateView.onCancel?.();
+      return;
+    }
+    if (this.ui.privateView?.actionMode && this.resolveInput) {
+      key.bzzyHandled = true;
+      const view = this.ui.privateView, actions = (view.actions || []).filter(action => !action.disabled);
+      if (key.name === 'escape' || key.ctrl && key.name === 'c') this.finish(null);
+      else if (['tab', 'left', 'right'].includes(key.name) && actions.length) {
+        const step = key.name === 'left' || key.shift ? -1 : 1;
+        view.actionFocus = ((view.actionFocus || 0) + step + actions.length) % actions.length; this.schedule();
+      } else if (key.name === 'return' && actions.length) {
+        const action = actions[view.actionFocus || 0];
+        if (action?.value !== '/cancel' || view.actionFocus !== undefined) this.privateAction(action?.value);
+      }
+      else if (!key.ctrl && !key.meta && ['c', 'v', 'q', 'a'].includes((text || key.name || '').toLowerCase())) this.privateAction((text || key.name).toLowerCase());
       return;
     }
     if (this.aliasEdit) {
@@ -1667,9 +1687,35 @@ export class TerminalChat {
     const view = this.ui.privateView, { color } = this.theme;
     const lines = this.compactHeader(width).lines;
     lines.push(color(clip('  ' + clean(view.title), width), palette.accent, true), '');
+    const hits = [], buttonRows = [];
+    if (view.code) lines.push(...wrap(clean(view.code), Math.max(1, width - 4)).map(line => color('  ' + line, palette.text, true)), '');
+    if (view.actions?.length) {
+      let line = '  ', column = 3;
+      for (const [index, action] of view.actions.entries()) {
+        const label = '[ ' + clean(action.label) + ' ]', size = Math.min(width - 4, cellWidth(label));
+        if (column + size > width && column > 3) { buttonRows.push(line); line = '  '; column = 3; }
+        const disabled = !view.actionMode || !this.resolveInput || action.disabled;
+        const focused = view.actionFocus === index || !view.actionFocus && index === 0;
+        line += fillSurface(clip(label, size), size, this.theme, focused && !disabled ? palette.selection : palette.surface, disabled ? palette.muted : palette.accent, !disabled) + '  ';
+        hits.push({ type: 'private-action', action: action.value, disabled, row: lines.length + buttonRows.length + 1, left: column, right: column + size - 1 });
+        column += size + 2;
+      }
+      buttonRows.push(line); lines.push(...buttonRows.map(row => sliceCells(row, 0, width)), '');
+    }
     const content = (view.lines || []).flatMap(line => wrap(clean(line), Math.max(1, width - 4)).map(item => '  ' + item));
     const reserved = 5;
     lines.push(...content.slice(0, Math.max(0, height - reserved - lines.length)));
+    if (view.progress && lines.length < height - reserved) {
+      lines.push(color(clip('  ' + clean(view.progress.label || 'Importing…'), width), palette.accent));
+      const { received, total } = view.progress;
+      if (Number.isSafeInteger(received) && Number.isSafeInteger(total) && total > 0 && received >= 0 && received <= total && lines.length < height - reserved) {
+        const fraction = received / total;
+        const bytes = value => value < 1024 ? value + ' B' : (value / 1024).toFixed(1) + ' KiB';
+        const counts = Math.floor(fraction * 100) + '% · ' + bytes(received) + ' / ' + bytes(total);
+        const cells = Math.max(4, Math.min(24, width - cellWidth(counts) - 5)), filled = Math.floor(cells * fraction);
+        lines.push(color(clip('  [' + '='.repeat(filled) + '-'.repeat(cells - filled) + '] ' + counts, width), palette.accent));
+      }
+    }
     const qr = view.qr || [], qrWidth = Math.max(0, ...qr.map(line => cellWidth(line))) + 8;
     if (qr.length && qrWidth <= width && lines.length + qr.length + reserved + 4 <= height) {
       const blank = '\x1b[47m' + ' '.repeat(qrWidth) + '\x1b[0m';
@@ -1677,17 +1723,17 @@ export class TerminalChat {
     } else if (qr.length && lines.length < height - reserved) {
       lines.push(color(clip(`  Resize for QR (${qrWidth} columns); the same code is shown above.`, width), palette.warning));
     }
-    if (view.notice && lines.length < height - 4) lines.push(color(clip('  ' + clean(view.notice), width), palette.warning));
+    if (view.notice && lines.length < height - 4) lines.push(...wrap(clean(view.notice), Math.max(1, width - 4), Math.max(1, height - lines.length - 4)).map(line => color('  ' + line, view.noticeTone === 'success' ? palette.goalSuccess : palette.warning)));
     while (lines.length < height - 3) lines.push('');
     const cancelRow = lines.length + 1, cancelLeft = width - 10;
     lines.push(replaceCells(color(clip('  ' + clean(this.resolveInput ? this.question : 'Waiting for encrypted transfer'), width - 12), palette.muted), cancelLeft, color(' ← Back ', palette.accent, true), width, this.theme, palette.background));
     const value = this.hidden ? '•'.repeat([...this.value].length) : clean(this.value);
-    lines.push(color(clip('  › ' + value, width), palette.text), '');
+    lines.push(view.actionMode || !this.resolveInput ? '' : color(clip('  › ' + value, width), palette.text), '');
     let frame = '\x1b[?25l';
     for (let row = 0; row < height; row++) frame += `\x1b[${row + 1};1H${this.theme.background(palette.background)}${this.theme.foreground(palette.text)}\x1b[2K${lines[row] || ''}\x1b[0m`;
     // Private codes/QRs never enter chat entries, copy regions or frame caches.
-    this.hitTargets = [{ type: 'private-cancel', row: cancelRow, left: cancelLeft + 1, right: cancelLeft + 8 }]; this.textRegion = null; this.scrollbar = null; this.privateFrame = true; this.lastFrame = []; this.lastBackgrounds = [];
-    if (this.resolveInput) frame += `\x1b[${height - 1};${Math.min(width, 5 + cellWidth(value))}H\x1b[?25h`;
+    this.hitTargets = [...hits.filter(hit => hit.row < cancelRow && hit.row <= height - 3), { type: 'private-cancel', row: cancelRow, left: cancelLeft + 1, right: cancelLeft + 8 }]; this.textRegion = null; this.scrollbar = null; this.privateFrame = true; this.lastFrame = []; this.lastBackgrounds = [];
+    if (this.resolveInput && !view.actionMode) frame += `\x1b[${height - 1};${Math.min(width, 5 + cellWidth(value))}H\x1b[?25h`;
     this.writeFrame(frame);
   }
   render({ force = false } = {}) {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RelayClient, createIdentity, verifyCertificate, encodeInvitation, renderInvitationQR } from './sdk.js';
 import { decodeInvitation } from '@bzzy/relay/invitation';
@@ -10,6 +10,7 @@ import { ensureRuntime, runtimeRequest } from '../engine/runtime.js';
 import { loadSession } from '../engine.js';
 import { canonical } from '../engine/database.js';
 import { object, opaque, uuid, fail } from '../validation.js';
+import { libraryApproval, createLibraryCode, decodeLibraryCode, libraryCodeProof } from './library-code.js';
 
 const protocol = 'bzzy-project-transfer', version = 1;
 export const TRANSFER_LIMITS = Object.freeze({ bytes: 256 * 1024 * 1024, chunkBytes: 16 * 1024,
@@ -58,6 +59,7 @@ const hashFile = async file => {
 export function classifyProjectShareCode(value, { allowInsecureLocal = false } = {}) {
   if (typeof value !== 'string') fail('INVALID_REQUEST', 'Use a valid Agent, Terminal or Library import code.');
   let code = value.trim();
+  const automatic = decodeLibraryCode(code); if (automatic) code = automatic.code;
   if (code.startsWith('BZZY:INVITE:1:')) code = decodeInvitation(code, { allowInsecureLocal }).code;
   const match = /^BZZY-(AGENT|TERMINAL|LIBRARY)-([A-Za-z0-9_-]{43})$/.exec(code);
   if (!match || Buffer.from(match[2], 'base64url').length !== 32 || Buffer.from(match[2], 'base64url').toString('base64url') !== match[2]) fail('INVALID_REQUEST', 'Use a valid Agent, Terminal or Library import code.');
@@ -67,7 +69,7 @@ export function classifyProjectShareCode(value, { allowInsecureLocal = false } =
 // Host-only source service. It attaches to Core's existing Relay identity/socket;
 // invitation/grant ownership is independent of all live session permissions.
 export class ProjectTransferService {
-  #client; #offers = new Map(); #grants = new Map(); #timer; #closed = false; #export; #creating = 0;
+  #client; #offers = new Map(); #grants = new Map(); #timer; #closed = false; #export; #creating = 0; #approving = false;
   constructor({ client, exportArchive } = {}) {
     this.#client = client;
     this.#export = exportArchive || (async (session, file) => (await import('../engine/project-bundle.js')).exportSharedProject(session, file));
@@ -89,19 +91,20 @@ export class ProjectTransferService {
     }
   }
   async createShare(input, { binding, authorize, exportArchive } = {}) {
-    object(input, ['sessionId', 'ttlSeconds', 'kind', 'cwd', 'expectedDigest', 'excludeGoalIds', 'kinds', 'excludeEntries']);
+    object(input, ['sessionId', 'ttlSeconds', 'kind', 'cwd', 'expectedDigest', 'excludeGoalIds', 'kinds', 'excludeEntries', 'approval']);
     const kind = input.kind ?? 'TERMINAL';
     if (!['AGENT', 'TERMINAL', 'LIBRARY'].includes(kind)) fail('INVALID_REQUEST', 'Choose an Agent, Terminal or Library share.');
     if (kind === 'LIBRARY') {
-      object(input, ['kind', 'cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries']);
+      object(input, ['kind', 'cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries', 'approval']);
       if (typeof input.cwd !== 'string' || !path.isAbsolute(input.cwd) || !/^[a-f0-9]{64}$/.test(input.expectedDigest || '')) fail('INVALID_REQUEST', 'Review the current Library before sharing it.');
-      input = { ...input, ...libraryShareSelection(input) };
+      input = { ...input, ...libraryShareSelection(input), approval: libraryApproval(input.approval) };
     } else { object(input, ['sessionId', 'ttlSeconds', 'kind']); uuid(input.sessionId); }
     // Only trusted Core Agent registry code may supply both callbacks. Purpose
     // strings in a session or remote request never authorize an Agent export.
     if (['AGENT', 'LIBRARY'].includes(kind) && (typeof authorize !== 'function' || typeof exportArchive !== 'function')) fail('OPERATION_DENIED', 'This sharing kind requires its trusted host registry.', 403);
     const session = kind === 'LIBRARY' ? { cwd: input.cwd, expectedDigest: input.expectedDigest, ...libraryShareSelection(input) } : loadSession(input.sessionId);
     const checkAuthorization = () => {
+      if (this.#closed) fail('GATEWAY_OFFLINE', 'The sharing service stopped.');
       authorize?.();
       if (kind === 'LIBRARY') return;
       const current = loadSession(input.sessionId);
@@ -131,9 +134,11 @@ export class ProjectTransferService {
       if (!same(invitation.spec, spec)) fail('FORBIDDEN', 'Relay changed the requested project share.', 403);
       const display = { relay: this.#client.url, code: invitation.code, sender: this.#client.identity.certificate, expiresAt: invitation.expiresAt };
       const allowInsecureLocal = this.#client.url.startsWith('ws:');
+      const capability = input.approval === 'code' ? createLibraryCode({ code: invitation.code, fingerprint: display.sender.id, sha256 }) : null;
       const offer = { shareId, kind, sessionId: session.id, binding, authorize: checkAuthorization, directory, file, fd, stat, bytes: stat.size, sha256,
-        invitationId: invitation.invitationId, code: invitation.code, qr: encodeInvitation(display, { allowInsecureLocal }),
-        terminalQR: await renderInvitationQR(display, { terminal: true, allowInsecureLocal }), expiresAt: invitation.expiresAt,
+        invitationId: invitation.invitationId, code: capability?.code || invitation.code, codeSecret: capability?.secret, codeAuthorized: false,
+        approval: capability ? 'code' : 'manual', qr: capability ? capability.code : encodeInvitation(display, { allowInsecureLocal }),
+        terminalQR: capability ? '' : await renderInvitationQR(display, { terminal: true, allowInsecureLocal }), expiresAt: invitation.expiresAt,
         state: 'open', pending: [], createdAt: Date.now(), spec };
       this.#offers.set(shareId, offer);
       while (this.#offers.size > TRANSFER_LIMITS.retainedOffers) {
@@ -160,6 +165,7 @@ export class ProjectTransferService {
     const offer = this.#get(shareId, binding);
     if (!['open', 'pending', 'approved'].includes(offer.state) || offer.expiresAt <= Date.now()) fail('UNCERTAIN', 'Create a new share after the previous code expires.', 409);
     return { shareId, kind: offer.kind, code: offer.code, qr: offer.qr, terminalQR: offer.terminalQR, expiresAt: offer.expiresAt,
+      ...(offer.approval === 'code' ? { approval: 'code' } : {}),
       senderFingerprint: this.#client.identity.certificate.id, bytes: offer.bytes, sha256: offer.sha256 };
   }
   status(shareId, binding) {
@@ -174,20 +180,29 @@ export class ProjectTransferService {
       offer.authorize(); verifyCertificate(data.recipient); opaque(data.claimId);
       if (!same(data.spec, offer.spec) || offer.state !== 'open' || data.expiresAt !== offer.expiresAt || offer.expiresAt <= Date.now()) fail('FORBIDDEN', 'Unexpected project claim.', 403);
       offer.pending = [{ claimId: data.claimId, recipient: structuredClone(data.recipient) }]; offer.state = 'pending';
+      if (offer.approval === 'code') void this.#approveCodeOffer(offer);
     } catch { void this.#client.deny(data.claimId).catch(() => {}); }
     return true;
+  }
+  async #approveCodeOffer(offer) {
+    if (this.#closed || offer.state !== 'pending' || !offer.pending.length) return;
+    try { await this.approveShare({ shareId: offer.shareId, claimId: offer.pending[0].claimId, confirmedFingerprint: offer.pending[0].recipient.id }); }
+    catch (error) { if (error.code !== 'CAPACITY') await this.revokeShare(offer.shareId).catch(() => {}); }
   }
   async approveShare(input, binding) {
     object(input, ['shareId', 'claimId', 'confirmedFingerprint']);
     const offer = this.#get(input.shareId, binding), claim = offer.pending.find(value => value.claimId === input.claimId);
     if (!claim || offer.state !== 'pending' || claim.recipient.id !== input.confirmedFingerprint) fail('CONFIRMATION_REQUIRED', 'Compare the recipient fingerprint before approving.', 403);
-    if ([...this.#offers.values()].some(value => value !== offer && value.state === 'approved')) fail('CAPACITY', 'Finish the active project transfer before approving another.');
-    const decision = await this.#client.approve(claim.claimId, claim.recipient); offer.authorize();
-    const grant = decision.grant;
-    if (!grant || grant.spec.resource !== offer.shareId || !same(grant.spec, offer.spec) || grant.recipientId !== claim.recipient.id || grant.hostId !== this.#client.identity.certificate.id) fail('FORBIDDEN', 'Project grant did not match the approved recipient.', 403);
-    offer.grantId = grant.id; offer.recipient = claim.recipient; offer.transferExpiresAt = grant.expiresAt;
-    offer.pending = []; offer.state = 'approved'; this.#grants.set(grant.id, offer.shareId);
-    return { approved: true };
+    if (this.#approving || [...this.#offers.values()].some(value => value !== offer && value.state === 'approved')) fail('CAPACITY', 'Finish the active project transfer before approving another.');
+    this.#approving = true; let grant;
+    try {
+      grant = (await this.#client.approve(claim.claimId, claim.recipient)).grant; offer.authorize();
+      if (this.#closed || offer.state !== 'pending' || offer.expiresAt <= Date.now() || !offer.pending.includes(claim) || !grant || grant.spec.resource !== offer.shareId || !same(grant.spec, offer.spec) || grant.recipientId !== claim.recipient.id || grant.hostId !== this.#client.identity.certificate.id) fail('FORBIDDEN', 'Project grant did not match the approved recipient.', 403);
+      offer.grantId = grant.id; offer.recipient = claim.recipient; offer.transferExpiresAt = grant.expiresAt;
+      offer.pending = []; offer.state = 'approved'; offer.authorizationExpiresAt = Math.min(offer.expiresAt, Date.now() + 15000); this.#grants.set(grant.id, offer.shareId);
+      return { approved: true };
+    } catch (error) { if (grant?.id) await this.#client.revokeGrant(grant.id).catch(() => {}); throw error; }
+    finally { this.#approving = false; }
   }
   authorizeRoute(grant, peer) {
     const shareId = this.#grants.get(grant.id), offer = shareId && this.#offers.get(shareId);
@@ -212,7 +227,13 @@ export class ProjectTransferService {
       object(request, ['v', 'protocol', 'type', 'id', 'op', 'params']); id = opaque(request.id);
       if (request.v !== version || request.protocol !== protocol || request.type !== 'request') fail('PROTOCOL_UNSUPPORTED', 'Unsupported transfer protocol.');
       let result, cancel = false;
-      if (request.op === 'manifest') {
+      if (offer.approval === 'code' && !offer.codeAuthorized && request.op !== 'authorize-code' && request.op !== 'cancel') fail('FORBIDDEN', 'Library code authorization is required.', 403);
+      if (request.op === 'authorize-code') {
+        object(request.params, ['proof']);
+        const expected = offer.codeSecret && libraryCodeProof(offer.codeSecret, { shareId: offer.shareId, grantId: message.grant.id, recipientId: offer.recipient.id, sha256: offer.sha256 });
+        if (offer.approval !== 'code' || offer.codeAuthorized || offer.authorizationExpiresAt <= Date.now() || typeof request.params.proof !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(request.params.proof) || !expected || !timingSafeEqual(Buffer.from(request.params.proof), Buffer.from(expected))) fail('FORBIDDEN', 'Library code authorization failed.', 403);
+        offer.codeAuthorized = true; result = { authorized: true };
+      } else if (request.op === 'manifest') {
         object(request.params, []);
         result = { format: 'bzzy-project-zip', version: 1, kind: offer.kind, bytes: offer.bytes, sha256: offer.sha256, chunkBytes: TRANSFER_LIMITS.chunkBytes };
       } else if (request.op === 'chunk') {
@@ -244,6 +265,7 @@ export class ProjectTransferService {
     if (offer.fd !== undefined) { fs.closeSync(offer.fd); offer.fd = undefined; }
     fs.rmSync(offer.directory, { recursive: true, force: true });
     offer.code = undefined; offer.qr = undefined; offer.terminalQR = undefined;
+    offer.codeSecret = undefined;
   }
   async revokeShare(shareId, binding, state = 'revoked') {
     const offer = this.#get(shareId, binding);
@@ -256,7 +278,9 @@ export class ProjectTransferService {
     for (const offer of this.#offers.values()) if (['open', 'pending', 'approved'].includes(offer.state)) {
       try {
         offer.authorize();
-        if ((offer.state === 'approved' ? offer.transferExpiresAt : offer.expiresAt) <= Date.now()) await this.revokeShare(offer.shareId, undefined, 'expired');
+        const deadline = offer.state === 'approved' ? offer.approval === 'code' && !offer.codeAuthorized ? offer.authorizationExpiresAt : offer.transferExpiresAt : offer.expiresAt;
+        if (deadline <= Date.now()) await this.revokeShare(offer.shareId, undefined, 'expired');
+        else if (offer.approval === 'code' && offer.state === 'pending') await this.#approveCodeOffer(offer);
       } catch {
         offer.state = 'revoked'; offer.pending = []; this.#release(offer);
         if (offer.grantId) { this.#grants.delete(offer.grantId); await this.#client.revokeGrant(offer.grantId).catch(() => {}); }
@@ -281,7 +305,8 @@ export class CoreTerminalSharing {
   async start() { await this.#request('connect', {}); return { ready: true }; }
   async createShare(input) { const result = await this.#request('share-create', input); return { ...result, renderQR: async () => result.terminalQR }; }
   async createLibraryShare(input) {
-    object(input, ['cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries']);
+    object(input, ['cwd', 'expectedDigest', 'ttlSeconds', 'excludeGoalIds', 'kinds', 'excludeEntries', 'approval']);
+    libraryApproval(input.approval);
     if (typeof input.cwd !== 'string' || !path.isAbsolute(input.cwd) || !/^[a-f0-9]{64}$/.test(input.expectedDigest || '')) fail('INVALID_REQUEST', 'Review the current Library before sharing it.');
     if (input.ttlSeconds !== undefined && (!Number.isSafeInteger(input.ttlSeconds) || input.ttlSeconds < 1 || input.ttlSeconds > TRANSFER_LIMITS.codeSeconds)) fail('INVALID_REQUEST', 'Choose a share-code lifetime of 1–600 seconds.');
     const selected = { ...input, ...libraryShareSelection(input) };
@@ -315,9 +340,15 @@ async function transferRequest(client, grantId, op, params, signal) {
   });
 }
 
-export async function importProjectShare({ expectedKind, code, cwd, expectedSenderFingerprint, onIdentity, onProgress, signal,
+export async function importProjectShare({ expectedKind, code, cwd, expectedSenderFingerprint, onIdentity, onProgress, onPhase, signal,
   url = DEFAULT_RELAY_URL, allowInsecureLocal = false, importArchive } = {}) {
   if (!['AGENT', 'TERMINAL', 'LIBRARY'].includes(expectedKind) || ['AGENT', 'LIBRARY'].includes(expectedKind) && typeof importArchive !== 'function') fail('INVALID_REQUEST', 'Choose the matching host importer.');
+  const capability = decodeLibraryCode(code);
+  if (capability) {
+    if (expectedKind !== 'LIBRARY' || expectedSenderFingerprint !== undefined && expectedSenderFingerprint !== capability.fingerprint) fail('FORBIDDEN', 'The Library code sender does not match.', 403);
+    code = capability.code; expectedSenderFingerprint = capability.fingerprint;
+    onIdentity ||= () => {};
+  }
   if (!fingerprint(expectedSenderFingerprint) || typeof onIdentity !== 'function') fail('CONFIRMATION_REQUIRED', 'Compare the source fingerprint before importing.', 403);
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) fail('INVALID_REQUEST', 'Choose the current recipient project directory.');
   let expectedCertificate;
@@ -331,6 +362,7 @@ export async function importProjectShare({ expectedKind, code, cwd, expectedSend
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-terminal-import-')); fs.chmodSync(directory, 0o700);
   const file = path.join(directory, 'project.zip'); let fd, approvedGrant, imported = false;
   try {
+    await onPhase?.('connecting'); signal?.throwIfAborted();
     await client.connect(); signal?.throwIfAborted(); await onIdentity({ recipientFingerprint: identity.certificate.id });
     const claim = await client.claim(code); // Single-use: never retry this mutation.
     const deadline = Date.now() + TRANSFER_LIMITS.codeSeconds * 1000;
@@ -346,10 +378,17 @@ export async function importProjectShare({ expectedKind, code, cwd, expectedSend
       expectedCertificate && !same(expectedCertificate, grant.peer)) fail('FORBIDDEN', 'The source did not approve this project import.', 403);
     verifyCertificate(grant.peer); client.trustPeer(grant.peer);
     approvedGrant = grant;
+    if (capability) {
+      const result = await transferRequest(client, grant.id, 'authorize-code', { proof: libraryCodeProof(capability.secret,
+        { shareId: grant.spec.resource, grantId: grant.id, recipientId: identity.certificate.id, sha256: capability.sha256 }) }, signal);
+      if (result?.authorized !== true) fail('FORBIDDEN', 'The Library code was not authorized.', 403);
+    }
     const manifest = await transferRequest(client, grant.id, 'manifest', {}, signal);
     object(manifest, ['format', 'version', 'kind', 'bytes', 'sha256', 'chunkBytes']);
     if (manifest.format !== 'bzzy-project-zip' || manifest.version !== 1 || manifest.kind !== expectedKind || !Number.isSafeInteger(manifest.bytes) || manifest.bytes < 1 || manifest.bytes > TRANSFER_LIMITS.bytes ||
       manifest.chunkBytes !== TRANSFER_LIMITS.chunkBytes || !/^[a-f0-9]{64}$/.test(manifest.sha256)) fail('INVALID_REQUEST', 'Invalid project manifest.');
+    if (capability && manifest.sha256 !== capability.sha256) fail('FORBIDDEN', 'The Library does not match the export code.', 403);
+    await onPhase?.('downloading'); signal?.throwIfAborted();
     fd = fs.openSync(file, 'wx', 0o600); const hash = createHash('sha256');
     for (let offset = 0; offset < manifest.bytes; offset += manifest.chunkBytes) {
       signal?.throwIfAborted();
@@ -366,6 +405,7 @@ export async function importProjectShare({ expectedKind, code, cwd, expectedSend
     }
     fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
     if (hash.digest('hex') !== manifest.sha256) fail('FORBIDDEN', 'The project ZIP digest did not match.', 403);
+    await onPhase?.('checking'); signal?.throwIfAborted();
     const importer = importArchive || (async (archive, directory, context) => (await import('../engine/project-bundle.js')).importSharedProject(archive, directory, undefined, { sourceFingerprint: context.sourceFingerprint, signal: context.signal }));
     if (expectedKind === 'LIBRARY') {
       const result = await importer(file, cwd, { sourceFingerprint: grant.hostId, signal, authorize: async () => {
@@ -381,6 +421,7 @@ export async function importProjectShare({ expectedKind, code, cwd, expectedSend
     }
     await transferRequest(client, grant.id, 'complete', { sha256: manifest.sha256 }, signal);
     signal?.throwIfAborted();
+    await onPhase?.('installing'); signal?.throwIfAborted();
     return await importer(file, cwd, { sourceFingerprint: grant.hostId, signal });
   } catch (error) {
     if (expectedKind === 'LIBRARY' && approvedGrant && !imported) {
@@ -423,7 +464,8 @@ export function importLibraryShare(input = {}) {
       options.signal?.throwIfAborted();
       await authorize();
       options.signal?.throwIfAborted();
-      return library.importLibraryBundle(review, { cwd, enable, ...(entryIndexes ? { entryIndexes } : {}) });
+      await options.onPhase?.('installing'); options.signal?.throwIfAborted();
+      return library.importLibraryBundle(review, { cwd, enable, reportReceipt: Boolean(decodeLibraryCode(options.code)), ...(entryIndexes ? { entryIndexes } : {}) });
     } finally { if (review) library.discardDefinitionBundleReview(review); }
   } });
 }

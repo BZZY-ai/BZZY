@@ -91,9 +91,12 @@ finishing a worker does not establish goal completion.
 Both libraries show names and ON/OFF controls, with plain **Import** and
 **Export**. Export opens a name-only checkbox table for that tab's project and
 Core entries. Space toggles names; Enter or **Export** automatically creates an
-expiring Relay code. Import accepts a code, compares fingerprints, then shows
-only that tab's missing names. Check names and choose **Import** to install and
-enable them. Matching names never overwrite existing definitions or their ON/OFF
+expiring Relay code. The **EXPORT CODE** screen has a clickable **Copy code**
+button; `C` copies immediately. On the other BZZY, **Import → ENTER CODE** accepts
+one paste, then shows connecting, download progress, integrity checking and
+installation. Missing entries install enabled, and completion lists only newly
+installed names. No second selection or manual fingerprint entry is needed for
+new Library codes. Matching names never overwrite existing definitions or their ON/OFF
 state. Duplicate project/Core names have a scope suffix. Complete skill resources
 and scopes are preserved; private bindings, history and case/evidence packages
 are excluded. Unsafe selected packages block export. Neither operation starts
@@ -102,15 +105,20 @@ agents, models or scripts. Open an entry to read its full details.
 For combined transfers, use `/library`. It includes skills, specialist agents,
 workflows and saved goal text. `bzzy library share` generates an expiring
 `BZZY-LIBRARY-…` code; `bzzy library import` asks for hidden code entry on the
-receiving host. Compare fingerprints and approve the recipient on the sender.
-Review exact files, then install only missing entries, optionally enabling the
-reviewed skills/agents. Existing names and availability are never overwritten.
+receiving host. New codes pin the sender and selected archive internally, and
+install only missing entries. Existing names and availability are never overwritten.
 Choose Library types before review, or run `bzzy library share agents skills`
 to share only those types. A blocked entry shows its safe reason and file/line,
 with an explicit option to omit that whole entry and share the rest. No content
 is silently stripped, and unselected types are not scanned.
 The Relay must also be updated for Library codes. See
 [Library sharing](../../BZZY-CORE/docs/LIBRARY-SHARING.md).
+
+New Library codes stay valid in Core for up to ten minutes after leaving the
+export screen; **Revoke code** cancels them. Both BZZYs need the current Core/CLI.
+Native clipboard success shows **Code copied**. SSH terminal clipboard requests
+and failures have distinct feedback. Full-session transfers retain their separate
+review and fingerprint approval, and legacy codes remain available via `/library import`.
 
 Use `/workflows` to choose one reusable goal pre-prompt, like the model picker.
 Choose **None** to turn it off; chat shows the selected workflow's name. Create,
