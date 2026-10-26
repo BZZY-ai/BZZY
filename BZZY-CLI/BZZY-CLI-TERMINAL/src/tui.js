@@ -1438,7 +1438,7 @@ export class TerminalChat {
       lines.push(fitStyled(line));
     }
     if (this.pendingApproval && (!this.pendingApproval.expiresAt || this.pendingApproval.expiresAt > Date.now())) {
-      const disabled = this.ui.sessionMode === 'VIEW' || !this.ui.onAnswerApproval || this.approvalSubmitting;
+      const disabled = !this.ui.canAnswerApproval() || this.approvalSubmitting;
       let line = '  ', column = 3;
       for (const [text, answer, tone] of [[' ✔ Approve once ', 'yes', palette.goalSuccess], [' ✕ Deny ', 'no', palette.danger]]) {
         const button = fillSurface(text, cellWidth(text), this.theme, disabled ? palette.surface : tone,
@@ -1475,7 +1475,7 @@ export class TerminalChat {
     const skillDetail = this.panel === 'skills' && Boolean(this.ui.skillPreview || this.ui.skillHistoryState
       || this.ui.skillSyncDetails || this.ui.skillPromotionDraft || this.ui.skillCreatorDraft || this.ui.skillMoveDraft || this.ui.definitionBundleDraft?.panel === 'skills');
     const hasSubmit = (this.promptDraft || skillDirectoryInput || !['skills', 'agents', 'workflows', 'metrics'].includes(this.panel))
-      && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
+      && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.canSubmitInput();
     const prompt = this.promptDraft && this.question ? this.question
       : this.panel === 'agents' ? this.ui.definitionBundleDraft?.panel === 'agents' ? 'ZIP review · Esc goes back' : this.ui.subagentCreatorDraft ? 'Agent preview · Esc returns to library' : 'Agents · Esc returns to chat'
       : this.panel === 'workflows' ? 'Workflows · ↑/↓ choose · Enter opens · Esc goes back'
@@ -1485,7 +1485,7 @@ export class TerminalChat {
       : skillDetail ? 'Skill · Esc goes back'
       : this.panel === 'skills' ? 'Library · Esc returns to chat'
       : this.panel === 'room' ? 'Message all agents'
-      : this.ui.sessionMode === 'VIEW' ? 'Read-only session'
+      : this.ui.sessionMode === 'VIEW' ? this.ui.canSubmitInput() ? 'Send a message to continue here' : 'Read-only session'
         : this.promptDraft && this.question ? this.question
           : this.mode === 'delegate' && !this.goal ? 'Ask BZZY, or type /goal to delegate work'
             : 'Ask BZZY to do anything';
@@ -1885,7 +1885,7 @@ export class TerminalChat {
         else if (badges.line) bottom.push(badges.line);
         bottom.push(...badges.extra);
         if (this.pendingApproval && (!this.pendingApproval.expiresAt || this.pendingApproval.expiresAt > Date.now())) {
-          const disabled = this.ui.sessionMode === 'VIEW' || !this.ui.onAnswerApproval || this.approvalSubmitting;
+          const disabled = !this.ui.canAnswerApproval() || this.approvalSubmitting;
           let approvalLine = '  '; let column = 3;
           for (const [text, answer, tone] of [[' ✔ Approve once ', 'yes', palette.goalSuccess], [' ✕ Deny ', 'no', palette.danger]]) {
             approvalLine += fillSurface(text, cellWidth(text), this.theme, disabled ? palette.surface : tone, disabled ? palette.muted : palette.background, true) + ' ';
@@ -1922,11 +1922,11 @@ export class TerminalChat {
       }
       const visibleValue = workflowOnly ? '' : this.hidden ? '•'.repeat([...this.value].length) : this.value.replaceAll('\n', ' ↵ ');
       const before = workflowOnly ? '' : this.hidden ? '•'.repeat(this.cursor) : [...this.value].slice(0, this.cursor).join('').replaceAll('\n', ' ↵ ');
-      const hasSubmit = !workflowOnly && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.sessionMode !== 'VIEW';
+      const hasSubmit = !workflowOnly && Boolean(this.resolveInput || this.ui.sessionId) && this.ui.canSubmitInput();
       const sendLabel = this.promptDraft ? ' Confirm ' : ' Send ↵ ';
       const inputWidth = Math.max(1, width - 5 - (hasSubmit ? cellWidth(sendLabel) + 1 : 0));
       const cropped = cropLeft(visibleValue, Math.max(0, cellWidth(before) - inputWidth + 1));
-      const inputText = visibleValue ? clip(cropped, inputWidth, '') : clip(workflowOnly ? '↑/↓ choose · Enter opens · Esc goes back' : this.panel === 'settings' && !this.promptDraft ? `↑/↓ choose · Enter opens · Esc ${this.ui.settingsOnly ? 'closes Settings' : 'returns to chat'}` : this.ui.sessionMode === 'VIEW' ? 'Read-only · /tabs or /detach' : this.mode === 'delegate' && !this.goal ? 'Chat, or /goal <objective> for supervised work' : 'Ask something, or /goal an objective', inputWidth);
+      const inputText = visibleValue ? clip(cropped, inputWidth, '') : clip(workflowOnly ? '↑/↓ choose · Enter opens · Esc goes back' : this.panel === 'settings' && !this.promptDraft ? `↑/↓ choose · Enter opens · Esc ${this.ui.settingsOnly ? 'closes Settings' : 'returns to chat'}` : this.ui.sessionMode === 'VIEW' ? this.ui.canSubmitInput() ? 'Send a message to continue here' : 'Read-only · /tabs or /detach' : this.mode === 'delegate' && !this.goal ? 'Chat, or /goal <objective> for supervised work' : 'Ask something, or /goal an objective', inputWidth);
       const inputLine = color(inputText, visibleValue ? palette.text : palette.muted) + ' '.repeat(Math.max(0, inputWidth - cellWidth(inputText)));
       bottom.push(edge('│ ') + inputLine + (hasSubmit ? ' ' + fillSurface(sendLabel, cellWidth(sendLabel), this.theme, this.value && !this.renderingPicker ? palette.accent : palette.selection, this.value && !this.renderingPicker ? palette.background : palette.accent, true) : '') + '  ' + edge('│'));
       inputIndex = bottom.length - 1;

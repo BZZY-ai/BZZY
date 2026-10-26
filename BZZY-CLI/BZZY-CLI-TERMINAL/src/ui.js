@@ -89,9 +89,15 @@ export class UI {
     } catch (error) { tui.notice(error.message, true); return false; }
     finally { this.permissionSubmitting = false; tui.schedule(); }
   }
+  canSubmitInput() {
+    return this.sessionMode !== 'VIEW' || Boolean(this.permissionConnection?.acquire);
+  }
+  canAnswerApproval() {
+    return Boolean(this.onAnswerApproval && this.canSubmitInput());
+  }
   async answerApproval(answer) {
     const question = this.tui?.pendingApproval;
-    if (!question || question.kind !== 'approval' || !['yes', 'no'].includes(answer) || this.sessionMode === 'VIEW' && !this.permissionConnection?.acquire || !this.onAnswerApproval || this.tui.approvalSubmitting) return;
+    if (!question || question.kind !== 'approval' || !['yes', 'no'].includes(answer) || !this.canAnswerApproval() || this.tui.approvalSubmitting) return;
     this.tui.approvalSubmitting = true; this.tui.schedule();
     try { await this.onAnswerApproval(question, answer); }
     catch (error) { this.tui.notice(error.message, true); }

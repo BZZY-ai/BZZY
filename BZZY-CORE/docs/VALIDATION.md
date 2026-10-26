@@ -1,3 +1,28 @@
+# CLI input handoff and approval controls (2026-10-26)
+
+Node.js 24/macOS full suites: **754 Core tests passed, 2 skipped** (756 total)
+and **727 CLI tests passed, 21 skipped** (748 total), zero failures. The final
+approval/dropdown/chat/layout regression run passes all 58 cases. CLI syntax
+and whitespace checks pass.
+
+An expired or released input lease no longer produces a false "another client"
+notice or turns an active attached terminal into a locked viewer. A different
+current owner still produces the handoff notice. Attached viewers retain Send
+and pending Approve/Deny controls through the same UI admission predicate used
+by their action handlers. Their explicit response uses existing Core input
+coordination; opening, polling and rendering never claim a lease. Read-only
+views retain disabled approval controls and cannot send input.
+
+Regression fixtures use the real Core daemon, durable question records and SGR
+mouse clicks to answer pending requests with no owner, after lease expiry and
+after another client takes control. Core records the exact yes/no answer and
+actor, while the draft survives and no model execution is created. Compact,
+wide, normal and minimal views are covered, including disabled read-only mouse
+and keyboard paths. Existing Core transfer permissions, question expiry,
+identity checks and idempotency are unchanged and remain covered by its suite.
+All state is synthetic in private temporary homes. No real pending request was
+answered, running installation updated or provider inference submitted.
+
 # Experiential manual effort controls (2026-10-26)
 
 Node.js 24/macOS full suites: **754 Core tests passed, 2 skipped** (756 total)

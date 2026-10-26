@@ -321,6 +321,12 @@ retroactively tightened. Read-only and isolated Agent boundaries remain enforced
 Pending approvals use expandable action cards and green **✔ Approve once** / red
 **✕ Deny** controls; Alt+Y/Alt+N answer the visible request without sending chat.
 Core rechecks the owner, exact pending question and expiry. Drafts remain intact.
+An attached terminal can answer directly after input moves to another client;
+the explicit Approve/Deny action coordinates control through Core. An expired
+input lease alone does not indicate another client. Read-only `--view` terminals
+keep these actions disabled, and opening or polling a chat never claims input.
+Attached viewers retain Send and a continuation prompt while another client
+controls input; their next submitted action coordinates the handoff.
 Alongside YOLO, a blue **Pursuing goal...** badge animates with rotating dots;
 verified achievement turns green and stalled outcomes turn red. Paused/cancelled
 goals keep their own labels. Status comes from Core lifecycle state, never reply text.

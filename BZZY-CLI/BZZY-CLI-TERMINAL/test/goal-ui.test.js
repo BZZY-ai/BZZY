@@ -15,6 +15,7 @@ import { clean, cellWidth } from '../src/terminal-format.js';
 import { goalIndicator, chatWorkIndicator } from '../src/goal-indicator.js';
 import { palette } from '../src/terminal-theme.js';
 import { initializeLaunchYolo } from '../src/permission-controls.js';
+import { attachSession, viewSession } from '../src/runtime-client.js';
 
 let directory, previous, session, ui, output;
 test.beforeEach(() => {
@@ -41,6 +42,13 @@ function pending() {
   const question = { id: randomUUID(), sessionId: session.id, kind: 'approval', state: 'pending', question: '/bin/zsh -lc "fixture command"\nAllow once? [y/N] ', expiresAt: Date.now() + 60000 };
   putRecord('question', question.id, question); ui.event('question', question); return question;
 }
+async function until(check, label) {
+  for (let attempt = 0; attempt < 150; attempt++) {
+    if (check()) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.fail(`Timed out waiting for ${label}`);
+}
 test('clicking YOLO toggles Core permissions, accepts the pending approval and preserves the unsent draft', async () => {
   await connection(); const input = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.value = 'Unsent draft'; ui.tui.cursor = 12;
   const question = pending(); ui.tui.render();
@@ -64,6 +72,69 @@ test('approval cards expose command details and check/cross actions send exactly
     ui.tui.event('question.answered', { id: question.id, answer });
   }
   assert.equal(listRecords('execution').length, 0);
+});
+test('attached approval clicks reclaim control after lease expiry or a genuine takeover without sending chat', async () => {
+  const info = await ensureRuntime(), seen = [];
+  const event = ui.event.bind(ui), update = ui.updateSession.bind(ui); let polls = 0;
+  ui.event = (type, data) => { seen.push({ type, data }); return event(type, data); };
+  ui.updateSession = snapshot => { polls++; return update(snapshot); };
+  const watching = attachSession(session, {}, ui);
+  try {
+    await until(() => ui.permissionConnection?.acquire && ui.reader && polls, 'attached input');
+    const own = () => getRecord('input-owner', session.id), notices = () => seen.filter(item => item.type === 'info' && /Another client controls input/.test(item.data.message));
+    assert.equal(own(), null, 'Opening the chat must not claim input'); assert.equal(ui.sessionMode, 'VIEW');
+    ui.tui.render(); assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'confirm'));
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Send a message to continue here/);
+    ui.tui.value = 'Keep this unsent draft'; ui.tui.cursor = ui.tui.value.length;
+    for (const [state, answer] of [['unclaimed', 'yes'], ['expired', 'no'], ['transferred', 'yes']]) {
+      const question = pending();
+      if (state === 'expired') {
+        putRecord('input-owner', session.id, { ...own(), expiresAt: Date.now() - 1 });
+        const before = polls; await until(() => polls >= before + 2, 'expired lease snapshot');
+        assert.equal((await runtimeRequest(info, 'GET', `/sessions/${session.id}`)).inputOwner, null);
+        assert.equal(notices().length, 0, 'An absent lease must not be announced as another client');
+        assert.equal(ui.sessionMode, 'CONTROL');
+      }
+      if (state === 'transferred') {
+        await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner: 'other-client', takeover: true });
+        await until(() => ui.sessionMode === 'VIEW' && notices().length === 1, 'genuine takeover notice');
+        assert.equal(own().owner, 'other-client', 'Observation cannot steal control back');
+      }
+      for (const minimal of [false, true]) for (const [columns, rows] of [[80, 24], [140, 40]]) {
+        ui.minimal = minimal; Object.assign(output, { columns, rows }); ui.tui.render();
+        assert.deepEqual(ui.tui.hitTargets.filter(hit => hit.type === 'approval').map(hit => hit.answer), ['yes', 'no']);
+        assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'confirm'), 'The attached composer remains usable after a handoff');
+      }
+      const button = ui.tui.hitTargets.find(hit => hit.type === 'approval' && hit.answer === answer);
+      ui.input.write(`\x1b[<0;${button.left};${button.row}M`); await ui.tui.approvalTask;
+      assert.equal(getRecord('question', question.id).answer, answer);
+      assert.equal(getRecord('question', question.id).answeredBy, ui.permissionConnection.owner);
+      assert.equal(own().owner, ui.permissionConnection.owner);
+      await until(() => !ui.tui.pendingApproval && ui.sessionMode === 'CONTROL', 'acknowledged approval');
+      assert.equal(ui.tui.value, 'Keep this unsent draft');
+    }
+    assert.equal(notices().length, 1); assert.equal(listRecords('execution').length, 0);
+    assert.equal(seen.filter(item => item.type === 'error').length, 0);
+  } finally { ui.coreLifecycleInterrupted = true; ui.reader?.close(); await watching; }
+});
+test('a read-only viewer keeps approval buttons and keyboard actions locked and never claims input', async () => {
+  const info = await ensureRuntime();
+  await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner: 'other-client' });
+  const question = pending(), watching = viewSession(session, { follow: true }, ui);
+  try {
+    await until(() => ui.reader && ui.onAnswerApproval, 'read-only viewer');
+    assert.equal(ui.sessionMode, 'VIEW'); assert.equal(ui.canAnswerApproval(), false);
+    for (const minimal of [false, true]) for (const [columns, rows] of [[80, 24], [140, 40]]) {
+      ui.minimal = minimal; Object.assign(output, { columns, rows }); ui.tui.render();
+      assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'approval'), false);
+      assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'confirm'), false);
+    }
+    for (const answer of ['yes', 'no']) await ui.answerApproval(answer);
+    ui.tui.key('', { name: 'y', meta: true }); await ui.tui.approvalTask;
+    assert.equal(getRecord('question', question.id).state, 'pending');
+    assert.equal((await runtimeRequest(info, 'GET', `/sessions/${session.id}`)).inputOwner.owner, 'other-client');
+    assert.equal(listRecords('execution').length, 0);
+  } finally { ui.coreLifecycleInterrupted = true; ui.reader?.close(); await watching; }
 });
 test('turning off an explicit --yolo launch before sending cannot silently re-enable it on execution', async () => {
   await connection(); ui.launchYolo = true; assert.equal(ui.yoloEnabled(), true);

@@ -4,7 +4,14 @@ CLI and iOS observe the same Core session. Opening, reconnecting and replaying
 history never claim input or start inference. A client submits an explicit
 input intent; Core coordinates admission and publishes durable events to both
 clients. Losing input control changes the CLI to a viewer without closing it.
-Its next submitted message can continue the session.
+Its next submitted message or approval answer can continue the session.
+The CLI reports another controller only when Core returns a different current
+owner. A missing or expired input lease alone is not a takeover. Attached
+terminals keep Approve/Deny available through their explicit-input admission
+path, with Send available to continue the chat; genuinely read-only views cannot
+answer or send messages. Opening, polling and displaying
+a pending approval never claim control. Core still checks the exact question,
+expiry, actor and transfer permissions when the user responds.
 
 The authenticated loopback endpoint is `POST /sessions/:id/input`, advertised
 by `capabilities.inputSubmission`. Operations are `execute`, `goal`, `answer`,

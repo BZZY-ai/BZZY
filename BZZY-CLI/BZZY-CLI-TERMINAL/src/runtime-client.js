@@ -171,7 +171,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
     if (ownershipLost) return;
     ownershipLost = true;
     ui.setSession?.(sessionId, 'VIEW');
-    ui.event('info', { message: 'Another client controls input. This terminal remains live; send a message to continue here.' });
+    ui.event('info', { message: 'Another client controls input. This terminal remains live; send a message or answer a pending request to continue here.' });
     if (ui.interactive && options.allowControlOnInput) { options.follow = true; options.executionId = undefined; }
   };
   const acquireControl = async ({ localMutation = false } = {}) => {
@@ -449,7 +449,9 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           if (firstAgents && ui.interactive && snapshot.session.mode === 'parallel' && activeId === sessionId) { selectTab(children[0].id); continue; }
         }
       }
-      if (options.activeControl && !ownershipLost && snapshot.inputOwner?.owner !== owner) loseControl();
+      // An expired/released lease is unclaimed input, not a takeover. The next
+      // explicit message or approval is admitted by Core; polling never claims it.
+      if (options.activeControl && !ownershipLost && snapshot.inputOwner && snapshot.inputOwner.owner !== owner) loseControl();
       if (options.allowControlOnInput && (!options.activeControl || ownershipLost) && snapshot.inputOwner?.owner === owner) {
         ownershipLost = false; options.activeControl = true; ui.setSession?.(sessionId, 'CONTROL');
       }
