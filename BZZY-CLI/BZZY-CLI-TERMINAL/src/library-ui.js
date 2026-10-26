@@ -58,15 +58,16 @@ function check(ui, before) {
 async function checked(ui, before, operation) { check(ui, before); const result = await operation(); check(ui, before); return result; }
 
 function tabKind(kind) {
-  if (!['skill', 'agent'].includes(kind)) throw new Error('Choose the Skills or Agents tab.');
+  if (!Object.hasOwn(shareTypes, kind)) throw new Error('Choose Skills, Agents, Workflows or Goals.');
   return kind;
 }
 const entryKey = entry => JSON.stringify([entry.kind, entry.scope || 'global', entry.name]);
-async function selectNames(ui, before, operation, kind, entries) {
+async function selectNames(ui, before, operation, kind, entries, labels = {}) {
+  const label = entry => labels[entryKey(entry)] || entry.name;
   const counts = new Map();
-  for (const { entry } of entries) counts.set(entry.name, (counts.get(entry.name) || 0) + 1);
+  for (const { entry } of entries) counts.set(label(entry), (counts.get(label(entry)) || 0) + 1);
   const choices = entries.map(({ entry, index }) => ({ value: String(index),
-    label: entry.name + (counts.get(entry.name) > 1 ? ` (${entry.scope === 'global' ? 'Core' : 'project'})` : ''), selected: true }));
+    label: label(entry) + (counts.get(label(entry)) > 1 ? ` (${kind === 'goal' ? entry.name.slice(-8) : entry.scope === 'global' ? 'Core' : 'project'})` : ''), selected: true }));
   const selected = await checked(ui, before, () => ui.chooseMany(`${operation} ${shareTypes[kind].toLowerCase()}`, choices, {
     scope: `library-${operation.toLowerCase()}`, columnHeader: 'NAME', confirmLabel: operation, cancelLabel: 'Back',
     emptyMessage: 'Select at least one name.', hint: `Space toggles · Enter ${operation.toLowerCase()}s · Esc back`,
@@ -87,7 +88,7 @@ export async function transferLibraryTab(operation, kind, cwd, ui, { loadBundle 
   const catalog = await checked(ui, before, () => backend.listLibraryExportChoices({ cwd: before.root, kinds: [kind] }));
   if (!Array.isArray(catalog.entries) || catalog.entries.some(entry => entry.kind !== kind)) throw new Error('The Library list changed. Reopen Export.');
   if (!catalog.entries.length) { ui.event('info', { message: `No ${shareTypes[kind].toLowerCase()} to export.` }); return null; }
-  const indexes = await selectNames(ui, before, 'Export', kind, catalog.entries.map((entry, index) => ({ entry, index })));
+  const indexes = await selectNames(ui, before, 'Export', kind, catalog.entries.map((entry, index) => ({ entry, index })), catalog.labels);
   if (!indexes) return null;
   const selectedEntries = indexes.map(index => catalog.entries[index]);
   let review;
@@ -235,6 +236,7 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
   terminal(ui); const before = context(ui, cwd), previous = ui.privateView;
   const view = { title: 'ENTER CODE', lines: [], qr: [], onCancel: null };
   let code = String(value || '').trim();
+  let goalLabels = new Map();
   ui.privateView = view; ui.tui?.schedule();
   try {
     if (!code) code = (await checked(ui, before, () => ui.secret('ENTER CODE · Enter continues · Esc back')))?.trim() || '';
@@ -270,7 +272,12 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
         }
       },
       onReview: async review => {
-        if (automatic) { check(ui, before); return automaticImports(backend, review, selectionKind); }
+        if (automatic) {
+          check(ui, before);
+          const decision = automaticImports(backend, review, selectionKind);
+          goalLabels = new Map(review.entries.filter(entry => entry.kind === 'goal').map(entry => [entry.version, entry.description || entry.name]));
+          return decision;
+        }
         // A private transport screen has no composer reader. Release it while
         // the ordinary selection dialog owns keyboard/mouse input.
         if (ui.privateView === view) ui.privateView = previous;
@@ -285,7 +292,7 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
     });
     check(ui, before);
     if (automatic) {
-      const installed = result.alreadyImported ? [] : ['skill', 'agent', 'workflow', 'goal'].flatMap(kind => (result[kind + 's'] || []).map(entry => ({ kind, name: entry.name || entry.id })));
+      const installed = result.alreadyImported ? [] : ['skill', 'agent', 'workflow', 'goal'].flatMap(kind => (result[kind + 's'] || []).map(entry => ({ kind, name: kind === 'goal' ? goalLabels.get(entry.version) || entry.name || entry.id : entry.name || entry.id })));
       ui.event('info', { message: installed.length ? 'Installed:\n' + [...new Set(installed.map(entry => `${names[entry.kind]} · ${entry.name}`))].join('\n') : 'Already installed. Nothing new was added.' });
     } else ui.event('info', { message: `${result.alreadyImported ? 'Library already installed' : 'Library installed'}: ${summary(result)}.${result.skipped?.length ? ` Skipped ${result.skipped.length} existing entries.` : ''} No execution started.` });
     return result;

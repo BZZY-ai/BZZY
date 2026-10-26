@@ -13,7 +13,7 @@ import { getRecord, putRecord, listRecords, database } from '@bzzy/core/engine/d
 import { clean, cellWidth } from '../src/terminal-format.js';
 
 let directory, previous, target, ui, notices;
-const pick = offered => offered.choices.find(choice => !['back', 'older', 'newer'].includes(choice.value)).value;
+const pick = offered => offered.choices.find(choice => !['back', 'older', 'newer', 'import', 'export'].includes(choice.value)).value;
 const provider = { id: 'codex', backend: 'codex' };
 function saved(objective, createdAt = '2026-10-01T00:00:00.000Z', extra = {}) {
   const session = createSession(provider, directory, 'offline-model', extra.alias);
@@ -41,11 +41,15 @@ test.afterEach(() => {
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-test('empty saved goals explain how to save one without changing durable state', async () => {
+test('empty saved goals offer Import without changing durable state', async () => {
   const before = state();
-  ui.chooseOne = () => assert.fail('No picker is needed for an empty list');
+  ui.chooseOne = (_title, offered) => {
+    assert.match(offered.description, /No saved goals.*\/goal <objective>/);
+    assert.equal(offered.choices.find(row => row.value === 'import').disabled, undefined);
+    assert.equal(offered.choices.find(row => row.value === 'export').disabled, true);
+    return null;
+  };
   assert.equal(await chooseSavedGoal(ui), null);
-  assert.match(notices[0].message, /No saved goals.*\/goal <objective>/);
   assert.deepEqual(state(), before);
 });
 
@@ -60,7 +64,7 @@ test('reuse returns the complete objective as data, including reserved controls 
       assert.equal(offered.choices[0].value, 'back'); assert.equal(offered.choices[0].selected, true);
       assert.match(offered.description, /NEW goal/);
       assert.match(offered.description, /Saved goals 1–1 of 1/);
-      const choice = offered.choices.find(row => row.value !== 'back');
+      const choice = offered.choices.find(row => !['back', 'import', 'export'].includes(row.value));
       assert.ok(choice.description.endsWith(objective));
       assert.equal(choice.value, `${source.id}:${source.goal.id}`);
       return choice.value;
@@ -87,7 +91,7 @@ test('pages expose every saved goal in recent order and support Older and Newer 
   for (let index = 0; index < 43; index++) saved(`Goal ${index}`, new Date(Date.UTC(2026, 9, 1, 0, index)).toISOString());
   const pages = [], before = state();
   ui.chooseOne = async (_title, offered) => {
-    const goals = offered.choices.filter(row => !['back', 'older', 'newer'].includes(row.value));
+    const goals = offered.choices.filter(row => !['back', 'older', 'newer', 'import', 'export'].includes(row.value));
     pages.push(goals.map(row => row.label));
     if (pages.length <= 2) return 'older';
     if (pages.length === 3) return 'newer';
@@ -167,7 +171,7 @@ function actualTerminal(columns, rows, minimal) {
   return terminal;
 }
 
-test('actual saved-goal popup supports keyboard reuse, clickable Back and Escape across terminal sizes', async () => {
+test('actual saved-goal popup supports keyboard reuse, clickable Back and Escape across terminal sizes', { timeout: 5000 }, async () => {
   const objective = ('Review this response 你🐝\nRetain every requirement. ' + 'Long requirement. '.repeat(20)).trim();
   saved(objective, undefined, { alias: 'HTTP checks' });
   const before = state();
@@ -179,7 +183,8 @@ test('actual saved-goal popup supports keyboard reuse, clickable Back and Escape
       assert.ok(tui.popupRegion.left >= 1 && tui.popupRegion.right < columns);
       assert.ok(tui.lastFrame.every(line => cellWidth(line) <= columns - 1));
       assert.match(tui.lastFrame.map(clean).join('\n'), /Saved goals/);
-      tui.key('', { name: 'down' }); tui.key('', { name: 'return' });
+      for (let index = 0; index < 3; index++) tui.key('', { name: 'down' });
+      tui.key('', { name: 'return' });
       assert.equal((await result).objective, objective);
       result = chooseSavedGoal(terminal); await Promise.resolve(); tui.render();
       const back = tui.hitTargets.find(hit => hit.type === 'cancel' && hit.back); assert.ok(back);
@@ -191,4 +196,33 @@ test('actual saved-goal popup supports keyboard reuse, clickable Back and Escape
     } finally { terminal.close(); }
   }
   assert.deepEqual(state(), before);
+});
+
+
+test('saved-goal Import is available when empty, refreshes the list, and never starts work', async () => {
+  const calls = []; let step = 0;
+  ui.chooseOne = async (_title, offered) => {
+    if (!step++) { assert.ok(offered.choices.some(row => row.value === 'import')); return 'import'; }
+    assert.ok(offered.choices.some(row => row.label === 'Imported goal fixture')); return 'back';
+  };
+  await chooseSavedGoal(ui, { transfer: async (operation, kind, cwd, screen) => {
+    calls.push([operation, kind, cwd, screen === ui]);
+    const { saveGoalTemplate } = await import('@bzzy/core/engine/goal-templates.js');
+    saveGoalTemplate({ objective: 'Imported goal fixture' });
+  } });
+  assert.deepEqual(calls, [['import', 'goal', directory, true]]);
+  assert.equal(loadSession(target.id).goal, null); assert.equal(listRecords('execution').length, 0);
+  assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.cursor, 4);
+});
+
+test('saved-goal Export uses the original project and a context switch cancels a pending transfer', async () => {
+  saved('A reusable supplied objective');
+  let step = 0, called = 0;
+  ui.chooseOne = async () => step++ ? 'back' : 'export';
+  assert.equal(await chooseSavedGoal(ui, { transfer: async (operation, kind, cwd) => {
+    assert.deepEqual([operation, kind, cwd], ['export', 'goal', directory]); called++;
+  } }), null);
+  assert.equal(called, 1); assert.equal(listRecords('execution').length, 0);
+  ui.chooseOne = async () => 'import';
+  await assert.rejects(chooseSavedGoal(ui, { transfer: async () => { ui.sessionId = randomUUID(); } }), /terminal or host changed/);
 });

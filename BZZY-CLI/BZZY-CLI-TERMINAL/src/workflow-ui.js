@@ -1,5 +1,6 @@
 import { home, loadSession } from '@bzzy/core/engine/store.js';
 import { createHash } from 'node:crypto';
+import { transferLibraryTab } from './library-ui.js';
 import { listWorkflows, getWorkflow, saveWorkflow, importWorkflow, deleteWorkflow, workflowSelection, selectWorkflow, getGoalWorkflow } from '@bzzy/core/engine/workflows.js';
 
 const sessionFor = ui => ui.sessionId && loadSession(ui.sessionId);
@@ -62,6 +63,7 @@ export function workflowRows(ui) {
       ...(!state.available ? [{ text: state.reason, tone: 'warning' }] : []),
       ...(goal?.workflow ? [{ text: `Current goal keeps ${goal.workflow.name} · ${goal.workflow.version.slice(0, 8)}`, tone: 'muted' }] : []),
       { text: 'Pick one workflow for this terminal. /goal loads its full text before model work.', tone: 'muted' },
+      { text: 'Import', action: 'import', tone: 'accent' }, { text: 'Export', action: 'export', tone: 'accent' },
       { text: 'Create workflow', action: 'create', tone: 'accent' }, { text: 'Load workflow from a text file', action: 'load' }, { text: '' },
       { text: `${state.selected ? '  ' : '✓ '}None · no workflow`, action: `none:${state.revision}:${token}`, tone: 'accent' },
       ...page.workflows.flatMap(row => [{ text: `${state.available && state.selected?.id === row.id ? '✓ ' : '  '}${row.name} · ${row.scope}`, action: `select:${row.scope}:${row.name}:${row.revision}:${state.revision}:${token}`, tone: 'accent' },
@@ -91,7 +93,7 @@ async function edit(ui, existing) {
   preview(ui, saved); ui.event('info', { message: `Saved ${saved.name}. Select it to apply to future goals in this terminal.` });
 }
 
-export async function workflowAction(action, ui) {
+export async function workflowAction(action, ui, { transfer = transferLibraryTab } = {}) {
   if (!ui.tui && !openWorkflows(ui)) return false;
   const initial = context(ui);
   try {
@@ -100,6 +102,9 @@ export async function workflowAction(action, ui) {
     if (['', 'library', 'refresh'].includes(action)) { clearPreview(ui); ui.workflowAdminContext = initial; }
     else if (action === 'back') closeWorkflows(ui);
     else if (action === 'close') { clearPreview(ui); closeWorkflows(ui); }
+    else if (action === 'import' || action === 'export') {
+      await transfer(action, 'workflow', cwdFor(ui), ui); check(ui, initial); clearPreview(ui);
+    }
     else if (action === 'create') await edit(ui);
     else if (action === 'load') {
       const file = (await prompt(ui, 'ask', 'Workflow text file · UTF-8, up to 128 KiB · Esc cancels'))?.trim(); if (!file) return true;

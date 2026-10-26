@@ -120,6 +120,15 @@ Native clipboard success shows **Code copied**. SSH terminal clipboard requests
 and failures have distinct feedback. Full-session transfers retain their separate
 review and fingerprint approval, and legacy codes remain available via `/library import`.
 
+**Saved goals (`/goal`)** and **Workflows (`/workflows`)** have the same plain
+**Import** and **Export** actions. Check names once to export, then copy the
+generated code. On the receiving BZZY, paste into **ENTER CODE** and follow the
+download/check/install progress. Only new entries appear in the result; existing
+goal text and scoped workflow names are skipped. Goals use readable objective
+text in the checkbox list and installation result. Import remains available when
+there are no saved goals. Imports neither start goals nor change the terminal's
+selected workflow. **Load workflow from a text file** remains a separate action.
+
 Use `/workflows` to choose one reusable goal pre-prompt, like the model picker.
 Choose **None** to turn it off; chat shows the selected workflow's name. Create,
 load, inspect and edit definitions through this list or its links in Skills and
@@ -151,6 +160,24 @@ transcript and composer, while preserving the chat draft. Esc returns from any
 Settings page to chat. Esc also closes other menu screens; when a prompt,
 picker or skill preview is open, it cancels that view first and preserves the
 unsent chat draft.
+
+Normal chat shows an animated **Cooking…** status while Core's admitted execution
+is running, including tool or specialist work within that reply. **Queued…**,
+**Starting…**, **Stopping…** and **Needs your input** distinguish the other states.
+The indicator disappears when execution finishes, fails, pauses or is cancelled;
+typing a draft starts no indicator. This works in ordinary and minimal layouts
+without adding synthetic messages or invocation counts. Goal runs retain their
+Pursuing/Verifying/Validating status.
+
+**Option+Delete** on Mac (**Alt+Backspace**) and **Ctrl+W** delete the previous
+word at the cursor, preserving text to its right. **Ctrl+Backspace** also works
+when the terminal reports that chord. Composer, text/private prompts, alias
+editing and model search accept the shortcuts. Legacy keys and extended
+[Kitty](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) and
+[xterm](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) Backspace packets
+are decoded without inserting packet characters. Key release does not delete
+another word; repeating the key does. Bracketed paste into the composer cannot
+activate word deletion.
 
 **Skills** opens the existing project/global skills library, including **Sync
 skills from Codex into BZZY**. **Metrics**, also available with `/metrics`, shows

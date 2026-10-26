@@ -15,7 +15,7 @@ import { hostMetricsCompact } from './host-metrics.js';
 import { choicePopup, visibleChoices } from './choice-popup.js';
 import { fillSurface, replaceCells, sliceCells } from './terminal-surface.js';
 import { settingsLayout, settingsActions, navigateSettings } from './settings-layout.js';
-import { goalIndicator, goalValidationIndicator } from './goal-indicator.js';
+import { goalIndicator, goalValidationIndicator, chatWorkIndicator } from './goal-indicator.js';
 import { escapeInputKind, TerminalKeyInput } from './terminal-keys.js';
 import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
 import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
@@ -128,6 +128,7 @@ export class TerminalChat {
     if (!this.bestiesGroupId && !this.sharedRoom.length && this.panel === 'room') this.panel = 'chat';
     if (session.delegationUsage) this.delegationUsage = session.delegationUsage;
     const job = snapshot.execution;
+    this.executionGoal = typeof job?.goal === 'boolean' ? job.goal : typeof snapshot.run?.goalMode === 'boolean' ? snapshot.run.goalMode : undefined;
     this.busy = job ? ['queued', 'launching', 'running'].includes(job.state) : ['running', 'waiting_for_input', 'verifying'].includes(session.executionState);
     const reported = session.usage?.available ? session.usage.tokens : undefined;
     this.tokens = this.busy ? reported == null ? this.tokens : Math.max(this.tokens ?? 0, reported) : session.summary?.usage?.totalTokens ?? reported;
@@ -804,6 +805,7 @@ export class TerminalChat {
       else if (key.name === 'return') { this.aliasEdit = null; if (edit.value.trim()) this.localCommand('/alias ' + edit.value.trim()); }
       else if (key.name === 'left') edit.cursor = Math.max(0, edit.cursor - 1);
       else if (key.name === 'right') edit.cursor = Math.min(chars.length, edit.cursor + 1);
+      else if ((key.meta || key.ctrl) && key.name === 'backspace' || key.ctrl && key.name === 'w') { const start = wordBoundary(chars, edit.cursor, -1); chars.splice(start, edit.cursor - start); edit.cursor = start; edit.value = chars.join(''); }
       else if (key.name === 'backspace' && edit.cursor) { chars.splice(--edit.cursor, 1); edit.value = chars.join(''); }
       else if (key.name === 'delete') { chars.splice(edit.cursor, 1); edit.value = chars.join(''); }
       else if (key.ctrl && key.name === 'a') edit.cursor = 0;
@@ -856,7 +858,10 @@ export class TerminalChat {
       }
       else if (key.name === 'space' && !picker.single) { const value = picker.choices[picker.focus].value; if (picker.selected.has(value)) picker.selected.delete(value); else picker.selected.add(value); }
       else if (key.name === 'return') this.chooseFocused();
-      else if (picker.kind === 'model' && key.name === 'backspace') { picker.query = [...(picker.query || '')].slice(0, -1).join(''); picker.error = ''; }
+      else if (picker.kind === 'model' && (key.name === 'backspace' || key.ctrl && key.name === 'w')) {
+        const query = [...(picker.query || '')];
+        picker.query = query.slice(0, key.meta || key.ctrl ? wordBoundary(query, query.length, -1) : -1).join(''); picker.error = '';
+      }
       else if (picker.kind === 'model' && key.ctrl && key.name === 'u') { picker.query = ''; picker.error = ''; }
       else if (picker.kind === 'model' && text && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(text)) { picker.query = ((picker.query || '') + text).slice(0, 120); picker.error = ''; }
       this.schedule(); return;
@@ -954,6 +959,7 @@ export class TerminalChat {
       if (key.name === 'return' && actions[this.skillFocus || 0]) { this.localCommand('/skills ' + actions[this.skillFocus || 0]); return; }
     }
     if (!this.canCompose()) return;
+    if (this.pasting && (['backspace', 'delete'].includes(key.name) || key.ctrl && key.name === 'w')) { key.bzzyHandled = true; return; }
 
     const completions = this.completions();
     if (completions.length) {
@@ -985,7 +991,7 @@ export class TerminalChat {
       this.submitMessage(); return;
     }
     if ((key.name === 'return' && (key.meta || key.shift)) || key.ctrl && key.name === 'j') { chars.splice(this.cursor++, 0, '\n'); }
-    else if (key.meta && key.name === 'backspace' || key.ctrl && key.name === 'w') { const start = wordBoundary(chars, this.cursor, -1); chars.splice(start, this.cursor - start); this.cursor = start; }
+    else if ((key.meta || key.ctrl) && key.name === 'backspace' || key.ctrl && key.name === 'w') { const start = wordBoundary(chars, this.cursor, -1); chars.splice(start, this.cursor - start); this.cursor = start; }
     else if ((key.meta || key.ctrl) && key.name === 'delete') chars.splice(this.cursor, wordBoundary(chars, this.cursor, 1) - this.cursor);
     else if (key.name === 'backspace') { if (this.cursor) chars.splice(--this.cursor, 1); }
     else if (key.name === 'delete') chars.splice(this.cursor, 1);
@@ -1233,7 +1239,9 @@ export class TerminalChat {
     return this.tokens != null ? (partial ? '≥' : '') + this.tokens.toLocaleString() + ' tokens' : 'tokens —';
   }
   goalBadgeLayout(width, { reserved = 0, surface = palette.background, showEmpty = false } = {}) {
-    const primary = goalIndicator(this.goal, this.frame, { validating: this.mode === 'debate' && this.busy }), validation = goalValidationIndicator(this.goal, this.goalValidation, this.frame);
+    const goal = goalIndicator(this.goal, this.frame, { validating: this.mode === 'debate' && this.busy });
+    const work = this.executionGoal === false || this.executionGoal == null && !goal?.animated ? chatWorkIndicator(this, this.frame) : null;
+    const primary = work || goal, validation = goalValidationIndicator(this.goal, this.goalValidation, this.frame);
     if (!primary && !showEmpty) return { line: '', extra: [] };
     const badge = (indicator, maximum) => {
       const text = ' ' + clip(indicator.label, Math.max(1, maximum - 2)) + ' ';

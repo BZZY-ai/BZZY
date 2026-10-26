@@ -80,8 +80,9 @@ async function waitForNewGoal(session, oldId) {
 test('plain /goal with no saved goals returns to chat without treating it as status or starting work', { timeout: 15000 }, async () => {
   const target = terminal('empty'), ui = scriptedUI(['/goal', '/exit']);
   assert.equal(await attachSession(target, {}, ui), 0);
-  assert.equal(ui.menus.length, 0);
-  assert.ok(ui.seen.some(item => /no saved goals/i.test(item.message || '')));
+  assert.equal(ui.menus.length, 1);
+  assert.match(ui.menus[0].content.description, /no saved goals/i);
+  assert.ok(ui.menus[0].content.choices.some(row => row.value === 'import'));
   assert.ok(!ui.seen.some(item => item.type === 'error'), JSON.stringify(ui.seen));
   assert.equal(loadSession(target.id).goal, null);
   assert.equal(listRecords('execution').length, 0);

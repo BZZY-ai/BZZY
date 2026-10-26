@@ -4,7 +4,7 @@ export const chatHelp = `Modes
   --delegate   A strong brain model plans and reviews; a cheaper executor does the work.
   --besties    2–3 agents collaborate on a shared goal and review each other’s evidence.
 
-/goal              Choose a saved goal; Enter starts it as a fresh goal here.
+/goal              Reuse, import or export saved goals; choosing an objective starts a fresh goal here.
 /goal <objective>  Start a goal; submitted goals are saved automatically.
 /goal status       Inspect the current goal without starting work.
 /goal resume       Continue a paused or stalled goal from its saved checkpoint.
@@ -30,7 +30,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /agents            Create and view reusable specialist subagents for any supported model.
 /create-skill <description> Ask for a name, then create and enable a global Core skill with the current model.
 /create-agent <description> Ask for a name, then create a global Core specialist with the current model.
-/workflows         Create, load and select complete instructions for future goals; /workflow is an alias.
+/workflows         Create, load, import/export and select instructions for future goals; /workflow is an alias.
 /metrics           Inspect recorded skill, specialist and worker usage for this goal or chat.
 /memory [query]    Search this engagement's findings, memory and past conversations.
 /learn             Review learning jobs, candidate skills and private user/host preferences.
@@ -45,6 +45,7 @@ bzzy settings      Open Settings directly without starting a conversation.
 bzzy doctor        Check both installed backends; add --live to test actual replies.
 
 /models · /effort · /providers · /usage · /pause · /cancel · /exit
+Option+Delete / Alt+Backspace · Ctrl+W delete the previous word at the cursor.
 Tab / Shift+Tab switch agent chats. bzzy --help lists options; bzzy --whoami explains the full system.`;
 
 export const chatCommands = [

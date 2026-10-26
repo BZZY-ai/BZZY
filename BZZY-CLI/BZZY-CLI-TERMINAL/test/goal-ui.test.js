@@ -12,7 +12,7 @@ import { putRecord, getRecord, listRecords } from '../src/database.js';
 import { ensureRuntime, runtimeInfo, runtimeRequest } from '../src/runtime.js';
 import { identityAlive } from '../src/recovery.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
-import { goalIndicator } from '../src/goal-indicator.js';
+import { goalIndicator, chatWorkIndicator } from '../src/goal-indicator.js';
 import { palette } from '../src/terminal-theme.js';
 import { initializeLaunchYolo } from '../src/permission-controls.js';
 
@@ -87,4 +87,38 @@ test('goal colors follow authoritative lifecycle states and animated dots fit co
   ui.tui.render();
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /01:01:01/);
   assert.notEqual(goalIndicator({ status: 'active' }, 0).label, goalIndicator({ status: 'active' }, 1).label);
+});
+
+
+test('ordinary chat shows Cooking through active execution and clears it on finish, failure and pause', () => {
+  const goal = { id: 'previous-goal', objective: 'Previously achieved objective', status: 'complete' };
+  const snapshot = (state, extra = {}) => ({ session: { ...session, goal, executionState: state, ...extra },
+    execution: { id: 'chat-fixture', goal: false, state } });
+  for (const minimal of [false, true]) for (const [columns, rows] of [[60, 18], [80, 24], [140, 40]]) {
+    ui.minimal = minimal; Object.assign(output, { columns, rows });
+    for (const [state, label] of [['queued', 'Queued…'], ['launching', 'Starting…'], ['running', 'Cooking…']]) {
+      ui.updateSession(snapshot(state)); ui.tui.render();
+      assert.ok(ui.tui.lastFrame.map(clean).join('\n').includes(label));
+      assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
+    }
+    const cooking = ui.tui.goalBadgeLayout(columns).line;
+    ui.tui.frame++; assert.notEqual(ui.tui.goalBadgeLayout(columns).line, cooking);
+    ui.event('execution.finished'); ui.tui.render();
+    assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /Cooking/);
+    for (const state of ['failed', 'paused', 'cancelled', 'completed']) {
+      ui.updateSession(snapshot(state)); ui.tui.render();
+      assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /Cooking|Starting|Queued/);
+    }
+    ui.updateSession({ ...snapshot('running'), session: { ...session, goal, executionState: 'waiting_for_input' } });
+    ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Needs your input/);
+    ui.updateSession({ ...snapshot('running'), execution: { goal: false, state: 'running', stopAction: 'pause' } });
+    ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Stopping/);
+    ui.updateSession({ session: { ...session, goal: { ...goal, status: 'active' } }, execution: { goal: false, state: 'running' } });
+    ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Cooking/);
+    ui.updateSession({ session: { ...session, goal: { ...goal, status: 'active' } }, execution: { goal: true, state: 'running' } });
+    ui.tui.render(); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Pursuing goal/);
+  }
+  assert.equal(chatWorkIndicator({ busy: false, state: 'needs your input' }), null);
+  assert.equal(ui.tui.entries.some(row => /Cooking/.test(row.text)), false, 'Working feedback is not a durable chat message or invocation');
+  assert.equal(listRecords('execution').length, 0);
 });

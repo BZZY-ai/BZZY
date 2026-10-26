@@ -12,7 +12,8 @@ existing iPhone connections remain compatible.
 
 ## Terminal flow
 
-On BZZY 1, open **Skills** or **Agents → Export**, check names, then choose
+On BZZY 1, open **Skills**, **Agents**, **Workflows (`/workflows`)** or
+**Saved goals (`/goal`) → Export**, check names, then choose
 **Export**. The private screen displays **EXPORT CODE** and a **Copy code**
 button. Click it or press **C**; no Enter is required. Native clipboard success,
 terminal clipboard requests and copy failures have distinct feedback.
@@ -22,6 +23,10 @@ connection/authorization, a download bar based on actual received bytes, package
 integrity checks and installation. It installs/enables only missing definitions
 and lists only newly installed names. Existing names and ON/OFF states are
 preserved. No second selection or manual fingerprint entry is needed.
+Saved-goal Import is available even with an empty list. Goal labels show readable
+objective text; same-label exports have a short identity suffix. Only objective
+text is transferred, with no old goal outcome or evidence. Workflows keep their
+project/Core scopes, and importing them does not change the selected workflow.
 
 The source Core must remain online; leaving the export screen keeps the code
 alive for up to ten minutes. **Revoke code** cancels it. A code is single use and
@@ -39,8 +44,8 @@ bzzy library import
 Source type/file review remains available for combined exports. New CLI exports
 use the same paste-once codes. `/import` routes Library and full-session codes.
 Legacy Library codes and invitation QR protocol text still work through
-`/library import` with their previous review/fingerprint flow. Main Skills and
-Agents Import buttons request a new export when given an obsolete code.
+`/library import` with their previous review/fingerprint flow. The four libraries'
+Import buttons request a new export when given an obsolete code.
 Full-session transfers retain their separate explicit approval. No share URL is
 created, and no model, script, hook, goal or specialist starts during import.
 

@@ -12,6 +12,8 @@ import { privateChatCommand } from '../src/terminal-commands.js';
 import { createSession } from '@bzzy/core/engine/store.js';
 import { listRecords } from '@bzzy/core/engine/database.js';
 import * as libraryBackend from '@bzzy/core/engine/definition-bundle.js';
+import { saveWorkflow } from '@bzzy/core/engine/workflows.js';
+import { saveGoalTemplate } from '@bzzy/core/engine/goal-templates.js';
 import { createSkill, setSkillEnabled } from '@bzzy/core/engine/skills.js';
 
 const code = 'BZZY-LIBRARY-' + 'L'.repeat(43), terminalCode = 'BZZY-TERMINAL-' + 'T'.repeat(43);
@@ -572,4 +574,48 @@ test('a long sub-16KiB resource is fully reachable through review line pages at 
     assert.equal(loads, 0); assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.cursor, 5);
     assert.equal(ui.events.length, 0); assert.equal(listRecords('execution').length, 0);
   }
+});
+
+
+for (const kind of ['goal', 'workflow']) test(`${kind} export uses name checkboxes and creates a typed one-code share`, async () => {
+  const labels = kind === 'goal' ? ['Check the supplied response.', 'Check the supplied control.'] : ['first-process', 'second-process'];
+  if (kind === 'goal') for (const objective of labels) saveGoalTemplate({ objective });
+  else for (const name of labels) saveWorkflow({ name, instructions: 'Compare supplied positive and negative controls.' }, { cwd, scope: 'global' });
+  const transport = [], ui = mockUI({ typeChoices: [(_title, choices) => {
+    assert.deepEqual(choices.map(row => row.label).sort(), [...labels].sort());
+    return [choices.find(row => row.label === labels[1]).value];
+  }] });
+  await transferLibraryTab('export', kind, cwd, ui, { loadBundle: async () => libraryBackend, relayLoader: async () => sourceTransport(transport) });
+  const request = transport.find(call => call.operation === 'create').input;
+  assert.deepEqual(request.kinds, [kind]);
+  assert.equal(kind === 'goal' ? request.excludeGoalIds.length : request.excludeEntries.length, 1);
+  assert.equal(ui.typeMenus.length, 1); assert.equal(ui.typeMenus[0].options.confirmLabel, 'Export');
+  assert.equal(ui.typeMenus[0].options.columnHeader, 'NAME'); assert.equal(ui.menus.length, 0);
+  assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft');
+  assert.equal(listRecords('execution').length, 0);
+});
+
+for (const kind of ['goal', 'workflow']) test(`${kind} import pastes once, filters by type and reports only human-readable installed entries`, async () => {
+  const value = review(), version = '9'.repeat(64), label = kind === 'goal' ? 'Review the supplied response fixture.' : 'new-process';
+  const entry = value.entries.find(row => row.kind === kind); entry.version = version;
+  if (kind === 'goal') entry.description = label; else entry.name = label;
+  let decision;
+  const ui = mockUI({ secret: automaticCode });
+  const result = await transferLibraryTab('import', kind, cwd, ui, { loadBundle: async () => libraryBackend,
+    relayLoader: async () => ({ importLibraryShare: async request => {
+      request.onPhase('connecting'); request.onProgress({ received: 2048, total: 4096 }); request.onPhase('checking');
+      decision = await request.onReview(value); request.onPhase('installing');
+      return { [kind + 's']: [kind === 'goal' ? { id: 'template:' + version, version } : { name: label }], skipped: [{ kind, name: 'already-here' }] };
+    } }) });
+  assert.deepEqual(decision.entryIndexes, [value.entries.indexOf(entry)]); assert.equal(decision.approved, true);
+  assert.equal(ui.prompts.length, 1); assert.match(ui.prompts[0], /^ENTER CODE/);
+  assert.equal(ui.typeMenus.length, 0); assert.equal(ui.menus.length, 0);
+  assert.ok(ui.frames.some(frame => frame.includes('Downloading encrypted Library')));
+  assert.ok(ui.frames.some(frame => frame.includes('Installing new entries')));
+  assert.equal(ui.events[0].message, 'Installed:\n' + (kind === 'goal' ? 'Goal' : 'Workflow') + ' · ' + label);
+  assert.equal(result[kind + 's'].length, 1); assert.equal(ui.privateView, undefined);
+  assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(listRecords('execution').length, 0);
+  await assert.rejects(transferLibraryTab('import', kind, cwd, mockUI({ secret: automaticCode }), {
+    loadBundle: async () => libraryBackend, relayLoader: async () => ({ importLibraryShare: async request => request.onReview({ ...value, entries: value.entries.filter(row => row.kind !== kind) }) }),
+  }), /no entries for the selected tab/);
 });

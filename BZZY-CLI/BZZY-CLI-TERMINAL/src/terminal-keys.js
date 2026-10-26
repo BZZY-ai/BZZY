@@ -13,16 +13,27 @@ export function escapeInputKind(text, key = {}) {
     || key.ctrl && (key.name === '[' || text === '[') ? 'press' : null;
 }
 
-// Buffer only a possible Escape packet; the caller bounds partial sequences.
+// Normalize extended Backspace before readline can split a packet into text.
+// Kitty/xterm encode Shift, Alt and Ctrl in bits 0, 1 and 2, plus one.
+function backspacePacket(sequence) {
+  const kitty = /^\x1b\[(?:8|127)(?::\d+)*(?:;(\d+)(?::([123]))?)?(?:;\d+(?::\d+)*)?u$/.exec(sequence);
+  const xterm = /^\x1b\[27;(\d+);(?:8|127)~$/.exec(sequence);
+  if (!kitty && !xterm) return null;
+  const modifiers = Number(kitty?.[1] || xterm?.[1] || 1) - 1;
+  if (kitty?.[2] === '3' || !Number.isSafeInteger(modifiers) || modifiers < 0 || modifiers > 255 || modifiers & ~(1 | 2 | 4 | 64 | 128)) return { ignore: true };
+  return { key: { name: 'backspace', sequence, shift: Boolean(modifiers & 1), meta: Boolean(modifiers & 2), ctrl: Boolean(modifiers & 4) } };
+}
+
+// Buffer only possible Escape/Backspace packets; the caller bounds partials.
 export function possibleEscapeSequence(sequence) {
-  return ['\x1b', '\x1b[', '\x1b[2'].includes(sequence) || /^\x1b\[27[\d;:]*[u~]?$/.test(sequence);
+  return ['\x1b', '\x1b[', '\x1b[1', '\x1b[12', '\x1b[2'].includes(sequence) || /^\x1b\[(?:27|127|8)[\d;:]*[u~]?$/.test(sequence);
 }
 // Node splits CSI-u event notifications and modifyOtherKeys packets into an
 // unknown prefix and printable characters. Consume Escape packets before its
 // decoder, and give arrows, Alt chords, mouse reports and text to readline.
 export class TerminalKeyInput {
   constructor(onKey, onEscape, { timeout = 50 } = {}) {
-    this.onEscape = onEscape; this.timeout = timeout; this.pending = '';
+    this.onKey = onKey; this.onEscape = onEscape; this.timeout = timeout; this.pending = '';
     this.utf8 = new StringDecoder('utf8'); this.decoder = new PassThrough();
     readline.emitKeypressEvents(this.decoder, { escapeCodeTimeout: timeout });
     this.decoder.on('keypress', onKey);
@@ -40,10 +51,11 @@ export class TerminalKeyInput {
       } else if (character === '\x1b') {
         flush(); this.flushPending(); this.pending = character;
       } else this.pending += character;
-      const kind = escapeInputKind('', { sequence: this.pending });
-      if (this.pending !== '\x1b' && kind) {
+      const kind = escapeInputKind('', { sequence: this.pending }), backspace = backspacePacket(this.pending);
+      if (this.pending !== '\x1b' && (kind || backspace)) {
         flush(); const sequence = this.pending; this.pending = '';
         if (kind === 'press') this.onEscape('', { name: 'escape', sequence });
+        else if (backspace && !backspace.ignore) this.onKey('', backspace.key);
       } else if (this.pending.length > 64 || !possibleEscapeSequence(this.pending) || /[u~]$/.test(this.pending)) {
         ordinary += this.pending; this.pending = '';
       }

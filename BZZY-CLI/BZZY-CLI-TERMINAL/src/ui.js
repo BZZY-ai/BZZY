@@ -179,7 +179,7 @@ export class UI {
         // Keep displayed row/context pins intact until the action validates
         // them. Reopening first would replace those pins with the new session.
         if (this.tui?.panel !== 'workflows') {
-          if (!['create', 'load'].includes(action)) {
+          if (!['create', 'load', 'import', 'export'].includes(action)) {
             this.event('error', { message: 'Reopen /workflows before choosing an action.' }); return true;
           }
           if (!openWorkflows(this)) return true;

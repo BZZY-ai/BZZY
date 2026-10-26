@@ -656,3 +656,57 @@ test('HTTP view restores legacy WebFetch metadata and merges live request/result
     assert.equal(ui.tui.traffic.length, 2); assert.equal(ui.tui.traffic[1].status, 200);
   } finally { ui.close(); }
 });
+
+
+test('word deletion consumes legacy, CSI-u and modifyOtherKeys packets at a Unicode cursor without leaking bytes', async () => {
+  const { ui, input } = terminal();
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve();
+    for (const chunks of [['\x1b\x7f'], ['\x1b\x08'], ['\x1b[127;3u'], ['\x1b[8;3u'], ['\x1b[27;3;127~'],
+      ['\x1b[27;3;8~'], ['\x1b[1', '27;3', ':1u'], ['\x1b[127;5u'], ['\x17']]) {
+      ui.tui.value = 'first naïve 世界 tail'; ui.tui.cursor = [...'first naïve 世界'].length;
+      for (const chunk of chunks) input.write(chunk);
+      assert.equal(ui.tui.value, 'first naïve  tail', JSON.stringify(chunks));
+      assert.equal(ui.tui.cursor, [...'first naïve '].length);
+    }
+    ui.tui.value = 'alpha beta gamma'; ui.tui.cursor = [...ui.tui.value].length;
+    input.write('\x1b[127;3:1u\x1b[127;3:2u\x1b[127;3:3u');
+    assert.equal(ui.tui.value, 'alpha ');
+    ui.tui.value = 'alpha beta'; ui.tui.cursor = 0;
+    input.write('\x1b[127;3u'); assert.equal(ui.tui.value, 'alpha beta');
+    ui.tui.cursor = [...ui.tui.value].length;
+    input.write('\x1b[127;3:3u'); assert.equal(ui.tui.value, 'alpha beta');
+    input.write('\x1b[127;9u'); assert.equal(ui.tui.value, 'alpha beta', 'Unsupported Command/Super modifiers do not delete text');
+    ui.reader.close(); await answer;
+  } finally { ui.close(); }
+});
+
+test('modified Backspace edits aliases, model searches and private prompts without changing the saved chat draft', { timeout: 5000 }, async () => {
+  const { ui, input } = terminal();
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); input.write('Keep this chat draft');
+    ui.tui.aliasEdit = { value: 'alpha beta', cursor: 10 };
+    input.write('\x1b[127;3u'); assert.equal(ui.tui.aliasEdit.value, 'alpha '); assert.equal(ui.tui.value, 'Keep this chat draft');
+    ui.tui.aliasEdit = null;
+    const picked = ui.chooseOne('Model', { choices: [{ value: 'one', label: 'One' }] }, { kind: 'model' }); await Promise.resolve();
+    ui.tui.selection.query = 'alpha beta'; input.write('\x1b[27;3;127~');
+    assert.equal(ui.tui.selection.query, 'alpha '); input.write('\x1b[27;1:1u'); assert.equal(await picked, null);
+    ui.tui.finish(null); await answer;
+    const secret = ui.secret('Private fixture: '); await Promise.resolve(); input.write('first second');
+    input.write('\x1b[127;3u'); assert.equal(ui.tui.value, 'first ');
+    input.write('\x1b[27;1:1u'); assert.equal(await secret, null);
+    assert.equal(ui.tui.value, 'Keep this chat draft');
+    assert.equal(ui.tui.entries.some(row => /first second/.test(row.text)), false);
+  } finally { ui.close(); }
+});
+
+test('bracketed paste cannot turn word-deletion control packets into destructive edits', async () => {
+  const { ui, input } = terminal();
+  try {
+    const answer = ui.ask('bzzy › '); await Promise.resolve(); input.write('Keep this draft');
+    input.write('\x1b[200~\x1b[127;3u\x17\x1b\x7f\x1b[201~');
+    assert.equal(ui.tui.value, 'Keep this draft');
+    input.write('\x1b[127;3u'); assert.equal(ui.tui.value, 'Keep this ');
+    ui.reader.close(); await answer;
+  } finally { ui.close(); }
+});

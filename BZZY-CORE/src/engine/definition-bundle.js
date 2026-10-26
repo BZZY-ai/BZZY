@@ -138,11 +138,27 @@ function definitionExclusions(value = [], kinds) {
     return Object.fromEntries(excludedEntryFields.map(field => [field, entry[field]]));
   }).sort((a, b) => entryKey(a).localeCompare(entryKey(b)));
 }
+function librarySelectionPins(value, kinds) {
+  if (!Array.isArray(value) || value.length > LIBRARY_BUNDLE_LIMITS.definitions) fail('Choose a bounded list of exact Library entries.');
+  const definitions = [], goals = [], seen = new Set();
+  for (const entry of value) {
+    object(entry, excludedEntryFields);
+    if (seen.has(entryKey(entry))) fail('Select each Library entry only once.');
+    seen.add(entryKey(entry));
+    if (entry.kind !== 'goal') { definitions.push(entry); continue; }
+    if (Object.keys(entry).length !== excludedEntryFields.length || !kinds.includes('goal') || entry.scope !== 'global' ||
+      typeof entry.id !== 'string' || !goalReference.test(entry.id) || !hash(entry.revision) || !hash(entry.version) || entry.name !== 'goal-' + entry.version.slice(0, 48)) {
+      fail('Select only exact, revision-pinned saved goals from the current Library.');
+    }
+    goals.push(Object.fromEntries(excludedEntryFields.map(field => [field, entry[field]])));
+  }
+  return [...definitionExclusions(definitions, kinds), ...goals].sort((a, b) => entryKey(a).localeCompare(entryKey(b)));
+}
 // Local-owner metadata only. Resource bytes are checked after the owner selects
 // names, so an unrelated blocked package cannot prevent a selective export.
-export function listLibraryExportChoices({ cwd = process.cwd(), kinds } = {}) {
-  const context = capture(cwd); kinds = definitionKinds(kinds);
-  const entries = [];
+export function listLibraryExportChoices({ cwd = process.cwd(), kinds = ['skill', 'agent'] } = {}) {
+  const context = capture(cwd); kinds = chosenKinds(kinds);
+  const entries = [], labels = {};
   for (const selected of ['global', 'project']) {
     if (kinds.includes('skill')) for (const item of pageAll(offset => listSkills({ projectRoot: context.projectRoot, scope: selected, offset, limit: 100 }), 'skills', LIBRARY_BUNDLE_LIMITS.definitions)) {
       entries.push(definitionPin('skill', selected, item));
@@ -150,17 +166,27 @@ export function listLibraryExportChoices({ cwd = process.cwd(), kinds } = {}) {
     if (kinds.includes('agent')) for (const item of pageAll(offset => listSubagentDefinitions({ cwd: context.cwd, scope: selected, offset, limit: 100 }), 'subagents', LIBRARY_BUNDLE_LIMITS.definitions)) {
       entries.push(definitionPin('agent', selected, item));
     }
+    if (kinds.includes('workflow')) for (const item of pageAll(offset => listWorkflows({ cwd: context.cwd, scope: selected, offset, limit: 100 }), 'workflows', LIBRARY_BUNDLE_LIMITS.definitions)) {
+      entries.push(definitionPin('workflow', selected, item));
+    }
   }
-  return { kinds, entries: definitionExclusions(entries, kinds) };
+  if (kinds.includes('goal')) for (const goal of pageAll(offset => listSavedGoals({ offset, limit: 100 }), 'goals', LIBRARY_BUNDLE_LIMITS.definitions)) {
+    const definition = { objective: goal.objective }, entry = { kind: 'goal', scope: 'global', name: goalName(definition),
+      id: goal.id, revision: goal.revision, version: digest(definition) };
+    entries.push(entry); labels[entryKey(entry)] = goalDescription(goal.objective);
+  }
+  return { kinds, entries: librarySelectionPins(entries, kinds), ...(kinds.includes('goal') ? { labels } : {}) };
 }
-export function previewSelectedLibraryExport({ cwd = process.cwd(), kinds, selectedEntries } = {}) {
-  kinds = definitionKinds(kinds);
+export function previewSelectedLibraryExport({ cwd = process.cwd(), kinds = ['skill', 'agent'], selectedEntries } = {}) {
+  kinds = chosenKinds(kinds);
   if (!Array.isArray(selectedEntries) || !selectedEntries.length) fail('Select at least one entry to export.');
-  const selected = definitionExclusions(selectedEntries, kinds), current = listLibraryExportChoices({ cwd, kinds }).entries;
+  const selected = librarySelectionPins(selectedEntries, kinds), current = listLibraryExportChoices({ cwd, kinds }).entries;
   const available = new Map(current.map(entry => [entryKey(entry), entry]));
   for (const entry of selected) if (digest(available.get(entryKey(entry)) || null) !== digest(entry)) fail('A selected entry changed. Open Export again.', 'STALE_REVIEW');
   const selectedKeys = new Set(selected.map(entryKey));
-  return previewLibraryExport({ cwd, kinds, excludeEntries: current.filter(entry => !selectedKeys.has(entryKey(entry))) });
+  const omitted = current.filter(entry => !selectedKeys.has(entryKey(entry)));
+  return previewLibraryExport({ cwd, kinds, excludeEntries: omitted.filter(entry => entry.kind !== 'goal'),
+    excludeGoalIds: omitted.filter(entry => entry.kind === 'goal').map(entry => entry.id) });
 }
 const definitionPin = (kind, scope, record) => ({ kind, scope, name: record.name, id: record.id || record.name,
   revision: record.revision, version: record.version });
@@ -484,14 +510,14 @@ function collectLibrary(context, { excludeGoalIds = [], kinds, excludeEntries = 
   }
   if (kinds.includes('goal')) for (const goal of pageAll(offset => listSavedGoals({ offset, limit: 100 }), 'goals', LIBRARY_BUNDLE_LIMITS.definitions)) {
     found.add(goal.id);
+    getSavedGoal(goal.id, { revision: goal.revision });
+    if (exclusions.has(goal.id)) {
+      excludedGoals.push({ id: goal.id, reason: 'Explicitly excluded by the owner.' });
+      content.pins.push({ kind: 'excluded-goal', id: goal.id, revision: goal.revision }); continue;
+    }
     let definition, reason;
     try { definition = normalizeGoalTemplate({ objective: goal.objective }); portable(Buffer.from(JSON.stringify(definition)), { ...context, privateRoots: goal.cwd ? [goal.cwd] : [] }); }
     catch { reason = 'Contains private credentials, account bindings, host paths or unsupported objective text.'; }
-    getSavedGoal(goal.id, { revision: goal.revision });
-    if (exclusions.has(goal.id)) {
-      excludedGoals.push({ id: goal.id, reason: reason || 'Explicitly excluded by the owner.' });
-      content.pins.push({ kind: 'excluded-goal', id: goal.id, revision: goal.revision }); continue;
-    }
     if (reason) { blockedGoals.push({ id: goal.id, reason }); continue; }
     add('goal', 'global', definition, { kind: 'goal', id: goal.id, revision: goal.revision, cwd: goal.cwd });
   }

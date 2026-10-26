@@ -5,12 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { digest, getRecord, putRecord } from '../src/engine/database.js';
+import { digest, getRecord, putRecord, listRecords } from '../src/engine/database.js';
 import { importSkill, setSkillEnabled } from '../src/engine/skills.js';
 import { saveSubagentDefinition } from '../src/engine/subagent-definitions.js';
-import { saveWorkflow } from '../src/engine/workflows.js';
+import { saveWorkflow, getWorkflow, workflowSelection, selectWorkflow } from '../src/engine/workflows.js';
 import { saveGoalTemplate } from '../src/engine/goal-templates.js';
-import { previewLibraryExport, listLibraryExportChoices, previewSelectedLibraryExport, buildLibraryArchive, readDefinitionBundleFile, discardDefinitionBundleReview } from '../src/engine/definition-bundle.js';
+import { createSession } from '../src/engine/store.js';
+import { previewLibraryImport, importLibraryBundle, previewLibraryExport, listLibraryExportChoices, previewSelectedLibraryExport, buildLibraryArchive, readDefinitionBundleFile, discardDefinitionBundleReview } from '../src/engine/definition-bundle.js';
 
 let directory, cwd, previousHome, reviews;
 test.beforeEach(() => {
@@ -193,4 +194,76 @@ test('damaged inventories and workflow content are actionable as whole-entry exc
   const review = preview({ kinds: ['skill', 'workflow', 'agent'], excludeEntries: error.blockedEntries.map(pin) });
   assert.deepEqual(review.entries.map(row => row.kind), ['agent']);
   assert.deepEqual(Object.keys(archive(build(review))).sort(), ['agents/global/portable-reviewer.json', 'manifest.json']);
+});
+
+
+test('workflow and goal checkboxes pin only selected entries, including later additions and blocked unchecked text', () => {
+  const chosenGoal = saveGoalTemplate({ objective: 'Review the supplied HTTP response controls.' });
+  const otherGoal = saveGoalTemplate({ objective: 'Review a different supplied fixture.' });
+  const privateGoal = saveGoalTemplate({ objective: 'Inspect /Users/fixture-owner/private-case.' });
+  const chosenFlow = saveWorkflow({ name: 'chosen-process', instructions: 'Use supplied positive and negative controls.' }, { cwd, scope: 'project' });
+  saveWorkflow({ name: 'private-process', instructions: 'Read /Users/fixture-owner/private-context.' }, { cwd, scope: 'global' });
+  const kinds = ['goal', 'workflow'], catalog = listLibraryExportChoices({ cwd, kinds });
+  const chosen = catalog.entries.filter(row => row.id === 'template:' + chosenGoal.id || row.id === chosenFlow.id);
+  assert.equal(chosen.length, 2);
+  const goalPin = chosen.find(row => row.kind === 'goal');
+  assert.equal(catalog.labels[JSON.stringify(['goal', 'global', goalPin.name])], chosenGoal.objective);
+  assert.ok(catalog.entries.every(row => Object.keys(row).length === pinFields.length));
+  saveGoalTemplate({ objective: 'An objective created after opening Export.' });
+  saveWorkflow({ name: 'later-process', instructions: 'Review later supplied evidence.' }, { cwd, scope: 'global' });
+  const review = previewSelectedLibraryExport({ cwd, kinds, selectedEntries: chosen }); reviews.push(review);
+  assert.deepEqual(review.totals.goals, 1); assert.deepEqual(review.totals.workflows, 1);
+  assert.ok(review.excludeGoalIds.includes('template:' + otherGoal.id));
+  assert.ok(review.excludeGoalIds.includes('template:' + privateGoal.id));
+  const files = archive(build(review)), manifest = JSON.parse(files['manifest.json']);
+  assert.deepEqual([manifest.skills.length, manifest.agents.length, manifest.workflows.length, manifest.goals.length], [0, 0, 1, 1]);
+  assert.deepEqual(JSON.parse(files[manifest.goals[0].file]), { objective: chosenGoal.objective });
+  assert.match(files[manifest.workflows[0].file], /supplied positive and negative controls/);
+  assert.ok(!JSON.stringify(files).includes('/Users/fixture-owner')); assert.ok(!JSON.stringify(files).includes('later-process'));
+});
+
+test('goal and workflow selections reject malformed, duplicate, changed and unavailable pins before publishing', () => {
+  const template = saveGoalTemplate({ objective: 'Review supplied immutable goal text.' });
+  const flow = saveWorkflow({ name: 'review-process', instructions: 'Review supplied controls.' }, { cwd, scope: 'global' });
+  const goal = listLibraryExportChoices({ cwd, kinds: ['goal'] }).entries[0];
+  for (const selectedEntries of [[goal, goal], [{ ...goal, revision: 1 }], [{ ...goal, scope: 'project' }],
+    [{ ...goal, name: 'changed-goal' }], [{ ...goal, id: 1 }], [{ ...goal, extra: true }], new Array(1)]) {
+    assert.throws(() => previewSelectedLibraryExport({ cwd, kinds: ['goal'], selectedEntries }));
+  }
+  const flowPin = listLibraryExportChoices({ cwd, kinds: ['workflow'] }).entries[0];
+  saveWorkflow({ name: flow.name, instructions: 'Changed supplied workflow controls.' }, { cwd, scope: 'global', expectedRevision: flow.revision });
+  assert.throws(() => previewSelectedLibraryExport({ cwd, kinds: ['workflow'], selectedEntries: [flowPin] }), { code: 'STALE_REVIEW' });
+  putRecord('core.goal.template', template.id, { ...template, createdAt: '2026-10-01T01:00:00Z' });
+  assert.throws(() => previewSelectedLibraryExport({ cwd, kinds: ['goal'], selectedEntries: [goal] }), { code: 'STALE_REVIEW' });
+  const current = listLibraryExportChoices({ cwd, kinds: ['goal'] }).entries;
+  const review = previewSelectedLibraryExport({ cwd, kinds: ['goal'], selectedEntries: current }); reviews.push(review);
+  putRecord('core.goal.template', template.id, { ...template, createdAt: '2026-10-02T01:00:00Z' });
+  assert.throws(() => build(review), { code: 'STALE_REVIEW' });
+});
+
+test('selected goal and workflow imports skip existing text and scoped names without selecting or executing them', () => {
+  const first = saveGoalTemplate({ objective: 'An existing recipient objective.' });
+  const second = saveGoalTemplate({ objective: 'A missing recipient objective.' });
+  saveWorkflow({ name: 'shared-process', instructions: 'SOURCE_GLOBAL_INSTRUCTIONS' }, { cwd, scope: 'global' });
+  saveWorkflow({ name: 'shared-process', instructions: 'SOURCE_PROJECT_INSTRUCTIONS' }, { cwd, scope: 'project' });
+  const kinds = ['goal', 'workflow'];
+  const review = previewSelectedLibraryExport({ cwd, kinds, selectedEntries: listLibraryExportChoices({ cwd, kinds }).entries }); reviews.push(review);
+  const file = build(review), sourceHome = process.env.BZZY_HOME;
+  process.env.BZZY_HOME = path.join(directory, 'recipient');
+  try {
+    saveGoalTemplate({ objective: first.objective });
+    const existing = saveWorkflow({ name: 'shared-process', instructions: 'RECIPIENT_OWN_INSTRUCTIONS' }, { cwd, scope: 'global' });
+    const session = createSession({ id: 'codex', backend: 'codex' }, cwd, 'offline-fixture');
+    const selected = selectWorkflow(session.id, existing.name, { scope: 'global', expectedRevision: 0 });
+    const importedReview = previewLibraryImport(file, { cwd }); reviews.push(importedReview);
+    const result = importLibraryBundle(importedReview, { cwd, enable: true, reportReceipt: true });
+    assert.equal(result.goals.length, 1); assert.equal(result.goals[0].version, second.version);
+    assert.deepEqual(result.workflows.map(row => [row.name, row.scope]), [['shared-process', 'project']]);
+    assert.equal(result.skipped.length, 2);
+    assert.equal(getWorkflow(existing.name, { cwd, scope: 'global' }).instructions, existing.instructions);
+    assert.deepEqual(workflowSelection(session.id), selected);
+    const retry = previewLibraryImport(file, { cwd }); reviews.push(retry);
+    assert.equal(importLibraryBundle(retry, { cwd, enable: true, reportReceipt: true }).alreadyImported, true);
+    assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('run').length, 0);
+  } finally { process.env.BZZY_HOME = sourceHome; }
 });

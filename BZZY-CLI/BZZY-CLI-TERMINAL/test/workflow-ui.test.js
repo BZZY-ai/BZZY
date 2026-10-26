@@ -147,3 +147,22 @@ test('captured actions remain invalid across private hosts with the same session
   } finally { process.env.BZZY_HOME = originalHome; }
   assert.equal(workflowSelection(session.id).revision, 1);
 });
+
+
+test('workflow Import and Export reuse typed Relay transfer and preserve workflow selection and chat drafts', async () => {
+  const workflow = saveWorkflow(definition(), { cwd: directory }); openWorkflows(ui);
+  await workflowAction(pick(workflow.name), ui);
+  const before = workflowSelection(session.id), calls = [];
+  assert.ok(rows().some(row => row.text === 'Import' && row.action === 'import'));
+  assert.ok(rows().some(row => row.text === 'Export' && row.action === 'export'));
+  for (const action of ['import', 'export']) {
+    await workflowAction(action, ui, { transfer: async (...args) => { calls.push(args); } });
+    assert.deepEqual(workflowSelection(session.id), before);
+  }
+  assert.deepEqual(calls.map(args => args.slice(0, 3)), [['import', 'workflow', directory], ['export', 'workflow', directory]]);
+  assert.ok(calls.every(args => args[3] === ui));
+  assert.equal(ui.tui.value, 'Retain this draft'); assert.equal(ui.tui.cursor, 5);
+  assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('run').length, 0);
+  await workflowAction('import', ui, { transfer: async () => { ui.activeTab = randomUUID(); } });
+  assert.ok(notices.some(row => row.type === 'error' && /changed/.test(row.message)));
+});

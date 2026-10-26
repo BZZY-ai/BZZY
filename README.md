@@ -42,6 +42,13 @@ Skills and Agents tabs show names and ON/OFF controls, with plain Import and
 Export actions. Select names once and copy the generated code. On another BZZY,
 Import asks **ENTER CODE**, then downloads, checks and installs missing entries
 with visible progress. Completion lists only newly installed names.
+The saved-goal picker (`/goal`) and Workflows (`/workflows`) provide the same
+Import/Export flow. Goal exports show readable objective text; imports save
+templates without starting goals or changing the selected workflow.
+
+Ordinary CLI chat displays **Cooking…** while its admitted Core execution is
+running. Queue, startup, stopping and input waits have separate labels; existing
+goal and validation status indicators retain their meaning.
 
 Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALIDATION.md)
 after `/validate` checks the original requirements and recorded evidence. The

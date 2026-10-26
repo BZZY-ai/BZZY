@@ -12,6 +12,13 @@ Like `/models`, choosing a name selects it directly. Exactly one workflow can be
 selected; **None** clears it. The picker marks the selection and the chat status
 shows its name. Creating, loading or selecting starts no model work.
 
+**Import** accepts an expiring Relay Library code and installs only missing
+workflow names in their project/Core scopes, with download/check/install progress.
+**Export** opens a name-only checkbox table, then generates a code with a Copy
+button. These use the same [Library transfer](LIBRARY-SHARING.md) as skills and
+agents. Existing workflow names and the current selection stay unchanged during
+import. **Load workflow from a text file** continues to load local UTF-8 text.
+
 The selection belongs to this terminal session across reopening, alias changes
 and model changes. Other sessions in the same directory keep their own
 selections. Global definitions are available across projects; project definitions

@@ -23,6 +23,15 @@ export function goalIndicator(goal, frame = 0, { validating = false } = {}) {
   return null;
 }
 
+// Presentation follows the admitted execution, never an optimistic input submit
+// or a remembered goal. Queued/stopping/input waits remain explicit.
+export function chatWorkIndicator({ busy, state } = {}, frame = 0) {
+  if (!busy) return null;
+  if (state === 'needs your input') return { label: 'Needs your input', tone: palette.warning };
+  const label = state === 'queued' ? 'Queued…' : state === 'starting' ? 'Starting…' : state === 'stopping' ? 'Stopping…' : 'Cooking…';
+  return { label: dots[frame % dots.length] + ' ' + label, tone: palette.goalActive, animated: true };
+}
+
 export function goalValidationIndicator(goal, validation, frame = 0) {
   if (!goal?.id || goal.status !== 'complete' || !validation || validation.sourceGoalId !== goal.id
     || !Number.isSafeInteger(validation.revision) || validation.revision < 1) return null;

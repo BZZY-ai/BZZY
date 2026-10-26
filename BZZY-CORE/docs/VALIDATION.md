@@ -1,3 +1,37 @@
+# CLI Goals/Workflows transfer, Cooking status and word deletion (2026-10-26)
+
+Node.js 24/macOS: **751 Core tests passed, 2 skipped** (753 total), and
+**721 CLI tests passed, 21 skipped** (742 total), zero failures. Both product
+syntax checks and whitespace checks pass. Focused transfer/navigation cases and
+51 keyboard/private-screen regressions also pass. Fixtures use canonical private
+temporary homes on the internal disk, synthetic data and local Relay servers.
+No running user installation, real clipboard, private Library or production Relay
+was changed; iOS is unchanged.
+
+Saved goals and Workflows reuse the checkbox Export → EXPORT CODE/Copy and
+Import → ENTER CODE → download/check/install flow. An empty saved-goal list still
+offers Import. Owner-only goal labels use readable objective text while exact
+identity/revision/content pins guard the selection. Unchecked blocked text and
+later additions are excluded; stale selected sources cannot publish a code.
+Missing-only imports preserve existing goal text, scoped workflow names and the
+current workflow selection, without starting goals or model work. Tests inspect
+real archives and missing-only/retry imports, alongside encrypted four-kind
+transfers into an independent recipient home using the existing Relay contract.
+
+Ordinary chat displays Cooking from admitted running execution state. Queue,
+startup, stopping and input waits have separate labels. Completion, failure,
+pause and cancellation remove the indicator, while goal runs keep their existing
+status treatment. The feedback creates no durable message or invocation receipt.
+Rendering is checked in ordinary/minimal layouts at 60, 80 and 140 columns.
+
+Option+Delete/Alt+Backspace, Ctrl+W and reported Ctrl+Backspace delete the preceding
+word at the cursor. The decoder handles legacy, CSI-u and modifyOtherKeys packets,
+including split input, Unicode, repeats and ignored releases. Alias/model search
+and private-prompt checks preserve the chat draft; bracketed composer paste cannot
+activate word deletion. Escape, arrows, mouse events, private codes and existing
+input routing retain their regressions. These checks drive raw packets through
+the real decoder; physical terminal shortcut mappings were not exercised.
+
 # iOS compact footer, recorded invocations and 20-entry history (2026-10-25)
 
 Build **Debug 0.1.0 (22)** passes the **86-test native Swift suite** plus one
