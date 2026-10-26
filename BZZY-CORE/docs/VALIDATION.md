@@ -1,3 +1,32 @@
+# Experiential selected-model effort refresh (2026-10-26)
+
+Node.js 24/macOS full suites: **754 Core tests passed, 2 skipped** (756 total)
+and **723 CLI tests passed, 21 skipped** (744 total), zero failures. Both syntax
+checks and whitespace checks pass. The focused provider/model/default-settings
+checks pass with synthetic credentials and isolated local HTTP servers.
+
+The public rich catalog contained 963 models during investigation; an unauthenticated
+read using the existing 50-entry paging and eight-second deadline reached only
+100 models before timeout. The selected-model endpoint returned its metadata
+independently. Public metadata was also replayed through the actual parser in a
+private local fixture, without an inference request or real account credentials.
+
+CLI effort selection now asks Core for the selected model's detail, independent
+of full-catalog pagination. It refreshes stale saved capability flags, handles
+the detail endpoint's default-waterfall deployment IDs, normalizes advertised
+levels and preserves the existing common-route restriction. Non-reasoning models
+remain default-only. Errors, timeouts, redirects, mismatched slugs and cancellation
+cannot silently apply stale choices or leak credentials. The adapter fixture
+confirms an advertised max selection reaches Codex's reasoning configuration.
+The full model list retains its existing bounded pagination.
+
+Core and shared Consensus & Compactor defaults validate refreshed metadata,
+while retaining their configuration APIs' accepted-level constraints. Tests cover
+saved stale disabled flags, default-only models, unsupported selections, native
+mouse selection and unchanged independent defaults. No provider IDs or effort
+lists were added to the TUI. No running installation or production account
+settings changed; paid inference behavior was not exercised.
+
 # CLI Goals/Workflows transfer, Cooking status and word deletion (2026-10-26)
 
 Node.js 24/macOS: **751 Core tests passed, 2 skipped** (753 total), and

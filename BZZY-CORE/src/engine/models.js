@@ -168,21 +168,57 @@ async function apiModels(provider, signal) {
   const result = provider.catalogFormat === 'experiential' ? { data: await experientialModels(provider, signal) }
     : (await apiCatalogPage(provider, provider.baseUrl.replace(/\/$/, '') + '/models', signal)).value;
   if (!Array.isArray(result.data)) throw new Error('No model catalog returned.');
-  return result.data.filter(model => compatibleCatalogEntry(provider, model)).map(model => {
-    const context = model.context_window ?? model.context_length;
-    const modalities = model.input_modalities ?? model.architecture?.input_modalities;
-    const cyber = provider.catalogFocus === 'cyber' && (/^orca\/orcacyber[-/]/i.test(model.id) || model.required_tier === 'sec-uncensored' || model.category === 'cyber');
-    const capabilities = providerModelCapabilities(provider, model.id, {
-      ...(provider.catalogFormat === 'experiential' && typeof model.supportsEffort === 'boolean' ? { supportsEffort: model.supportsEffort } : {}),
-      supportedEfforts: Array.isArray(model.effort?.supported_levels) ? model.effort.supported_levels : undefined,
-      defaultEffort: typeof model.effort?.default_level === 'string' ? model.effort.default_level : undefined,
-      contextWindow: Number.isSafeInteger(context) && context > 0 ? context : undefined,
-      inputModalities: Array.isArray(modalities) ? modalities.filter(value => ['text', 'image'].includes(value)) : undefined,
-      ...(cyber ? { category: 'cyber' } : {}),
-    });
-    return { id: model.id, name: model.display_name || model.name || model.id,
-      description: model.description || [cyber ? 'Cyber' : '', capabilities.contextWindow ? capabilities.contextWindow.toLocaleString() + ' context tokens' : '', capabilities.inputModalities?.join(' + ')].filter(Boolean).join(' · '), capabilities };
+  return result.data.filter(model => compatibleCatalogEntry(provider, model)).map(model => apiModel(provider, model));
+}
+
+function apiModel(provider, model) {
+  const context = model.context_window ?? model.context_length;
+  const modalities = model.input_modalities ?? model.architecture?.input_modalities;
+  const cyber = provider.catalogFocus === 'cyber' && (/^orca\/orcacyber[-/]/i.test(model.id) || model.required_tier === 'sec-uncensored' || model.category === 'cyber');
+  const capabilities = providerModelCapabilities(provider, model.id, {
+    ...(provider.catalogFormat === 'experiential' && typeof model.supportsEffort === 'boolean' ? { supportsEffort: model.supportsEffort } : {}),
+    supportedEfforts: Array.isArray(model.effort?.supported_levels) ? model.effort.supported_levels : undefined,
+    defaultEffort: typeof model.effort?.default_level === 'string' ? model.effort.default_level : undefined,
+    contextWindow: Number.isSafeInteger(context) && context > 0 ? context : undefined,
+    inputModalities: Array.isArray(modalities) ? modalities.filter(value => ['text', 'image'].includes(value)) : undefined,
+    ...(cyber ? { category: 'cyber' } : {}),
   });
+  if (capabilities.supportedEfforts) capabilities.supportedEfforts = [...new Set(capabilities.supportedEfforts.filter(level => typeof level === 'string' && /^[a-z][a-z0-9_-]{0,23}$/.test(level)))];
+  if (!capabilities.supportedEfforts?.includes(capabilities.defaultEffort)) delete capabilities.defaultEffort;
+  return { id: model.id, name: model.display_name || model.name || model.id,
+    description: model.description || [cyber ? 'Cyber' : '', capabilities.contextWindow ? capabilities.contextWindow.toLocaleString() + ' context tokens' : '', capabilities.inputModalities?.join(' + ')].filter(Boolean).join(' · '), capabilities };
+}
+
+// Effort selection belongs to one model. Do not wait for every catalog page,
+// or trust a stale saved capability flag after the gateway changes its routes.
+export async function modelEffortCapabilities(session, { signal, timeoutMs = 8000 } = {}) {
+  const provider = getProvider(session.provider), model = session.model || session.resolvedModel || provider.model;
+  if (provider.catalogFormat === 'experiential') {
+    const bounded = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
+    try {
+      if (!validId(model) || model === '.' || model === '..') throw new Error('Invalid model.');
+      bounded.throwIfAborted();
+      const url = new URL('/api/models/' + encodeURIComponent(model), provider.baseUrl);
+      const { value } = await apiCatalogPage(provider, url, bounded, 4 * 1024 * 1024);
+      if (value?.model?.slug !== model || !Array.isArray(value.providers)) throw new Error('Invalid model metadata.');
+      const defaults = Array.isArray(value.default_provider_ids) ? value.default_provider_ids
+        : Array.isArray(value.default_waterfall) ? value.default_waterfall.filter(row => row && (!row.status || row.status === 'active'))
+          .map(row => row.model_provider_id).filter(id => typeof id === 'string' && id) : undefined;
+      const selected = experientialModel({ ...value, default_provider_ids: defaults });
+      if (!selected) throw new Error('This model has no compatible route.');
+      return apiModel(provider, selected).capabilities;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new Error(error.code === 'MODEL_AUTH' ? 'Experiential rejected the API key. Run bzzy auth experiential.'
+        : 'Could not verify reasoning levels for this Experiential model. Retry the effort picker or choose another model.');
+    }
+  }
+  let capabilities = providerModelCapabilities(provider, model, session.modelCapabilities);
+  if (!capabilities.supportedEfforts?.length && capabilities.supportsEffort !== false) {
+    const catalog = await availableModels(session, { signal, timeoutMs });
+    capabilities = catalog.models.find(entry => entry.id === model)?.capabilities || capabilities;
+  }
+  return capabilities;
 }
 
 export async function availableModels(session, { signal, timeoutMs = 8000 } = {}) {

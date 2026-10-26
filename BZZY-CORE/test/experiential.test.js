@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { BUILTINS, getProvider, providerModelCapabilities, saveKey, saveConfig, config, credentialStatus } from '../src/engine/providers.js';
-import { availableModels } from '../src/engine/models.js';
+import { availableModels, modelEffortCapabilities } from '../src/engine/models.js';
 import { createSession } from '../src/engine/store.js';
 import { codexLaunch } from '../src/engine/engines/codex.js';
 import { reasoningEffort } from '../src/engine/instructions.js';
@@ -166,5 +166,62 @@ test('catalog auth errors and redirects remain sanitized without sending credent
     assert.deepEqual(result.models, []); assert.equal(result.source, 'manual'); assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
     if (status === 401) assert.match(result.description, /bzzy auth experiential/);
   }
+  assert.equal(leaked, false);
+});
+
+
+test('effort discovery reads one selected model, refreshes stale flags and reaches Codex with the chosen effort', async t => {
+  const calls = [], slug = 'owner/future-model';
+  await catalogServer(t, (request, response) => {
+    calls.push({ path: request.url, auth: request.headers.authorization });
+    const detail = entry(slug, {}, { supports_reasoning: true, supported_reasoning_efforts: ['low', 'high', 'max'], reasoning_default_effort: 'high' });
+    delete detail.default_provider_ids;
+    detail.default_waterfall = [{ model_provider_id: 'route-' + slug, status: 'active' }];
+    detail.providers.push({ id: 'unused-route', status: 'active', routable: true, capabilities: { supports_tools: true, supports_streaming: true, supports_reasoning: false } });
+    response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(detail));
+  });
+  const provider = getProvider('experiential');
+  const current = createSession(provider, directory, slug); current.modelCapabilities = { supportsEffort: false };
+  const capabilities = await modelEffortCapabilities(current);
+  assert.deepEqual(calls, [{ path: '/api/models/owner%2Ffuture-model', auth: 'Bearer ' + secret }]);
+  assert.deepEqual(capabilities.supportedEfforts, ['low', 'high', 'max']); assert.equal(capabilities.defaultEffort, 'high');
+  assert.notEqual(capabilities.supportsEffort, false); assert.equal(current.modelCapabilities.supportsEffort, false, 'Discovery alone does not mutate a saved session');
+  const launch = codexLaunch(provider, { ...current, selectedEffort: 'max', modelCapabilities: capabilities });
+  assert.ok(launch.args.includes('model_reasoning_effort="max"'));
+  assert.equal(listRecords('execution').length, 0); assert.doesNotMatch(JSON.stringify(capabilities), new RegExp(secret));
+});
+
+test('selected effort metadata is sanitized and respects explicit non-reasoning models', async t => {
+  let reasoning = true;
+  await catalogServer(t, (_request, response) => {
+    const detail = entry('fresh-model', {}, { supports_reasoning: reasoning, supported_reasoning_efforts: ['low', 'high', 'max', 'invalid level', 1, 'high'], reasoning_default_effort: 'invalid level' });
+    response.end(JSON.stringify(detail));
+  });
+  const session = { provider: 'experiential', model: 'fresh-model', modelCapabilities: { supportedEfforts: ['old'], supportsEffort: true } };
+  assert.deepEqual((await modelEffortCapabilities(session)).supportedEfforts, ['low', 'high', 'max']);
+  assert.equal((await modelEffortCapabilities(session)).defaultEffort, undefined);
+  reasoning = false;
+  assert.equal((await modelEffortCapabilities(session)).supportsEffort, false);
+});
+
+test('selected-model lookup rejects mismatches, redirects, slow responses and authentication errors without stale effort or secret leakage', async t => {
+  let mode = 'mismatch', leaked = false;
+  const receiver = http.createServer(() => { leaked = true; }); await new Promise(resolve => receiver.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { receiver.closeAllConnections(); await new Promise(resolve => receiver.close(resolve)); });
+  await catalogServer(t, (_request, response) => {
+    if (mode === 'timeout') return;
+    if (mode === 'redirect') { response.writeHead(302, { Location: `http://127.0.0.1:${receiver.address().port}/credentials` }); response.end(); return; }
+    if (mode === 'auth') { response.statusCode = 401; response.end(secret); return; }
+    response.end(JSON.stringify(entry('wrong-model')));
+  });
+  const current = { provider: 'experiential', model: 'selected-model', modelCapabilities: { supportedEfforts: ['max'] } };
+  for (mode of ['mismatch', 'redirect', 'timeout', 'auth']) {
+    await assert.rejects(modelEffortCapabilities(current, { timeoutMs: mode === 'timeout' ? 50 : 1000 }), error => {
+      assert.doesNotMatch(error.message, new RegExp(secret));
+      return /Could not verify|rejected the API key/.test(error.message);
+    });
+  }
+  const abort = new AbortController(); abort.abort();
+  await assert.rejects(modelEffortCapabilities(current, { signal: abort.signal }), { name: 'AbortError' });
   assert.equal(leaked, false);
 });

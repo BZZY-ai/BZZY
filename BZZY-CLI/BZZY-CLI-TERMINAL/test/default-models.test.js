@@ -202,3 +202,17 @@ test('refreshing the same model retains a supported effort and resets an effort 
     assert.equal(saved.effort, expected);
   }
 });
+
+
+test('Core and shared background effort validation uses fresh picker metadata instead of stale disabled flags', async () => {
+  new CoreAssistant().configure({ source: 'core', provider: 'experiential', model: 'future-gateway', effort: 'default' }, { expectedRevision: 0, requestId: randomUUID() });
+  configureBackgroundModel({ source: 'custom', provider: 'experiential', model: 'future-gateway', effort: 'default' }, { expectedRevision: 0 });
+  const { controller } = settings();
+  for (const target of ['core', 'background']) {
+    controller.drafts.get(target).agents[0].capabilities = { supportsEffort: false, supportedEfforts: [] };
+    controller.effortPicker = async () => ({ effort: 'high', capabilities: { supportedEfforts: ['low', 'high', 'max'] } });
+    await controller.run(`defaults:effort:${target}:0`); await controller.run(`defaults:save:${target}`);
+    assert.equal(target === 'core' ? new CoreAssistant().settings().selection.effort : backgroundModelSettings().selection.effort, 'high');
+  }
+  assert.equal(listRecords('execution').length, 0);
+});

@@ -267,6 +267,9 @@ Experiential Labs is built in. Run `bzzy auth experiential`, then choose it in
 `gpt-5.6-sol`; Core discovers other chat models and their capabilities from the
 authenticated catalog. `EXPLABS_API_KEY` is the alternative host environment
 setting. See [Experiential setup](../../BZZY-CORE/docs/EXPERIENTIAL.md).
+For Experiential, `/effort` and the Effort dropdown refresh the selected model
+directly, without waiting for its entire catalog. Reopening the picker refreshes
+old saved effort metadata. Available levels remain model/route-specific.
 
 CLI stays terminal-oriented; persistent Agent management lives in iPhone.
 The terminal header shows Core host CPU and used/total RAM, refreshed roughly

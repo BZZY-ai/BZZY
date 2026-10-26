@@ -6,7 +6,7 @@ import os from 'node:os';
 import http from 'node:http';
 import { availableModels, chooseModel, normalizeModel } from '../src/models.js';
 import { chooseEffort } from '../src/model-controls.js';
-import { BUILTINS, addProvider, chooseProvider, ensureApiKey, apiKey, defaultSelection, saveDefaultSelection, setDefault } from '../src/providers.js';
+import { BUILTINS, saveConfig, saveKey, addProvider, chooseProvider, ensureApiKey, apiKey, defaultSelection, saveDefaultSelection, setDefault } from '../src/providers.js';
 import { root } from '../src/process.js';
 import { reasoningEffort } from '../src/instructions.js';
 import { codexLaunch } from '../src/engines/codex.js';
@@ -223,4 +223,28 @@ test('changing a provider inside another mode preserves the normal chat preset',
     assert.equal(next.provider, 'claude'); assert.equal(config().defaultProvider, 'codex');
     assert.deepEqual(defaultSelection(), normal);
   }
+});
+
+
+test('Experiential effort picker refreshes one-model metadata and saves supported choices rather than keeping stale flags', async t => {
+  const paths = [], server = http.createServer((request, response) => {
+    paths.push(request.url);
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ model: { slug: 'current-gateway-model', status: 'active', supported_params: { tools: true, reasoning: true } },
+      default_waterfall: [{ model_provider_id: 'active-route' }], providers: [{ id: 'active-route', status: 'active', routable: true,
+        capabilities: { supports_tools: true, supports_streaming: true, supports_reasoning: true, supported_reasoning_efforts: ['low', 'high', 'max'] } }] }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  saveConfig({ version: 1, providers: { experiential: { ...BUILTINS.experiential, baseUrl: `http://127.0.0.1:${server.address().port}/v1` } } });
+  saveKey('experiential', 'synthetic-effort-fixture');
+  const current = { provider: 'experiential', model: 'current-gateway-model', modelCapabilities: { supportsEffort: false }, cwd: directory };
+  const ui = { async chooseOne(_title, choices) {
+    const picker = await choices; assert.deepEqual(picker.choices.map(choice => choice.value), ['default', 'low', 'high', 'max']); return 'max';
+  } };
+  const selected = await chooseEffort(current, ui);
+  assert.equal(selected.effort, 'max'); assert.deepEqual(selected.capabilities.supportedEfforts, ['low', 'high', 'max']);
+  assert.deepEqual(paths, ['/api/models/current-gateway-model']);
+  ui.chooseOne = async (_title, choices) => { await choices; return 'ultra'; };
+  await assert.rejects(chooseEffort(current, ui), /supported by this model/);
 });

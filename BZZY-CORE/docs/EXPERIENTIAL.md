@@ -37,6 +37,14 @@ intersection leaves only provider-default reasoning. Missing metadata does not
 invent effort levels. Live metadata takes precedence over the exact-model
 fallback. See the [model catalog](https://platform.experientiallabs.ai/docs/models).
 
+The CLI's **Effort** dropdown and `/effort` refresh only the selected model via
+authenticated `GET /api/models/<slug>`, including its current default waterfall.
+They do not need the full paginated catalog to finish first. This also replaces
+stale saved effort flags when a route's capabilities change. Only advertised
+common reasoning levels appear; explicit non-reasoning models keep Default only.
+Unknown or failed detail reads show a loading error rather than inventing levels
+or silently keeping stale choices. Effort discovery starts no model inference.
+
 Discovery is bounded to 2,000 source entries, 40 pages, 4 MiB per page and 16 MiB
 in total, within the existing discovery deadline. Incomplete pages, repeated
 entries or changing totals return the existing manual-selection screen instead of a partial catalog.

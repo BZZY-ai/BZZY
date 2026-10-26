@@ -172,8 +172,10 @@ export class DefaultModels {
         const retained = prior.effort === 'default' || capabilities.supportsEffort !== false && capabilities.supportedEfforts?.includes(prior.effort);
         selected.effort = selected.model === prior.model && retained ? prior.effort : 'default';
       }
-      if (field === 'effort' && ['core', 'background'].includes(target) && selected.effort !== 'default' &&
-          (current.modelCapabilities.supportsEffort === false || current.modelCapabilities.supportedEfforts?.length && !current.modelCapabilities.supportedEfforts.includes(selected.effort))) fail('INVALID_REQUEST');
+      if (field === 'effort' && ['core', 'background'].includes(target) && selected.effort !== 'default') {
+        const refreshed = effortCapabilities(selected);
+        if (refreshed.supportsEffort === false || refreshed.supportedEfforts?.length && !refreshed.supportedEfforts.includes(selected.effort)) fail('INVALID_REQUEST');
+      }
     }
     draft.agents[index] = publicSelection(selected); draft.dirty = true;
     if (target === 'background') draft.source = 'custom';

@@ -65,12 +65,12 @@ test('model search, hover, mouse wheel and one-click selection never enter chat 
 test('effort dropdowns list only the selected model capabilities and support direct mouse selection', async t => {
   const { ui, tui } = terminal(t);
   const session = { provider: 'codex', model: 'reasoning', selectedEffort: 'medium', modelCapabilities: { supportsEffort: true, supportedEfforts: ['medium', 'high'] } };
-  const selected = chooseEffort(session, ui); await Promise.resolve(); tui.render();
+  const selected = chooseEffort(session, ui); await new Promise(resolve => setImmediate(resolve)); tui.render();
   assert.equal(tui.selection.kind, 'effort');
   assert.deepEqual(tui.selection.choices.map(choice => choice.value), ['default', 'medium', 'high']);
   const high = tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 2); tui.mouse(0, high.left + 2, high.row);
   assert.equal((await selected).effort, 'high');
-  const fixed = chooseEffort({ ...session, model: 'fixed', modelCapabilities: { supportsEffort: false } }, ui); await Promise.resolve(); tui.render();
+  const fixed = chooseEffort({ ...session, model: 'fixed', modelCapabilities: { supportsEffort: false } }, ui); await new Promise(resolve => setImmediate(resolve)); tui.render();
   assert.deepEqual(tui.selection.choices.map(choice => choice.value), ['default']);
   tui.key('', { name: 'escape' }); assert.equal(await fixed, null);
 });
