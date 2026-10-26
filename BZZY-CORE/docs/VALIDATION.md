@@ -1,3 +1,35 @@
+# Portable bug bounty workflow and specialist pack (2026-10-26)
+
+Node.js 24/macOS: **756 Core tests passed, 2 skipped** (758 total), zero failures.
+Core syntax and whitespace checks pass. The final two pack checks independently
+validate the compact workflow and corrected reporter after content review.
+
+The optional asset pack contains 25 self-contained specialists with simple
+`-agent` names, shared G1-G8 gates, matching class criteria and evidence/report
+handoffs. Complete authoring files are 105–142 lines and instruction bodies fit
+the existing 16,000-byte schema limit. Definitions omit provider/model/effort
+and permission grants. The compact goal workflow routes bounded hypotheses to
+these agents, preserves admitted criteria for independent review, and loads
+`vuln-report-writer` only after confirmation, supervisor review and two saved
+reproductions. The full methodology remains a separate reference asset.
+
+The pack test uses real Core registries and Library ZIP export/import between
+isolated homes. It checks all 25 complete instruction/version pins, enabled
+discovery, workflow text, reporting skill, duplicate import and no created
+sessions/executions. Embedded criteria remain behavior instructions; this change
+does not add a machine vulnerability verifier or claim live-model accuracy.
+
+On the explicitly requested local host, the previous 16 global security
+specialists were backed up and replaced through Core's revision-checked owner
+APIs. All 25 replacements are enabled and visible through the installed CLI.
+The workflow was added globally without selecting it for an existing goal. The
+existing reporting skill was corrected to use permitted project output paths,
+private bindings instead of published credentials, and current program taxonomy,
+then enabled. Native runtime code, running sessions, workflow selections and
+Core service installation were unchanged. No target test, provider inference or
+external report submission was performed. Private backups, generated install
+documents and the user's reference folders remain outside product commits.
+
 # CLI input handoff and approval controls (2026-10-26)
 
 Node.js 24/macOS full suites: **754 Core tests passed, 2 skipped** (756 total)
