@@ -389,7 +389,10 @@ Ctrl+G. Settings and the complete pairing QR use the full content area beneath
 the top bar and never leave the chat composer underneath. Sky-blue controls have
 hover and pressed feedback; sessions, Settings actions, Back, Send, Copy and the
 update checker accept mouse clicks. The composer preserves unsent drafts across
-local controls.
+local controls. The obsolete dashboard/eyes header has no rendering route in any
+panel. Import, generated share codes and pairing QR screens use a compact text
+header with connection state and model/usage context. Codes stay outside chat,
+history and frame caches; the complete pairing QR and quiet zone still fit 80×24.
 
 The model control at the bottom opens a floating searchable dropdown over the
 current chat. Click a model once to apply it; use the mouse wheel or arrows to

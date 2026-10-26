@@ -6,7 +6,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { UI } from '../src/ui.js';
 import { clean, cellWidth, wrap } from '../src/terminal-format.js';
-import { eyeMotion } from '../src/mascot.js';
 import { RunnerUI } from '../src/runtime-ui.js';
 import { events } from '../src/database.js';
 import { commandSuggestions } from '../src/terminal-commands.js';
@@ -291,7 +290,7 @@ test('weekly quotas stay in the header and Activity shows readable progress with
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /Codex 7d: 75% left.*Claude 7d: 65% left.*DeepSeek: \$12.34/);
       assert.match(frame, /Checking the footer/); assert.match(frame, /opening paypal.com/);
-      assert.doesNotMatch(frame, /curl -sSL/); assert.match(frame, /╭─ Message/); assert.match(frame, new RegExp(sessionId));
+      assert.doesNotMatch(frame, /curl -sSL|╭─ Message|CHAT ACTIVITY HTTP SESSIONS/); assert.match(frame, /fixture-brain/); assert.match(frame, /Send ↵/);
       assert.equal(ui.tui.activities.length, 1);
     }
   } finally { ui.close(); }
@@ -511,7 +510,7 @@ test('slash suggestions filter, complete without switching agent tabs, and keep 
     input.write('/do'); ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.completions().length, 0);
     input.write('c'); assert.equal(ui.tui.completions()[0].command, '/doctor');
     Object.assign(output, { columns: 80, rows: 24 }); ui.event('message.user', { text: 'Keep this question pinned' }); ui.tui.render();
-    const smaller = ui.tui.lastFrame.map(clean).join('\n'); assert.match(smaller, /YOU ASKED[\s\S]*Keep this question pinned/);
+    const smaller = ui.tui.lastFrame.map(clean).join('\n'); assert.match(smaller, /YOU\s+│ Keep this question pinned/);
     ui.tui.key('', { name: 'u', ctrl: true }); input.write('/goal status\r'); assert.equal(await answer, '/goal status');
   } finally { ui.close(); }
 });
@@ -579,27 +578,20 @@ test('terminal text handles wide characters and strips injected terminal control
   assert.equal(cellWidth('你🐝a'), 5); assert.deepEqual(wrap('你🐝a', 4), ['你🐝', 'a']);
   assert.equal(clean('\x1b[2Jhello\x1b]0;bad\x07'), 'hello');
 });
-test('eye animation paints only changed mascot cells, respects spacing and stops queuing frames under backpressure', async () => {
+test('terminal updates retain the compact frame and respect output backpressure', async () => {
   const term = terminal(), { ui, output } = term;
   try {
     clearTimeout(ui.tui.timer); clearTimeout(ui.tui.renderTimer); ui.tui.renderTimer = null;
     const answer = ui.ask('bzzy › '); await Promise.resolve();
-    ui.event('message.user', { text: 'Keep this prompt visible while the mascot moves' });
-    ui.event('text', { text: 'The chat text must stay still.' }); ui.tui.setPanel('activity'); ui.tui.render();
-    const before = [...ui.tui.lastFrame], region = ui.tui.eyeRegion, written = term.written.length;
-    assert.ok(region.columns >= 19 && region.rows >= 5);
-    assert.ok(region.suffixes.every(suffix => suffix.startsWith('   ')), 'the sidebar keeps a gutter beside the mascot');
-    assert.ok(region.top >= 2, 'the sidebar keeps padding above the eyes');
-    ui.tui.animationTime = 2.2; ui.tui.paintEyes();
-    assert.deepEqual(ui.tui.lastFrame.slice(region.top + region.rows - 1), before.slice(region.top + region.rows - 1));
-    const painted = term.written.slice(written); assert.ok(painted.length > 0); assert.doesNotMatch(painted, /The chat text|YOU ASKED/);
-    for (const cursor of painted.matchAll(/\x1b\[(\d+);(\d+)H/g)) {
-      assert.ok(Number(cursor[1]) >= region.top && Number(cursor[1]) < region.top + region.rows);
-      assert.ok(Number(cursor[2]) >= region.left && Number(cursor[2]) < region.left + region.columns);
-    }
-    const pausedAt = term.written.length; ui.tui.outputBlocked = true; ui.tui.animationTime = 3.2; ui.tui.paintEyes();
-    assert.equal(term.written.length, pausedAt); output.emit('drain'); assert.equal(ui.tui.outputBlocked, false);
-    assert.notDeepEqual(eyeMotion(1), eyeMotion(1 + 1 / 60)); assert.ok(eyeMotion(6.75).open < 0.2);
+    ui.tui.value = 'Keep this draft'; ui.tui.cursor = 4;
+    ui.event('text', { text: 'The chat text must stay available.' }); ui.tui.render();
+    const pausedAt = term.written.length; ui.tui.outputBlocked = true;
+    ui.event('text', { text: 'A reply arrived while output was blocked.' }); ui.tui.render();
+    assert.equal(term.written.length, pausedAt);
+    output.emit('drain'); assert.equal(ui.tui.outputBlocked, false); ui.tui.render();
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /A reply arrived while output was blocked/);
+    assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.cursor, 4);
+    assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /CHAT ACTIVITY HTTP SESSIONS|bzzy\s+\/\s+/);
     ui.reader.close(); await answer;
   } finally { ui.close(); }
 });
@@ -613,7 +605,7 @@ test('copy mode gives selection to the terminal, freezes rendering, and resumes 
     assert.equal(ui.tui.copyMode, true); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /COPY MODE/);
     assert.ok(term.written.includes('\x1b[?1000l'));
     const frozenAt = term.written.length;
-    ui.event('text', { text: 'A reply arrived during selection.' }); ui.tui.animationTime = 4.1; ui.tui.paintEyes(); ui.tui.render();
+    ui.event('text', { text: 'A reply arrived during selection.' }); ui.tui.render();
     input.write('ignored while selecting'); assert.equal(term.written.length, frozenAt); assert.equal(ui.tui.value, 'keep this draft');
     ui.tui.key('', { name: 'escape' }); ui.tui.render();
     assert.equal(ui.tui.copyMode, false); assert.match(ui.tui.entries.at(-1).text, /A reply arrived during selection/); assert.match(ui.tui.lastFrame.map(clean).join('\n'), /A reply arrived/);

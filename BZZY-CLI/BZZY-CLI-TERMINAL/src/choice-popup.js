@@ -19,7 +19,7 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   const detailLimit = Math.max(1, Math.min(8, picker.detailLimit || 3));
   const detailLines = details ? wrap(details, inner - 4, Math.min(detailLimit, picker.descriptionRows || 2)) : [];
   const maxHeight = Math.max(7, Math.min(dropdown ? 20 : 25, height - (dropdown ? 0 : minimumTop) - 1));
-  const reserved = 6 + (searchable ? 2 : 0) + detailLines.length + (dropdown ? 0 : 2);
+  const reserved = 6 + (searchable ? 2 : 0) + (picker.columnHeader ? 1 : 0) + detailLines.length + (dropdown ? 0 : 2);
   const rows = Math.max(1, Math.min(filtered.length || 1, maxHeight - reserved));
   const position = Math.max(0, filtered.findIndex(item => item.index === picker.focus));
   const offset = Math.max(0, Math.min(position - Math.floor(rows / 2), filtered.length - rows));
@@ -35,6 +35,7 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
     hits.push({ type: 'picker-search', row: lines.length - 1, left: 2, right: size - 3 });
     lines.push(edge('├' + '─'.repeat(inner) + '┤'));
   } else put();
+  if (picker.columnHeader) put('   ' + picker.columnHeader, palette.muted);
   if (picker.loading) put(' ' + (picker.loadingLabel || 'Loading choices…'), palette.accent);
   else if (!filtered.length) put(' No matching models.', palette.muted);
   else for (const { choice, index } of filtered.slice(offset, offset + rows)) {

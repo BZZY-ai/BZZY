@@ -350,8 +350,8 @@ test('a compact pairing QR renders completely inside an 80 by 24 TUI', async () 
   assert.equal(ui.settings.qrLines().length, 18);
   const start = term.written.length; ui.tui.render(); const frame = term.written.slice(start);
   assert.match(clean(frame), /bzzy.*qr-model/); assert.match(clean(frame), /1,234 tokens.*CPU.*RAM/); assert.match(frame, /\x1b\[47m/);
-  assert.ok(ui.tui.eyeRegion && ui.tui.eyeRegion.rows === 2);
-  assert.match(clean(frame), /[\u2800-\u28ff]/u, 'the compact header retains the actual eyes');
+  assert.doesNotMatch(clean(frame), /[\u2800-\u28ff]|CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save/u, 'pairing never restores the obsolete dashboard');
+  assert.match(clean(frame), /bzzy/);
   assert.doesNotMatch(clean(frame), /Open the QR image to scan|QR needs|\d+ columns/);
   assert.equal([...frame.matchAll(/\x1b\[\d+;1H/g)].length, 24);
   assert.match(clean(frame), /C Copy code/); assert.equal(ui.tui.lastFrame.length, 0);

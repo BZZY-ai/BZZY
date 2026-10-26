@@ -13,7 +13,6 @@ import { skillsCommand as terminalSkillsCommand } from './skills-ui.js';
 import { root } from './process.js';
 import { checkConnections } from './connection-check.js';
 import { UI } from './ui.js';
-import { Pet } from './mascot.js';
 import { NotificationHub } from './notifications.js';
 import { executeManaged, submitManagedGoal, viewSession, attachSession, changeSessionModel, conversationModeCommand, controlSession } from './runtime-client.js';
 import { ensureRuntime, runtimeInfo, runtimeRequest } from './runtime.js';
@@ -151,7 +150,7 @@ Options:
   --effort LEVEL        Model reasoning effort
   --yolo                Disable Codex approvals AND sandbox; bypass Claude permissions
   --json                Emit JSONL events; unavailable approvals are denied
-  --no-pet              Hide the bug-eyed terminal mascot
+  --no-pet              Reduce terminal animation updates
   --device              Use Codex's device-code login
   -h, --help            Show help
   -v, --version         Show version
@@ -401,11 +400,10 @@ async function executeFromCommand(provider, session, options, ui, prompt, flags)
 
 async function chat(provider, options, ui, existingSession) {
   if (!ui.interactive) throw new Error('Use bzzy run "task" or bzzy goal "objective" when stdin is not a terminal.');
-  const pet = new Pet(ui, options.pet);
   let session = existingSession || createChatSession(provider, options);
   ui.setSession(session.id);
   if (existingSession) await restoreConversation(session, ui);
-  ui.updateSession?.(session); pet.greet();
+  ui.updateSession?.(session);
   ui.event('info', { message: `${provider.name}\n/goal <objective> · /providers · /models · /validate [objective] · /help`, welcome: true });
   if (options.mode === 'parallel') ui.event('info', { message: 'Parallel mode · chat normally, or use /goal <objective> for independent work by ' + (session.parallelAgents?.map(agent => agent.provider + (agent.model ? ':' + agent.model : '')).join(', ') || options.agents || 'codex,claude,deepseek'), welcome: true });
   if (options.mode === 'debate') ui.event('info', { message: 'Validate mode · get a first response, select the agents, then investigate and validate for up to five rounds.', welcome: true });

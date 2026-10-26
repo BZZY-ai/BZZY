@@ -3,7 +3,6 @@ import { subagentRows } from './subagents-ui.js';
 import { workflowRows, workflowAction, workflowChatLabel } from './workflow-ui.js';
 import { namedTerminalSessions } from './session-browser.js';
 import { clean, cellWidth, clip, wrap, wrapProse, duration } from './terminal-format.js';
-import { mascotCells, mascotLine } from './mascot.js';
 import { commandSuggestions, privateChatCommand } from './terminal-commands.js';
 import { backendVisit } from './backend-traffic.js';
 import { accountStatusLabels } from './account-status.js';
@@ -12,7 +11,7 @@ import { palette, createTerminalTheme } from './terminal-theme.js';
 import { connectionStatusLabel } from './connection-status.js';
 import { messageBodyToPlainText, parseMessageBody } from '@bzzy/core/message-format';
 import { renderMessageContent } from './message-renderer.js';
-import { hostMetricsCompact, hostMetricsLabel } from './host-metrics.js';
+import { hostMetricsCompact } from './host-metrics.js';
 import { choicePopup, visibleChoices } from './choice-popup.js';
 import { fillSurface, replaceCells, sliceCells } from './terminal-surface.js';
 import { settingsLayout, settingsActions, navigateSettings } from './settings-layout.js';
@@ -79,7 +78,6 @@ export class TerminalChat {
       this.animationTime = (instant - this.animationStarted) / 1000; this.frame = Math.floor(this.animationTime * 10);
       if (!this.copyMode && !this.outputBlocked) {
         if (previous !== this.frame && (this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated || goalValidationIndicator(this.goal, this.goalValidation, this.frame)?.animated)) this.schedule();
-        if (!this.renderTimer && this.ui.pet !== false) this.paintEyes();
       }
       const interval = this.ui.pet === false ? 100 : animationInterval;
       deadline += interval;
@@ -89,28 +87,6 @@ export class TerminalChat {
     this.timer = setTimeout(tick, animationInterval); this.timer.unref();
   }
   writeFrame(frame) { if (frame && !this.output.write(frame)) this.outputBlocked = true; }
-  paintEyes() {
-    const region = this.eyeRegion;
-    if (!region || this.selection || this.copyMode || this.textSelection || this.outputBlocked || this.closed) return;
-    const next = mascotCells(this.animationTime, { columns: region.columns, rows: region.rows, compact: region.compact ?? true });
-    let output = '';
-    for (let row = 0; row < next.length; row++) {
-      const changed = column => next[row][column].text !== this.eyeCells[row][column].text || next[row][column].tone !== this.eyeCells[row][column].tone;
-      for (let column = 0; column < region.columns;) {
-        if (!changed(column)) { column++; continue; }
-        const start = column++;
-        while (column < region.columns && changed(column)) column++;
-        output += `\x1b[${region.top + row};${region.left + start}H` + mascotLine(next[row].slice(start, column), this.theme);
-      }
-      if (!this.privateFrame) {
-        const index = region.top + row - 1;
-        this.lastFrame[index] = replaceCells(this.lastFrame[index] || '', region.left - 1, mascotLine(next[row], this.theme), (this.output.columns || 80) - 1, this.theme, palette.background);
-        if (this.paintedFrame) this.paintedFrame[index] = this.lastFrame[index];
-      }
-    }
-    this.eyeCells = next;
-    if (output) this.writeFrame('\x1b7' + this.theme.background(palette.background) + output + '\x1b[0m\x1b8');
-  }
   setCopyMode(active) {
     if (active === Boolean(this.copyMode) || active && (this.hidden || this.selection)) return;
     this.textSelection = null; this.copyMode = active;
@@ -1236,27 +1212,6 @@ export class TerminalChat {
     const partial = ['besties', 'parallel'].includes(this.mode) && this.groupUsage && !this.groupUsage.complete;
     return this.tokens != null ? (partial ? '≥' : '') + this.tokens.toLocaleString() + ' tokens' : 'tokens —';
   }
-  counters() {
-    const status = this.clipboardStatus && Date.now() < this.clipboardStatusUntil ? this.clipboardStatus : this.copyMode ? 'COPY MODE · live updates held'
-      : this.busy ? spinner[this.frame % spinner.length] + ' ' + this.state : '● ' + this.state;
-    const elapsed = this.startedAt ? duration(Math.max(0, ((this.finishedAt ? Date.parse(this.finishedAt) : Date.now()) - Date.parse(this.startedAt)) / 1000)) : '';
-    return [status, this.goal ? 'goal ' + this.goal.status : '', elapsed, this.tokenLabel(), this.effort].filter(Boolean).join('  ·  ');
-  }
-  modelHeader(width) {
-    const color = this.theme.color, lines = [];
-    const effort = ' Effort: ' + (this.effort || 'default').replace(/^effort /, '') + ' ▾ ';
-    const model = ' ' + clip(this.model, Math.max(1, width - cellWidth(effort) - 17)) + ' ▾ ';
-    let column = 3;
-    const controls = [[model, '/providers'], [effort, '/effort'], [' Save ', '/default']];
-    let line = '  ';
-    for (const [label, command] of controls) {
-      if (column + cellWidth(label) > width) break;
-      const disabled = this.busy || this.ui.sessionMode === 'VIEW' || command !== '/providers' && this.modelSelectionRequired;
-      this.hitTargets.push({ type: 'model-control', command, disabled, row: 0, left: column, right: column + cellWidth(label) - 1 });
-      column += cellWidth(label) + 1; line += fillSurface(label, cellWidth(label), this.theme, command === '/default' && !disabled ? palette.selection : palette.surface, disabled ? palette.muted : palette.accent, !disabled) + ' ';
-    }
-    lines.push(line); return lines;
-  }
   goalBadgeLayout(width, { reserved = 0, surface = palette.background, showEmpty = false } = {}) {
     const primary = goalIndicator(this.goal, this.frame, { validating: this.mode === 'debate' && this.busy }), validation = goalValidationIndicator(this.goal, this.goalValidation, this.frame);
     if (!primary && !showEmpty) return { line: '', extra: [] };
@@ -1275,7 +1230,7 @@ export class TerminalChat {
     return { line, extra };
   }
   simpleChatLayout() {
-    return !this.ui.minimal && ['chat', 'room', 'skills', 'agents', 'workflows', 'metrics'].includes(this.panel);
+    return !this.ui.minimal;
   }
   elapsedClock() {
     const durationSeconds = () => {
@@ -1598,90 +1553,30 @@ export class TerminalChat {
     if (sizes[0] + sizes[1] + 5 <= available) return ['  ' + roles.map((role, index) => render(role, sizes[index])).join(color('  │  ', palette.border))];
     return roles.map(role => '  ' + render(role, available));
   }
-  persistentHeader(width, height, { compact = false, controls = '' } = {}) {
-    const { color } = this.theme, muted = text => color(text, palette.muted), accent = text => color(text, palette.accent, true);
-    const rows = compact ? 2 : height >= 36 ? 8 : height >= 30 ? 7 : height >= 24 ? 5 : 2;
-    const eyeRows = this.ui.pet === false ? 0 : rows;
-    const eyeWidth = compact ? 10 : Math.max(10, Math.min(42, Math.round(rows * 5.4), Math.floor(width * 0.42)));
-    const left = compact ? 2 : 3, gap = compact ? 2 : 6;
-    const textWidth = Math.max(1, width - left - (eyeRows ? eyeWidth + gap : 0));
-    const effort = (this.effort || 'default').replace(/^effort /, '').replace(/^provider default$/, 'default');
-    const provider = this.provider || 'agent';
-    const modelWidth = Math.max(1, textWidth - 9 - cellWidth(provider) - cellWidth('effort ' + effort) - 6);
-    let brand = accent('bzzy') + muted('  /  ') + color(provider + ' · ' + clip(this.model, modelWidth), palette.text, true) + muted(' · ') + color('effort ' + effort, palette.accent, true);
-    const context = this.mode === 'delegate' ? 'Delegate · plan, execute, review'
-      : this.mode === 'besties' || this.bestiesGroupId ? 'Besties · shared evidence, messages and peer reviews' : 'Type / for commands';
-    const directory = this.cwd || 'Your project, your agent.';
-    const shownAlias = this.aliasEdit ? [...this.aliasEdit.value].slice(0, this.aliasEdit.cursor).join('') + '▏' + [...this.aliasEdit.value].slice(this.aliasEdit.cursor).join('') : this.alias;
-    let text = [brand, muted(clip(shownAlias ? `${shownAlias} · ${directory}` : directory, textWidth)),
-      ...(this.mode === 'delegate' && !compact ? [
-        ...(this.aliasEdit ? [muted(clip('Enter save name · Esc cancel', textWidth))] : []), ...this.delegateHeader(textWidth),
-      ] : [muted(clip(this.aliasEdit ? 'Enter save name · Esc cancel' : context, textWidth))])];
-    if (compact) {
-      const controlWidth = cellWidth(controls), modelSpace = Math.max(1, textWidth - controlWidth - 2);
-      brand = color(clip(`bzzy / ${provider} · ${this.model}`, modelSpace), palette.accent, true);
-      this.compactControlLeft = left + (eyeRows ? eyeWidth + gap : 0) + cellWidth(brand) + 3;
-      const connection = connectionStatusLabel(this.ui.connectionStatus, this.theme, true);
-      text = [brand + (controls ? muted('  ' + controls) : ''), connection + muted(clip(' · ' + this.tokenLabel() + ' · ' + hostMetricsLabel(this.ui.hostMetrics, Math.min(64, textWidth)), Math.max(1, textWidth - cellWidth(connection))))];
-    }
-    const header = compact ? [] : [connectionStatusLabel(this.ui.connectionStatus, this.theme)];
-    this.eyeRegion = null;
-    if (!compact && height >= 30) header.push('');
-    if (eyeRows) {
-      const cells = mascotCells(this.animationTime, { columns: eyeWidth, rows: eyeRows, compact: true });
-      const textStart = Math.max(0, Math.floor((eyeRows - text.length) / 2)), suffixes = [];
-      this.eyeRegion = { top: header.length + 1, left: left + 1, columns: eyeWidth, rows: eyeRows, suffixes };
-      this.eyeCells = cells;
-      for (let row = 0; row < eyeRows; row++) {
-        suffixes.push(' '.repeat(gap) + (text[row - textStart] || ''));
-        header.push(' '.repeat(left) + mascotLine(cells[row], this.theme) + suffixes[row]);
-      }
-      if (this.mode === 'delegate' && !compact) for (const line of text.slice(eyeRows)) header.push(' '.repeat(left + eyeWidth + gap) + line);
-    } else header.push(...(this.mode === 'delegate' && !compact ? text : text.slice(0, 2)).map(line => ' '.repeat(left) + line));
-    if (!compact && this.alias) {
-      const column = left + (eyeRows ? eyeWidth + gap : 0) + 1;
-      this.hitTargets.push({ type: 'alias', row: eyeRows ? this.eyeRegion.top + Math.max(0, Math.floor((eyeRows - text.length) / 2)) + 1 : 2,
-        left: column, right: Math.min(width, column + cellWidth(this.alias) - 1) });
-    }
-    if (!compact) { const row = header.length + 1; header.push(...this.modelHeader(width)); for (const hit of this.hitTargets) if (hit.type === 'model-control' && hit.row === 0) hit.row = row; }
-    if (compact) return header.map(line => cellWidth(line) > width ? color(clip(line, width), palette.text) : line);
-    if (height > 24) header.push('');
-    if (this.ui.accountStatusEnabled) for (const line of wrap(accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width - 4)) header.push(color('  ' + line, palette.accent));
-    if (this.ui.hostMetricsEnabled) header.push(muted('  ' + clip(hostMetricsLabel(this.ui.hostMetrics, width - 4), width - 4)));
-    header.push(color('  ' + clip(this.counters(), width - 3), ['needs your input', 'failed'].includes(this.state) ? palette.warning : palette.accent));
-    if (this.ui.tabs?.length > 1) {
-      let column = 1;
-      header.push(this.ui.tabs.map((tab, index) => {
-        const label = tab.id === this.ui.activeTab ? ` [${index} ${agentLabel(tab.agent)}] ` : ` ${index} ${agentLabel(tab.agent)} `;
-        this.hitTargets.push({ type: 'tab', id: tab.id, row: header.length + 1, left: column, right: column + cellWidth(label) - 1 }); column += cellWidth(label);
-        return (tab.id === this.ui.activeTab ? accent : muted)(label);
-      }).join(''));
-    }
-    let column = 1;
-    header.push(this.panels().map(panel => {
-      const label = `  ${panel === 'room' ? 'SHARED ROOM' : panel.toUpperCase()}`;
-      this.hitTargets.push({ type: 'panel', panel, row: header.length + 1, left: column, right: column + cellWidth(label) - 1 }); column += cellWidth(label);
-      return (this.panel === panel ? accent : muted)(label);
-    }).join(''));
-    header.push(color('─'.repeat(width), palette.border));
-    return header.map(line => cellWidth(line) > width ? color(clip(line, width), palette.text) : line);
+  compactHeader(width, { controls = '' } = {}) {
+    const { color } = this.theme;
+    const brand = color('  bzzy', palette.accent, true);
+    const connection = connectionStatusLabel(this.ui.connectionStatus, this.theme, true);
+    const available = Math.max(1, width - (controls ? cellWidth(controls) + 2 : 0));
+    const left = cellWidth(brand) + cellWidth(connection) + 2 <= available ? brand + '  ' + connection : connection;
+    const controlLeft = controls ? width - cellWidth(controls) + 1 : null;
+    const top = controls ? left + ' '.repeat(Math.max(1, width - cellWidth(left + controls))) + color(controls, palette.muted) : left;
+    const model = clean(this.model || 'default'), effort = clean(this.effort || 'default').replace(/^effort /, '');
+    const usage = this.tokenLabel() + ' · ' + hostMetricsCompact(this.ui.hostMetrics);
+    const context = model + ' · ' + effort;
+    const modelWidth = Math.max(1, width - cellWidth(usage) - 5);
+    const detail = width >= 60 ? '  ' + clip(context, modelWidth) + ' · ' + usage : '  ' + context + ' · ' + usage;
+    return { lines: [cellWidth(top) <= width ? top : color(clip(clean(top), width), palette.muted), color(clip(detail, width), palette.muted)], controlLeft };
   }
   renderSettings(width, height) {
     const { color } = this.theme, settings = this.ui.settings;
-    const title = settings.pageTitle || 'Settings', subtitle = settings.pageSubtitle || '';
-    const compactTop = !this.ui.minimal;
-    const header = compactTop ? [this.settingsTopBar(width)] : this.persistentHeader(width, height);
-    if (compactTop) this.eyeRegion = null;
+    const subtitle = settings.pageSubtitle || '';
+    const header = [this.settingsTopBar(width)];
     const backRow = header.length + 1;
     header.push(color('  ← Back', settings.busy ? palette.muted : palette.accent, true)
-      + (compactTop && subtitle ? color(clip('  ' + subtitle, Math.max(0, width - 8)), palette.muted) : ''));
+      + (subtitle ? color(clip('  ' + subtitle, Math.max(0, width - 8)), palette.muted) : ''));
     this.hitTargets.push({ type: 'back', row: backRow, left: 3, right: 9 });
-    if (!compactTop) {
-      header.push(color(clip('  ' + title, width), palette.text, true)
-        + (height <= 24 && subtitle ? color(clip(' · ' + subtitle, width - cellWidth(title) - 2), palette.muted) : ''));
-      if (height > 24 && subtitle) header.push(color(clip('  ' + subtitle, width), palette.muted));
-    }
-    if (settings.page === 'default-models' && compactTop) {
+    if (settings.page === 'default-models') {
       const usage = this.tokenLabel() + ' · ' + this.elapsedClock();
       const context = `  bzzy · ${this.model} · ${(this.effort || 'default').replace(/^effort /, '')} effort`;
       if (width < 60) { header.push(color(clip(context, width), palette.text)); header.push(color(clip('  ' + usage, width), palette.muted)); }
@@ -1725,7 +1620,7 @@ export class TerminalChat {
     let frame = '\x1b[?25l';
     for (let row = 0; row < height; row++) {
       const line = lines[row] || '';
-      const background = compactTop && row === 0 ? palette.surface : palette.background;
+      const background = row === 0 ? palette.surface : palette.background;
       frame += `\x1b[${row + 1};1H${this.theme.background(background)}${this.theme.foreground(palette.text)}\x1b[2K${line}\x1b[0m`;
     }
     this.textRegion = null; this.scrollbar = null;
@@ -1735,35 +1630,22 @@ export class TerminalChat {
     const { color } = this.theme, settings = this.ui.settings, qr = settings.qrLines();
     const qrWidth = Math.max(0, ...qr.map(line => cellWidth(line))) + 8;
     const notice = settings.warning || /copied|opened|copy request/i.test(settings.message);
-    const controls = notice ? settings.message : 'C Copy code  O Open image  Esc back';
-    let header = this.persistentHeader(width, height), compact = false;
-    const fullFits = qr.length && qrWidth <= width && header.length + qr.length + 6 <= height;
-    if (!fullFits && qr.length && qrWidth <= width && qr.length + 6 <= height) {
-      // Two persistent brand rows plus the complete QR and its four-module
-      // white quiet zone fit 80×24. Controls share the compact header.
-      this.hitTargets = [];
-      header = this.persistentHeader(width, height, { compact: true, controls });
-      compact = true;
-    }
+    const controls = 'C Copy code  O Open image  ← Back';
+    // Two compact rows leave room for every QR module and its quiet zone at 80×24.
+    const fits = qr.length && qrWidth <= width && qr.length + 6 <= height;
+    const { lines: header, controlLeft } = this.compactHeader(width, { controls: fits ? controls : '' });
+    if (notice) header[1] = color(clip('  ' + settings.message, width), settings.warning ? palette.warning : palette.accent);
     const lines = [...header];
-    if (fullFits || compact) {
-      if (!compact) lines.push(color(clip('  Scan with BZZY on iPhone', width), palette.accent, true));
+    if (fits) {
       const indent = ' '.repeat(Math.max(0, Math.floor((width - qrWidth) / 2)));
       const blank = indent + '\x1b[47m' + ' '.repeat(qrWidth) + '\x1b[0m';
       lines.push(blank, blank);
       for (const line of qr) lines.push(indent + '\x1b[47m    ' + line + '\x1b[47m    \x1b[0m');
       lines.push(blank, blank);
-      if (!compact) {
-        while (lines.length < height - 1) lines.push('');
-        lines.push(color(clip('  ' + controls, width), notice && settings.warning ? palette.warning : palette.muted));
-      }
-      const actionRow = compact ? 1 : height;
-      const copyLeft = compact ? this.compactControlLeft : 3;
-      const openLeft = compact ? this.compactControlLeft + cellWidth('C Copy code  ') : 16;
-      this.hitTargets.push({ type: 'settings', action: 'copy-code', row: actionRow, left: copyLeft, right: Math.min(width, copyLeft + 10) },
-        { type: 'settings', action: 'open-qr', row: actionRow, left: openLeft, right: Math.min(width, openLeft + 11) });
-      lines[actionRow - 1] = replaceCells(lines[actionRow - 1], width - 10, color(' ← Back ', palette.accent), width, this.theme, palette.background);
-      this.hitTargets.push({ type: 'qr-back', row: actionRow, left: width - 9, right: width - 3 });
+      const openLeft = controlLeft + cellWidth('C Copy code  ');
+      this.hitTargets.push({ type: 'settings', action: 'copy-code', row: 1, left: controlLeft, right: controlLeft + cellWidth('C Copy code') - 1 },
+        { type: 'settings', action: 'open-qr', row: 1, left: openLeft, right: openLeft + cellWidth('O Open image') - 1 },
+        { type: 'qr-back', row: 1, left: width - cellWidth('← Back') + 1, right: width });
     } else {
       this.hitTargets.push({ type: 'qr-back', row: lines.length + 1, left: 3, right: 9 });
       lines.push(color(clip('  ← Back  Pair iPhone', width), palette.accent, true), '');
@@ -1783,7 +1665,7 @@ export class TerminalChat {
   }
   renderPrivateView(width, height) {
     const view = this.ui.privateView, { color } = this.theme;
-    const lines = this.persistentHeader(width, height);
+    const lines = this.compactHeader(width).lines;
     lines.push(color(clip('  ' + clean(view.title), width), palette.accent, true), '');
     const content = (view.lines || []).flatMap(line => wrap(clean(line), Math.max(1, width - 4)).map(item => '  ' + item));
     const reserved = 5;
@@ -1890,13 +1772,14 @@ export class TerminalChat {
     const pinned = this.pinned && !['settings', 'metrics'].includes(this.panel) ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
     const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
     const simpleChat = this.simpleChatLayout();
-    if (this.ui.minimal) this.eyeRegion = null;
-    if (simpleChat) this.eyeRegion = null;
     const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme), ...this.delegateHeader(width)]
-      : simpleChat ? [this.simpleTopBar(width)] : this.persistentHeader(width, height);
+      : [this.simpleTopBar(width)];
     if (this.panel !== 'chat' && this.panel !== 'settings' && !this.promptDraft) {
       this.hitTargets.push({ type: 'back', row: header.length + 1, left: 3, right: 9 });
       header.push(color('  ← Back', palette.accent, true) + color(clip('  ' + this.panel[0].toUpperCase() + this.panel.slice(1), Math.max(0, width - 8)), palette.muted));
+    }
+    if (this.panel === 'activity' && this.ui.accountStatusEnabled) {
+      header.push(color(clip('  ' + accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width), palette.muted));
     }
     if (pinned.length && !this.ui.minimal) {
       if (simpleChat) {

@@ -1,3 +1,25 @@
+# Remove obsolete terminal GUI fallbacks (2026-10-25)
+
+Node.js 24/macOS: **705 CLI tests passed, 21 skipped** (726 total), zero
+failures. The focused terminal/transfer/settings suites passed **114 tests**;
+the CLI syntax and whitespace checks pass. Core/Relay execution code is
+unchanged. Fixtures use private temporary homes on the internal disk; no running
+installation, user Library entry or live share was changed.
+
+The old persistent dashboard header, model/Save strip, panel-tab row and eye
+animation renderer were removed from the TUI. Activity and HTTP use the current
+terminal shell. Import, generated-code screens and pairing QR use compact text
+headers in ordinary and minimal mode; opening a different screen cannot select
+the obsolete layout. Weekly account quotas remain visible in Activity. Actual
+checkbox popups now render the name column heading, not just their body fallback.
+
+Tests cover private transfer screens across 50×20, 80×24 and 150×42 terminals,
+Back/cancellation, draft/cursor restoration, code exclusion from chat/history/frame
+caches, output backpressure and normal panel navigation. Pairing retains every
+QR module and its full white quiet zone inside 80×24, with working copy/open/back
+controls. No real provider or production Relay call was needed for this frontend
+change; physical-device scanning was not repeated.
+
 # Name-only Skills/Agents and Relay checkbox transfers (2026-10-25)
 
 Node.js 24/macOS full suites: **739 Core tests passed, 2 skipped** (741 total)

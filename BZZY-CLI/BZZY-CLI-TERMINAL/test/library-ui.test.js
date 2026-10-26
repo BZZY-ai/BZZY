@@ -480,6 +480,7 @@ test('actual tab table uses name checkboxes, an Export button, mouse input and p
     ui.tui.key(' ', { name: 'space' });
     assert.equal(ui.tui.selection.selected.size, 1);
     ui.tui.render(); const button = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(button);
+    assert.match(ui.tui.lastFrame.join('\n'), /NAME/);
     ui.tui.mouse(0, button.left, button.row); await task;
     assert.deepEqual(transport.find(call => call.operation === 'create').input.excludeEntries.map(row => row.name), ['first-checks']);
     assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.cursor, 5); assert.equal(listRecords('execution').length, 0);
