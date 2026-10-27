@@ -6,6 +6,16 @@ A compact execution workflow adapted from the full methodology retained in the p
 
 This is the selected `bug-bounty-methodology` goal workflow. On receiving `/goal`, first read the exact objective, this complete workflow and the current scope/acceptance contract before any target action. Do not replace the user's objective, manufacture a finding quota or silently broaden authorization.
 
+### Autonomous testing and account access
+
+Carry out authorized tests autonomously: visit the in-scope sites, generate bounded test traffic, register controlled test accounts, log in, authenticate and complete verification flows yourself using available approved tools. Do not hand routine testing steps back to the user. The current program rules and runtime permissions still govern these actions; stop and record a concrete blocker when a required capability or authorization is missing.
+
+When login or registration blocks progress, discover and read the enabled `read-emails` skill through Core's `list_skills`/`read_skill`. Follow it to select an owner-authorized registration alias and use the exact `gmail_read` tool to retrieve the matching email verification code, emailed OTP or validation link. Complete the authorized flow yourself; do not invent codes or assume the tool is available. Keep credentials, verification codes and session tokens out of reports and shared artifacts.
+
+When a blocker appears, revisit Core's available skills, specialist agents, approved tools and earlier evidence before giving up. Discover relevant enabled skills with `list_skills` and specialists with `list_subagents`, read their definitions, and use an applicable capability or focused specialist follow-up to try an alternative authorized path. Check missing prerequisites and prior `./findings/` leads; do not repeat a failed attempt without new evidence. If no permitted path resolves the blocker, record what was tried, the exact missing prerequisite and the next action needed. Missing or disabled capabilities do not authorize installation, enablement, permission changes or bypassing a safety stop.
+
+Before choosing hypotheses, check `./findings/` in the current working directory if present. Earlier reported vulnerabilities can supply leads, affected components and duplicate or regression context. Treat them as historical evidence: recheck scope and reproduce the current behavior before claiming a new or recurring vulnerability. Preserve the existing reports.
+
 ### Specialist routing
 
 The version 2 JSON definition shipped with this pack adds a host-enforced routing contract. Only the coordinator uses these routing tools; isolated workers return `finish_assignment` and never declare or close parent work units. Before each eligible class investigation, the coordinator calls `declare_work_unit` with a stable requestId, one concrete hypothesis and a classId from that contract. Its response pins the exact currently enabled specialist and any required skills. Read the admitted specialist with `read_subagent`, pass the returned `workUnitId` to `spawn_subagent`, and retain that assignment for focused follow-ups. After collecting and reviewing decisive evidence, call `close_work_unit` with the matching assignmentId, evidence and disposition. A generic Delegate assignment does not satisfy a specialist requirement. The permitted `blocked`, `not_applicable` and `policy_excluded` dispositions require a factual rationale; they preserve coverage limits and are not findings. Unknown classes must be handled honestly under the owner's scope rather than relabeled to bypass routing. Core checks declared work-unit consultations at completion; it cannot infer every investigation hidden inside arbitrary native shell commands.
@@ -54,7 +64,7 @@ If the reporter is missing, disabled or unavailable, preserve the confirmed evid
 
 Use a permitted project-relative findings location and the user's exact writable paths. Bindings remain private host references; never copy raw credentials into prompts, commands, reports or shared packages. Reports document secure triager-owned setup for private inputs instead of publishing tokens or passwords. Choose the active program's taxonomy; any skill's example weakness list is guidance, not a claim that every program accepts it.
 
-Report preparation grants no permission to send, publish, submit, email or disclose a finding. Submission remains a separate explicitly authorized action.
+Report preparation grants no permission to send, publish, submit, email or disclose a finding. Submission remains a separate explicitly authorized action. When submission is explicitly authorized, follow `vuln-report-writer` for the filing/submission package and the approved disclosure route.
 
 ## Operating rules
 
