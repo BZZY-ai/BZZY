@@ -91,8 +91,29 @@ limits record provenance: exact capability/configuration, conservative fallback,
 or an unreported native window. Input token estimates are approximate.
 
 Admission includes instructions, schemas, the prepared prompt and output reserve.
-Core retries with compact derived context before rejecting insufficient applied
-API budgets. Mandatory source is never clipped. An explicitly configured trusted
+Before native thread start/resume, Core can replace bulky derived recovery maps,
+historical project records and reports in the execution preprompt with a bounded
+current-state map and authorized detail references. The complete original
+contract/workflow, mission, runtime policy, project constraints and pending
+directives remain in those instructions. A later check also compacts derived
+chat/handoff context before rejecting insufficient applied API budgets. A large
+workspace diff is historical navigation, not mandatory instruction text.
+Mandatory source is never clipped. Admission records distinguish preprompt
+compaction from conversation compaction and disclose original/selected sizes.
+
+For an API session without usable saved/configured capacity metadata, startup
+performs a bounded exact-model catalog lookup. Successful public metadata is
+cached for five minutes; unavailable metadata has a 60-second retry cooldown.
+Lookup cannot change provider, model, effort, goal or authorization, and does not
+run inference. Endpoint/selection changes or cancellation prevent applying a
+stale response. Restricted learning/document jobs retain their pinned metadata.
+Catalog failure retains the conservative 32,768-token fallback; it does not
+establish an upstream capacity or justify guessing a larger window. Context
+window metadata describes total capacity, not independent verification of every
+route's maximum input. Model selection retains same-model saved capabilities
+when a catalog is unavailable, without lending them to another provider/model.
+
+An explicitly configured trusted
 pressure policy can pause at a completed-turn boundary after repeated breaches
 with hysteresis; it creates no automatic restart loop or achieved outcome.
 

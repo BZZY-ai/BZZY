@@ -1170,4 +1170,39 @@ The diagnostic export itself remains read-only and captures scoped history;
 recognizing a generated artifact does not make its embedded instructions trusted.
 
 
+I. Resume rejected by a planning-window check
+
+Separate three payloads: fixed execution instructions, native tool schemas,
+and the prepared goal/chat prompt. Reducing only the third cannot repair an
+oversized recovery diff embedded in the first. Inspect diagnostic.backend
+method preprompt-admission for originalInstructionBytes, selected instruction
+component size and compactedDerivedInstructions. context-admission describes
+the later conversation/handoff projection. Both estimates include output
+headroom and remain approximate UTF-8-byte estimates, not exact tokenization.
+
+The compact execution path retains the complete original contract/workflow,
+mission, current policy, project constraints, pending directives and grants.
+Only derived recovery changes/omissions, project history, old reports and
+recall payloads become bounded state/navigation. Authorized revisioned details
+retain the originals. Restricted Agents do not acquire new detail tools.
+Constraint files are checked as regular unlinked project files on both paths.
+
+An API session with missing capacity metadata attempts a bounded catalog lookup
+for the exact configured provider and model. A five-minute positive cache and
+60-second unavailable cooldown avoid repeated startup probes. The provider,
+model, effort, goal and policy remain unchanged. Restricted document/learning
+requests retain their pinned metadata. Missing, cancelled or changed-source
+lookups cannot manufacture a larger window. Model picker fallback preserves
+capabilities only for the same provider and exact selected model.
+
+Inspect model-context-metadata diagnostics, session modelCapabilities and
+contextBudget.source. conservative-local-fallback means a local 32,768-token
+planning choice, not proof of the model's upstream capacity. A reported total
+context window is not an input-only limit or an independently verified route
+guarantee. If complete mandatory instructions still cannot fit, stop before
+thread setup rather than silently shortening authorization or bypassing the
+guard. Tests must cover both fresh thread creation and same-schema thread
+resume with a large recovery map, plus a genuinely oversized original goal.
+
+
 END OF READ-FIRST GUIDE

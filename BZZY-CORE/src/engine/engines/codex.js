@@ -25,6 +25,7 @@ import { toolSchemaManifest } from '../native-context.js';
 import { digest, getRecord, listRecords } from '../database.js';
 import { delegationUsage } from '../delegation-usage.js';
 import { recordWorkObservation } from '../episode.js';
+import { hydrateModelContext } from '../model-context.js';
 
 export { codexHome } from '../auth.js';
 
@@ -211,7 +212,17 @@ export class CodexEngine {
       const installed = version('codex');
       assertCodexVersion(installed);
       startupStage = 'configuration';
+      if (this.provider.auth === 'api-key' && !this.options.learningReview && !this.options.documentOnly && !this.options.documentTaskInstructions) {
+        this.metadataAbort = new AbortController();
+        const metadata = await hydrateModelContext(this.session, { signal: this.metadataAbort.signal });
+        if (this.interrupted || this.metadataAbort.signal.aborted) return;
+        if (metadata.provenance?.source === 'source-changed') throw Object.assign(new Error('Model selection or provider configuration changed while preparing context metadata. Resume with the current saved selection.'), { code: 'MODEL_CONTEXT_CHANGED' });
+        recordBackendDiagnostics(this.session, { method: 'model-context-metadata', outcome: metadata.provenance?.source || 'unavailable',
+          model: this.session.model, contextBudget: { metadata: metadata.provenance, changed: metadata.changed } });
+      }
       const launchConfig = codexLaunch(this.provider, this.session, this.options);
+      this.nativeToolSchemaBytes = Buffer.byteLength(JSON.stringify(nativeTools)); this.nativeToolsKnown = true;
+      const instructions = this.prepareInstructions(this.inputSource || '');
       if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { directory: launchConfig.env.CODEX_HOME }).available) throw new Error(`Codex / ChatGPT subscription authentication is unavailable in ${launchConfig.env.CODEX_HOME}. Run bzzy auth codex with the same BZZY_CODEX_HOME to sign in.`);
       startupStage = 'process_spawn';
       this.rpc = new Rpc(launch('codex', launchConfig.args, { env: launchConfig.env, cwd: this.session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
@@ -236,7 +247,7 @@ export class CodexEngine {
         : this.options.agentScope ? { approvalPolicy: 'never', permissions: agentPermissionProfile }
         : { approvalPolicy: this.options.yolo || this.options.scopedAutonomy ? 'never' : 'on-request', sandbox: codexSandboxMode(this.options) };
       const params = { cwd: this.session.cwd, ...policy,
-        developerInstructions: agentInstructions(this.session, this.options) };
+        developerInstructions: instructions };
       this.nativeInstructions = params.developerInstructions;
       if (this.options.learningReview) { params.dynamicTools = []; params.ephemeral = true; }
       const effort = reasoningEffort(this.session, this.options);
@@ -300,6 +311,7 @@ export class CodexEngine {
   async run(prompt, { goal = false, resumeGoal = false } = {}) {
     if (this.options.learningReview && (goal || resumeGoal || this.options.toolHost)) throw new Error('Learning reviews cannot execute goals or expose tools.');
     this.options.goalMode = goal;
+    this.inputSource = goal ? this.session.goal.objective : prompt;
     this.progress.setPrompt(goal ? this.session.goal.objective : prompt);
     try {
       await this.open();
@@ -557,6 +569,25 @@ export class CodexEngine {
     return prompt;
   }
 
+  prepareInstructions(source) {
+    const estimate = instructions => nativeInputEstimate({ contextBudget: this.session.nativeContextBudget,
+      instructions, toolSchemaBytes: this.nativeToolSchemaBytes, toolsKnown: this.nativeToolsKnown, prompt: source });
+    let instructions = agentInstructions(this.session, this.options), inputEstimate = estimate(instructions);
+    const originalInstructionBytes = Buffer.byteLength(instructions); let compactedDerivedInstructions = false;
+    if (inputEstimate.exceedsBudget) {
+      const compact = agentInstructions(this.session, { ...this.options, compactDerived: true });
+      if (Buffer.byteLength(compact) < originalInstructionBytes) {
+        instructions = compact; compactedDerivedInstructions = true; inputEstimate = estimate(instructions);
+      }
+    }
+    recordBackendDiagnostics(this.session, { method: 'preprompt-admission', outcome: inputEstimate.exceedsBudget ? 'rejected' : 'admitted',
+      inputEstimate: { ...inputEstimate, originalInstructionBytes, compactedDerivedInstructions } });
+    assertNativeInputFits(inputEstimate);
+    this.nativeInstructions = instructions;
+    this.compactedDerivedInstructions = compactedDerivedInstructions;
+    return instructions;
+  }
+
   pauseForContextPressure() {
     if (!this.session.nativeContext?.pressure?.pausePending || !this.options.contextPressurePolicy || this.activeTurns.size || this.hostRequests
       || this.interrupted || this.closing || !this.operation?.goal || !this.goalArmed || this.session.goal?.status !== 'active') return;
@@ -616,6 +647,7 @@ export class CodexEngine {
 
   async interrupt(reason = 'interrupted') {
     this.interrupted = true;
+    this.metadataAbort?.abort();
     clearTimeout(this.refreshTimer); this.refreshTimer = null;
     this.stopReason = reason;
     if (!this.rpc || !this.threadId) return;
@@ -639,6 +671,7 @@ export class CodexEngine {
     // Stop's kill grace and finally cleanup may both close the same native
     // transport. One close owns its TERM/KILL timers and process identity.
     clearTimeout(this.refreshTimer); this.refreshTimer = null;
+    this.metadataAbort?.abort();
     this.closing ||= this.rpc?.close() || Promise.resolve();
     await this.closing; this.session.backendProcess = null;
   }

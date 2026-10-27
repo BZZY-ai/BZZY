@@ -11,7 +11,7 @@ import { CodexEngine, codexDynamicTools, synchronizeCodexTools } from '../src/en
 import { ClaudeEngine } from '../src/engine/engines/claude.js';
 import { createSession, loadSession, saveSession } from '../src/engine/store.js';
 import { appendEvent, events, getRecord, putRecord, removeRecord } from '../src/engine/database.js';
-import { getProvider } from '../src/engine/providers.js';
+import { getProvider, saveConfig, BUILTINS } from '../src/engine/providers.js';
 import { newGoal } from '../src/engine/goals.js';
 import { recordDiagnosticTool } from '../src/engine/session-diagnostics.js';
 import { saveWorkflow, selectWorkflow, preflightGoalWorkflow } from '../src/engine/workflows.js';
@@ -254,6 +254,7 @@ test('recovery marks an unacknowledged dispatch uncertain without replaying it',
 
 test('API context admission rejects an oversized original objective before dispatch without clipping it', async () => {
   process.env.EXPLABS_API_KEY = 'offline-fixture-key';
+  saveConfig({ providers: { experiential: { ...BUILTINS.experiential, baseUrl: 'http://127.0.0.1:9/v1' } } });
   session.provider = 'experiential'; session.backend = 'codex'; session.model = 'unknown-offline-model';
   const objective = 'Preserve this complete synthetic objective. '.repeat(5000);
   session.goal.objective = objective; saveSession(session);
@@ -261,7 +262,8 @@ test('API context admission rejects an oversized original objective before dispa
   await assert.rejects(engine.run('Fixture', { goal: true }), { code: 'CONTEXT_BUDGET_EXCEEDED' });
   assert.equal(session.goal.objective, objective); assert.equal(loadSession(session.id).goal.objective, objective);
   assert.equal(calls().some(call => call.method === 'thread/goal/set' && call.params.status === 'active'), false);
-  const admission = events(session.id).find(row => row.type === 'diagnostic.backend' && row.data.method === 'context-admission');
+  assert.equal(calls().some(call => ['thread/start', 'thread/resume'].includes(call.method)), false);
+  const admission = events(session.id).find(row => row.type === 'diagnostic.backend' && row.data.method === 'preprompt-admission');
   assert.equal(admission.data.outcome, 'rejected');
   assert.equal(admission.data.inputEstimate.components.mandatoryPrompt, Buffer.byteLength(objective));
 });
@@ -277,6 +279,38 @@ test('input admission compacts derived handoff context once while preserving the
   assert.ok(prompt.includes(source)); assert.equal(prompt.includes(original), false); assert.ok(prompt.includes('CURRENT STATE CAPSULE'));
   const admission = events(session.id).find(row => row.type === 'diagnostic.backend' && row.data.method === 'context-admission');
   assert.equal(admission.data.inputEstimate.compactedDerived, true); assert.equal(admission.data.outcome, 'admitted');
+});
+
+for (const retainedThread of [false, true]) test(`a 32K API goal compacts recovery before ${retainedThread ? 'retained thread resume' : 'fresh thread setup'} without changing its contract`, async () => {
+  process.env.EXPLABS_API_KEY = 'offline-fixture-key';
+  saveConfig({ providers: { experiential: { ...BUILTINS.experiential, baseUrl: 'http://127.0.0.1:9/v1' } } });
+  session.provider = 'experiential'; session.model = 'unknown-offline-model'; session.selectedEffort = 'default';
+  session.contract = normalizeContract({ context: 'EXACT ORIGINAL OWNER INSTRUCTIONS Ω🙂\nUse only the supplied offline baseline.',
+    scope: { allowedTargets: ['offline.invalid'], excludedActions: ['credential collection'] }, constraints: ['Preserve every original constraint.'] }, session.goal.objective);
+  const workflow = saveWorkflow(JSON.parse(fs.readFileSync(new URL('../assets/bug-bounty/bug-bounty-methodology.json', import.meta.url), 'utf8')), { cwd: session.cwd });
+  selectWorkflow(session, workflow.name, { expectedRevision: 0 }); preflightGoalWorkflow(session);
+  const original = JSON.stringify(session.contract), goalId = session.goal.id;
+  putRecord('recovery', session.id, { sessionId: session.id, state: 'reconciled', createdAt: new Date().toISOString(),
+    workspaceChanges: Array.from({ length: 1200 }, (_, index) => ({ path: 'DERIVED_RECOVERY_FILE_' + index,
+      before: { sha256: 'a'.repeat(64), size: 100 }, after: { sha256: 'b'.repeat(64), size: 200 } })) });
+  saveSession(session); createEngine(); engine.provider = getProvider('experiential');
+  if (retainedThread) {
+    session.engineThreadId = 'native-thread'; session.coreSkillsProtocol = 7;
+    prepareNativeReadiness(session, { backend: 'codex', tools: codexDynamicTools(session, { ...engine.options, goalMode: true }), instructions: 'Older unbounded recovery preprompt.' });
+    acknowledgeNativeReadiness(session, { threadId: session.engineThreadId }); saveSession(session);
+  }
+  const running = engine.run('Fixture', { goal: true, resumeGoal: true }); running.catch(() => {});
+  await until(() => engine.activeTurns.size > 0);
+  const start = calls().find(call => call.method === (retainedThread ? 'thread/resume' : 'thread/start')), received = start.params.developerInstructions;
+  const context = JSON.parse(received.slice(received.lastIndexOf('DURABLE TASK CONTEXT:\n') + 'DURABLE TASK CONTEXT:\n'.length));
+  assert.equal(JSON.stringify(context.contract), original); assert.equal(context.derivedHistory.compacted, true);
+  assert.doesNotMatch(received, /DERIVED_RECOVERY_FILE_/); assert.ok(Buffer.byteLength(received) < 60000);
+  const admission = events(session.id).find(row => row.type === 'diagnostic.backend' && row.data.method === 'preprompt-admission');
+  assert.equal(admission.data.outcome, 'admitted'); assert.equal(admission.data.inputEstimate.compactedDerivedInstructions, true);
+  assert.ok(admission.data.inputEstimate.originalInstructionBytes > 200000);
+  for (const name of ['declare_work_unit', 'close_work_unit']) assert.ok(session.nativeBackendReadiness.tools.names.includes(name));
+  assert.equal(session.goal.id, goalId); assert.equal(JSON.stringify(session.contract), original);
+  await engine.interrupt('user_pause'); await running;
 });
 
 test('an explicit pressure pause waits for a completed turn, preserves goal identity and starts no replacement work', async () => {

@@ -176,7 +176,8 @@ export function nativeInputEstimate({ contextBudget, instructions = '', toolSche
 
 export function assertNativeInputFits(estimate) {
   if (!estimate.exceedsBudget) return;
-  throw Object.assign(new Error(`BZZY's approximate native input estimate (${estimate.estimatedInputTokens} input + ${estimate.outputHeadroomTokens} output headroom tokens) exceeds the configured ${estimate.contextBudget.tokens}-token planning window. Configure accurate model context metadata or reduce the objective/workflow/tool surface; mandatory source text was not truncated.`),
+  const fallback = estimate.contextBudget.source === 'conservative-local-fallback';
+  throw Object.assign(new Error(`BZZY's approximate native input estimate (${estimate.estimatedInputTokens} input + ${estimate.outputHeadroomTokens} output headroom tokens) exceeds the ${fallback ? 'fallback' : 'configured'} ${estimate.contextBudget.tokens}-token planning window.${fallback ? ' The provider did not report a usable capacity for this exact model; this is not a verified model limit.' : ''} Refresh this model's catalog metadata or choose a model that fits the complete objective/workflow/tool surface; mandatory source text was not truncated.`),
     { code: 'CONTEXT_BUDGET_EXCEEDED', contextEstimate: estimate });
 }
 

@@ -9,7 +9,8 @@ export async function chooseUnifiedModel(current, ui, { title = 'Choose model', 
     const choices = Promise.allSettled(Object.values(providers()).map(async provider => {
       const catalog = await availableModels({ ...current, provider: provider.id, backend: provider.backend, engineHome: provider.id === current.provider ? current.engineHome : null }, { signal: abort.signal });
       const models = [...catalog.models];
-      if (current.provider === provider.id && current.model && !models.some(model => model.id === current.model)) models.unshift({ id: current.model, name: current.model });
+      if (current.provider === provider.id && current.model && !models.some(model => model.id === current.model)) models.unshift({ id: current.model, name: current.model,
+        ...(current.modelCapabilities ? { capabilities: structuredClone(current.modelCapabilities) } : {}) });
       const entries = [{ id: null, name: 'Provider default', capabilities: null }, ...models], effortPolicy = providerEffortPolicy(provider);
       return entries.map(model => {
         const value = JSON.stringify([provider.id, model.id]);

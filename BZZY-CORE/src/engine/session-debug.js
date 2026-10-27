@@ -11,7 +11,7 @@ import { privateWorkspacePath } from './private-paths.js';
 
 const sessionFields = ['id', 'alias', 'provider', 'backend', 'model', 'resolvedModel', 'selectedEffort', 'mode', 'role', 'purpose',
   'parentSessionId', 'assignmentId', 'createdAt', 'updatedAt', 'turns', 'executionState', 'goal', 'contract', 'policy', 'strictPolicy',
-  'usage', 'elapsedSeconds', 'reviewSource', 'importedUntrusted', 'importProvenance', 'allowedSkillIds',
+  'usage', 'elapsedSeconds', 'reviewSource', 'importedUntrusted', 'importProvenance', 'allowedSkillIds', 'modelCapabilities',
   'nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency'];
 const recordFields = ['id', 'sessionId', 'parentSessionId', 'goalId', 'workerSessionId', 'assignmentId', 'number', 'currentRound',
   'state', 'status', 'reason', 'createdAt', 'updatedAt', 'startedAt', 'finishedAt', 'objective', 'context', 'constraints', 'scope',

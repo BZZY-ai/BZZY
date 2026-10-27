@@ -275,3 +275,18 @@ test('Experiential model selectors retain manual effort even when the catalog sa
   }
   assert.equal(current.modelCapabilities.supportsEffort, false);
 });
+
+test('unified model selection preserves exact current capabilities when its catalog is unavailable', async () => {
+  // No provider keys are configured; native catalog helpers use local fixtures.
+  const capabilities = { contextWindow: 96000, inputModalities: ['text'], supportedEfforts: ['low', 'high'] };
+  const current = { ...session('experiential'), model: 'saved-manual-model', selectedEffort: 'high', modelCapabilities: capabilities };
+  const ui = { async chooseOne(_title, choices) {
+    const picker = await choices, value = JSON.stringify(['experiential', current.model]);
+    assert.ok(picker.choices.some(choice => choice.value === value)); return { value, effort: 'high' };
+  } };
+  const selected = await chooseUnifiedModel(current, ui);
+  assert.deepEqual(selected.capabilities, capabilities); assert.notEqual(selected.capabilities, capabilities);
+  selected.capabilities.contextWindow = 48000; assert.equal(current.modelCapabilities.contextWindow, 96000);
+  ui.chooseOne = async (_title, choices) => { await choices; return JSON.stringify(['experiential', null]); };
+  const other = await chooseUnifiedModel(current, ui); assert.equal(other.capabilities, null, 'A different selected slug must not inherit the current context.');
+});

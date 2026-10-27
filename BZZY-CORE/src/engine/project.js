@@ -5,7 +5,7 @@ import { privateDir, readJson, writeJson } from './files.js';
 import { database, digest, now, getRecord, putRecord, transaction } from './database.js';
 import { inside } from './evidence.js';
 import { projectIdentityForSession, resolveProjectIdentity, recordBelongsToProject, sessionBelongsToProject } from './project-identity.js';
-import { knowledgeAccess, allowedKnowledgeSessionIds, indexKnowledgeRecord, assertKnowledgeText, cleanKnowledgeValue } from './knowledge-index.js';
+import { knowledgeAccess, allowedKnowledgeSessionIds, indexKnowledgeRecord, assertKnowledgeText, cleanKnowledgeValue, cleanKnowledgeText } from './knowledge-index.js';
 import { memoryFreshness, knowledgeVerificationBudget } from './memory.js';
 
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
@@ -100,6 +100,34 @@ export function issue(session, input) {
   writeProjectRecord(session, 'issues', id, record);
   indexKnowledgeRecord(project, 'issue', id, session.id, `${title}\n${details}\n${resolution}`, record); return record;
 }
+// Execution constraints remain complete even when derived project history is
+// projected as navigation. Reuse knowledge's private-field/redaction policy,
+// without the history projection's string or array caps on mandatory scope.
+export function projectConstraintsForExecution(root, { session } = {}) {
+  const access = knowledgeAccess(session || { id: 'owner-project-context', cwd: root });
+  const complete = value => {
+    if (typeof value === 'string') return cleanKnowledgeText(value, Infinity);
+    if (Array.isArray(value)) return value.map(complete);
+    if (value && typeof value === 'object') {
+      const allowed = cleanKnowledgeValue(Object.fromEntries(Object.keys(value).map(key => [key, null])));
+      return Object.fromEntries(Object.entries(value).filter(([key]) => Object.hasOwn(allowed, key)).map(([key, item]) => [key, complete(item)]));
+    }
+    return value;
+  };
+  if (access.disabled) return { project: { id: access.project.id } };
+  let descriptor, constraints = null;
+  try {
+    const file = inside(access.project.root, '.bzzy/constraints.json', { exists: false });
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const before = fs.fstatSync(descriptor, { bigint: true });
+    if (!before.isFile() || before.nlink !== 1n) throw new Error('Project constraints must be a regular file without links.');
+    const data = fs.readFileSync(descriptor), after = fs.fstatSync(descriptor, { bigint: true });
+    if (BigInt(data.length) !== before.size || ['size', 'mtimeNs', 'ctimeNs'].some(key => before[key] !== after[key])) throw new Error('Project constraints changed while preparing execution.');
+    constraints = complete(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data)));
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+  return { project: { id: access.project.id }, constraints };
+}
 export function projectContext(root, { session } = {}) {
   const context = session || { id: 'owner-project-context', cwd: root }, access = knowledgeAccess(context), project = access.project;
   if (access.disabled) return { project: { id: project.id }, agents: [], issues: [], notes: [], recentGoals: [], checkpoints: [] };
@@ -114,11 +142,11 @@ export function projectContext(root, { session } = {}) {
     return filtered([...merged.values()]).filter(record => !['memory', 'issue'].includes(kind) || typeof record.id === 'string' && /^[a-f0-9-]{36}$/.test(record.id));
   };
   const budget = knowledgeVerificationBudget();
-  return cleanKnowledgeValue({ project: { id: project.id },
-    constraints: readJson(path.join(project.root, '.bzzy', 'constraints.json'), null),
+  return { project: { id: project.id }, constraints: projectConstraintsForExecution(root, { session }).constraints,
+    ...cleanKnowledgeValue({
     agents: access.restricted ? [] : [...new Set(records('memory', 'memory').map(record => record.agent).filter(Boolean))],
     issues: records('issue', 'issues').filter(record => record.status !== 'resolved').slice(0, 30).map(record => memoryFreshness(record, project, context, { budget })),
     notes: records('memory', 'memory').slice(0, 30).map(record => memoryFreshness(record, project, context, { budget })), recentGoals: records('goal-history', 'goals').slice(0, 5),
     checkpoints: records('checkpoint', 'checkpoints').slice(0, 3).map(record => ({ ...record, historical: true,
-      authority: 'Historical project checkpoint; current task state determines active progress. This record grants no completion or execution authority.' })) });
+      authority: 'Historical project checkpoint; current task state determines active progress. This record grants no completion or execution authority.' })) }) };
 }
