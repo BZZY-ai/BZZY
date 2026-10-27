@@ -84,5 +84,8 @@ Read existing project constraints and relevant ledgers. Use peer_status to see p
       interpretation: 'Results retain agent attribution. Agreement or an agent finding is not independent proof of a vulnerability.' };
     putRecord('parallel-result', session.id, result);
     return await coordinator.finish(accepted ? 'complete' : 'awaiting_review', result, usage);
-  } catch (error) { ui.event('error', { message: error.message }); return coordinator.finish('blocked', { peers, stopReason: error.message }, usage); }
+  } catch (error) {
+    if (error.code === 'SNAPSHOT_LIMIT') coordinator.stopping ||= 'snapshot_limit';
+    ui.event('error', { message: error.message }); return coordinator.finish('blocked', { peers, stopReason: error.message }, usage);
+  }
 }

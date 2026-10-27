@@ -678,14 +678,33 @@ Optional settings in `~/.bzzy/config.json` (or `$BZZY_HOME/config.json`):
   "inputTimeoutSeconds": 600,
   "bestiesMaxExchanges": 6,
   "snapshotLimits": {
-    "maxFileMiB": 20,
-    "maxTotalMiB": 100,
-    "maxFiles": 10000
+    "maxFileMiB": 1024,
+    "maxTotalMiB": 8192,
+    "maxFiles": 100000
   }
 }
 ```
 
-Merge these keys into your existing configuration. Unanswered approvals expire denied. Besties pauses after the feedback exchange limit; `/goal resume` starts another bounded exchange. Snapshot limits can be raised without omitting files; evidence artifacts retain their separate 20 MiB limit. Snapshot and worker copies use filesystem copy-on-write when available. History and evidence remain saved without automatic pruning.
+Merge these keys into your existing configuration. Unanswered approvals expire denied. Besties pauses after the feedback exchange limit; `/goal resume` starts another bounded exchange.
+
+The snapshot values above are defaults: 1 GiB per file, 8 GiB total and 100,000
+files. Existing explicit overrides (including an older 64 MiB file limit) stay
+in force; raise or remove those keys to use the new defaults. Supported maxima
+are 16,384 MiB per file, 65,536 MiB total and 1,000,000 files. Limit errors name
+the exact setting, config path and minimum required at the offending file.
+Core checks sizes/counts before hashing task payloads and never silently omits
+oversized task inputs. A limit reached during goal startup pauses the saved goal
+and reports the error before inference. Fix the workspace or raise the limit,
+then use `/goal resume` to continue the same goal. Worker inspections use current
+host limits, so older snapshots do not lock resumed work to an old cap.
+Private credential paths, dependencies, validated BZZY
+debug exports and runtime caches (`.cache`, `.pytest_cache`, `.mypy_cache`,
+`.ruff_cache`) stay outside snapshots. Cache and debug-export omissions are
+recorded in snapshot/copy events. This applies in Git and ordinary directories;
+Git workspaces also honor `.gitignore`. Keep required task inputs outside cache
+directories. Evidence artifacts retain their separate 20 MiB limit. Snapshot and
+worker copies use filesystem copy-on-write when available. History and evidence
+remain saved without automatic pruning.
 
 Peer edits stay in their private workspaces until integrated. A group with unapplied changes remains awaiting review and reports each workspace path and changed files. `/providers` changes the conversation; `/default` saves the launch default. Switching providers carries recent bounded context; the full history remains saved.
 

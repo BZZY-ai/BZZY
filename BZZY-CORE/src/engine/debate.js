@@ -204,6 +204,7 @@ PRIOR MAIN CASE:\n${JSON.stringify(currentCase)}\nCHALLENGER REPORTS:\n${JSON.st
     result.outcome = unresolved ? 'unresolved' : 'assessed';
     return await finishValidation(session, options, ui, coordinator, result, usage, missionContext, synthesizeConsensus, consensus);
   } catch (error) {
+    if (error.code === 'SNAPSHOT_LIMIT') coordinator.stopping ||= 'snapshot_limit';
     ui.event('error', { message: error.message });
     const partial = { version: 1, debateId: debateIdentity(session), transcript, decision, objectionLedger, outcome: 'unresolved', goalSatisfaction: 'inconclusive',
       assessment: { passed: false, challengeRounds: transcript.length, semanticVerification: 'not-automated' },

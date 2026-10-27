@@ -115,6 +115,7 @@ test('regular source, ordinary large ZIPs and misleading names retain source lim
   fs.appendFileSync(path.join(project, 'task_full_debug_27102026.zip'), ' changed');
   assert.equal(inspectWorkspace(snapshot, project)[0].path, 'task_full_debug_27102026.zip');
   const large = path.join(project, 'ordinary.zip'), fd = fs.openSync(large, 'w', 0o600); fs.ftruncateSync(fd, 21 * MiB); fs.closeSync(fd);
+  fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 20 } }));
   assert.throws(() => workspaceManifest(project), /file exceeds 20 MiB/);
 });
 

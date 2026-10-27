@@ -17,6 +17,8 @@ import { ensureRuntime, runtimeInfo, runtimeRequest } from '../src/runtime.js';
 import { identityAlive } from '../src/recovery.js';
 import { delay } from '../src/delegation.js';
 import { runBesties } from '../src/besties.js';
+import { runParallel } from '../src/parallel.js';
+import { runDebate } from '../src/debate.js';
 import { assessCompletion, assessRequirement, assessGroupCompletion } from '../src/verification.js';
 
 let directory, environment;
@@ -51,6 +53,23 @@ function peers(session) {
   putRecord('besties', session.id, { goalId: session.goal.id, peers: result.map(child => ({ sessionId: child.id, selection: { provider: child.provider }, namespace: child.agentNamespace })), cursors: {}, createdAt: now() });
   return result;
 }
+
+for (const [mode, run] of [['besties', runBesties], ['parallel', runParallel], ['debate', runDebate]]) {
+  test(`${mode} snapshot limit pauses the same goal without launching model work`, async () => {
+    const session = parent(), goalId = session.goal.id;
+    session.mode = mode; session.parallelAgents = session.besties; session.debateAgents = session.besties; saveSession(session);
+    fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 1 } }));
+    const fd = fs.openSync(path.join(session.cwd, 'tool-output.bin'), 'w'); fs.ftruncateSync(fd, 2 * 1024 * 1024); fs.closeSync(fd);
+    const messages = [];
+    assert.equal(await run(session, {}, { event(type, data) { messages.push({ type, ...data }); } }), 130);
+    const paused = loadSession(session.id);
+    assert.equal(paused.goal.id, goalId); assert.equal(paused.goal.status, 'paused');
+    assert.equal(paused.goal.reason, 'snapshot_limit'); assert.equal(paused.executionState, 'paused');
+    assert.ok(messages.some(event => event.type === 'error' && /snapshotLimits.maxFileMiB/.test(event.message)));
+    assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('assignment').length, 0);
+  });
+}
+
 test('peer messages are durable, idempotent and grant only explicitly shared evidence', async () => {
   const session = parent(), [a, b] = peers(session), evidence = captureEvidence(a, 'proof.txt');
   const input = { requestId: 'proof-once', text: 'I inspected the local control; please check this evidence.', evidence: [evidence.id] };

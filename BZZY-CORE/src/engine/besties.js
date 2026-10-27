@@ -110,7 +110,7 @@ export async function runBesties(session, options, ui) {
     const result = { goalId: session.goal.id, peers: group?.peers || [], collaboration: group ? peerCollaborationState(session) : null, stopReason: coordinator.stopping, usage };
     putRecord('besties-result', session.id, result); return coordinator.finish('awaiting_review', result, usage);
   } catch (error) {
-    coordinator.stopping ||= 'coordination_failure'; ui.event('error', { message: error.message });
+    coordinator.stopping ||= error.code === 'SNAPSHOT_LIMIT' ? 'snapshot_limit' : 'coordination_failure'; ui.event('error', { message: error.message });
     return coordinator.finish('awaiting_review', { peers: group?.peers || [], stopReason: error.message }, usage);
   }
 }

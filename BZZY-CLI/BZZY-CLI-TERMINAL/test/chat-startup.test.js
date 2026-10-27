@@ -59,11 +59,20 @@ for (const id of ['codex', 'claude']) {
   });
 }
 
-test('goals still take a complete snapshot and identify oversized files before starting inference', async () => {
+test('snapshot limit pauses the saved goal before inference and raising it permits resume', async () => {
   const session = createSession(BUILTINS.codex, work); session.goal = newGoal('Verify the source'); prepareTask(session, {}, session.goal.objective);
-  await assert.rejects(runSession(BUILTINS.codex, session, { pet: false }, ui(), session.goal.objective, { goal: true }), /Cannot snapshot "large.bin".*20 MiB/);
+  fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 20 } }));
+  const goalId = session.goal.id, output = ui();
+  assert.equal(await runSession(BUILTINS.codex, session, { pet: false }, output, session.goal.objective, { goal: true }), 2);
+  assert.ok(output.events.some(event => event.type === 'error' && /Cannot snapshot "large.bin".*20 MiB/.test(event.message)));
   assert.equal(fs.existsSync(process.env.BZZY_TEST_LOG), false);
-  fs.rmSync(path.join(work, 'large.bin')); session.goal = newGoal('Verify the source'); saveSession(session);
-  assert.equal(await runSession(BUILTINS.codex, session, { pet: false }, ui(), session.goal.objective, { goal: true }), 0);
+  const paused = loadSession(session.id);
+  assert.equal(paused.executionState, 'paused'); assert.equal(paused.goal.status, 'paused');
+  assert.equal(paused.goal.id, goalId); assert.equal(paused.goal.reason, 'snapshot_limit');
+  assert.equal(paused.failure.category, 'workspace_limit');
+  fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 64 } }));
+  assert.equal(await runSession(BUILTINS.codex, paused, { pet: false }, ui(), paused.goal.objective, { goal: true, resumeGoal: true }), 0);
+  assert.equal(loadSession(session.id).goal.id, goalId);
   const [snapshot] = listRecords('snapshot'); assert.equal(snapshot.sessionId, session.id); assert.ok(snapshot.manifest['source.txt']);
+  assert.equal(snapshot.manifest['large.bin'].size, 21 * 1024 * 1024);
 });

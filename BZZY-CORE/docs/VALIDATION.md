@@ -1,3 +1,25 @@
+# Larger, resumable workspace snapshots (2026-10-27)
+
+Node 24/macOS: **985 Core tests passed, 2 skipped** and **765 CLI tests passed,
+21 skipped**. Both syntax checks and repository whitespace checks passed.
+Core uses the canonical `/private/tmp` test root to avoid the existing macOS
+`/var` versus `/private/var` path-alias assertion in the unrelated canvas fixture.
+
+Regression coverage preserves a 65 MiB nested task input and more than 100 MiB
+of total input through snapshot, worker copy and hash-based change inspection;
+accepts 10,001 task files; and excludes/audits Playwright and Python caches in
+both Git and ordinary directories, including legacy snapshots. Explicit smaller
+limits remain enforced before payload hashing, with exact configuration guidance.
+Raising host limits unblocks existing worker inspections without replacing their
+historical snapshots. Credential paths and Git ignore rules remain enforced.
+
+A real fixture-backed goal fails preflight without inference, saves its paused
+state and original goal ID, then resumes that same goal after a limit increase,
+retaining the oversized input. Parallel, Besties and Validate startup checks also
+pause the original goal and launch no model work on snapshot-limit failure.
+No running installation, private configuration or existing goal was updated or
+resumed. These local fixtures do not establish native Linux or live-model results.
+
 # Direct-to-latest terminal restore and requested iPhone install (2026-10-27)
 
 The full CLI suite passed **762 tests, 21 skipped** (783 total), with no failures.
