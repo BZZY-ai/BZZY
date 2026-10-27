@@ -76,6 +76,10 @@ Use only owned or explicitly assigned test accounts, objects, listeners, domains
 
 ## Phase 1: establish scope and model the product
 
+Before target traffic, read `./hosts.txt` and `./in_scope_urls.txt` from the current project's working directory. `hosts.txt` lists the in-scope hosts: explicit domains and wildcard domain patterns. Use these entries to bound host discovery and testing, subject to the active program's exclusions and restrictions. Match domain labels correctly; a wildcard does not include unrelated suffix matches, and the apex domain is not implicitly included unless the scope explicitly covers it.
+
+`in_scope_urls.txt` contains in-scope URLs collected from the Wayback Machine and other historical or discovery sources. Use it as the initial URL/endpoint queue and as leads for parameters, older routes and equivalent operations. Recheck each URL's host against `hosts.txt` and current program rules before requesting it; historical inclusion does not prove a route is still live, authorized or vulnerable. Check redirect destinations before following them. These URLs seed coverage rather than exhaust it; additional endpoints may be explored within the same approved scope. If either file is missing, unreadable or conflicts with current policy, record the specific scope or coverage gap and resolve it before the affected tests; do not invent or widen scope.
+
 Read the exact goal and distinguish a requested security outcome from the method used to investigate it. Record product value, actors/roles, objects, allowed/forbidden operations and security-relevant state transitions. Prioritize money, identity, private content, execution authority, tenant boundaries and durable integrity.
 
 State testable invariants: an actor may access only authorized objects; revoked credentials stay revoked across routes; one-time actions happen at most once; server identity determines role, price and ownership; equivalent routes enforce the same visibility and trust rules. Mark product facts observed, inferred or unknown. Record the attacker's real starting capability separately from the privileged test harness.
