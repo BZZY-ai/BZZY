@@ -10,6 +10,37 @@ import { memoryFreshness, knowledgeVerificationBudget } from './memory.js';
 
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
 const canProjectWrite = session => !['executor', 'reviewer', 'learning-review', 'skill-writer', 'knowledge-review'].includes(session.role) && session.policy?.mode !== 'read-only';
+function initializeProjectIgnore(dir) {
+  const ignore = path.join(dir, '.gitignore'), legacy = 'runtime/\n*.sqlite*\n';
+  try { fs.writeFileSync(ignore, '*\n', { mode: 0o600, flag: 'wx' }); return; }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  let descriptor;
+  try {
+    descriptor = fs.openSync(ignore, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const before = fs.fstatSync(descriptor);
+    if (!before.isFile() || before.nlink !== 1) throw new Error('Project ignore file must be a regular file without links.');
+    if (before.size !== Buffer.byteLength(legacy)) return;
+    const contents = Buffer.alloc(before.size + 1), bytes = fs.readSync(descriptor, contents, 0, contents.length, 0);
+    if (bytes !== before.size || contents.subarray(0, bytes).toString('utf8') !== legacy) return;
+    const temp = path.join(dir, `.gitignore.${randomUUID()}.tmp`);
+    try {
+      fs.writeFileSync(temp, '*\n', { mode: 0o600, flag: 'wx' });
+      const after = fs.lstatSync(ignore);
+      if (!after.isFile() || after.nlink !== 1 || ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].some(key => before[key] !== after[key])) throw new Error('Project ignore file changed during initialization.');
+      // Rename replaces the directory entry and never writes through a link.
+      fs.renameSync(temp, ignore);
+    } finally { fs.rmSync(temp, { force: true }); }
+  } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+}
+// Trusted owner terminal setup, before model execution policy is installed.
+// A fresh launch establishes its own workspace even beneath another project.
+// Workers, Agents and ordinary read-only lookups use initializeProject instead.
+export function initializeTerminalProject(session) {
+  const project = resolveProjectIdentity(session.cwd, { create: true, boundary: session.cwd });
+  session.cwd = project.root; session.projectRoot = project.root; session.projectId = project.id;
+  initializeProjectIgnore(path.join(project.root, '.bzzy'));
+  return project;
+}
 export function projectDirectory(session) {
   const project = projectIdentityForSession(session), base = path.join(project.root, '.bzzy');
   if (session.agentNamespace && !/^[a-zA-Z0-9_-]{1,80}$/.test(session.agentNamespace)) throw new Error('Invalid agent namespace.');
@@ -22,8 +53,7 @@ export function initializeProject(session) {
   const dir = projectDirectory(session); privateDir(dir);
   const constraints = path.join(project.root, '.bzzy', 'constraints.json');
   if (!fs.existsSync(constraints)) writeJson(constraints, { version: 1, constraints: session.contract?.constraints || [], scope: { allowedTargets: [], excludedTargets: [], allowedActions: [], excludedActions: [], accountReferences: [], cleanupObligations: [], ...session.contract?.scope } });
-  const ignore = path.join(dir, '.gitignore');
-  if (!fs.existsSync(ignore) || fs.readFileSync(ignore, 'utf8') === 'runtime/\n*.sqlite*\n') fs.writeFileSync(ignore, '*\n', { mode: 0o600 });
+  initializeProjectIgnore(dir);
   return project;
 }
 export function writeProjectRecord(session, kind, id, record) {

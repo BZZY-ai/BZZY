@@ -1,5 +1,13 @@
 # bzzy 🐝
 
+Type `$` anywhere in a chat or `/goal` draft to choose an enabled skill or
+specialist agent. Keep typing to filter; arrows choose a row and Enter/Tab or a
+click inserts the reference at the cursor. Skills insert `$skill-name`; agents
+insert `subagent name`. Selection preserves the rest of the draft and sends
+nothing. Escape closes the picker. Project/global scope and current execution
+availability come from Core; selecting an entry does not enable it or grant
+permissions. Currency amounts, `${variable}` and `$(command)` remain ordinary text.
+
 Consecutive replies from the same assistant share one heading and a plain tree
 rail, without filled user/assistant message backgrounds. User turns and changes
 of specialist start a fresh heading. Original reply boundaries, copy targets and
@@ -714,9 +722,14 @@ total/count budget are skipped. Smaller later files can still fit. Files that
 change, disappear or are individually unreadable during capture are also
 omitted. A bounded notice records the reason and sample paths; the goal continues.
 
-Launching in `/projects/nasa` keeps that cwd and creates project state beneath
-`/projects/nasa/.bzzy`. A binary under `findings/` stays in place even when it
-is skipped from the snapshot. Core keeps durable chat/runtime state separately
+Launching a new terminal in `/projects/nasa` immediately creates
+`/projects/nasa/.bzzy` and pins that exact canonical directory as its workspace,
+even if a parent already has `.bzzy`. `/alias nasa` names the chat there;
+`bzzy --attach nasa` reopens its saved directory and history. Existing saved
+chats keep their previous project boundary. Owner launch initializes metadata
+even for a read-only task; model execution remains read-only. A binary under
+`findings/` stays in place even when it is skipped from the snapshot.
+Core keeps durable chat/runtime state separately
 in its private home. Isolated workers get a partial-copy notice and the original
 input location as a reference; their existing tools and permissions still govern
 access. Missing required inputs can be requested through existing evidence and

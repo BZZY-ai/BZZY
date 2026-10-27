@@ -81,7 +81,10 @@ export function projectIdentityForSession(session, options = {}) {
     }
     current = current.parentSessionId ? getRecord('session', current.parentSessionId) : null;
   }
-  return resolveProjectIdentity(boundary || session.projectRoot || session.cwd, { ...options, ...(boundary ? { boundary } : {}) });
+  // A saved root is the engagement boundary, not a hint to search its parents.
+  // Losing a local marker must never silently attach this chat to another space.
+  boundary ||= session.projectRoot;
+  return resolveProjectIdentity(boundary || session.cwd, { ...options, ...(boundary ? { boundary } : {}) });
 }
 
 export function recordBelongsToProject(record, project) {

@@ -75,6 +75,10 @@ Implemented:
   creates one idle terminal using normal chat defaults. Private identity-checked
   locks serialize concurrent creation. CLI workflow launch selection is applied
   before new-goal admission; existing goals and accepted retries keep their pins.
+- Fresh owner terminals immediately initialize `.bzzy` at their exact canonical
+  launch cwd, including beneath a marked parent project. Saved boundaries stay
+  pinned; aliasing and attachment preserve the original directory and history.
+  Initial owner metadata setup does not widen read-only model execution policy.
 - Explicitly saved/imported goal templates in Core's Library. The CLI Goals tab
   saves objectives manually; bare `/goal` chooses one and starts a fresh goal
   through normal input admission. `/goal <objective>` does not auto-save a template.

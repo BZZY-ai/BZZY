@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createChatSession } from '../src/engine/host-commands.js';
 import { getProvider } from '../src/engine/providers.js';
-import { loadSession, saveSession } from '../src/engine/store.js';
+import { createSession, loadSession, saveSession } from '../src/engine/store.js';
 import { claimInput } from '../src/engine/runtime.js';
 import { newGoal } from '../src/engine/goals.js';
 import { setSessionMode } from '../src/engine/session-operations.js';
@@ -37,6 +37,23 @@ test('blank canvas inserts independent model slots idempotently, preserving priv
   assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('agent').length, 0);
   assert.throws(() => insertCanvasModel(root.id, revision, choice, uid()), /canvas changed/);
   assert.throws(() => insertCanvasModel(root.id, canvas.revision, { ...choice, model: 'bad\nmodel' }, uid()), /model/);
+});
+
+test('companions added or unlinked in a legacy nested canvas retain its saved engagement without a new workspace', () => {
+  const nested = path.join(directory, 'nested'); fs.mkdirSync(nested);
+  const legacy = createSession(getProvider('codex'), nested, choice.model);
+  Object.assign(legacy, { projectRoot: root.projectRoot, projectId: root.projectId, executionState: 'paused',
+    mode: 'parallel', parallelAgents: [choice, choice], policy: { mode: 'read-only', writablePaths: [] } });
+  saveSession(legacy); let saved = openCanvas(legacy.id); claimInput(legacy.id, 'legacy-owner');
+  saved = unlinkCanvasModels(legacy.id, saved.revision, saved.nodes[0].id, 'legacy-owner', uid());
+  saved = insertCanvasModel(legacy.id, saved.revision, choice, uid());
+  for (const node of saved.nodes.slice(1)) {
+    const companion = loadSession(node.sessionId);
+    assert.equal(companion.cwd, fs.realpathSync(nested)); assert.equal(companion.projectRoot, root.projectRoot);
+    assert.equal(companion.projectId, root.projectId);
+  }
+  assert.equal(fs.existsSync(path.join(nested, '.bzzy')), false);
+  assert.equal(listRecords('execution').length, 0);
 });
 
 test('links require a confirmed pause, cannot overlap or cycle, and never resume the goal or change policy', () => {

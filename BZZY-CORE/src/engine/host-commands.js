@@ -12,7 +12,7 @@ import { prepareTask } from './task.js';
 import { reconcileSession, identityAlive } from './recovery.js';
 import { getRecord, putRecord, listRecords, digest, appendEvent, reserveRequest } from './database.js';
 import { remember } from './memory.js';
-import { initializeProject } from './project.js';
+import { initializeProject, initializeTerminalProject } from './project.js';
 import { ensureRuntime, runtimeRequest } from './runtime.js';
 import { applyDelegationSelection } from './delegation-setup.js';
 import { applyBestiesSelection } from './besties-setup.js';
@@ -69,11 +69,22 @@ export function applyLaunchWorkflow(session, reference) {
   return bindLaunchWorkflow(session, launchWorkflow(reference, session.cwd));
 }
 
-export function createChatSession(provider, options) {
+function terminalWorkspace(cwd, projectSession) {
+  // A companion belongs to its existing canvas, rather than a new CLI launch.
+  // This context is supplied by Core, never read from a CLI option bag.
+  if (projectSession) {
+    const project = projectIdentityForSession(projectSession);
+    return { cwd: fs.realpathSync(cwd), projectRoot: project.root, projectId: project.id };
+  }
+  const workspace = { cwd };
+  initializeTerminalProject(workspace);
+  return workspace;
+}
+
+export function createChatSession(provider, options, { projectSession } = {}) {
   const workflow = launchWorkflow(options.workflow, options.cwd);
-  const session = createSession(provider, options.cwd, options.model, options.alias);
-  const project = projectIdentityForSession(session);
-  session.projectRoot = project.root; session.projectId = project.id;
+  const workspace = terminalWorkspace(options.cwd, projectSession);
+  const session = Object.assign(createSession(provider, workspace.cwd, options.model, options.alias), workspace);
   applySelections(session, options);
   if (options.modelSelectionRequired) { session.modelSelectionRequired = true; session.model = null; }
   saveSession(session);
@@ -113,9 +124,8 @@ export async function openOrCreateChatSession(reference, options) {
 }
 
 export function newConversation(previous, options) {
-  const session = createSession(getProvider(previous.provider), options.cwd, previous.model);
-  const project = projectIdentityForSession(session);
-  session.projectRoot = project.root; session.projectId = project.id;
+  const workspace = terminalWorkspace(options.cwd);
+  const session = Object.assign(createSession(getProvider(previous.provider), workspace.cwd, previous.model), workspace);
   Object.assign(session, { selectedEffort: previous.selectedEffort, modelCapabilities: previous.modelCapabilities, modelSelectionRequired: previous.modelSelectionRequired, mode: previous.mode,
     executor: previous.executor, besties: previous.besties, parallelAgents: previous.parallelAgents, debateAgents: previous.debateAgents });
   saveSession(session); return session;
@@ -204,12 +214,14 @@ export function createTaskSession(provider, options, prompt, { goal, initialCont
   if (options.requestId) {
     const reserved = reserveRequest('cli-create', options.requestId, creationInput, db => {
       const workflow = launchWorkflow(options.workflow, options.cwd);
-      const initial = { version: 1, id: randomUUID(), provider: provider.id, backend: provider.backend, cwd: options.cwd, model: options.model || provider.model || null,
+      const workspace = terminalWorkspace(options.cwd);
+      const initial = { version: 1, id: randomUUID(), provider: provider.id, backend: provider.backend, ...workspace, model: options.model || provider.model || null,
         ...(options.alias == null ? {} : { alias: options.alias }),
         engineThreadId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), turns: 0, goal: null, executionState: 'idle' };
       applySelections(initial, options);
       if (workflow !== undefined) { putRecord('session', initial.id, initial, db); bindLaunchWorkflow(initial, workflow); }
       prepareTask(initial, taskOptions, prompt, { persist: false });
+      initializeProject(initial);
       if (goal && !initialContext) initial.goal = newGoal(initial.contract.objective, options.tokenBudget || initial.contract.limits.tokenBudget);
       putRecord('session', initial.id, initial, db); appendEvent(initial.id, 'session.created', { sessionId: initial.id }, db); return { sessionId: initial.id };
     });
@@ -217,9 +229,11 @@ export function createTaskSession(provider, options, prompt, { goal, initialCont
     if (!initialContext && listRecords('execution').some(job => job.sessionId === session.id)) return { session, existingExecution: true };
   } else {
     const workflow = launchWorkflow(options.workflow, options.cwd);
-    session = createSession(provider, options.cwd, options.model, options.alias);
+    const workspace = terminalWorkspace(options.cwd);
+    session = Object.assign(createSession(provider, workspace.cwd, options.model, options.alias), workspace);
     bindLaunchWorkflow(session, workflow);
     applySelections(session, options); prepareTask(session, taskOptions, prompt);
+    initializeProject(session);
     if (goal && !initialContext) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget);
   }
   saveSession(session); return { session, existingExecution: false };

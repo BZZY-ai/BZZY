@@ -1,3 +1,39 @@
+# Launch-directory workspaces and inline skill/agent selection (2026-10-27)
+
+Node 24/macOS: **1,007 Core tests passed, 2 skipped** and **779 CLI tests passed,
+21 skipped**. Both product syntax checks and staged whitespace checks passed.
+The final CLI run used stable source after an earlier run overlapped edits to
+the runtime build fingerprint; its runtime-reuse check also passed separately.
+
+Fresh owner CLI chats, new conversations and task launches initialize the exact
+canonical cwd's `.bzzy/project.json` and `.gitignore` before model work. A parent
+engagement cannot absorb the new terminal or supply its constraints. Aliasing
+and attachment preserve the saved location/history. Repeated launches preserve
+the local identity and custom defaults; first-contract constraints/scope still
+reach their project projection. Existing canvas companions retain their original
+engagement rather than becoming fresh launch workspaces.
+
+Core fixtures cover immediate idle creation, nested marked projects, canonical
+paths, read-only task setup without model permission changes, accepted request
+retries without repeated setup, missing-marker ancestor drift, legacy attachment,
+canvas insertion/unlinking and failed workflow admission. Generic project lookup,
+registered Agent boundaries and raw read-only no-write behavior remain covered.
+Startup ignore-file handling rejects symlinks, hardlinks and FIFOs, reads only a
+bounded legacy template and preserves custom rules; legacy replacement uses an
+exclusive temporary file and atomic rename.
+
+The CLI `$` picker uses Core's enabled scoped skill/specialist catalogs and
+rechecks exact identity before insertion, including across catalog pages. It
+inserts `$skill-name` or `subagent name` without sending or enabling anything.
+Fixtures cover keyboard/mouse, quoted references, Unicode and suffix retention,
+drafts during active work, stale choices, project overrides, ordinary/minimal
+frames at 60×18, 80×24 and 120×36, and exact `/goal` objective persistence.
+Large catalogs show their coverage and support filtering by description.
+
+No live providers, native Linux deployment or running installation update were
+exercised. Canonical durable chat/runtime state remains in Core's private home;
+this change creates project metadata without relocating existing history.
+
 # Client tool-call trees independent of compactor memory (2026-10-27)
 
 Node 24/macOS: **997 Core tests passed, 2 skipped** and **770 CLI tests passed,

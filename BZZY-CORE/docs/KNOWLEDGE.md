@@ -9,11 +9,20 @@ provider/model/effort.
 ## Scope and identity
 
 An engagement has a `.bzzy/project.json` identity and a private Core directory
-binding. Opening a subdirectory uses the nearest marked engagement while the
-terminal keeps its original cwd. Separate engagement markers remain separate.
-Project constraints are inherited. Read-only sessions resolve identity without
-creating project metadata. Persistent Agents stay within their registered
-directory; workers cannot search their supervisor's private history.
+binding. A fresh owner CLI terminal immediately initializes `.bzzy` in its exact
+canonical launch directory and pins that directory as its engagement boundary.
+Launching beneath another marked project creates a separate workspace and does
+not inherit its constraints or knowledge. `/alias` only names the saved chat;
+attachment preserves its saved cwd, project boundary and history. Existing chats
+retain their prior boundary. A missing local marker cannot redirect a pinned
+chat into an ancestor's engagement.
+
+Generic project lookups and unpinned legacy sessions can still find the nearest
+marked ancestor. Read-only execution and workers cannot initialize project
+metadata; explicit owner terminal launch creates the initial marker and ignore
+file before execution policy is installed, including for a read-only task.
+That setup grants no model write permission. Persistent Agents stay within their
+registered directory; workers cannot search their supervisor's private history.
 
 Renaming/moving a directory on the same filesystem retains its identity and
 verified path aliases. Copying a marked directory creates a separate identity

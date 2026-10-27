@@ -8,6 +8,7 @@ import { assertLibraryMenu, prepareLibraryRemoval } from './library-entry-menu.j
 import { namedTerminalSessions } from './session-browser.js';
 import { clean, cellWidth, clip, wrap, wrapProse, duration } from './terminal-format.js';
 import { commandSuggestions, privateChatCommand } from './terminal-commands.js';
+import { referenceToken, referenceCatalog, insertReference } from './reference-completions.js';
 import { backendVisit } from './backend-traffic.js';
 import { accountStatusLabels } from './account-status.js';
 import { copyText, readClipboard } from './clipboard.js';
@@ -465,11 +466,37 @@ export class TerminalChat {
   }
   completions() {
     if (['settings', 'skills', 'agents', 'workflows', 'goals', 'metrics'].includes(this.panel)) return [];
-    if (!this.resolveInput || this.hidden || this.selection || this.renderingPicker || this.pasting || !/^bzzy\b/.test(this.question || '')) return [];
-    if (this.completionQuery !== this.value) { this.completionQuery = this.value; this.completionFocus = 0; this.completionDismissed = false; }
-    return this.completionDismissed ? [] : commandSuggestions(this.value);
+    if (!this.canCompose() || this.hidden || this.promptDraft || this.pasting || this.resolveInput && !/^bzzy\b/.test(this.question || '')) return [];
+    const key = JSON.stringify([this.ui.activeTab || this.ui.sessionId, this.cwd, this.value, this.cursor]);
+    if (this.completionQuery !== key) { this.completionQuery = key; this.completionFocus = 0; this.completionDismissed = false; }
+    if (this.completionDismissed) return [];
+    const token = referenceToken(this.value, this.cursor);
+    if (!token) return this.resolveInput ? commandSuggestions(this.value) : [];
+    const catalogKey = JSON.stringify([this.ui.activeTab || this.ui.sessionId, this.cwd, token.query]);
+    if (this.referenceCatalog?.key !== catalogKey || Date.now() - this.referenceCatalog.loadedAt > 1000) {
+      try { this.referenceCatalog = { key: catalogKey, loadedAt: Date.now(), ...referenceCatalog(this.ui, token.query) }; }
+      catch { this.referenceCatalog = { key: catalogKey, loadedAt: Date.now(), choices: [] }; }
+    }
+    this.completionFocus = Math.min(this.completionFocus, Math.max(0, this.referenceCatalog.choices.length - 1));
+    return this.referenceCatalog.choices;
   }
-  completeCommand(choice) { this.value = choice.command + ' '; this.cursor = [...this.value].length; this.schedule(); }
+  completeCommand(choice) {
+    if (choice.kind === 'reference') {
+      try {
+        const draft = insertReference(this.ui, this.value, this.cursor, choice);
+        if (!draft) return;
+        Object.assign(this, draft);
+        this.completionQuery = JSON.stringify([this.ui.activeTab || this.ui.sessionId, this.cwd, this.value, this.cursor]);
+        this.completionDismissed = true;
+      } catch (error) { this.referenceCatalog = null; this.completionDismissed = true; this.notice(error.message, true); }
+    } else { this.value = choice.command + ' '; this.cursor = [...this.value].length; }
+    this.schedule();
+  }
+  completionHint(completions) {
+    if (completions[0].kind !== 'reference') return '  Commands · ↑/↓ choose · Tab complete · Esc close';
+    return this.referenceCatalog?.truncated ? `  Skills & agents · ${completions.length}/${this.referenceCatalog.total} · type to filter`
+      : '  Skills & agents · type to filter · ↑/↓ · Enter/Tab';
+  }
   panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'agents', 'workflows', 'goals', 'metrics', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'agents', 'workflows', 'goals', 'metrics', 'settings']; }
   setPanel(panel) {
     if (this.ui.coreLifecycleInterrupted && !['settings', 'metrics', 'chat'].includes(panel)) return;
@@ -1043,7 +1070,7 @@ export class TerminalChat {
         else if (key.name === 'escape') this.completionDismissed = true;
         else {
           const choice = completions[this.completionFocus];
-          if (key.name === 'tab' || choice.argument && this.value !== choice.command) { this.completeCommand(choice); return; }
+          if (choice.kind === 'reference' || key.name === 'tab' || choice.argument && this.value !== choice.command) { this.completeCommand(choice); return; }
           this.value = choice.command; this.cursor = [...this.value].length;
           // Enter confirms a command; the normal submit path handles local views below.
         }
@@ -1522,7 +1549,7 @@ export class TerminalChat {
     if (completions.length) {
       const maximum = height < 20 ? 2 : height < 28 ? 3 : 5;
       const offset = Math.max(0, Math.min(this.completionFocus - Math.floor(maximum / 2), completions.length - maximum));
-      lines.push(color(clip('  Commands · ↑/↓ choose · Tab complete · Esc close', width), palette.muted));
+      lines.push(color(clip(this.completionHint(completions), width), palette.muted));
       for (let index = offset; index < Math.min(completions.length, offset + maximum); index++) {
         const item = completions[index];
         hits.push({ type: 'command', choice: item, row: lines.length, left: 3, right: width });
@@ -1987,7 +2014,7 @@ export class TerminalChat {
       }
       if (completions.length) {
         const maximum = height < 28 ? 3 : 6, offset = Math.max(0, Math.min(this.completionFocus - Math.floor(maximum / 2), completions.length - maximum));
-        bottom.push(muted('  Commands · ↑/↓ choose · Tab complete · Esc close'));
+        bottom.push(muted(this.completionHint(completions)));
         for (let index = offset; index < Math.min(completions.length, offset + maximum); index++) {
           const item = completions[index];
           bottomHits.push({ type: 'command', choice: item, row: bottom.length, left: 3, right: width - 1 });

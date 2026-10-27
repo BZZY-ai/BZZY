@@ -60,4 +60,5 @@ test('an unknown workflow fails before creating a chat, named chat or goal', asy
   assert.throws(() => createTaskSession(getProvider('codex'), { ...options(), workflow: 'missing', requestId: randomUUID() }, 'Inspect evidence', { goal: true }));
   assert.equal(listRecords('session').length, 0); assert.equal(listRecords('core.workflow.selection').length, 0);
   assert.equal(listRecords('execution').length, 0);
+  assert.equal(fs.existsSync(path.join(directory, '.bzzy')), false);
 });

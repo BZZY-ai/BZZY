@@ -89,7 +89,7 @@ export function insertCanvasModel(sessionId, revision, selection, requestId) {
       saveSession(root); session = root;
     } else {
       session = createChatSession(getProvider(normalized.provider), { cwd: canvas.cwd, model: normalized.model, effort: normalized.effort,
-        launchDefault: normalized });
+        launchDefault: normalized }, { projectSession: root });
       session.canvasParentId = sessionId; saveSession(session);
     }
     const node = slot(session); node.selection = normalized;
@@ -138,7 +138,8 @@ export function unlinkCanvasModels(sessionId, revision, nodeId, owner, requestId
       const node = nodeFor(canvas, id), thread = bindings.get(id)?.sessionId;
       if (thread && thread !== node.sessionId) node.threads = [...new Set([...(node.threads || []), thread])];
       if (!node.sessionId) {
-        const session = createChatSession(getProvider(node.selection.provider), { cwd: canvas.cwd, model: node.selection.model, effort: node.selection.effort, launchDefault: node.selection });
+        const session = createChatSession(getProvider(node.selection.provider), { cwd: canvas.cwd, model: node.selection.model, effort: node.selection.effort, launchDefault: node.selection },
+          { projectSession: loadSession(canvas.sessionId) });
         session.canvasParentId = sessionId; session.executionState = 'paused'; saveSession(session); node.sessionId = session.id;
       }
     }
