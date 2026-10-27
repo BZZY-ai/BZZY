@@ -1154,14 +1154,20 @@ export class TerminalChat {
         put('');
       }
     } else {
+      let assistantSpeaker = null;
       for (const entry of this.entries) {
         if (entry.kind === 'tool' && !this.showTools) continue;
         const layout = this.entryLayout(entry, width);
-        if (entry.kind === 'assistant') for (let offset = 0; offset < layout.lines.length - 1; offset++)
+        const speaker = entry.kind === 'assistant' ? JSON.stringify([entry.label || 'BZZY', entry.peerSessionId || null]) : null;
+        const continuation = speaker !== null && speaker === assistantSpeaker;
+        const entryLines = continuation ? layout.lines.slice(1) : layout.lines;
+        if (speaker !== null) assistantSpeaker = speaker;
+        else if (!['tool', 'invocation', 'notice'].includes(entry.kind)) assistantSpeaker = null;
+        if (entry.kind === 'assistant') for (let offset = 0; offset < entryLines.length - 1; offset++)
           this.contentHits.push({ type: 'response', entry, row: lines.length + offset, left: 3, right: width - 2 });
         if (entry.kind === 'approval') this.contentHits.push({ type: 'approval-details', id: entry.questionId, row: lines.length, left: 3, right: width - 2 });
         if (entry.kind === 'debate') for (const hit of layout.hits) this.contentHits.push({ ...hit, row: lines.length + hit.row });
-        for (const line of layout.lines) lines.push(line);
+        for (const line of entryLines) lines.push(line);
       }
     }
     return lines;
@@ -1180,7 +1186,7 @@ export class TerminalChat {
     }
     const { color } = this.theme;
     const lines = [], put = (text, tone = palette.text, bold = false) => lines.push(color(text, tone, bold));
-    const replyLine = line => color('  ▎ ', palette.agent) + fillSurface(line, width - 6, this.theme, palette.agentSurface, palette.text);
+    const replyLine = line => color('  │ ', palette.agent) + color(line, palette.text);
     if (entry.kind === 'approval') {
       const tone = entry.decision === 'approved' ? palette.goalSuccess : entry.decision === 'denied' ? palette.danger : palette.warning;
       put('  ' + (entry.decision === 'approved' ? '✔ Approved once' : entry.decision === 'denied' ? '✕ Denied' : '◇ Permission requested') + '  ' + (entry.expanded ? '▴ Hide details' : '▾ Show details'), tone, true);
@@ -1194,7 +1200,7 @@ export class TerminalChat {
       put('  ' + label, palette.user, true);
       for (const line of wrapProse(text, width - 7)) {
         lines.push(color('  ▎ ', palette.user)
-          + fillSurface(line, width - 6, this.theme, palette.userSurface, palette.userText));
+          + color(line, palette.userText));
       }
       put('');
     }
@@ -1211,9 +1217,9 @@ export class TerminalChat {
       const displayLabel = entry.kind === 'assistant' ? clip(label, width - 4) : label;
       if (isFormatted) {
         put(`  ${displayLabel}`, tone, true);
-        const rendered = renderMessageContent(projection, { width: width - 7, theme: this.theme, background: palette.agentSurface });
+        const rendered = renderMessageContent(projection, { width: width - 7, theme: this.theme, background: palette.background });
         for (const line of rendered.lines) lines.push(replyLine(line));
-        put('');
+        lines.push(color('  │', tone));
         const layout = { width, text: entry.text, lines, displayText, isFormatted };
         this.entryLayouts.set(entry, layout); return layout;
       }
@@ -1229,7 +1235,8 @@ export class TerminalChat {
         if (entry.kind === 'assistant') lines.push(replyLine(text));
         else put('  ' + text, entry.kind === 'error' ? palette.warning : palette.text, !isFormatted && /^#{1,6}\s/.test(line));
       }
-      put('');
+      if (entry.kind === 'assistant') lines.push(color('  │', tone));
+      else put('');
       const layout = { width, text: entry.text, lines, rawLines, displayText, isFormatted };
       this.entryLayouts.set(entry, layout); return layout;
     }

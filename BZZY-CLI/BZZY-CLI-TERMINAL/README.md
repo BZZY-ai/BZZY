@@ -1,5 +1,11 @@
 # bzzy 🐝
 
+Consecutive replies from the same assistant share one heading and a plain tree
+rail, without filled user/assistant message backgrounds. User turns and changes
+of specialist start a fresh heading. Original reply boundaries, copy targets and
+saved history stay intact. Pair iPhone now explicitly requests 30-day access;
+updates retain private host state but cannot renew an already expired pairing.
+
 Metrics includes current-session BZZY health: workflow consultation coverage and
 blockers, native tool delivery/context planning, compaction/refresh state, memory
 indexing and background review reasons. These are read-only saved observations.

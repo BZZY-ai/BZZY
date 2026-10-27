@@ -10,11 +10,16 @@ export function notificationDeliveryStatus() {
   const compatible = registrations.filter(row => row.relayPush ? relay?.configured === true && row.environment === relay.environment : row.environment === configuration?.environment);
   const configured = Boolean(configuration || relay?.configured);
   const deliveries = listRecords('core.push.delivery');
+  const expiredPairing = listRecords('core.push.registration').some(row => {
+    const grant = getRecord('core.relay.grant', row.relayGrantId);
+    return row.enabled && !row.revokedAt && grant && !grant.revokedAt && grant.expiresAt <= Date.now();
+  });
   const counts = {};
   for (const delivery of deliveries) counts[delivery.state] = (counts[delivery.state] || 0) + 1;
   return { configured, registeredDevices: registrations.length, compatibleDevices: compatible.length,
     goalEvents: listRecords('outbox').filter(row => /^goal\./.test(row.event?.type || '')).length, deliveries: counts,
-    message: !configured ? registrations.some(row => row.relayPush) ? 'iPhone alerts are queued through Relay; configure Apple APNs on Relay. See Core docs/PUSH.md.' : 'iPhone alerts need private Apple APNs setup on this host. See Core docs/PUSH.md.'
+    message: !registrations.length && expiredPairing ? 'The saved iPhone pairing has expired. Pair again in Settings > Pair iPhone, then reopen the app to register goal alerts.'
+      : !configured ? registrations.some(row => row.relayPush) ? 'iPhone alerts are queued through Relay; configure Apple APNs on Relay. See Core docs/PUSH.md.' : 'iPhone alerts need private Apple APNs setup on this host. See Core docs/PUSH.md.'
       : !registrations.length ? 'Enable notifications in the paired iPhone app.'
       : !compatible.length ? 'The Apple environment differs from the installed iPhone build.' : 'iPhone goal alerts are configured. Apple acceptance is recorded per delivery.' };
 }

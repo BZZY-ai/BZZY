@@ -834,11 +834,15 @@ public final class RelayConnection {
                 else { stopCore(purge: false) }
             } catch {
                 guard state.host?.grantID == host.grantID, self.transport === transport, !suspended else { return }
-                hasHost = false
                 let failure = error as? RelayFailure ?? RelayFailure("CONNECTION_FAILED")
-                hostStatus = failure.code == "GRANT_UNAVAILABLE" ? "Access expired or revoked" : "Host unavailable"
-                stopCore(purge: failure.code == "GRANT_UNAVAILABLE")
-                if failure.code == "GRANT_UNAVAILABLE" { state.host = nil; try? save() }
+                let expired = host.expiresAt <= RelayWire.now
+                // A reconnect/inspection failure is not a revocation receipt.
+                // Retain the pinned pairing through Core/Relay updates; cached
+                // trust never unlocks actions without a fresh Core response.
+                hasHost = !expired
+                hostStatus = expired ? "Access expired" : failure.code == "GRANT_UNAVAILABLE" ? "Access unavailable · Reconnecting" : "Host unavailable"
+                stopCore(purge: expired)
+                if expired { state.host = nil; try? save() }
             }
         }
     }
@@ -1296,6 +1300,7 @@ public final class RelayConnection {
         projection.showLatestHistory()
         publishCoreEvents()
     }
+    public var coreHistoryOldestCursor: Int64 { coreProjection?.firstCursor ?? 0 }
     public func holdCoreHistory(sessionID: String) {
         guard sessionID == coreSessionID else { return }
         coreProjection?.holdHistoryWindow()

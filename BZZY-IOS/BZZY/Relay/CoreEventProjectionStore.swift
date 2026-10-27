@@ -22,10 +22,10 @@ public final class CoreEventProjectionStore {
     private var saved: Saved
     private let file: URL
     private let maximumEvents = 20_000 // Legacy decoding bound.
-    private let recentEvents = 2_000
-    private let recentBytes = 4 * 1024 * 1024
-    private let visibleEvents = 4_000
-    private let visibleBytes = 8 * 1024 * 1024
+    private let recentEvents = 10_000
+    private let recentBytes = 16 * 1024 * 1024
+    private let visibleEvents = 10_000
+    private let visibleBytes = 16 * 1024 * 1024
     private var displayed: [CoreEvent] = []
     private var olderAvailable = false
     private var browsingHistory = false

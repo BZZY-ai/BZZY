@@ -3,7 +3,7 @@ import Foundation
 // Display windows are independent of Core's durable event cursor and private
 // replay cache. Anchoring IDs keeps incoming replies from moving older reading.
 struct ConversationHistoryWindow {
-    static let pageSize = 20
+    static let pageSize = 50
     static let maximumVisible = 200
     private var firstID: UUID?
     private(set) var count = pageSize

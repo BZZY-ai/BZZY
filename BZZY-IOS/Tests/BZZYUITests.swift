@@ -155,7 +155,7 @@ final class BZZYUITests: XCTestCase {
         app.buttons["agent-COOL"].tap()
         XCTAssertTrue(app.staticTexts["History entry 225"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["History entry 225"].isHittable)
-        XCTAssertEqual(app.scrollViews["conversation-history"].value as? String, "20 messages")
+        XCTAssertEqual(app.scrollViews["conversation-history"].value as? String, "50 messages")
         let scroll = app.scrollViews.firstMatch
         let earlier = app.buttons["load-earlier-messages"]
         let first = app.staticTexts["History entry 001"]
@@ -286,7 +286,8 @@ final class BZZYUITests: XCTestCase {
         XCTAssertTrue(app.buttons["tab-agents"].waitForExistence(timeout: 10))
         attach(app, name: "iOS Agents")
         app.buttons["tab-terminal"].tap()
-        XCTAssertTrue(app.buttons["host-status"].exists)
+        XCTAssertFalse(app.buttons["host-status"].exists)
+        XCTAssertTrue(app.staticTexts["connection-status-label"].exists)
         attach(app, name: "iOS Terminal")
         app.buttons["tab-agents"].tap()
         app.buttons["create-agent"].tap()
@@ -366,8 +367,8 @@ final class BZZYUITests: XCTestCase {
         XCTAssertFalse(app.buttons["enable-notifications"].isEnabled)
         app.buttons["Close"].firstMatch.tap()
         app.buttons["Close"].firstMatch.tap()
-        app.buttons["tab-terminal"].tap()
-        app.buttons["host-status"].tap()
+        app.buttons["Settings"].tap()
+        app.buttons["connection-settings"].tap()
         let code = app.secureTextFields["pairing-code"]
         XCTAssertTrue(code.waitForExistence(timeout: 3))
         code.tap(); code.typeText("BZZY-AGENT-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -519,7 +520,8 @@ final class BZZYUITests: XCTestCase {
         XCTAssertTrue(app.buttons["tab-terminal"].isHittable)
         attach(app, name: "iOS Accessibility Text")
         app.buttons["tab-terminal"].tap()
-        XCTAssertTrue(app.buttons["host-status"].exists)
+        XCTAssertFalse(app.buttons["host-status"].exists)
+        XCTAssertTrue(app.staticTexts["connection-status-label"].exists)
         app.buttons["terminal-session-design"].tap()
         assertCompactChatHeader(app)
     }

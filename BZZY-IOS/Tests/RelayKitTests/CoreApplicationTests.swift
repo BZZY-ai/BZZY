@@ -119,19 +119,19 @@ final class CoreApplicationTests: XCTestCase {
             if let token { value["bootstrapToken"] = .string(token) }
             return try CoreEventHistoryPage(.object(value), sessionID: h.session)
         }
-        try store.bootstrap(page(5001, token: "tail-proof")); try store.markSubscribed()
-        for lower in stride(from: Int64(4951), through: 951, by: -50) { try store.prepend(page(lower)) }
-        XCTAssertEqual(store.firstCursor, 951); XCTAssertLessThanOrEqual(store.events.count, 4000)
-        XCTAssertEqual(store.cursor, 5050); XCTAssertTrue(store.hasNewerHistory)
+        try store.bootstrap(page(11001, token: "tail-proof")); try store.markSubscribed()
+        for lower in stride(from: Int64(10951), through: 951, by: -50) { try store.prepend(page(lower)) }
+        XCTAssertEqual(store.firstCursor, 951); XCTAssertLessThanOrEqual(store.events.count, 10000)
+        XCTAssertEqual(store.cursor, 11050); XCTAssertTrue(store.hasNewerHistory)
         let first = store.firstCursor
-        try store.apply(CoreEventBatch(h.batch([5051]), resource: "resource", sessionID: h.session, cursor: 5050))
-        XCTAssertEqual(store.firstCursor, first); XCTAssertEqual(store.cursor, 5051)
-        store.showLatestHistory(); XCTAssertEqual(store.events.last?.seq, 5051); XCTAssertFalse(store.hasNewerHistory)
+        try store.apply(CoreEventBatch(h.batch([11051]), resource: "resource", sessionID: h.session, cursor: 11050))
+        XCTAssertEqual(store.firstCursor, first); XCTAssertEqual(store.cursor, 11051)
+        store.showLatestHistory(); XCTAssertEqual(store.events.last?.seq, 11051); XCTAssertFalse(store.hasNewerHistory)
         let restored = try CoreEventProjectionStore(directory: directory, hostID: "host", resource: "resource", sessionID: h.session)
-        XCTAssertLessThanOrEqual(restored.events.count, 2000); XCTAssertEqual(restored.cursor, 5051); XCTAssertTrue(restored.hasOlderHistory)
+        XCTAssertLessThanOrEqual(restored.events.count, 10000); XCTAssertEqual(restored.cursor, 11051); XCTAssertTrue(restored.hasOlderHistory)
         // A lost ACK can replay an evicted event without reintroducing it.
         try restored.apply(CoreEventBatch(h.batch([1]), resource: "resource", sessionID: h.session, cursor: 0))
-        XCTAssertEqual(restored.cursor, 5051); XCTAssertFalse(restored.events.contains(where: { $0.seq == 1 }))
+        XCTAssertEqual(restored.cursor, 11051); XCTAssertFalse(restored.events.contains(where: { $0.seq == 1 }))
     }
 
     @MainActor func testHoldingCachedHistoryPreservesReadingWhileNewEventsAreSaved() async throws {

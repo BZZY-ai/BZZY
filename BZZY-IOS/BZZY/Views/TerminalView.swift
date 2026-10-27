@@ -4,22 +4,14 @@ import RelayKit
 struct TerminalView: View {
     @Environment(RelayConnection.self) private var relay
     @Bindable var store: WorkspaceStore
-    @State private var showConnection = false
     @State private var notificationTerminal: LiveTerminalRecord?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { sessionsHeading; Spacer(minLength: 8); hostStatus }
-                    VStack(alignment: .leading, spacing: 4) { sessionsHeading; hostStatus }
-                }
-                Rectangle().fill(BZZYTheme.line).frame(height: 0.5)
-
                 if relay.coreCatalogAvailable || !store.liveTerminals.isEmpty {
                     HStack(alignment: .firstTextBaseline) {
-                        Text(relay.coreCatalogAvailable ? "Your terminals" : "Saved terminals · Offline").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         Spacer()
                         Button { relay.performHostAction { await relay.refreshCoreSessions() } } label: {
                             Group {
@@ -93,23 +85,10 @@ struct TerminalView: View {
             }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 16)
         }.scrollIndicators(.hidden)
             .task { if relay.coreCatalogAvailable { await relay.refreshCoreSessions() } }
-            .sheet(isPresented: $showConnection) { ConnectView() }
             .navigationDestination(item: $notificationTerminal) { terminal in RemoteTerminalConversationView(store: store, terminal: terminal) }
             .onChange(of: store.notificationTerminalID) { _, id in
                 if let id, let terminal = store.liveTerminals.first(where: { $0.id == id }) { notificationTerminal = terminal; store.notificationTerminalID = nil }
             }
-    }
-
-    private var sessionsHeading: some View {
-        Text("› sessions").bzzyFont(14, weight: .semibold).foregroundStyle(BZZYTheme.accent)
-            .fixedSize(horizontal: true, vertical: false).accessibilityAddTraits(.isHeader)
-    }
-
-    private var hostStatus: some View {
-        Button { showConnection = true } label: {
-            Label(relay.shortStatus, systemImage: "desktopcomputer")
-                .bzzyFont(11).foregroundStyle(BZZYTheme.secondary).frame(minHeight: 44)
-        }.buttonStyle(.plain).accessibilityIdentifier("host-status")
     }
 
     private func sessionRow(name: String, symbol: String, activity: TerminalGoalActivity? = nil) -> some View {

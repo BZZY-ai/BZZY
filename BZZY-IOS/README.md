@@ -4,6 +4,27 @@ Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The current
 appearance follows the CLI: dark flat surfaces, compact monospaced prompt rows,
 cyan controls, teal user messages and lavender assistant messages.
 
+Build **0.1.0 (23)** removes filled message backgrounds, groups consecutive
+replies under one speaker heading, and simplifies the Agents/Terminal list
+headers. The compact Pause icon asks for confirmation and rechecks the selected
+computer/conversation/goal before dispatch. Cached chats open the latest **50
+entries**, with older 50-entry pages and a 200-entry rendering limit. Authorized
+opening/reconnect still refreshes from Core without submitting work. The app
+reads bounded older event pages toward 50 projected messages, since 50 streamed
+events may represent only one reply. Its protected raw event cache retains up
+to 10,000 events / 16 MiB per conversation; exceptionally large histories can
+reach those limits before retaining 50 complete messages. Core keeps full history.
+
+Failed Relay grant inspection retains the pinned computer and private cached
+history through reconnects. Actions remain locked until Core confirms access;
+actual local expiry and explicit revocation still remove authorization. New
+CLI **Pair iPhone** grants last 30 days instead of one day; updating does not
+extend already expired grants. Pair an expired phone again, then reopen the app
+with notification permission/Activity alerts enabled. Goal achieved, paused and
+stalled alerts use Core's existing durable outbox and authenticated APNs route.
+`bzzy notifications status` now identifies an expired pairing separately from
+missing Apple setup. Simulator checks cannot prove delivery to a physical phone.
+
 Build **Debug 0.1.0 (22)** puts host CPU/RAM in the home connection footer,
 between Core status and the compact Refresh icon. Agents shows the list and
 New Agent; voice chat remains available in **Settings → Voice**. Agents and

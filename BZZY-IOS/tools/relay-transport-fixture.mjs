@@ -37,7 +37,12 @@ async function command(frame) {
             expiresAt: Date.now() + 60000, payload: { index } };
           await host.request('route.send', { grantId: grant.id, messageId, box: seal(host.identity, peer, envelope) });
           sent++;
-          await new Promise(resolve => setTimeout(resolve, 2));
+          // Receipt-dependent tests must not accidentally coalesce two in-flight
+          // grant inspections. Wait for this accepted delivery before the next.
+          const deadline = Date.now() + 5000;
+          while (index + 1 < frame.count && received <= index && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 5));
+          }
         }
       })().catch(error => { failure = error.code || 'FAILED'; });
       return { started: true };

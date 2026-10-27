@@ -2,6 +2,39 @@ import XCTest
 @testable import RelayKit
 
 final class CoreHostProfileTests: XCTestCase {
+    @MainActor func testUnavailableRelayGrantKeepsPinnedComputerButNeverUnlocksCoreActions() async throws {
+        let fixture = try MultiHostFixture(); defer { fixture.shutdown() }
+        let identity = try RelayIdentity.generate()
+        let configuration = try fixture.request(["op": .string("start"), "certificate": try RelayWire.object(identity.certificate)])
+        let endpoint = try XCTUnwrap(URL(string: try XCTUnwrap(configuration["endpoint"].string)))
+        let host = try XCTUnwrap(configuration["hosts"].array?.first)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var authorization: Data?
+        func connection() throws -> RelayConnection {
+            try RelayConnection(isolatedIdentity: identity, loopbackTransport: RelayTransport(identity: identity, loopbackEndpoint: endpoint),
+                projectionDirectory: directory, loadAuthorization: { authorization }, saveAuthorization: { authorization = $0 })
+        }
+        let original = try connection(); defer { original.pause() }
+        await original.connect()
+        original.previewPairing(try XCTUnwrap(host["qr"].string)); await original.claimConfirmedHost()
+        try await eventually { try fixture.request(["op": .string("state")])["pendingCount"].integer == 1 }
+        _ = try fixture.request(["op": .string("approve")])
+        try await eventually { original.coreActionsAvailable }
+        original.pause()
+        var saved = try SavedCoreHosts.decode(XCTUnwrap(authorization))
+        let binding = try XCTUnwrap(saved.profiles[0].state.host)
+        saved.profiles[0].state.host = HostBinding(certificate: binding.certificate, grantID: "unavailable-fixture-grant", expiresAt: binding.expiresAt)
+        authorization = try JSONEncoder().encode(saved)
+        let restored = try connection(); defer { restored.pause() }
+        await restored.connect()
+        try await eventually { restored.hostStatus.contains("Access unavailable") }
+        XCTAssertTrue(restored.hasHost); XCTAssertFalse(restored.coreActionsAvailable)
+        XCTAssertEqual(restored.hosts.first?.id, binding.certificate.id)
+        XCTAssertNotNil(try SavedCoreHosts.decode(XCTUnwrap(authorization)).profiles[0].state.host)
+        let paused = await restored.controlCore("pause"); XCTAssertFalse(paused)
+        XCTAssertEqual(try fixture.request(["op": .string("state")])["executionCount"].integer, 0)
+    }
     @MainActor func testPausedModeDropdownUsesDefaultsInOneRealCoreChatWithoutExecution() async throws {
         let fixture = try MultiHostFixture(); defer { fixture.shutdown() }
         let identity = try RelayIdentity.generate()

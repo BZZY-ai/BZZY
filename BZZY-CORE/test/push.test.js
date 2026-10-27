@@ -8,6 +8,7 @@ import { generateKeyPairSync, createPublicKey, verify, randomUUID } from 'node:c
 import { APNsClient, loadAPNsConfiguration, PushError } from '../src/push/apns.js';
 import { registerDeviceNotifications, updateDeviceNotifications, revokeDeviceNotifications, authorizedPushRegistration } from '../src/push/registration.js';
 import { CorePushWorker } from '../src/push/worker.js';
+import { notificationDeliveryStatus } from '../src/push/status.js';
 import { newGoal } from '../src/engine/goals.js';
 import { saveSession } from '../src/engine/store.js';
 import { superviseExecutions } from '../src/engine/runtime-processes.js';
@@ -50,6 +51,13 @@ function configuration() {
   return { keyId: 'KEYID12345', teamId: 'TEAMID1234', topic: 'app.bzzy.ios', environment: 'sandbox', privateKey, fingerprint: randomUUID() };
 }
 function register(row, extra = {}) { return registerDeviceNotifications(row, { deviceToken: token, environment: 'sandbox', enabled: true, ...extra }); }
+test('an expired phone pairing is diagnosed separately from notification permission or missing Apple setup', () => {
+  const row = grant(); register(row);
+  putRecord('core.relay.grant', row.id, { ...row, expiresAt: Date.now() - 1 });
+  const status = notificationDeliveryStatus();
+  assert.equal(status.registeredDevices, 0); assert.match(status.message, /pairing has expired/);
+  assert.doesNotMatch(JSON.stringify(status), new RegExp(token));
+});
 function outbox(selected, type = 'goal.completed', extra = {}) {
   const event = { id: randomUUID(), sessionId: selected.id, type, occurredAt: new Date(Date.now() + 10).toISOString(),
     objective: 'PRIVATE GOAL TEXT', cwd: '/private/workspace', ...extra };

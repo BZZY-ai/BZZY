@@ -34,6 +34,9 @@ struct ConversationCanvas: View {
     @State private var goalToReplace: String?
     @State private var replacementDraft: String?
     @State private var showReplaceGoal = false
+    @State private var showPauseConfirmation = false
+    @State private var pauseHostID: String?
+    @State private var pauseGoalID: String?
     @State private var retryGoalMessageID: String?
     @State private var showShare = false
     @State private var showImport = false
@@ -87,6 +90,11 @@ struct ConversationCanvas: View {
     }
 
     private var visibleMessages: [LocalMessage] { historyWindow.visible(in: messages) }
+    private func startsSpeakerGroup(_ message: LocalMessage) -> Bool {
+        guard !message.isUser, let index = visibleMessages.firstIndex(where: { $0.id == message.id }),
+              let previous = visibleMessages[..<index].last(where: { $0.invocation == nil }) else { return true }
+        return previous.isUser || previous.speaker != message.speaker || previous.accentIndex != message.accentIndex
+    }
     private var hasEarlierMessages: Bool {
         historyWindow.hasEarlier(in: messages) || isLive && relay.coreSessionID == conversationID && relay.coreHistoryHasOlder
     }
@@ -184,7 +192,8 @@ struct ConversationCanvas: View {
                         }
                         ForEach(visibleMessages) { message in
                             TranscriptMessageRow(message: message, showsDraft: !isDemo && !isLive && message.isUser,
-                                       speaker: message.isUser ? "You" : (message.speaker ?? assistantName ?? title))
+                                       speaker: message.isUser ? "You" : (message.speaker ?? assistantName ?? title),
+                                       showsSpeaker: startsSpeakerGroup(message))
                                 .id(message.id)
                         }
                         if isLive, relay.coreSessionID == conversationID {
@@ -321,6 +330,20 @@ struct ConversationCanvas: View {
                 draft = store.composerDraft(hostID: hostID, conversationID: conversationID)
             } else if !isLive { draft = store.localComposerDrafts[conversationID] ?? "" }
         }
+        .task(id: "\(relay.isCoreSessionReady(conversationID)):\(relay.coreHistoryHasOlder)") {
+            // Fifty wire events may contain only part of one streamed reply.
+            // Fill toward fifty projected messages, with bounded read-only pages.
+            for _ in 0..<100 {
+                guard isLive, relay.isCoreSessionReady(conversationID), followingLatest, !pagingHistory,
+                      messages.filter({ $0.invocation == nil }).count < ConversationHistoryWindow.pageSize,
+                      relay.coreHistoryHasOlder, !relay.coreHistoryLoading, !Task.isCancelled else { return }
+                let first = relay.coreHistoryOldestCursor
+                await relay.loadOlderCoreHistory(sessionID: conversationID)
+                guard followingLatest, !Task.isCancelled else { return }
+                relay.showLatestCoreHistory(sessionID: conversationID)
+                if relay.coreHistoryOldestCursor >= first { return }
+            }
+        }
         .onChange(of: draft) { _, text in
             if let hostID = draftHostID, relay.hosts.contains(where: { $0.id == hostID && $0.isPaired }) { store.saveComposerDraft(text, hostID: hostID, conversationID: conversationID) }
             else if !isLive { store.localComposerDrafts[conversationID] = text.isEmpty ? nil : text }
@@ -333,6 +356,13 @@ struct ConversationCanvas: View {
             if isLive && relay.coreRemovedSessionID == conversationID { cancelDictation(); dismiss() }
         }
         .onDisappear { composerFocused = false; cancelDictation(); persistComposerDraft() }
+        .confirmationDialog("Pause this conversation?", isPresented: $showPauseConfirmation, titleVisibility: .visible) {
+            Button("Pause") {
+                guard canPause, pauseHostID == relay.activeHostID, pauseGoalID == relay.coreGoalID else { return }
+                relay.performHostAction { await relay.controlCore("pause", sessionID: conversationID) }
+            }
+            Button("Keep running", role: .cancel) {}
+        }
         .alert("Replace current goal?", isPresented: $showReplaceGoal) {
             Button("No", role: .cancel) { replacementDraft = nil; goalToReplace = nil; retryGoalMessageID = nil }
             Button("Yes, replace goal", role: .destructive) {
@@ -363,7 +393,7 @@ struct ConversationCanvas: View {
         Menu {
             if relay.coreExecutionState != "paused" {
                 Button("Pause to change mode", systemImage: "pause.fill") {
-                    relay.performHostAction { await relay.controlCore("pause", sessionID: conversationID) }
+                    requestPauseConfirmation()
                 }.disabled(!canPause)
             }
             ForEach(["solo", "delegate", "debate", "parallel", "besties"], id: \.self) { mode in
@@ -404,9 +434,12 @@ struct ConversationCanvas: View {
                             prepareForSubmission(); relay.performHostAction { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
                         }
                     } else {
-                        goalShortcut(relay.coreExecutionState == "paused" ? "Paused" : "Pause", icon: "pause.fill", id: "pause-goal", enabled: canPause) {
-                            relay.performHostAction { await relay.controlCore("pause", sessionID: conversationID) }
-                        }
+                        Button {
+                            requestPauseConfirmation()
+                        } label: {
+                            Image(systemName: "pause.fill").bzzyFont(14).frame(width: 44, height: 44)
+                        }.buttonStyle(.plain).foregroundStyle(canPause ? BZZYTheme.accent : BZZYTheme.muted)
+                            .disabled(!canPause).accessibilityLabel("Pause conversation").accessibilityIdentifier("pause-goal")
                     }
                 }
                 if let session = store.liveSession, session.id == conversationID {
@@ -546,6 +579,11 @@ struct ConversationCanvas: View {
         }
     }
 
+    private func requestPauseConfirmation() {
+        pauseHostID = relay.activeHostID; pauseGoalID = relay.coreGoalID
+        composerFocused = false; showPauseConfirmation = true
+    }
+
     private func finishDictation() {
         recordingTask?.cancel(); recordingTask = nil
         voice.stop()
@@ -586,19 +624,19 @@ private struct TranscriptBlock<Content: View>: View {
     var isUser = false
     var pending = false
     var accent: Color? = nil
+    var showsSpeaker = true
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 7) {
+            if showsSpeaker { HStack(spacing: 7) {
                 Text(isUser ? "YOU" : "AGENT")
                 if !isUser { Text("·"); Text(speaker).lineLimit(1).truncationMode(.middle) }
             }.bzzyFont(11, weight: .semibold)
                 .foregroundStyle(isUser ? BZZYTheme.user : accent ?? BZZYTheme.agent)
-                .accessibilityHidden(true)
+                .accessibilityHidden(true) }
             content().frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.horizontal, 12).padding(.vertical, 10)
-            .background(isUser ? BZZYTheme.userSurface : BZZYTheme.agentSurface)
             .overlay(alignment: .leading) {
                 Rectangle().fill(isUser ? BZZYTheme.user.opacity(pending ? 0.35 : 0.85) : (accent ?? BZZYTheme.agent).opacity(0.8)).frame(width: 2)
             }
@@ -635,6 +673,7 @@ private struct TranscriptMessageRow: View {
     let message: LocalMessage
     let showsDraft: Bool
     let speaker: String
+    var showsSpeaker = true
     private var content: ChatContent { ChatContent.parse(message.text) }
     var body: some View {
         if let step = message.invocation {
@@ -647,7 +686,7 @@ private struct TranscriptMessageRow: View {
         } else {
         VStack(alignment: .leading, spacing: 7) {
             TranscriptBlock(speaker: message.isUser ? "you" : speaker, isUser: message.isUser,
-                            accent: message.accentIndex.map(invocationColor)) {
+                            accent: message.accentIndex.map(invocationColor), showsSpeaker: showsSpeaker) {
                 if message.isUser {
                     Text(verbatim: message.text).bzzyFont(15).lineSpacing(4).textSelection(.enabled)
                         .foregroundStyle(BZZYTheme.userText)

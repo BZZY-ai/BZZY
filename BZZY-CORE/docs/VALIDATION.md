@@ -1,3 +1,31 @@
+# Chat readability, iPhone history and pairing diagnostics (2026-10-27)
+
+Node 24/macOS: **975 Core tests passed, 2 skipped** and **761 CLI tests passed,
+21 skipped**. Both syntax checks pass. Focused transcript tests verify grouped
+headings, separate original replies/copy targets, specialist transitions and
+plain message backgrounds. Existing update activation/rollback tests retain
+private grants, goals, settings and live runner identities on macOS and Linux.
+
+iOS build **0.1.0 (23)**: **88 native Swift tests passed**, plus model/message
+format checks, native preview rendering and plist checks. Four focused simulator
+UI cases passed across broad/focused runs: recorded invocation rows, 50-entry
+history/older paging/Latest, accessibility navigation and notification/connection
+settings. Simulator screenshots confirm plain transcript backgrounds. The final
+simulator build uses local signing and preserves the normal Keychain boundary.
+
+Regression coverage includes an unavailable Relay grant retaining the pinned
+computer while every Core action stays locked, bounded larger event-cache reload
+and backward browsing, explicit expiry/revocation, and diagnosis of an expired
+notification pairing. Older native fixtures now page through diagnostic events
+to find actual reply bodies and sequence transport frames by acknowledged
+receipts instead of assuming coalesced inspections consume a fixed quota.
+
+New own-phone pairings request the existing supported 30-day lifetime, not
+permanent access. Existing expired grants are not renewed. No Relay protocol
+change, running-installation update, phone installation or production APNs send
+was performed. Physical-device notification display still requires a current
+pairing, enabled iOS alerts, matching Apple setup and an actual device check.
+
 # Long-running goals and structured workflow consultation (2026-10-26)
 
 Node.js 24/macOS full suites: **864 Core tests passed, 2 skipped** (866 total)

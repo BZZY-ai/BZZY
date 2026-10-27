@@ -270,7 +270,7 @@ test('Pair iPhone uses maximum access without pickers and its secondary screen r
   assert.equal(ui.settings.warning, false, ui.settings.message); assert.equal(ui.settings.page, 'pair');
   assert.equal(fixture.calls.length, 1);
   assert.deepEqual(fixture.calls[0], { sessionId: ui.sessionId, permissions: fullPermissions,
-    sessionAccess: true, shareAccess: true, agentAccess: true, ttlSeconds: 600, grantTtlSeconds: 86400 });
+    sessionAccess: true, shareAccess: true, agentAccess: true, ttlSeconds: 600, grantTtlSeconds: 30 * 86400 });
   assert.ok(ui.settings.rows().some(row => row.action === 'back')); assert.ok(ui.settings.rows().some(row => row.action === 'copy-code'));
   assert.ok(ui.settings.rows().some(row => /^BZZY-PAIR-/.test(row.text)));
   // Escape closes an optional QR and returns directly to chat.

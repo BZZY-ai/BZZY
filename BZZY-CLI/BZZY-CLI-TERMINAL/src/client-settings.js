@@ -156,7 +156,7 @@ export class ClientSettings {
     put();
     if (this.#invitation) {
       put(this.#invitation.code, 'text');
-      put(`Code expires at ${new Date(this.#invitation.expiresAt).toLocaleTimeString()} · access lasts 24 hours`, 'muted');
+      put(`Code expires at ${new Date(this.#invitation.expiresAt).toLocaleTimeString()} · access lasts 30 days`, 'muted');
       put('Show QR', 'accent', 'qr');
       put('Open QR image', 'accent', 'open-qr');
       put('Copy code', 'accent', 'copy-code');
@@ -236,7 +236,7 @@ export class ClientSettings {
     if (!id) { this.message = 'Start a terminal session with bzzy first, then pair your iPhone.'; return; }
     if (this.closed) return;
     const invitation = await this.gateway.createPairing({ sessionId: id, permissions: [...sessionPermissions],
-      sessionAccess: true, shareAccess: true, agentAccess: true, ttlSeconds: 600, grantTtlSeconds: 86400 });
+      sessionAccess: true, shareAccess: true, agentAccess: true, ttlSeconds: 600, grantTtlSeconds: 30 * 86400 });
     if (this.closed) return;
     this.#invitation = invitation;
     // Only the SDK's fixed black/white SGR and block glyphs may enter the frame.

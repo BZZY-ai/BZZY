@@ -20,7 +20,6 @@ struct AgentsView: View {
                         FlyEyes().frame(maxWidth: .infinity).padding(.horizontal, -14)
                     }
                     HStack {
-                        agentsHeading
                         Spacer()
                         Button { relay.performHostAction { await relay.refreshCoreAgents() } } label: {
                             Image(systemName: "arrow.clockwise").bzzyFont(13).frame(width: 44, height: 44)
@@ -32,10 +31,6 @@ struct AgentsView: View {
 
                 if relay.coreAgentsAvailable || !store.hostAgents.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(relay.coreAgentsAvailable ? "On demand" : "Saved agents · Offline").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
-                            Spacer()
-                        }
                         if relay.coreAgentsAvailable && !store.hostAgentsConfigured {
                             Text("Configure the default Agents workspace on your host to create agents.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         }
@@ -104,11 +99,6 @@ struct AgentsView: View {
             .onChange(of: store.notificationAgentID) { _, id in
                 if let id, let agent = store.hostAgents.first(where: { $0.id == id }) { notificationAgent = agent; store.notificationAgentID = nil }
             }
-    }
-
-    private var agentsHeading: some View {
-        Text("› agents").bzzyFont(14, weight: .semibold).foregroundStyle(BZZYTheme.accent)
-            .fixedSize(horizontal: true, vertical: false).accessibilityAddTraits(.isHeader)
     }
 
     private func hostAgentRow(_ agent: HostAgentRecord) -> some View {

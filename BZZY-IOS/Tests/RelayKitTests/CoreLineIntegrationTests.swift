@@ -332,8 +332,8 @@ final class CoreLineIntegrationTests: XCTestCase {
             let state = try fixture.request(["op": .string("state")])
             return state["executions"].array?.contains { $0["id"].string == run["executionId"].string && $0["state"].string == "finished" } == true ? state : nil
         }
-        let events = try await agent.request("events.list")
-        XCTAssertTrue(events["events"].array?.contains { $0["type"].string == "text" && $0["data"]["text"].string?.contains("<message version=\"1\">") == true } == true)
+        let hasReply = try await hasFormattedReply(agent)
+        XCTAssertTrue(hasReply)
         let shareID = CoreRelayClient.commandID(), share = try await client.request("share.create", id: shareID)
         XCTAssertTrue(share["code"].string?.hasPrefix("BZZY-TERMINAL-") == true)
         let shareAgain = try await client.request("share.create", id: shareID)
@@ -384,8 +384,8 @@ final class CoreLineIntegrationTests: XCTestCase {
             resource: try XCTUnwrap(importedContext["resource"].string), expectedShareKind: .agent)
         clients[importedClient.resource] = importedClient
         _ = try await importedClient.request("session.get")
-        let importedEvents = try await importedClient.request("events.list")
-        XCTAssertTrue(importedEvents["events"].array?.contains { $0["type"].string == "text" && $0["data"]["text"].string?.contains("<message version=\"1\">") == true } == true)
+        let hasImportedReply = try await hasFormattedReply(importedClient)
+        XCTAssertTrue(hasImportedReply)
         let afterImport = try fixture.request(["op": .string("state")])
         XCTAssertEqual(afterImport["nativeExecutionCount"].integer, 1, "Import/open never starts inference")
         XCTAssertEqual(afterImport["importedExecutionCount"].integer, 1, "The source execution is preserved as imported historical context")
@@ -407,6 +407,17 @@ final class CoreLineIntegrationTests: XCTestCase {
 }
 
 private extension String { var asCoreString: CoreJSONValue { .string(self) } }
+
+@MainActor private func hasFormattedReply(_ client: CoreRelayClient) async throws -> Bool {
+    var cursor: Int64 = 0
+    for _ in 0..<20 {
+        let page = try await client.request("events.list", params: ["after": .number(Double(cursor)), "limit": .number(50)])
+        if page["events"].array?.contains(where: { $0["type"].string == "text" && $0["data"]["text"].string?.contains("<message version=\"1\">") == true }) == true { return true }
+        guard page["hasMore"].bool == true, let next = page["nextCursor"].integer, next > cursor else { return false }
+        cursor = next
+    }
+    return false
+}
 
 private final class LocalCoreLineFixture {
     private let process = Process(), input = Pipe(), output = Pipe(), errors = Pipe()

@@ -37,7 +37,7 @@ struct SettingsView: View {
                             Spacer()
                             Image(systemName: "chevron.right").bzzyFont(12).foregroundStyle(BZZYTheme.muted)
                         }.panel()
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(.plain).accessibilityIdentifier("connection-settings")
                     Button { showNotifications = true } label: {
                         HStack {
                             Label("Notifications", systemImage: "bell").bzzyFont(14)

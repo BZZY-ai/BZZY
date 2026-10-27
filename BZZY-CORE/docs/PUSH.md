@@ -181,6 +181,13 @@ owner's Apple configuration and permission.
 
 ## Diagnosing delivery
 
+The CLI's own-phone pairing now lasts 30 days; older pairings were one day.
+Source updates preserve the same private identity and grants without extending
+their expiry. An expired pairing stops alerts as well as remote controls. Safe
+notification status identifies that condition: pair again through CLI Settings,
+then reopen the iPhone app to register its current Apple token and preferences.
+Never bypass expired/revoked authorization to deliver a queued alert.
+
 Run `bzzy notifications status`, or open CLI Settings → BZZY Core, for safe
 configuration/registration/delivery status. Missing or mismatched Apple setup
 creates `waiting_for_configuration` records with a fixed reason code, rather

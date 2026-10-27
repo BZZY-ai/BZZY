@@ -160,19 +160,19 @@ struct ChatChecks {
     }
     let initial = (1...225).map(message), incoming = (226...235).map(message)
     var window = ConversationHistoryWindow()
-    require(window.visible(in: initial).map(\.text) == Array(initial.suffix(20)).map(\.text), "Opening history shows exactly the latest 20 cached messages")
+    require(window.visible(in: initial).map(\.text) == Array(initial.suffix(50)).map(\.text), "Opening history shows exactly the latest 50 cached messages")
     window.freeze(in: initial)
-    require(window.visible(in: initial + incoming) == Array(initial.suffix(20)), "Incoming messages cannot shift the older reading window")
-    require(window.revealEarlier(in: initial + incoming) && window.count == 40, "Earlier loads one 20-message page")
-    require(window.visible(in: initial + incoming).first?.id == initial[185].id && window.visible(in: initial + incoming).last?.id == initial.last?.id, "Paging preserves the original tail boundary and stable IDs")
+    require(window.visible(in: initial + incoming) == Array(initial.suffix(50)), "Incoming messages cannot shift the older reading window")
+    require(window.revealEarlier(in: initial + incoming) && window.count == 100, "Earlier loads one 50-message page")
+    require(window.visible(in: initial + incoming).first?.id == initial[125].id && window.visible(in: initial + incoming).last?.id == initial.last?.id, "Paging preserves the original tail boundary and stable IDs")
     let earlier = (-40 ... -1).map(message), backfilled = earlier + initial + incoming
-    require(window.revealEarlier(in: backfilled) && window.visible(in: backfilled).first?.id == initial[165].id, "Prepending Core events does not invalidate the visible anchor")
+    require(window.revealEarlier(in: backfilled) && window.visible(in: backfilled).first?.id == initial[75].id, "Prepending Core events does not invalidate the visible anchor")
     for _ in 0..<20 { window.revealEarlier(in: backfilled) }
     require(window.count <= 200 && window.visible(in: backfilled).first?.id == earlier.first?.id, "Backward browsing stays bounded while reaching the earliest message")
     require(!window.includesLatest(in: backfilled), "A bounded older window cannot claim to be at the latest reply")
     window.showLatest()
-    require(window.visible(in: backfilled) == Array(backfilled.suffix(20)), "Latest returns to the newest 20 messages")
-    print("PASS: 20-message windows, anchored live updates, older paging, bounded rendering and Latest")
+    require(window.visible(in: backfilled) == Array(backfilled.suffix(50)), "Latest returns to the newest 50 messages")
+    print("PASS: 50-message windows, anchored live updates, older paging, bounded rendering and Latest")
 }
 
 @MainActor private func checkInvocationTranscript() throws {

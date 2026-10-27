@@ -12,6 +12,27 @@ import { commandSuggestions } from '../src/terminal-commands.js';
 import { palette, palettes, createTerminalTheme } from '../src/terminal-theme.js';
 
 const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+test('consecutive replies share one speaker heading and plain rails without merging saved replies or copy targets', () => {
+  const { ui } = terminal();
+  try {
+    ui.event('text', { text: 'First reply', itemId: 'first' });
+    ui.event('info', { message: 'Background checkpoint saved' });
+    ui.event('text', { text: 'Second reply', itemId: 'second' });
+    let lines = ui.tui.content(100), text = lines.map(clean).join('\n');
+    assert.equal((text.match(/AGENT · bzzy/g) || []).length, 1);
+    assert.match(text, /│ First reply/); assert.match(text, /│ Second reply/);
+    assert.equal(ui.tui.entries.filter(entry => entry.kind === 'assistant').length, 2);
+    const copied = new Set(ui.tui.contentHits.filter(hit => hit.type === 'response').map(hit => hit.entry.text));
+    assert.deepEqual(copied, new Set(['First reply', 'Second reply']));
+    for (const entry of ui.tui.entries) assert.doesNotMatch(ui.tui.entryLayout(entry, 100).lines.join(''), /\x1b\[(?:48;|4[0-7]m)/);
+    ui.event('message.user', { text: 'Follow-up' });
+    ui.event('text', { text: 'Third reply', itemId: 'third' });
+    ui.event('peer.text', { text: 'Specialist reply', childSessionId: 'worker', agent: 'Reviewer', itemId: 'worker-reply' });
+    text = ui.tui.content(100).map(clean).join('\n');
+    assert.equal((text.match(/AGENT · bzzy/g) || []).length, 2);
+    assert.match(text, /YOU/); assert.match(text, /AGENT · Reviewer/);
+  } finally { ui.close(); }
+});
 test('CLI and iOS share assistant message boundaries for native, legacy and interleaved streams', () => {
   const fixtures = JSON.parse(fs.readFileSync(new URL('../../../BZZY-CORE/test/fixtures/chat-message-boundaries.json', import.meta.url), 'utf8'));
   for (const fixture of fixtures) {
@@ -133,7 +154,7 @@ test('user and agent turns retain labeled, distinct rails in RGB, basic-color an
       const user = ui.tui.entryLayout({ kind: 'user', text: 'Review the café 🐝 and 漢字 layout.', goal: true }, 66).lines;
       const agent = ui.tui.entryLayout({ kind: 'assistant', label: 'Codex', text: 'I checked the layout.\nThe saved history stays intact.' }, 66).lines;
       assert.match(user.map(clean).join('\n'), /YOU · GOAL/); assert.match(agent.map(clean).join('\n'), /AGENT · Codex/);
-      assert.match(clean(user[1]), /▎ Review the café/); assert.match(clean(agent[1]), /▎ I checked the layout/);
+      assert.match(clean(user[1]), /▎ Review the café/); assert.match(clean(agent[1]), /│ I checked the layout/);
       assert.doesNotMatch(agent.map(clean).join('\n'), /\[Copy\]/);
       assert.ok([...user, ...agent].every(line => cellWidth(line) <= 66));
       assert.ok(user.map(clean).some(line => line.includes('▎')));
