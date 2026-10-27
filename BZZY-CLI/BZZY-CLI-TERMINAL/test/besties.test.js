@@ -54,21 +54,49 @@ function peers(session) {
   return result;
 }
 
-for (const [mode, run] of [['besties', runBesties], ['parallel', runParallel], ['debate', runDebate]]) {
-  test(`${mode} snapshot limit pauses the same goal without launching model work`, async () => {
+for (const [mode, run] of [['besties', runBesties], ['parallel', runParallel]]) {
+  test(`${mode} skips incidental large files and proceeds to worker dispatch`, async () => {
     const session = parent(), goalId = session.goal.id;
     session.mode = mode; session.parallelAgents = session.besties; session.debateAgents = session.besties; saveSession(session);
     fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 1 } }));
     const fd = fs.openSync(path.join(session.cwd, 'tool-output.bin'), 'w'); fs.ftruncateSync(fd, 2 * 1024 * 1024); fs.closeSync(fd);
     const messages = [];
-    assert.equal(await run(session, {}, { event(type, data) { messages.push({ type, ...data }); } }), 130);
+    assert.equal(await run(session, {}, { event(type, data) {
+      messages.push({ type, ...data });
+      if (type === 'besties.turn' || type === 'parallel.usage') {
+        const id = randomUUID(); putRecord('control', id, { id, sessionId: session.id, action: 'cancel', state: 'queued' });
+      }
+    } }), 130);
     const paused = loadSession(session.id);
-    assert.equal(paused.goal.id, goalId); assert.equal(paused.goal.status, 'paused');
-    assert.equal(paused.goal.reason, 'snapshot_limit'); assert.equal(paused.executionState, 'paused');
-    assert.ok(messages.some(event => event.type === 'error' && /snapshotLimits.maxFileMiB/.test(event.message)));
-    assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('assignment').length, 0);
+    assert.equal(paused.goal.id, goalId); assert.equal(paused.goal.status, 'cancelled');
+    assert.equal(paused.goal.reason, 'cancelled');
+    assert.ok(messages.some(event => event.type === 'info' && /snapshot skipped 1 file/.test(event.message)));
+    assert.equal(messages.some(event => event.type === 'error'), false);
+    const group = getRecord(mode, session.id);
+    assert.equal(group.peers.length, 2); assert.ok(listRecords('execution').length >= 1);
+    for (const peer of group.peers) {
+      const child = loadSession(peer.sessionId);
+      assert.ok(fs.existsSync(path.join(child.cwd, 'source.txt')));
+      assert.equal(fs.existsSync(path.join(child.cwd, 'tool-output.bin')), false);
+    }
   });
 }
+
+test('Validate skips incidental large files and reaches independent investigation', async () => {
+  const session = parent(); session.mode = 'debate'; session.debateAgents = session.besties; saveSession(session);
+  fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 1 } }));
+  const fd = fs.openSync(path.join(session.cwd, 'tool-output.bin'), 'w'); fs.ftruncateSync(fd, 2 * 1024 * 1024); fs.closeSync(fd);
+  let investigated = false; const messages = [];
+  assert.equal(await runDebate(session, {}, { event(type, data) { messages.push({ type, ...data }); } }, {
+    async investigate(_session, _agents, snapshot) {
+      investigated = true;
+      assert.ok(snapshot.manifest['source.txt']); assert.equal(snapshot.manifest['tool-output.bin'], undefined);
+      throw new Error('Fixture ended after reaching investigation');
+    },
+  }), 2);
+  assert.equal(investigated, true); assert.notEqual(loadSession(session.id).goal.status, 'paused');
+  assert.ok(messages.some(event => event.type === 'info' && /snapshot skipped 1 file/.test(event.message)));
+});
 
 test('peer messages are durable, idempotent and grant only explicitly shared evidence', async () => {
   const session = parent(), [a, b] = peers(session), evidence = captureEvidence(a, 'proof.txt');

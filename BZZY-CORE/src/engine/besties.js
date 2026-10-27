@@ -29,7 +29,7 @@ export async function runBesties(session, options, ui) {
     }
     if (!group) {
       const context = session.conversationHandoff?.pending ? conversationPrompt(session, session.goal.objective) : '';
-      const snapshot = snapshotWorkspace(session, 'besties-common-input'), peers = [];
+      const snapshot = snapshotWorkspace(session, 'besties-common-input', { ui }), peers = [];
       for (const [index, selection] of choices.entries()) {
         const namespace = `${selection.provider}-bestie-${index + 1}-${session.goal.id.slice(0, 8)}${session.modeRevision ? '-' + session.modeRevision : ''}`, work = path.join(home(), 'besties', session.id, namespace);
         privateDir(path.dirname(work)); copyWorkspaceSnapshot(snapshot, work, { sessionId: session.id });
@@ -110,7 +110,7 @@ export async function runBesties(session, options, ui) {
     const result = { goalId: session.goal.id, peers: group?.peers || [], collaboration: group ? peerCollaborationState(session) : null, stopReason: coordinator.stopping, usage };
     putRecord('besties-result', session.id, result); return coordinator.finish('awaiting_review', result, usage);
   } catch (error) {
-    coordinator.stopping ||= error.code === 'SNAPSHOT_LIMIT' ? 'snapshot_limit' : 'coordination_failure'; ui.event('error', { message: error.message });
+    coordinator.stopping ||= 'coordination_failure'; ui.event('error', { message: error.message });
     return coordinator.finish('awaiting_review', { peers: group?.peers || [], stopReason: error.message }, usage);
   }
 }

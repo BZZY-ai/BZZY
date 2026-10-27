@@ -260,18 +260,21 @@ export async function assessDebateCompletion(session, record, { signal } = {}) {
 // Child success alone establishes neither those paths nor those final checks.
 export async function assessGroupCompletion(session, children, { mutualReviewed = true, signal } = {}) {
   const group = getRecord(session.mode, session.id), snapshot = group?.snapshotId && getRecord('snapshot', group.snapshotId);
-  const project = snapshot ? workspaceManifest(session.cwd, snapshot.limits) : {};
+  const projectOmissions = [], projectOmittedPaths = new Set(), projectOmittedDirectories = new Set();
+  const project = snapshot ? workspaceManifest(session.cwd, undefined, { omissions: projectOmissions, omittedPaths: projectOmittedPaths, omittedDirectories: projectOmittedDirectories, priority: Object.keys(snapshot.manifest) }) : {};
   const workspaces = children.map(child => {
     const changes = snapshot ? inspectWorkspace(snapshot, child.cwd) : [];
     const unapplied = changes.filter(change => {
       try {
         inside(session.cwd, change.path, { exists: false });
+        if (projectOmittedPaths.has(change.path) || [...projectOmittedDirectories].some(dir => !dir || change.path.startsWith(dir + '/'))) return true;
         return (project[change.path]?.sha256 || null) !== (change.after?.sha256 || null);
       } catch { return true; }
     });
-    return { sessionId: child.id, agent: child.agentNamespace || child.provider, directory: child.cwd, changes, unapplied: unapplied.map(change => change.path) };
+    return { sessionId: child.id, agent: child.agentNamespace || child.provider, directory: child.cwd, changes, unapplied: unapplied.map(change => change.path),
+      omissions: changes.omissions || [], uninspectedPaths: changes.uninspected || [] };
   });
-  const integrated = workspaces.every(workspace => !workspace.unapplied.length);
+  const integrated = workspaces.every(workspace => !workspace.unapplied.length && !workspace.uninspectedPaths.length);
   const aggregate = artifact(session, JSON.stringify({ goalId: session.goal?.id, mutualReviewed,
     children: children.map(child => ({ sessionId: child.id, goalId: child.goal?.id, provider: child.provider, model: child.model,
       status: child.goal?.status, acceptance: child.acceptance || null })) }, null, 2), 'group-acceptance-evidence', 'application/json');
@@ -291,6 +294,7 @@ export async function assessGroupCompletion(session, children, { mutualReviewed 
   const result = await assessCompletion(session, { signal, prerequisite });
   result.aggregateEvidenceId = aggregate.id; result.childSessions = children.map(child => child.id); result.mutualReviewed = mutualReviewed;
   result.workspaces = workspaces; result.integrated = integrated;
+  result.workspaceOmissions = projectOmissions;
   if (!integrated) result.reason = 'Peer changes remain in private workspaces. Review and integrate the selected result before completing the project goal.';
   putRecord('acceptance', result.id, result); return result;
 }

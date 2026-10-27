@@ -15,10 +15,13 @@ Implemented:
 - Workspace snapshots default to 1 GiB per file, 8 GiB total and 100,000 files,
   with size/count preflight before payload hashing. Explicit owner limits remain
   authoritative. Runtime caches, including `.cache/ms-playwright`, are excluded
-  with durable omission records in Git and ordinary directories. Task evidence
-  stays included; oversized inputs fail explicitly with the exact config setting
-  and path, preserving the paused goal for explicit resume. Existing worker
-  snapshots use current host limits during inspection. See the CLI's
+  with durable omission records in Git and ordinary directories. Oversized,
+  excess, changing or individually unreadable files are skipped with a bounded
+  coverage notice; goals continue in their original cwd. Copied workers receive
+  the omission notice and original input location as a reference under existing
+  permissions. Omitted files never become inferred deletions or verified edits;
+  previously captured files that cannot be inspected block patch acceptance.
+  Existing worker snapshots use current host copy limits. See the CLI's
   [snapshot settings](../BZZY-CLI/BZZY-CLI-TERMINAL/README.md).
 
 - [Long-running goal continuity](docs/LONG-RUN-RELIABILITY.md): goal/round-scoped

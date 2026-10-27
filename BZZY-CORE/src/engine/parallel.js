@@ -24,7 +24,7 @@ export async function runParallel(session, options, ui) {
     else {
       if (saved) putRecord('coordination-history', `${session.id}:parallel:${saved.modeRevision || 0}`, saved);
       const context = session.conversationHandoff?.pending ? conversationPrompt(session, session.goal.objective) : '';
-      const snapshot = snapshotWorkspace(session, 'parallel-common-input');
+      const snapshot = snapshotWorkspace(session, 'parallel-common-input', { ui });
       for (const [index, selection] of choices.entries()) {
         const namespace = `${selection.provider}-${index + 1}-${session.goal.id.slice(0, 8)}${session.modeRevision ? '-' + session.modeRevision : ''}`;
         const work = path.join(home(), 'parallel', session.id, namespace); privateDir(path.dirname(work));
@@ -85,7 +85,6 @@ Read existing project constraints and relevant ledgers. Use peer_status to see p
     putRecord('parallel-result', session.id, result);
     return await coordinator.finish(accepted ? 'complete' : 'awaiting_review', result, usage);
   } catch (error) {
-    if (error.code === 'SNAPSHOT_LIMIT') coordinator.stopping ||= 'snapshot_limit';
     ui.event('error', { message: error.message }); return coordinator.finish('blocked', { peers, stopReason: error.message }, usage);
   }
 }

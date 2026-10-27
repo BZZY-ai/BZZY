@@ -59,20 +59,20 @@ for (const id of ['codex', 'claude']) {
   });
 }
 
-test('snapshot limit pauses the saved goal before inference and raising it permits resume', async () => {
+test('snapshot limits skip incidental files and the goal executes in its original cwd', async () => {
   const session = createSession(BUILTINS.codex, work); session.goal = newGoal('Verify the source'); prepareTask(session, {}, session.goal.objective);
   fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 20 } }));
   const goalId = session.goal.id, output = ui();
-  assert.equal(await runSession(BUILTINS.codex, session, { pet: false }, output, session.goal.objective, { goal: true }), 2);
-  assert.ok(output.events.some(event => event.type === 'error' && /Cannot snapshot "large.bin".*20 MiB/.test(event.message)));
-  assert.equal(fs.existsSync(process.env.BZZY_TEST_LOG), false);
-  const paused = loadSession(session.id);
-  assert.equal(paused.executionState, 'paused'); assert.equal(paused.goal.status, 'paused');
-  assert.equal(paused.goal.id, goalId); assert.equal(paused.goal.reason, 'snapshot_limit');
-  assert.equal(paused.failure.category, 'workspace_limit');
-  fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 64 } }));
-  assert.equal(await runSession(BUILTINS.codex, paused, { pet: false }, ui(), paused.goal.objective, { goal: true, resumeGoal: true }), 0);
-  assert.equal(loadSession(session.id).goal.id, goalId);
+  assert.equal(await runSession(BUILTINS.codex, session, { pet: false }, output, session.goal.objective, { goal: true }), 0);
+  assert.ok(output.events.some(event => event.type === 'info' && /snapshot skipped 1 file/.test(event.message)));
+  assert.equal(output.events.some(event => event.type === 'error'), false);
+  assert.ok(fs.existsSync(process.env.BZZY_TEST_LOG));
+  const saved = loadSession(session.id);
+  assert.equal(saved.executionState, 'idle'); assert.equal(saved.goal.id, goalId);
+  assert.equal(saved.cwd, work); assert.ok(fs.existsSync(path.join(work, '.bzzy')));
+  assert.equal(fs.statSync(path.join(work, 'large.bin')).size, 21 * 1024 * 1024);
   const [snapshot] = listRecords('snapshot'); assert.equal(snapshot.sessionId, session.id); assert.ok(snapshot.manifest['source.txt']);
-  assert.equal(snapshot.manifest['large.bin'].size, 21 * 1024 * 1024);
+  assert.equal(snapshot.manifest['large.bin'], undefined);
+  const requests = fs.readFileSync(process.env.BZZY_TEST_LOG, 'utf8');
+  assert.match(requests, /WORKSPACE SNAPSHOT COVERAGE/); assert.match(requests, /large.bin/);
 });

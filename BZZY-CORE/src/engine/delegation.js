@@ -352,6 +352,7 @@ export function reviewAssignment(parent, id, input) {
     if (job.latestReport?.round !== job.currentRound || !Array.isArray(job.latestReport.changes)) throw new Error('Accepting an assignment requires the current round’s recorded report and patch.');
     const snapshot = getRecord('snapshot', job.snapshotId);
     const changes = inspectWorkspace(snapshot, job.workspace);
+    if (changes.uninspected.length) throw new Error('Some previously snapshotted worker files could not be inspected. Resolve their omissions before accepting changes.');
     if (digest(changes) !== digest(job.latestReport.changes)) throw new Error('Worker workspace changed after its report. Request a focused follow-up before accepting it.');
     const modes = Object.fromEntries(changes.filter(change => change.after).map(change => [change.path, fs.statSync(inside(job.workspace, change.path)).mode & 0o777]));
     patch = { snapshotId: snapshot.id, changes, sha256: digest(changes), modes };
@@ -379,6 +380,7 @@ export function applyAssignment(parent, id) {
   const patch = job.review?.patch;
   if (!patch || patch.sha256 !== digest(patch.changes)) throw new Error('This assignment has no immutable reviewed patch. Request a new reviewed assignment before applying it.');
   const base = getRecord('snapshot', patch.snapshotId), changes = inspectWorkspace(base, job.workspace);
+  if (changes.uninspected.length) throw new Error('Some previously snapshotted worker files could not be inspected. Unverified changes were not applied.');
   if (digest(changes) !== patch.sha256) throw new Error('Worker workspace changed after supervisor review. Unreviewed changes were not applied.');
   if (changes.some(change => change.after && (fs.statSync(inside(job.workspace, change.path)).mode & 0o777) !== patch.modes?.[change.path])) throw new Error('Worker file permissions changed after supervisor review.');
   const application = getRecord('assignment-apply', id) || { id, patchSha256: patch.sha256, paths: {} };
@@ -485,7 +487,8 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
       error: code === 0 ? null : childSession.failure?.message || childSession.goal?.reason || childSession.stopReason || null,
       workerClaim: report?.status || 'unknown', summary: (report?.summary || 'Worker returned without a structured assignment report.').slice(0, 8000),
       report: report || null, contextRequest: request, artifacts: [...outputs, patch].map(a => ({ id: a.id, label: a.label, size: a.size, sha256: a.sha256 })),
-      missingReport: !report, changes, usage: childSession.usage ? { ...childSession.usage, elapsedSeconds: childSession.elapsedSeconds } : null, exitCode: code, finishedAt: now() };
+      missingReport: !report, changes, workspaceOmissions: changes.omissions, uninspectedPaths: changes.uninspected,
+      usage: childSession.usage ? { ...childSession.usage, elapsedSeconds: childSession.elapsedSeconds } : null, exitCode: code, finishedAt: now() };
     const fullReport = artifact(childSession, JSON.stringify(result, null, 2), 'assignment-report', 'application/json');
     result.reportArtifactId = fullReport.id;
     result.artifacts.push({ id: fullReport.id, label: fullReport.label, size: fullReport.size, sha256: fullReport.sha256 });

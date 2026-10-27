@@ -39,7 +39,7 @@ export async function runDebate(session, options, ui, dependencies = {}) {
     const material = artifact(session, content, 'debate-selected-material', selected?.mediaType || 'text/plain');
     if (selected) { Object.assign(material, { importedFrom: selected.id, importedSha256: selected.sha256,
       ...(selected.source ? { source: selected.source, sourceWorkspace: selected.sourceWorkspace, sourceSha256: selected.sourceSha256 } : {}) }); putRecord('artifact', material.id, material); }
-    const snapshot = snapshotWorkspace(session, 'debate-fixed-snapshot');
+    const snapshot = snapshotWorkspace(session, 'debate-fixed-snapshot', { ui });
     const materialPath = path.join(snapshot.directory, 'BZZY_SELECTED_MATERIAL.txt');
     if (fs.existsSync(materialPath)) throw new Error('Reserved validation snapshot path already exists.');
     fs.writeFileSync(materialPath, content, { mode: 0o600 });
@@ -204,7 +204,6 @@ PRIOR MAIN CASE:\n${JSON.stringify(currentCase)}\nCHALLENGER REPORTS:\n${JSON.st
     result.outcome = unresolved ? 'unresolved' : 'assessed';
     return await finishValidation(session, options, ui, coordinator, result, usage, missionContext, synthesizeConsensus, consensus);
   } catch (error) {
-    if (error.code === 'SNAPSHOT_LIMIT') coordinator.stopping ||= 'snapshot_limit';
     ui.event('error', { message: error.message });
     const partial = { version: 1, debateId: debateIdentity(session), transcript, decision, objectionLedger, outcome: 'unresolved', goalSatisfaction: 'inconclusive',
       assessment: { passed: false, challengeRounds: transcript.length, semanticVerification: 'not-automated' },

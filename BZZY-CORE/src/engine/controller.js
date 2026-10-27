@@ -31,13 +31,12 @@ import { captureSkillOutcomes } from './skill-feedback.js';
 
 export function classifyFailure(error) {
   const message = String(error.message || error);
-  const category = error.code === 'SNAPSHOT_LIMIT' ? 'workspace_limit'
-    : /auth|unauthorized|invalid.*key|not.logged.in|401/i.test(message) ? 'authentication'
+  const category = /auth|unauthorized|invalid.*key|not.logged.in|401/i.test(message) ? 'authentication'
     : /rate.?limit|429|quota|usage.limit/i.test(message) ? 'rate_limit'
     : /input.*required|approval required|permission.*denied/i.test(message) ? 'missing_input'
     : /timeout|timed.out/i.test(message) ? 'timeout' : error.code === 'UNSUPPORTED_POLICY' ? 'unsupported_policy'
     : /tool|command|spawn|ENOENT/i.test(message) ? 'tool_failure' : 'backend_failure';
-  return { category, message, retryable: ['rate_limit', 'timeout'].includes(category), requiresInput: ['authentication', 'missing_input', 'workspace_limit'].includes(category) };
+  return { category, message, retryable: ['rate_limit', 'timeout'].includes(category), requiresInput: ['authentication', 'missing_input'].includes(category) };
 }
 export function usageSummary(session) {
   return delegationUsage(session);
@@ -85,7 +84,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     if (!agentScope && (options.strictPolicy || goal && session.mode === 'delegate')) requireSandbox(goal && session.mode === 'delegate' ? 'Delegate workers' : 'Enforced task policies');
     initializeProject(session);
     if (session.contract) writeProjectRecord(session, 'contracts', session.goal?.id || session.id, session.contract);
-    if (goal && !session.startSnapshotId && !['executor', 'reviewer'].includes(session.role)) session.startSnapshotId = snapshotWorkspace(session, 'run-start').id;
+    if (goal && !session.startSnapshotId && !['executor', 'reviewer'].includes(session.role)) session.startSnapshotId = snapshotWorkspace(session, 'run-start', { ui: recorded }).id;
     session.executionState = 'running'; if (goal) { session.goal.status = 'active'; session.deferTerminalNotification = true; }
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
     putRecord('run', session.id, run); saveSession(session);
@@ -186,18 +185,13 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     return stopping ? ['interrupted', 'user_pause', 'cancelled'].includes(stopping) ? 130 : 2 : goal && session.goal.status !== 'complete' ? 2 : 0;
   } catch (error) {
     failedThisTurn = true;
-    const failure = classifyFailure(error);
-    if (failure.category === 'workspace_limit' && !stopping) {
-      stop('snapshot_limit');
-      recorded.event('error', { message: failure.message, code: error.code });
-    }
-    session.failure = failure; session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping ? 'paused' : 'failed';
+    const failure = classifyFailure(error); session.failure = failure; session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping ? 'paused' : 'failed';
     const budgetLimited = ['runtime_limit', 'token_limit'].includes(stopping);
     if (goal && !['complete', 'cancelled'].includes(session.goal.status)) {
       session.goal.status = stopping === 'cancelled' ? 'cancelled' : stopping ? budgetLimited ? 'budget_limited' : 'paused' : failure.category === 'rate_limit' ? 'usage_limited' : 'blocked';
       session.goal.reason = stopping || failure.message;
     }
-    if (stopping) return budgetLimited || stopping === 'snapshot_limit' ? 2 : 130;
+    if (stopping) return budgetLimited ? 2 : 130;
     throw error;
   } finally {
     clearInterval(heartbeat); clearInterval(historyMaintenance); clearInterval(controls); clearTimeout(killTimer); indicator.stop(); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); ui.beforeOutput = null;

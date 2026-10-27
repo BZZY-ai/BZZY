@@ -56,7 +56,7 @@ export function readArtifact(id, offset = 0, limit = 8192) {
 }
 const excluded = new Set(['.git', 'node_modules', '.bzzy', '.bzzy-runtime', 'codex', 'codex-0.162.0', 'claude-code', '.venv', '__pycache__']);
 const runtimeCaches = new Set(['.cache', '.pytest_cache', '.mypy_cache', '.ruff_cache']);
-const omissionPolicy = 'workspace-snapshot-v2';
+const omissionPolicy = 'best-effort-workspace-snapshot-v3';
 const MiB = 1024 * 1024;
 const maximumSnapshotLimits = { maxFileMiB: 16384, maxTotalMiB: 65536, maxFiles: 1000000 };
 function runtimeCachePath(name) {
@@ -71,25 +71,42 @@ function snapshotLimits() {
   }
   return limits;
 }
-function snapshotLimitError(message, key, minimum) {
-  const setting = `snapshotLimits.${key}`, config = JSON.stringify(path.join(home(), 'config.json'));
-  const remedy = minimum <= maximumSnapshotLimits[key]
-    ? `Set ${setting} to at least ${minimum} in ${config}`
-    : `${setting} supports at most ${maximumSnapshotLimits[key]} in ${config}`;
-  return Object.assign(new Error(`${message} ${remedy}; select a smaller task workspace or exclude unneeded files with .gitignore in a Git project. Task files are never silently omitted. After fixing the limit or workspace, use /goal resume to continue the saved goal.`),
-    { code: 'SNAPSHOT_LIMIT', setting, minimum });
+const recoverableFileError = error => ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EBUSY', 'ENAMETOOLONG', 'EFBIG'].includes(error.code);
+function omissionRecorder(omissions) {
+  let samples = omissions.filter(item => item.reason.startsWith('snapshot_') && item.path).length;
+  return item => {
+    if (samples++ < 64) { omissions.push(item); return; }
+    let summary = omissions.find(entry => entry.pathsTruncated && entry.reason === item.reason && entry.limit === item.limit);
+    if (!summary) { summary = { reason: item.reason, ...(item.limit ? { limit: item.limit, limitValue: item.limitValue } : {}), pathsTruncated: true, omittedCount: 0, bytes: 0 }; omissions.push(summary); }
+    summary.omittedCount++; summary.bytes += item.bytes || 0;
+  };
 }
-function snapshotInfo(file) {
+function snapshotOmissionSummary(snapshot) {
+  const omissions = (snapshot?.omissions || []).filter(item => item.reason.startsWith('snapshot_'));
+  if (!omissions.length) return null;
+  return { snapshotId: snapshot.id, originalWorkspace: snapshot.source, unknownCount: omissions.some(item => item.unknownCount || item.kind === 'directory'),
+    skippedFiles: omissions.reduce((count, item) => count + (item.unknownCount || item.kind === 'directory' ? 0 : item.omittedCount || 1), 0),
+    samples: omissions.filter(item => item.path).slice(0, 8).map(item => ({ path: item.path.slice(0, 240), reason: item.reason, limit: item.limit })),
+    notice: 'This workspace copy is partial. Snapshot limits skip incidental files without stopping the goal; skipped files are not deleted or verified. The parent continues in the original workspace. Isolated workers do not receive skipped files; originalWorkspace is a reference for inputs only where existing read tools and policy allow it, never permission to write there. Continue with available inputs; request selected evidence or report a missing prerequisite when needed. This notice grants no additional filesystem access.' };
+}
+export function workspaceSnapshotContext(session) {
+  const assignment = session.assignmentId && getRecord('assignment', session.assignmentId);
+  const group = session.bestiesSessionId ? getRecord('besties', session.bestiesSessionId) : session.parallelSessionId ? getRecord('parallel', session.parallelSessionId) : null;
+  const id = assignment?.snapshotId || group?.snapshotId || session.startSnapshotId;
+  return id ? snapshotOmissionSummary(getRecord('snapshot', id)) : null;
+}
+function snapshotInfo(file, expectedSize = Infinity) {
   const fd = fs.openSync(file, 'r'), hash = createHash('sha256'), buffer = Buffer.allocUnsafe(1024 * 1024);
   try {
     let size = 0, count;
-    while ((count = fs.readSync(fd, buffer, 0, buffer.length, null))) { hash.update(buffer.subarray(0, count)); size += count; }
+    while ((count = fs.readSync(fd, buffer, 0, buffer.length, null))) { hash.update(buffer.subarray(0, count)); size += count; if (size > expectedSize) break; }
     return { size, sha256: hash.digest('hex') };
   } finally { fs.closeSync(fd); }
 }
-export function workspaceManifest(root, limits = snapshotLimits(), { omissions = [] } = {}) {
+export function workspaceManifest(root, limits = snapshotLimits(), { omissions = [], omittedPaths = new Set(), omittedDirectories = new Set(), priority = [] } = {}) {
   const resolved = fs.realpathSync(root), privateRoot = fs.existsSync(home()) ? fs.realpathSync(home()) : home(), privateIsInsideWorkspace = privateRoot.startsWith(resolved + path.sep);
   if (resolved === privateRoot) throw new Error('The private bzzy state directory cannot be used as a project workspace.');
+  const omit = omissionRecorder(omissions);
   const omittedCaches = new Set();
   const cachePath = name => {
     const relative = runtimeCachePath(name);
@@ -100,11 +117,21 @@ export function workspaceManifest(root, limits = snapshotLimits(), { omissions =
   let names;
   try { names = execFileSync('git', ['-C', root, 'ls-files', '-co', '--exclude-standard', '-z'], { maxBuffer: 64 * MiB, stdio: ['ignore', 'pipe', 'ignore'] }).toString().split('\0').filter(Boolean); }
   catch (error) {
-    // Falling back after truncated Git output would include ignored files.
-    if (error.code === 'ENOBUFS') throw new Error('Git workspace listing exceeds 64 MiB. Select a smaller task workspace.');
+    // Never fall back to a walk that could include Git-ignored files after
+    // truncation. A partial empty copy is safe; native parent work can continue.
+    if (error.code === 'ENOBUFS') {
+      omissions.push({ reason: 'snapshot_limit', limit: 'listingBytes', limitValue: 64 * MiB, pathsTruncated: true, omittedCount: 0, unknownCount: true });
+      omittedDirectories.add(''); return {};
+    }
     names = [];
     const walk = (dir, prefix = '') => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+      catch (error) {
+        if (!recoverableFileError(error)) throw error;
+        omittedDirectories.add(prefix); omit({ path: prefix || '.', reason: 'snapshot_unavailable', kind: 'directory', code: error.code }); return;
+      }
+      for (const entry of entries) {
         if (privateIsInsideWorkspace && path.resolve(dir, entry.name) === privateRoot) continue;
         const relative = path.join(prefix, entry.name);
         if (excluded.has(entry.name) || privateWorkspacePath(relative)) continue;
@@ -114,39 +141,58 @@ export function workspaceManifest(root, limits = snapshotLimits(), { omissions =
       }
     }; walk(resolved);
   }
-  const result = {}, files = []; let total = 0;
-  for (const name of [...new Set(names)].sort()) {
+  const result = {}, files = [], preferred = new Set(priority); let total = 0;
+  for (const name of [...new Set(names)].sort((a, b) => Number(preferred.has(b)) - Number(preferred.has(a)) || (a < b ? -1 : a > b ? 1 : 0))) {
     const absolute = path.resolve(resolved, name);
     if (privateIsInsideWorkspace && (absolute === privateRoot || absolute.startsWith(privateRoot + path.sep))) continue;
     if (name.split(path.sep).some(p => excluded.has(p)) || privateWorkspacePath(name)) continue;
     if (cachePath(name)) continue;
-    const file = inside(root, name, { exists: false });
-    if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue;
+    let file, stat;
+    try { file = inside(root, name, { exists: false }); stat = fs.lstatSync(file); }
+    catch (error) {
+      if (!recoverableFileError(error)) throw error;
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) { omittedPaths.add(name); omit({ path: name, reason: 'snapshot_unavailable', code: error.code }); }
+      continue;
+    }
+    if (!stat.isFile()) continue;
     const diagnostic = recognizedDebugArtifact(file);
     if (diagnostic) { omissions.push({ path: name, ...diagnostic }); continue; }
-    const size = fs.statSync(file).size; total += size;
-    if (size > limits.maxFileMiB * MiB) throw snapshotLimitError(`Cannot snapshot ${JSON.stringify(name)}: file exceeds ${limits.maxFileMiB} MiB (${size.toLocaleString('en-US')} bytes).`, 'maxFileMiB', Math.ceil(size / MiB));
-    if (total > limits.maxTotalMiB * MiB) throw snapshotLimitError(`Workspace snapshot exceeds ${limits.maxTotalMiB} MiB at ${JSON.stringify(name)} (${total.toLocaleString('en-US')} bytes so far).`, 'maxTotalMiB', Math.ceil(total / MiB));
-    if (files.length >= limits.maxFiles) throw snapshotLimitError(`Workspace snapshot exceeds ${limits.maxFiles.toLocaleString('en-US')} files at ${JSON.stringify(name)}.`, 'maxFiles', files.length + 1);
+    const size = stat.size;
+    const limit = size > limits.maxFileMiB * MiB ? 'maxFileMiB' : files.length >= limits.maxFiles ? 'maxFiles' : total + size > limits.maxTotalMiB * MiB ? 'maxTotalMiB' : null;
+    if (limit) { omittedPaths.add(name); omit({ path: name, reason: 'snapshot_limit', limit, limitValue: limits[limit], bytes: size }); continue; }
+    total += size;
     files.push({ name, file, size });
   }
-  // Reject oversized workspaces before hashing any task payloads. Stream accepted
-  // files, then recheck their sizes so growth during preflight cannot bypass limits.
+  // Only hash files that fit. Files that disappear or change during capture are
+  // omissions, never an excuse to stop unrelated goal work or widen permissions.
   for (const { name, file, size } of files) {
-    const info = snapshotInfo(file);
-    if (info.size !== size) throw new Error(`Workspace changed while snapshotting: ${name}`);
-    result[name] = info;
+    try {
+      const info = snapshotInfo(file, size);
+      if (info.size !== size) { omittedPaths.add(name); omit({ path: name, reason: 'snapshot_changed', bytes: size }); continue; }
+      result[name] = info;
+    } catch (error) {
+      if (!recoverableFileError(error)) throw error;
+      omittedPaths.add(name); omit({ path: name, reason: 'snapshot_unavailable', code: error.code, bytes: size });
+    }
   }
   return result;
 }
-export function snapshotWorkspace(session, label = 'snapshot') {
+export function snapshotWorkspace(session, label = 'snapshot', { ui } = {}) {
   const limits = snapshotLimits(), omissions = [], manifest = workspaceManifest(session.cwd, limits, { omissions }), id = randomUUID();
   const directory = path.join(home(), 'snapshots', id); privateDir(directory);
+  const omit = omissionRecorder(omissions);
   try {
     for (const relative of Object.keys(manifest)) {
       const target = path.join(directory, relative); privateDir(path.dirname(target));
-      fs.copyFileSync(inside(session.cwd, relative), target, fs.constants.COPYFILE_FICLONE);
-      if (snapshotInfo(target).sha256 !== manifest[relative].sha256) throw new Error(`Workspace changed while snapshotting: ${relative}`);
+      try {
+        fs.copyFileSync(inside(session.cwd, relative), target, fs.constants.COPYFILE_FICLONE);
+        if (snapshotInfo(target, manifest[relative].size).sha256 === manifest[relative].sha256) continue;
+        omit({ path: relative, reason: 'snapshot_changed', bytes: manifest[relative].size });
+      } catch (error) {
+        if (!recoverableFileError(error)) throw error;
+        omit({ path: relative, reason: 'snapshot_unavailable', code: error.code, bytes: manifest[relative].size });
+      }
+      fs.rmSync(target, { force: true }); delete manifest[relative];
     }
     // Dependencies are explicitly outside the source snapshot; available read-only to tools.
     if (fs.existsSync(path.join(session.cwd, 'node_modules'))) fs.symlinkSync(path.join(session.cwd, 'node_modules'), path.join(directory, 'node_modules'));
@@ -157,7 +203,13 @@ export function snapshotWorkspace(session, label = 'snapshot') {
   const record = { id, sessionId: session.id, label, source: session.cwd, directory, manifest, limits, omissions,
     omissionPolicy, manifestHash: digest(manifest), createdAt: now() };
   writeJson(path.join(home(), 'snapshots', `${id}.json`), record); putRecord('snapshot', id, record);
-  appendEvent(session.id, 'snapshot', { id, label, manifestHash: record.manifestHash, omissions, omissionPolicy: record.omissionPolicy }); return record;
+  appendEvent(session.id, 'snapshot', { id, label, manifestHash: record.manifestHash, omissions, omissionPolicy: record.omissionPolicy });
+  const summary = snapshotOmissionSummary(record);
+  if (summary) {
+    const data = { message: `Workspace snapshot skipped ${summary.unknownCount ? 'some' : summary.skippedFiles} file(s) that exceeded its budget or were unavailable. Continuing with available files.`, snapshotId: id, ...summary };
+    if (ui) ui.event('info', data); else appendEvent(session.id, 'info', data);
+  }
+  return record;
 }
 export function copyWorkspaceSnapshot(snapshot, directory, { sessionId = snapshot.sessionId } = {}) {
   const source = fs.realpathSync(snapshot.directory), omissions = (snapshot.omissions || []).map(item => ({ ...item, phase: 'snapshot' }));
@@ -177,12 +229,14 @@ export function copyWorkspaceSnapshot(snapshot, directory, { sessionId = snapsho
 export function inspectWorkspace(snapshot, cwd) {
   // Limits are host resource settings, not evidence authority. A resumed worker
   // must honor today's settings instead of remaining stuck on a historical cap.
-  const omissions = [], current = workspaceManifest(cwd, snapshotLimits(), { omissions }), changes = [], before = { ...snapshot.manifest };
+  const omissions = [], omittedPaths = new Set(), omittedDirectories = new Set(), before = { ...snapshot.manifest };
+  const current = workspaceManifest(cwd, snapshotLimits(), { omissions, omittedPaths, omittedDirectories, priority: Object.keys(before) }), changes = [], uninspected = [];
   const baseline = (snapshot.omissions || []).map(item => ({ ...item, phase: 'baseline' }));
   // Older snapshots may already contain diagnostic exports. Validate that saved
   // copy too: a worker never owes deletion/integration of diagnostic data. If
   // that path now holds ordinary source, it remains an observable new change.
   for (const file of Object.keys(before)) {
+    if (omittedPaths.has(file) || [...omittedDirectories].some(dir => !dir || file.startsWith(dir + path.sep))) { delete before[file]; uninspected.push(file); continue; }
     const cache = runtimeCachePath(file);
     if (cache) {
       delete before[file];
@@ -198,6 +252,7 @@ export function inspectWorkspace(snapshot, cwd) {
     if (before[file]?.sha256 !== current[file]?.sha256) changes.push({ path: file, before: before[file] || null, after: current[file] || null });
   }
   Object.defineProperty(changes, 'omissions', { value: [...baseline, ...omissions.map(item => ({ ...item, phase: 'current' }))], enumerable: false });
+  Object.defineProperty(changes, 'uninspected', { value: uninspected, enumerable: false });
   return changes;
 }
 export const artifactsFor = sessionId => listRecords('artifact').filter(a => a.sessionId === sessionId);

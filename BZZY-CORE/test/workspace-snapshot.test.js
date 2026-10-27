@@ -4,10 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { workspaceManifest, snapshotWorkspace, copyWorkspaceSnapshot, inspectWorkspace } from '../src/engine/evidence.js';
+import { workspaceManifest, snapshotWorkspace, copyWorkspaceSnapshot, inspectWorkspace, workspaceSnapshotContext } from '../src/engine/evidence.js';
 import { createSession } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
 import { events, getRecord } from '../src/engine/database.js';
+import { sandboxSupport, spawnBounded } from '../src/engine/policy.js';
 
 const MiB = 1024 * 1024;
 let root, project, previous, session;
@@ -67,32 +68,34 @@ for (const git of [false, true]) test(`runtime caches are excluded and audited w
   file('source.js'); assert.deepEqual(inspectWorkspace(snapshot, project), []);
 });
 
-test('file, total and count limits fail before hashing and identify the exact configured setting', () => {
+test('file, total and count budgets omit incidental files without hashing their payloads', () => {
   file('first.bin', 600 * 1024); file('second.bin', 600 * 1024);
   const read = fs.readSync; let bytes = 0;
   fs.readSync = (...args) => { const count = read(...args); bytes += count; return count; };
   try {
-    for (const [limits, key, minimum] of [
-      [{ maxFileMiB: 1, maxTotalMiB: 1, maxFiles: 10 }, 'maxTotalMiB', 2],
-      [{ maxFileMiB: 1, maxTotalMiB: 2, maxFiles: 1 }, 'maxFiles', 2],
+    for (const [limits, key] of [
+      [{ maxFileMiB: 1, maxTotalMiB: 1, maxFiles: 10 }, 'maxTotalMiB'],
+      [{ maxFileMiB: 1, maxTotalMiB: 2, maxFiles: 1 }, 'maxFiles'],
     ]) {
       configure(limits); bytes = 0;
-      assert.throws(() => snapshotWorkspace(session), error => {
-        assert.ok(error.message.includes(`snapshotLimits.${key} to at least ${minimum}`));
-        assert.ok(error.message.includes(path.join(process.env.BZZY_HOME, 'config.json'))); return true;
-      });
-      assert.ok(bytes <= 128, `Only classification headers should be read before rejecting: ${bytes}`);
+      const omissions = [], manifest = workspaceManifest(project, undefined, { omissions });
+      assert.deepEqual(Object.keys(manifest), ['first.bin']);
+      assert.ok(omissions.some(item => item.path === 'second.bin' && item.reason === 'snapshot_limit' && item.limit === key));
+      assert.ok(bytes <= 600 * 1024 + 128, `Only included files and classification headers should be read: ${bytes}`);
     }
     configure({ maxFileMiB: 1 }); file('large.bin', 2 * MiB); bytes = 0;
-    assert.throws(() => snapshotWorkspace(session), /snapshotLimits.maxFileMiB to at least 2/);
-    assert.ok(bytes <= 128);
-    assert.equal(fs.existsSync(path.join(process.env.BZZY_HOME, 'snapshots')), false);
+    const omissions = [], manifest = workspaceManifest(project, undefined, { omissions });
+    assert.equal(manifest['large.bin'], undefined); assert.equal(Object.keys(manifest).length, 2);
+    assert.ok(omissions.some(item => item.path === 'large.bin' && item.limit === 'maxFileMiB'));
+    assert.ok(bytes <= 1200 * 1024 + 192);
   } finally { fs.readSync = read; }
 });
 
 test('explicit 64 MiB limits remain enforced and larger settings pass validation', () => {
   file('fixture.json', 65 * MiB); configure({ maxFileMiB: 64 });
-  assert.throws(() => workspaceManifest(project), /file exceeds 64 MiB.*snapshotLimits.maxFileMiB to at least 65/);
+  const omissions = [];
+  assert.deepEqual(workspaceManifest(project, undefined, { omissions }), {});
+  assert.equal(omissions[0].limit, 'maxFileMiB'); assert.equal(omissions[0].limitValue, 64);
   configure({ maxFileMiB: 1024, maxTotalMiB: 32768, maxFiles: 200000 });
   assert.equal(workspaceManifest(project)['fixture.json'].size, 65 * MiB);
   configure({ maxFileMiB: 16385 }); assert.throws(() => workspaceManifest(project), /maxFileMiB must be an integer from 1 to 16384/);
@@ -109,7 +112,8 @@ test('raising limits unblocks inspection of an existing worker without replacing
   const snapshot = snapshotWorkspace(session), worker = path.join(root, 'worker'); copyWorkspaceSnapshot(snapshot, worker);
   const generated = path.join(worker, 'tool-output.bin'), fd = fs.openSync(generated, 'w');
   fs.ftruncateSync(fd, 2 * MiB); fs.closeSync(fd);
-  assert.throws(() => inspectWorkspace(snapshot, worker), { code: 'SNAPSHOT_LIMIT' });
+  const partial = inspectWorkspace(snapshot, worker);
+  assert.deepEqual(partial, []); assert.ok(partial.omissions.some(item => item.path === 'tool-output.bin'));
   configure({ maxFileMiB: 4, maxTotalMiB: 4 });
   const changes = inspectWorkspace(snapshot, worker);
   assert.equal(changes.length, 1); assert.equal(changes[0].path, 'tool-output.bin');
@@ -144,6 +148,109 @@ test('files growing between preflight and hashing cannot bypass snapshot limits'
     if (name === target && flags === 'r') fs.appendFileSync(target, 'changed');
     return open(name, flags, ...args);
   };
-  try { assert.throws(() => snapshotWorkspace(session), /Workspace changed while snapshotting: growing.bin/); }
+  try {
+    const snapshot = snapshotWorkspace(session);
+    assert.equal(snapshot.manifest['growing.bin'], undefined);
+    assert.ok(snapshot.omissions.some(item => item.path === 'growing.bin' && item.reason === 'snapshot_changed'));
+  }
   finally { fs.openSync = open; }
+});
+
+test('a large sibling does not consume the budget for smaller later inputs', () => {
+  configure({ maxFileMiB: 4, maxTotalMiB: 1 });
+  file('a-app.apk', 2 * MiB); file('b-task.txt', 32);
+  const snapshot = snapshotWorkspace(session);
+  assert.deepEqual(Object.keys(snapshot.manifest), ['b-task.txt']);
+  assert.equal(snapshot.omissions[0].limit, 'maxTotalMiB');
+  assert.equal(fs.statSync(path.join(project, 'a-app.apk')).size, 2 * MiB);
+  session.startSnapshotId = snapshot.id;
+  const coverage = workspaceSnapshotContext(session);
+  assert.equal(coverage.originalWorkspace, project); assert.equal(coverage.skippedFiles, 1);
+  assert.match(coverage.notice, /existing read tools and policy/);
+  assert.equal(events(session.id).filter(event => event.type === 'info').length, 1);
+});
+
+test('budget omissions cannot become worker deletions and tracked files retain priority', () => {
+  configure({ maxFileMiB: 1, maxTotalMiB: 1, maxFiles: 1 }); file('z-source.txt', 32);
+  const snapshot = snapshotWorkspace(session), worker = path.join(root, 'worker'); copyWorkspaceSnapshot(snapshot, worker);
+  fs.writeFileSync(path.join(worker, 'a-generated.txt'), 'new incidental output');
+  fs.appendFileSync(path.join(worker, 'z-source.txt'), ' changed');
+  const changes = inspectWorkspace(snapshot, worker);
+  assert.equal(changes.length, 1); assert.equal(changes[0].path, 'z-source.txt'); assert.ok(changes[0].after);
+  const fd = fs.openSync(path.join(worker, 'z-source.txt'), 'r+'); fs.ftruncateSync(fd, 2 * MiB); fs.closeSync(fd);
+  const partial = inspectWorkspace(snapshot, worker);
+  assert.deepEqual(partial.uninspected, ['z-source.txt']);
+  assert.equal(partial.some(change => change.path === 'z-source.txt'), false);
+  fs.unlinkSync(path.join(worker, 'z-source.txt'));
+  const deleted = inspectWorkspace(snapshot, worker).find(change => change.path === 'z-source.txt');
+  assert.ok(deleted.before); assert.equal(deleted.after, null);
+});
+
+test('omission metadata stays bounded when many files exceed the count budget', () => {
+  configure({ maxFiles: 1 });
+  for (let i = 0; i < 1000; i++) file(`${i}.txt`);
+  const snapshot = snapshotWorkspace(session);
+  assert.equal(Object.keys(snapshot.manifest).length, 1);
+  assert.ok(snapshot.omissions.length <= 65);
+  assert.equal(snapshot.omissions.reduce((count, item) => count + (item.omittedCount || 1), 0), 999);
+  session.startSnapshotId = snapshot.id;
+  assert.equal(workspaceSnapshotContext(session).skippedFiles, 999);
+  assert.equal(workspaceSnapshotContext(session).samples.length, 8);
+});
+
+test('an unreadable incidental file is omitted while readable inputs remain usable', () => {
+  const target = file('a-unreadable.bin'), open = fs.openSync; file('b-task.txt');
+  fs.openSync = (name, flags, ...args) => {
+    if (name === target && flags === 'r') throw Object.assign(new Error('fixture denied'), { code: 'EACCES' });
+    return open(name, flags, ...args);
+  };
+  try {
+    const snapshot = snapshotWorkspace(session);
+    assert.deepEqual(Object.keys(snapshot.manifest), ['b-task.txt']);
+    assert.ok(snapshot.omissions.some(item => item.path === 'a-unreadable.bin' && item.reason === 'snapshot_unavailable'));
+  } finally { fs.openSync = open; }
+});
+
+test('copy failures for individual files do not fail an otherwise usable snapshot', () => {
+  const target = file('a-vanished.txt'), copy = fs.copyFileSync; file('b-task.txt');
+  fs.copyFileSync = (source, ...args) => {
+    if (source === target) throw Object.assign(new Error('fixture disappeared'), { code: 'ENOENT' });
+    return copy(source, ...args);
+  };
+  try {
+    const snapshot = snapshotWorkspace(session);
+    assert.deepEqual(Object.keys(snapshot.manifest), ['b-task.txt']);
+    assert.ok(snapshot.omissions.some(item => item.path === 'a-vanished.txt' && item.reason === 'snapshot_unavailable'));
+  } finally { fs.copyFileSync = copy; }
+});
+
+test('best-effort capture cannot bypass symlink containment', () => {
+  execFileSync('git', ['init', '-q', project]);
+  const outside = path.join(root, 'outside.txt'); fs.writeFileSync(outside, 'not a project input');
+  fs.symlinkSync(outside, path.join(project, 'link.txt'));
+  execFileSync('git', ['-C', project, 'add', 'link.txt']);
+  assert.throws(() => workspaceManifest(project), /symlinks/);
+});
+
+test('an isolated worker can read an omitted original input under existing permissions without modifying it', async t => {
+  if (!sandboxSupport()) return t.skip('Native sandbox is unavailable on this host.');
+  configure({ maxFileMiB: 1 });
+  const input = file('findings/previous-report/chrome', 2 * MiB);
+  const snapshot = snapshotWorkspace(session), worker = path.join(root, 'worker'); copyWorkspaceSnapshot(snapshot, worker);
+  assert.equal(fs.existsSync(path.join(worker, 'findings/previous-report/chrome')), false);
+  const program = `const fs = require('node:fs');
+    const fd = fs.openSync(process.argv[1], 'r'), header = Buffer.alloc(10);
+    fs.readSync(fd, header, 0, header.length, 0); fs.closeSync(fd);
+    if (header.toString() !== 'task input') process.exit(2);
+    try { fs.writeFileSync(process.argv[1], 'changed'); process.exit(3); }
+    catch (error) { if (!['EPERM', 'EACCES', 'EROFS'].includes(error.code)) throw error; }
+    fs.writeFileSync('analysis.txt', 'Read original input without copying it.');`;
+  const child = spawnBounded(process.execPath, ['-e', program, input], {
+    cwd: worker, policy: { mode: 'workspace-write', writablePaths: ['.'], network: 'disabled' },
+  });
+  let stderr = ''; child.stderr.on('data', value => { stderr += value; });
+  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  assert.equal(code, 0, stderr);
+  assert.equal(fs.statSync(input).size, 2 * MiB);
+  assert.ok(fs.existsSync(path.join(worker, 'analysis.txt')));
 });

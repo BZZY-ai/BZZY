@@ -1,3 +1,34 @@
+# Best-effort workspace copies preserve the original project cwd (2026-10-27)
+
+Node 24/macOS: **993 Core tests passed, 2 skipped** and **765 CLI tests passed,
+21 skipped**. Both syntax checks and repository whitespace checks passed.
+
+Snapshot per-file, total-byte and file-count budgets now produce bounded omission
+metadata and a visible continuation notice. Larger siblings do not consume the
+budget for smaller subsequent inputs. Individual unreadable, disappearing and
+changing files are also omitted; credential/path policies, invalid configuration,
+required-evidence checks and durable-storage failures remain authoritative.
+The parent runs in its original cwd and retains project state beneath `.bzzy`;
+Core's private durable session/runtime state is unchanged.
+
+Fixtures verify that a goal reaches its real backend despite an oversized input,
+with the same goal ID/cwd, the original file intact, `.bzzy` present and copy
+coverage in its effective model instructions. Parallel and Besties reach worker
+dispatch; Validate reaches the independent investigation boundary. Omission
+samples stay bounded with 999 excluded files. Hash/copy races and individual
+read failures preserve usable inputs. Known baseline files retain inspection
+priority; omitted tracked edits cannot become deletions or accepted/applied
+patches. Group integration retains unknown-file coverage instead of treating
+uninspected paths as matching.
+
+A native sandbox fixture reads the header of an omitted synthetic input under
+`findings/previous-report/chrome` from its original location, writes its own
+analysis output and cannot overwrite the original. This uses existing native
+read permissions; path references and copy notices grant no additional access.
+Symlink containment and credential exclusions retain negative coverage. These
+local fixtures do not prove native Linux behavior or live-model accuracy.
+No running installation, private configuration or saved goal was updated/resumed.
+
 # Larger, resumable workspace snapshots (2026-10-27)
 
 Node 24/macOS: **985 Core tests passed, 2 skipped** and **765 CLI tests passed,

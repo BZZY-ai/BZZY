@@ -176,7 +176,9 @@ test('automatic project files are ignored without replacing custom ignore rules'
 test('snapshot limits can be raised explicitly without omitting files from the manifest', () => {
   const s = session(); fs.writeFileSync(path.join(directory, 'large.bin'), Buffer.alloc(21 * 1024 * 1024, 1));
   saveConfig({ version: 1, snapshotLimits: { maxFileMiB: 20 } });
-  assert.throws(() => snapshotWorkspace(s), /exceeds 20 MiB/);
+  const partial = snapshotWorkspace(s);
+  assert.equal(partial.manifest['large.bin'], undefined);
+  assert.ok(partial.omissions.some(item => item.path === 'large.bin' && item.reason === 'snapshot_limit'));
   saveConfig({ version: 1, snapshotLimits: { maxFileMiB: 24, maxTotalMiB: 30 } });
   const snapshot = snapshotWorkspace(s);
   assert.equal(snapshot.manifest['large.bin'].size, 21 * 1024 * 1024);

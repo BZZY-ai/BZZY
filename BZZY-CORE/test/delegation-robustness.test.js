@@ -138,6 +138,19 @@ test('pausing and read-only recovery expose questions without dispatching or imp
   assert.equal(launched.length, 1); assert.equal(loadSession(worker.id).id, worker.id);
 });
 
+test('incidental snapshot omissions cannot authorize deletion or acceptance of an uninspected worker edit', async () => {
+  const { job, worker, snapshot } = assignment();
+  const proof = artifact(worker, 'A selected offline observation', 'observation');
+  recordWorkerReport(worker, { status: 'complete', summary: 'Selected observation recorded.', evidence: [proof.id] });
+  fs.writeFileSync(path.join(process.env.BZZY_HOME, 'config.json'), JSON.stringify({ snapshotLimits: { maxFileMiB: 1 } }));
+  const fd = fs.openSync(path.join(worker.cwd, 'offline.txt'), 'r+'); fs.ftruncateSync(fd, 2 * 1024 * 1024); fs.closeSync(fd);
+  finishRound(job, worker, snapshot, 'awaiting_review');
+  const brain = new ToolHost(parent, { event() {} }); await brain.call('read_artifact', { id: proof.id });
+  assert.throws(() => reviewAssignment(parent, job.id, { outcome: 'accepted', rationale: 'The observation was read.', evidence: [proof.id] }), /could not be inspected/);
+  assert.equal(fs.readFileSync(path.join(parent.cwd, 'offline.txt'), 'utf8'), 'offline fixture');
+  assert.equal(assignmentStatus(job.id).closure, 'open');
+});
+
 test('all successful evidence reads create hash-pinned bounded receipts while forged or modified evidence cannot be accepted', async () => {
   const { job, worker, snapshot } = assignment(), evidence = artifact(worker, 'A controlled comparison', 'comparison');
   recordWorkerReport(worker, { status: 'complete', summary: 'The supplied comparison is ready for review.', evidence: [evidence.id] }); finishRound(job, worker, snapshot, 'awaiting_review');

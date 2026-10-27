@@ -18,6 +18,15 @@ Keep this directory layout when cloning: the Node packages use sibling file
 dependencies. Agent and sharing implementations live in Core and their clients.
 There is no separate Agent or sharing daemon.
 
+Launching `bzzy` in `/projects/nasa` keeps that directory as the terminal's
+workspace. Project notes, memory files and evidence use `/projects/nasa/.bzzy`;
+Core retains durable chat/runtime state in its private home, normally `~/.bzzy`.
+Existing folders such as `findings/`, APKs and application binaries can stay in
+place. Snapshot copies are best effort: files that exceed the copy budget are
+skipped with a notice, while the goal continues in its original directory.
+Isolated workers receive explicit coverage information and the original input
+location as a reference subject to their existing tools and permissions.
+
 CLI **Agents** manages [reusable specialist subagents](BZZY-CORE/docs/SUBAGENTS.md),
 such as HTTP analysts or finding reviewers. Core invokes them from normal chats
 and goals across supported models, with separate contexts, bounded parallelism

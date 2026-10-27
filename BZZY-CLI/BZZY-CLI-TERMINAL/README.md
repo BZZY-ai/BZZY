@@ -690,13 +690,25 @@ Merge these keys into your existing configuration. Unanswered approvals expire d
 The snapshot values above are defaults: 1 GiB per file, 8 GiB total and 100,000
 files. Existing explicit overrides (including an older 64 MiB file limit) stay
 in force; raise or remove those keys to use the new defaults. Supported maxima
-are 16,384 MiB per file, 65,536 MiB total and 1,000,000 files. Limit errors name
-the exact setting, config path and minimum required at the offending file.
-Core checks sizes/counts before hashing task payloads and never silently omits
-oversized task inputs. A limit reached during goal startup pauses the saved goal
-and reports the error before inference. Fix the workspace or raise the limit,
-then use `/goal resume` to continue the same goal. Worker inspections use current
-host limits, so older snapshots do not lock resumed work to an old cap.
+are 16,384 MiB per file, 65,536 MiB total and 1,000,000 files. These limit the
+snapshot copy, not the files an agent can read through its existing tools and
+permissions. Files above the per-file budget or that do not fit the remaining
+total/count budget are skipped. Smaller later files can still fit. Files that
+change, disappear or are individually unreadable during capture are also
+omitted. A bounded notice records the reason and sample paths; the goal continues.
+
+Launching in `/projects/nasa` keeps that cwd and creates project state beneath
+`/projects/nasa/.bzzy`. A binary under `findings/` stays in place even when it
+is skipped from the snapshot. Core keeps durable chat/runtime state separately
+in its private home. Isolated workers get a partial-copy notice and the original
+input location as a reference; their existing tools and permissions still govern
+access. Missing required inputs can be requested through existing evidence and
+context tools. An omission is never verified evidence or an inferred deletion.
+Tracked files that become too large or unavailable cannot be accepted/applied as
+uninspected worker changes. Worker inspections use current host limits; raising
+them can include files omitted by an earlier inspection. Invalid configuration,
+unsafe paths, actual required-evidence failures and durable-store failures remain
+explicit errors. This behavior does not automatically resume already paused work.
 Private credential paths, dependencies, validated BZZY
 debug exports and runtime caches (`.cache`, `.pytest_cache`, `.mypy_cache`,
 `.ruff_cache`) stay outside snapshots. Cache and debug-export omissions are
