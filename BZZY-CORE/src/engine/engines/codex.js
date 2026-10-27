@@ -33,11 +33,21 @@ function rotateNativeThread(session) {
   if (session.engineThreadId) {
     // A fresh native goal counts from zero. Preserve all prior consumption so
     // a schema/home migration cannot replenish the owner's remaining budget.
-    if (Number.isFinite(session.goal?.nativeTokensUsed)) session.goal.nativeTokenOffset = Math.max(session.goal.nativeTokenOffset || 0, session.goal.nativeTokensUsed);
+    preserveNativeGoalUsage(session);
     if (Number.isFinite(session.usage?.tokens)) session.engineTokenOffset = Math.max(session.engineTokenOffset || 0, session.usage.tokens);
   }
   session.engineThreadId = null;
   session.conversationHandoff = { pending: true, throughSeq: conversationCursor(session.id) };
+}
+
+function missingNativeThread(error, threadId) {
+  if (![-32600, -32001].includes(error?.rpcCode) || typeof threadId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(threadId)) return false;
+  return error.message === `thread not found: ${threadId}` || error.message === `no rollout found for thread id ${threadId}`;
+}
+
+function preserveNativeGoalUsage(session) {
+  const used = [session.goal?.nativeTokensUsed, session.goal?.supervisorTokensUsed].filter(Number.isFinite);
+  if (session.goal && used.length) session.goal.nativeTokenOffset = Math.max(session.goal.nativeTokenOffset || 0, ...used);
 }
 
 export function codexDynamicTools(session, options = {}) {
@@ -202,6 +212,7 @@ export class CodexEngine {
       await this.close(); this.rpc = null;
     }
     let startupStage = 'configuration';
+    const startedTurnsBeforeOpen = this.startedTurns;
     try {
       this.closing = null;
       if (this.session.nativeContext?.refresh?.state === 'dispatching') {
@@ -254,11 +265,18 @@ export class CodexEngine {
       if (effort) params.config = { model_reasoning_effort: effort };
       if (this.session.model) params.model = this.session.model;
       if (this.provider.auth === 'api-key') params.modelProvider = 'bzzy_api';
+      let resumed = false;
       if (this.session.engineThreadId) {
         startupStage = 'thread_resume';
         this.threadId = this.session.engineThreadId;
-        const snapshot = await this.rpc.request('thread/goal/get', { threadId: this.threadId });
-        if (snapshot.goal?.status === 'active') {
+        let snapshot;
+        try { snapshot = await this.rpc.request('thread/goal/get', { threadId: this.threadId }); }
+        catch (error) {
+          // A read-only miss alone does not prove the rollout is gone. Ask the
+          // backend to resume it once before deciding whether to replace it.
+          if (!missingNativeThread(error, this.threadId)) throw error;
+        }
+        if (snapshot?.goal?.status === 'active') {
           await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'automatic' });
         }
         const setupId = recordBackendDiagnostics(this.session, { method: 'thread/resume', outcome: 'prepared', transport: 'codex-app-server',
@@ -266,18 +284,49 @@ export class CodexEngine {
           model: params.model, policy, contextBudget: launchConfig.contextBudget,
           readiness: prepareNativeReadiness(this.session, { backend: 'codex', threadId: this.threadId, resumed: true,
             instructions: params.developerInstructions, contextBudget: launchConfig.contextBudget }) });
-        const result = await this.rpc.request('thread/resume', { threadId: this.threadId, ...params });
-        recordBackendDiagnostics(this.session, { setupId, method: 'thread/resume', outcome: 'accepted', transport: 'codex-app-server',
-          toolsSource: 'inherited-native-thread; not re-enumerated by BZZY', threadId: this.threadId, model: result.model || params.model,
-          contextBudget: launchConfig.contextBudget, readiness: acknowledgeNativeReadiness(this.session, { threadId: this.threadId }) });
-        startupStage = 'permission_activation';
-        this.assertAgentPermissions(result);
-        this.session.resolvedModel = result.model || this.session.model;
-        this.nativeToolSchemaBytes = this.session.nativeBackendReadiness?.tools?.bytes || 0;
-        this.nativeToolsKnown = Boolean(this.session.nativeBackendReadiness?.tools?.sha256);
-        if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
-        saveSession(this.session);
-      } else {
+        let result, replacementRequired = false;
+        try { result = await this.rpc.request('thread/resume', { threadId: this.threadId, ...params }); }
+        catch (error) {
+          if (!missingNativeThread(error, this.threadId) || this.interrupted || this.closing || this.operation || this.activeTurns.size
+            || this.startedTurns !== startedTurnsBeforeOpen) throw error;
+          recordBackendDiagnostics(this.session, { setupId, method: 'thread/resume', outcome: 'missing', threadId: this.threadId,
+            reason: 'backend-confirmed-rollout-unavailable' });
+          // No model turn/active-goal request has been sent in this open(). An
+          // explicit metadata rejection permits one fresh thread, never replay
+          // of an uncertain generation or tool side effect.
+          rotateNativeThread(this.session); this.threadId = null; saveSession(this.session);
+          replacementRequired = true;
+          params.developerInstructions = this.prepareInstructions(this.inputSource || '');
+          this.ui.event('info', { message: 'The saved backend thread is unavailable. Rebuilding it from this BZZY session’s saved context; the existing goal, scope and spent budget are preserved.' });
+        }
+        if (!replacementRequired) {
+          if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('The backend returned an invalid thread/resume response. No replacement thread was started.');
+          resumed = true;
+          recordBackendDiagnostics(this.session, { setupId, method: 'thread/resume', outcome: 'accepted', transport: 'codex-app-server',
+            toolsSource: 'inherited-native-thread; not re-enumerated by BZZY', threadId: this.threadId, model: result.model || params.model,
+            contextBudget: launchConfig.contextBudget, readiness: acknowledgeNativeReadiness(this.session, { threadId: this.threadId }) });
+          startupStage = 'permission_activation'; this.assertAgentPermissions(result);
+          if (!snapshot) {
+            snapshot = await this.rpc.request('thread/goal/get', { threadId: this.threadId });
+            if (snapshot.goal?.status === 'active') await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'automatic' });
+          }
+          this.nativeGoalPresent = Boolean(snapshot.goal);
+          if (!this.nativeGoalPresent && this.options.goalMode && this.session.goal) {
+            // A missing goal resets only the goal's native counter. This thread
+            // still retains its cumulative chat usage and history.
+            preserveNativeGoalUsage(this.session);
+            this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
+            recordBackendDiagnostics(this.session, { method: 'native-goal-recovery', outcome: 'objective-required', threadId: this.threadId,
+              reason: 'backend-confirmed-goal-absent' });
+          }
+          this.session.resolvedModel = result.model || this.session.model;
+          this.nativeToolSchemaBytes = this.session.nativeBackendReadiness?.tools?.bytes || 0;
+          this.nativeToolsKnown = Boolean(this.session.nativeBackendReadiness?.tools?.sha256);
+          if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
+          saveSession(this.session);
+        }
+      }
+      if (!resumed) {
         // Native threads retain their initial tool schemas on resume. Reserve the
         // delegation tools even when the first turn is chat; ToolHost still denies
         // using them until an explicit goal execution authorizes them.
@@ -295,6 +344,7 @@ export class CodexEngine {
         startupStage = 'permission_activation';
         this.assertAgentPermissions(result);
         this.threadId = result.thread.id;
+        this.nativeGoalPresent = false;
         this.session.engineThreadId = this.threadId;
         this.session.resolvedModel = result.model || this.session.model;
         if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
@@ -321,7 +371,10 @@ export class CodexEngine {
       promise.catch(() => {});
       this.operation = { promise, resolve, reject, goal, pendingStart: true };
       if (goal) {
-        if (!resumeGoal) await this.rpc.request('thread/goal/clear', { threadId: this.threadId, origin: 'user' });
+        if (!resumeGoal) {
+          await this.rpc.request('thread/goal/clear', { threadId: this.threadId, origin: 'user' });
+          this.nativeGoalPresent = false;
+        }
         if (this.interrupted) return;
         const params = { threadId: this.threadId, status: 'active', origin: 'user' };
         let promptSetupId;
@@ -373,6 +426,7 @@ export class CodexEngine {
   }
 
   updateGoal(goal) {
+    if (goal) this.nativeGoalPresent = true;
     // Native thread goals survive ordinary turns. Their notifications are not
     // evidence that the current BZZY execution is pursuing a goal.
     if (!this.operation?.goal || !this.goalArmed || !this.session.goal || !goal) return;
@@ -638,10 +692,12 @@ export class CodexEngine {
 
   async setGoalStatus(status) {
     await this.open();
+    if (this.nativeGoalPresent === false && ['clear', 'paused'].includes(status)) return { goal: null, nativeGoalAbsent: true };
     const result = status === 'clear'
       ? await this.rpc.request('thread/goal/clear', { threadId: this.threadId, origin: 'user' })
       : await this.rpc.request('thread/goal/set', { threadId: this.threadId, status, origin: 'user' });
-    if (status !== 'clear') this.updateGoal(result.goal);
+    if (status === 'clear') this.nativeGoalPresent = false;
+    else this.updateGoal(result.goal);
     return result;
   }
 

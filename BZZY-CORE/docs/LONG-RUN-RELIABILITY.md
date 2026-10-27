@@ -15,6 +15,19 @@ remaining budget survive. A host catalog listing a tool does not prove that an
 old native thread received it. Metrics reports known missing routing tools.
 Rotation never authorizes replay of uncertain actions.
 
+A saved native thread can be absent after a backend restart, including when an
+empty thread was created but never persisted before an admission failure. A
+read-only goal lookup miss first gets one normal resume attempt. Only an exact
+backend missing-thread/rollout rejection for that saved ID, before any turn in
+startup, permits one replacement thread. BZZY rebuilds the saved context and
+original objective without changing the goal, workflow, permissions or consumed
+goal/session/delegation budgets. An existing thread with a confirmed absent
+native goal receives the original objective again while retaining prior goal
+usage. Pause/clear do not create or activate a missing native goal. Authentication,
+transport and ambiguous failures, accepted resumes with failed later reads, and
+failed active-goal/turn requests do not trigger this recovery or automatic replay.
+Diagnostics distinguish a rejected resume from the accepted replacement start.
+
 Generated diagnostic files can remain in the project directory. Content-validated
 BZZY regular reports and full-debug ZIPs are excluded from execution snapshots,
 worker copies and workspace comparisons with explicit omission metadata. This

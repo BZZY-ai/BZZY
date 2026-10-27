@@ -1205,4 +1205,48 @@ guard. Tests must cover both fresh thread creation and same-schema thread
 resume with a large recovery map, plus a genuinely oversized original goal.
 
 
+J. Saved backend thread is missing
+
+A native backend thread ID is a pointer, not the BZZY session or goal identity.
+The backend can return an ID for an empty thread that is never persisted if work
+stops before a first saved turn. A later backend restart can therefore leave a
+valid saved BZZY session pointing at an unavailable native rollout. Compare the
+error time with previous thread/start, admission rejection and process shutdown
+receipts; do not infer that the BZZY goal, evidence or durable history was lost.
+
+The updated adapter retains normal goal lookup/pause/resume ordering. A precise
+missing-ID error from the read-only goal lookup allows one thread/resume attempt;
+the lookup alone does not authorize replacement. Only the resume's exact
+missing-thread or no-rollout error for the saved ID and a recognized backend RPC
+code authorizes one fresh thread, before any turn has started in this startup.
+Authentication errors, pipe closure, timeouts, generic/ambiguous RPC errors,
+another ID, a failed metadata read after accepted resume, and failed mutating
+goal/turn requests must stop without this fallback. Recovery is not permission
+to retry uncertain generation or tool side effects. A failed replacement start
+also stops; there is no recursive restart loop.
+
+Inspect diagnostic.backend method thread/resume with outcome missing and reason
+backend-confirmed-rollout-unavailable, followed by a prepared/accepted thread/start
+with its own setupId/threadRef. A replacement must submit current native tools,
+retain the same cwd, model, provider, runtime policy, workflow and BZZY goal ID,
+and deliver the saved handoff plus complete original objective at the next
+authorized goal dispatch. The backend may have lost its private history; do not
+claim it was recovered. BZZY reconstructs from its own saved sources, retaining
+source references and the distinction between historical evidence and new work.
+
+Check nativeTokenOffset and engineTokenOffset against prior accounted goal and
+session consumption. Replacement resets backend counters, not the owner's spent
+allowance. Delegated/specialist usage still counts. A retained thread with no
+native goal resets only the native goal counter, not cumulative chat usage;
+native-goal-recovery / objective-required records this case. In both cases the
+next native allowance must respect the aggregate remaining budget. An exhausted
+goal must not receive new model work. No recovery establishes verified success.
+
+Owner pause/clear can leave an absent native goal absent; they must not launch
+model work. Test both those controls before recovery dispatch and controls after
+a replacement goal has been created. Offline fixtures must also exercise normal
+persisted resume, pre-resume pausing of an active native goal, original contract
+delivery, legacy usage counters, exhausted budgets and all non-retry cases above.
+
+
 END OF READ-FIRST GUIDE
