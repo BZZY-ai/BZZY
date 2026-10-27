@@ -155,7 +155,18 @@ and scopes are preserved; private bindings, history and case/evidence packages
 are excluded. Unsafe selected packages block export. Neither operation starts
 agents, models or scripts. Open an entry to read its full details.
 
-For combined transfers, use `/library`. It includes skills, specialist agents,
+For a new installation, open **Settings → BZZY Core → Export Library** on the
+source. One checkbox list starts with every current-project and Core/global
+skill, specialist agent and workflow, plus saved goals, selected, including OFF
+definitions. Type and scope distinguish matching names; goals show their text.
+Uncheck anything to leave it out, then **Export** and **Copy code**. On the new
+installation, open **Settings → BZZY Core → Import Library** and paste the code.
+It uses the same private code, progress and missing-entry import flow as the
+individual tabs. Newly installed names also remain visible on the Settings page.
+Existing names and ON/OFF states survive; new skills/agents install enabled.
+Account keys, private bindings and chat history do not travel with this Library.
+
+Combined transfers also remain available through `/library`. It includes skills, specialist agents,
 workflows and saved goal text. `bzzy library share` generates an expiring
 `BZZY-LIBRARY-…` code; `bzzy library import` asks for hidden code entry on the
 receiving host. New codes pin the sender and selected archive internally, and
@@ -667,10 +678,10 @@ The existing runtime supports expiring session credentials with explicit control
 Open **Settings** from the top-right gear, use `/settings`, run `bzzy settings`,
 or launch `bzzy --settings` directly. It includes hidden API-key save/replacement
 for Core's API-key providers, including Experiential Labs, and device
-pairing using the bundled Core Relay gateway. The main menu has four entries:
-**API keys**, **Default BZZY folder**, **Pair iPhone**, and **BZZY Core**.
-Open BZZY Core for status, Start, Stop, Restart and its independent model/effort
-default. Stop leaves Settings usable. The BZZY Core page also provides **Update
+pairing using the bundled Core Relay gateway. The main menu includes
+**API keys**, **Default BZZY folder**, **Pair iPhone**, **Default models** and **BZZY Core**.
+Open BZZY Core for status, Start, Stop, Restart and **Export Library / Import Library**.
+Stop leaves Settings usable. The BZZY Core page also provides **Update
 BZZY CLI + Core**, which uses the same checked updater and reloads this terminal
 with chat and draft retained. Start/Restart preserve paused work. Leaving
 Settings reconnects an existing chat

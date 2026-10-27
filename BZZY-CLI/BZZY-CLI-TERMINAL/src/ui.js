@@ -28,10 +28,11 @@ import { recordInvocationEvent, reconcileInvocationEntries } from './invocation-
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, minimal = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, sessionDebugExporter, sessionFullDebugExporter, updateHandoff, yolo, readOnly = false } = {}) {
+  constructor({ json = false, pet = true, minimal = false, cwd = process.cwd(), input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, sessionDebugExporter, sessionFullDebugExporter, updateHandoff, yolo, readOnly = false } = {}) {
     this.json = json;
     this.pet = pet;
     this.minimal = minimal;
+    this.launchCwd = cwd;
     this.colorPalette = updateHandoff?.colorPalette || 'blue';
     this.input = input;
     this.output = output;

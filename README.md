@@ -109,7 +109,10 @@ pack includes a structured JSON workflow for new goals. Existing goals retain
 their original workflow on resume; source updates do not patch live runners.
 
 Transfer the [BZZY Library](BZZY-CORE/docs/LIBRARY-SHARING.md) between Mac and
-Linux with `bzzy library share` and `bzzy library import`. Expiring Relay codes
+Linux from **Settings → BZZY Core → Export Library / Import Library**.
+Export starts with all skills, specialist agents, workflows and saved goals
+checked in one list; import uses the same paste-once code flow as each Library tab.
+`bzzy library share` and `bzzy library import` remain available. Expiring Relay codes
 carry skills, specialist agents, workflows and saved goal text; the receiver
 validates and installs only missing entries. `/share` separately transfers a full
 terminal project and its saved context/history; later imports preserve existing chats.

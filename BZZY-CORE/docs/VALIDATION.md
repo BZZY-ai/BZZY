@@ -1,3 +1,25 @@
+# Combined Library transfer in Settings (2026-10-27)
+
+**Settings → BZZY Core** now offers **Export Library / Import Library** using
+the existing name-checkbox and private expiring-code flows. All current-project
+and Core/global skills, specialist agents and workflows, including OFF entries,
+plus explicitly saved goals start selected. Mixed names show type/scope; goal
+labels show objective text. Imports retain existing definitions and ON/OFF
+choices, enable newly installed skills/agents and show new names in Settings.
+No account configuration, histories, permissions or execution are transferred.
+Standalone Settings uses its launch directory, including `--cwd`; an attached
+terminal uses its saved session directory.
+
+Node 24/macOS: **112 focused CLI tests** and **48 Core Library tests** passed.
+Coverage includes both scopes/all four kinds, exact selected pins, OFF entries,
+stale/cancelled choices, obsolete-code refusal, masked input, real TUI progress
+and draft restoration, compact Settings navigation, result display and private
+host/stop guards. Core tests exercise actual encrypted transfers via a local
+Relay into independent recipient Core homes, missing-only commits, durable
+receipts and rejection of invalid authority or private content. CLI syntax and
+whitespace checks passed. No deployed Relay, native Linux host or running user
+installation was changed or validated by this run.
+
 # Root installer accepts pathlib paths during ownership traversal (2026-10-27)
 
 The embedded ownership preflight now normalizes filesystem paths with

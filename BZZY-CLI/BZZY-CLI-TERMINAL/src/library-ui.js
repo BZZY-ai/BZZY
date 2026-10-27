@@ -63,15 +63,19 @@ function tabKind(kind) {
 }
 const entryKey = entry => JSON.stringify([entry.kind, entry.scope || 'global', entry.name]);
 async function selectNames(ui, before, operation, kind, entries, labels = {}) {
-  const label = entry => labels[entryKey(entry)] || entry.name;
+  const label = entry => {
+    const name = labels[entryKey(entry)] || entry.name;
+    return kind ? name : `${names[entry.kind]} · ${name}${entry.kind === 'goal' ? '' : ` (${entry.scope === 'global' ? 'Core' : 'project'})`}`;
+  };
   const counts = new Map();
   for (const { entry } of entries) counts.set(label(entry), (counts.get(label(entry)) || 0) + 1);
   const choices = entries.map(({ entry, index }) => ({ value: String(index),
-    label: label(entry) + (counts.get(label(entry)) > 1 ? ` (${kind === 'goal' ? entry.name.slice(-8) : entry.scope === 'global' ? 'Core' : 'project'})` : ''), selected: true }));
-  const selected = await checked(ui, before, () => ui.chooseMany(`${operation} ${shareTypes[kind].toLowerCase()}`, choices, {
-    scope: `library-${operation.toLowerCase()}`, columnHeader: 'NAME', confirmLabel: operation, cancelLabel: 'Back',
+    label: label(entry) + (counts.get(label(entry)) > 1 ? ` (${entry.kind === 'goal' ? entry.name.slice(-8) : entry.scope === 'global' ? 'Core' : 'project'})` : ''), selected: true }));
+  const selected = await checked(ui, before, () => ui.chooseMany(`${operation} ${kind ? shareTypes[kind].toLowerCase() : 'Library'}`, choices, {
+    scope: `library-${operation.toLowerCase()}`, columnHeader: kind ? 'NAME' : 'TYPE · NAME', confirmLabel: operation, cancelLabel: 'Back',
     emptyMessage: 'Select at least one name.', hint: `Space toggles · Enter ${operation.toLowerCase()}s · Esc back`,
-    description: operation === 'Import' ? 'Import enables the selected entries for use.' : 'Only checked names will be shared.',
+    description: operation === 'Import' ? 'Import enables the selected entries for use.' : kind ? 'Only checked names will be shared.'
+      : 'All skills, agents, workflows and saved goals start selected. Uncheck any names to leave them out.',
   }));
   if (!selected?.length) return null;
   const allowed = new Map(choices.map(choice => [choice.value, Number(choice.value)]));
@@ -79,22 +83,41 @@ async function selectNames(ui, before, operation, kind, entries, labels = {}) {
   return selected.map(value => allowed.get(value));
 }
 
-export async function transferLibraryTab(operation, kind, cwd, ui, { loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), ...options } = {}) {
+export async function transferLibraryTab(operation, kind, cwd, ui, options = {}) {
   tabKind(kind);
-  if (operation === 'import') return importLibrary('', cwd, ui, { ...options, loadBundle, selectionKind: kind });
+  return transferLibrarySelection(operation, kind, cwd, ui, options);
+}
+
+export function transferLibrary(operation, cwd, ui, options = {}) {
+  return transferLibrarySelection(operation, undefined, cwd, ui, options);
+}
+
+export function libraryTransferErrorMessage(error) {
+  if (safeImportErrors[error?.code]) return safeImportErrors[error.code];
+  if (localErrors.has(error?.message) || Object.values(safeImportErrors).includes(error?.message)) return error.message;
+  if (['LIBRARY_BLOCKED_ENTRIES', 'LIBRARY_BLOCKED_GOALS'].includes(error?.code)) return 'Some selected entries contain private or nonportable data. Review them with /library share, or uncheck them before exporting.';
+  return 'Library transfer failed. Check Core/Relay and the selected packages, then try again.';
+}
+
+async function transferLibrarySelection(operation, kind, cwd, ui, { loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), ...options } = {}) {
+  if (operation === 'import') return importLibrary('', cwd, ui, { ...options, loadBundle, selectionKind: kind, currentCodesOnly: true });
   if (operation !== 'export') throw new Error('Choose Import or Export.');
+  const kinds = kind ? [kind] : Object.keys(shareTypes).sort();
   terminal(ui); const before = context(ui, cwd), backend = await checked(ui, before, loadBundle);
   if (typeof backend.listLibraryExportChoices !== 'function' || typeof backend.previewSelectedLibraryExport !== 'function') throw new Error('Update BZZY Core and CLI together to select Library entries.');
-  const catalog = await checked(ui, before, () => backend.listLibraryExportChoices({ cwd: before.root, kinds: [kind] }));
-  if (!Array.isArray(catalog.entries) || catalog.entries.some(entry => entry.kind !== kind)) throw new Error('The Library list changed. Reopen Export.');
-  if (!catalog.entries.length) { ui.event('info', { message: `No ${shareTypes[kind].toLowerCase()} to export.` }); return null; }
+  const catalog = await checked(ui, before, () => backend.listLibraryExportChoices({ cwd: before.root, kinds }));
+  if (!Array.isArray(catalog.entries) || catalog.entries.some(entry => !kinds.includes(entry.kind))) throw new Error('The Library list changed. Reopen Export.');
+  if (!catalog.entries.length) {
+    const message = kind ? `No ${shareTypes[kind].toLowerCase()} to export.` : 'No Library entries to export.';
+    ui.event('info', { message }); options.onComplete?.(null, message); return null;
+  }
   const indexes = await selectNames(ui, before, 'Export', kind, catalog.entries.map((entry, index) => ({ entry, index })), catalog.labels);
   if (!indexes) return null;
   const selectedEntries = indexes.map(index => catalog.entries[index]);
   let review;
   try {
-    review = await checked(ui, before, () => backend.previewSelectedLibraryExport({ cwd: before.root, kinds: [kind], selectedEntries }));
-    if (!Array.isArray(review.kinds) || JSON.stringify(review.kinds) !== JSON.stringify([kind]) ||
+    review = await checked(ui, before, () => backend.previewSelectedLibraryExport({ cwd: before.root, kinds, selectedEntries }));
+    if (!Array.isArray(review.kinds) || JSON.stringify([...review.kinds].sort()) !== JSON.stringify(kinds) ||
       JSON.stringify(review.entries.map(entryKey).sort()) !== JSON.stringify(selectedEntries.map(entryKey).sort())) throw new Error('The selected Library entries changed. Reopen Export.');
     return await shareLibraryBundle(before.root, review, ui, { ...options, compact: true, assertContext: () => check(ui, before) });
   } finally { if (review) backend.discardDefinitionBundleReview(review); }
@@ -231,7 +254,7 @@ export async function shareLibrary(cwd, ui, { loadBundle = () => import('@bzzy/c
   } finally { backend.discardDefinitionBundleReview(review); }
 }
 
-export async function importLibrary(value, cwd, ui, { relayLoader = () => import('@bzzy/core/relay'), loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), selectionKind } = {}) {
+export async function importLibrary(value, cwd, ui, { relayLoader = () => import('@bzzy/core/relay'), loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), selectionKind, currentCodesOnly = false, onComplete } = {}) {
   if (selectionKind !== undefined) tabKind(selectionKind);
   terminal(ui); const before = context(ui, cwd), previous = ui.privateView;
   const view = { title: 'ENTER CODE', lines: [], qr: [], onCancel: null };
@@ -243,7 +266,7 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
     if (!code) return null;
     const automatic = automaticCodePattern.test(code);
     if (!automatic && !codePattern.test(code) && !code.startsWith('BZZY:INVITE:1:')) throw new Error('Use a BZZY-LIBRARY code from the sender’s Library share screen.');
-    if (selectionKind && !automatic) throw Object.assign(new Error('Create a new export code.'), { code: 'LEGACY_LIBRARY_CODE' });
+    if ((selectionKind || currentCodesOnly) && !automatic) throw Object.assign(new Error('Create a new export code.'), { code: 'LEGACY_LIBRARY_CODE' });
     let sender;
     if (!automatic) {
       view.title = 'VERIFY SENDER'; view.lines = ['On the sender, open Verification to compare its fingerprint.']; ui.tui?.schedule();
@@ -291,10 +314,12 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
       },
     });
     check(ui, before);
+    let message;
     if (automatic) {
       const installed = result.alreadyImported ? [] : ['skill', 'agent', 'workflow', 'goal'].flatMap(kind => (result[kind + 's'] || []).map(entry => ({ kind, name: kind === 'goal' ? goalLabels.get(entry.version) || entry.name || entry.id : entry.name || entry.id })));
-      ui.event('info', { message: installed.length ? 'Installed:\n' + [...new Set(installed.map(entry => `${names[entry.kind]} · ${entry.name}`))].join('\n') : 'Already installed. Nothing new was added.' });
-    } else ui.event('info', { message: `${result.alreadyImported ? 'Library already installed' : 'Library installed'}: ${summary(result)}.${result.skipped?.length ? ` Skipped ${result.skipped.length} existing entries.` : ''} No execution started.` });
+      message = installed.length ? 'Installed:\n' + [...new Set(installed.map(entry => `${names[entry.kind]} · ${entry.name}`))].join('\n') : 'Already installed. Nothing new was added.';
+    } else message = `${result.alreadyImported ? 'Library already installed' : 'Library installed'}: ${summary(result)}.${result.skipped?.length ? ` Skipped ${result.skipped.length} existing entries.` : ''} No execution started.`;
+    ui.event('info', { message }); onComplete?.(result, message);
     return result;
   } catch (error) {
     if (error?.name === 'AbortError' || error?.code === 'CANCELLED') { ui.tui?.notice('Library import cancelled.'); return null; }

@@ -21,6 +21,8 @@ import { home, readJson, writeJson } from '../src/files.js';
 import { listRecords, getRecord, putRecord, digest } from '../src/database.js';
 import { runtimeInfo, runtimeRequest } from '../src/runtime.js';
 import { identityAlive } from '../src/process-identity.js';
+import { transferLibrary } from '../src/library-ui.js';
+import { libraryImportEntryIndexes } from '@bzzy/core/engine/definition-bundle.js';
 
 let directory, previous;
 const providerKeys = ['DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY', 'EXPLABS_API_KEY'];
@@ -45,11 +47,11 @@ test.afterEach(async () => {
   for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   fs.rmSync(directory, { recursive: true, force: true });
 });
-function terminal() {
+function terminal(cwd) {
   const input = new PassThrough(); Object.assign(input, { isTTY: true, isRaw: false, setRawMode(value) { this.isRaw = value; } });
   const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 32, columns: 100 });
   const term = { input, output, written: '' }; output.on('data', chunk => { term.written += chunk; });
-  term.ui = new UI({ input, output, error: output, pet: false });
+  term.ui = new UI({ input, output, error: output, pet: false, cwd });
   const session = createSession(BUILTINS.codex, path.join(directory, 'workspace'));
   term.ui.setSession(session.id); terminals.push(term); return term;
 }
@@ -147,6 +149,93 @@ test('BZZY Core Settings exposes one action that updates both CLI and Core', asy
   assert.equal(listRecords('execution').length, 0);
 });
 
+test('Core Settings exports and imports the full Library in the saved terminal project', async () => {
+  const { ui, output } = terminal(), calls = [], project = path.join(directory, 'workspace');
+  ui.tui.value = 'Retain this draft'; ui.tui.cursor = 6;
+  ui.settings = new ClientSettings(ui, { hostLoader: async () => ({ coreHostStatus: async () => ({ running: true }) }),
+    libraryTransfer: async (operation, cwd, target, options) => {
+      calls.push({ operation, cwd, target }); assert.equal(ui.settings.busy, true);
+      if (operation === 'import') options.onComplete({}, 'Installed:\nSkill · report-writing\nSpecialist agent · reviewer\nWorkflow · research\nGoal · Review the supplied application');
+    } });
+  ui.openSettings();
+  await ui.settings.run('library-export'); assert.equal(calls.length, 0, 'Library actions require their visible secondary page');
+  await ui.settings.run('core');
+  ui.tui.cwd = path.join(directory, 'another-directory');
+  Object.assign(output, { columns: 80, rows: 24 });
+  for (const action of ['library-export', 'library-import']) {
+    ui.settings.focusAction(action); ui.tui.settingsEnsureFocus = true; ui.tui.render();
+    const hit = ui.tui.hitTargets.find(hit => hit.type === 'settings' && hit.action === action);
+    assert.ok(hit && hit.row <= 24 && hit.right < 80, `${action} must be reachable in compact Settings`);
+    await ui.settings.run(action);
+    assert.equal(ui.settings.warning, false, ui.settings.message); assert.equal(ui.settings.busy, false);
+    assert.equal(ui.settings.page, 'core'); assert.equal(ui.tui.panel, 'settings');
+  }
+  assert.deepEqual(calls.map(({ operation, cwd, target }) => [operation, cwd, target === ui]), [['export', project, true], ['import', project, true]]);
+  const result = ui.settings.rows().map(row => row.text).join('\n');
+  for (const text of ['Skill · report-writing', 'Specialist agent · reviewer', 'Workflow · research', 'Goal · Review the supplied application']) assert.ok(result.includes(text));
+  assert.equal(listRecords('execution').length, 0); assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
+  ui.tui.setPanel('chat'); assert.equal(ui.tui.value, 'Retain this draft'); assert.equal(ui.tui.cursor, 6);
+});
+
+test('Settings Library import uses the same private code flow and shows the complete installed result on return', async () => {
+  const { ui, input, output } = terminal(), code = 'BZZY-LIBRARY-2.' + Array(4).fill(Buffer.alloc(32, 7).toString('base64url')).join('.');
+  const frames = []; ui.tui.writeFrame = frame => frames.push(frame);
+  const entries = [
+    { kind: 'skill', name: 'report-writing' }, { kind: 'agent', name: 'reviewer' }, { kind: 'workflow', name: 'research' },
+    { kind: 'goal', name: 'goal-opaque-id', version: 'a'.repeat(64), description: 'Review the supplied application' },
+  ];
+  ui.settings = new ClientSettings(ui, {
+    hostLoader: async () => ({ coreHostStatus: async () => ({ running: true }) }),
+    libraryTransfer: (operation, cwd, target, options) => transferLibrary(operation, cwd, target, { ...options,
+      loadBundle: async () => ({ libraryImportEntryIndexes }), relayLoader: async () => ({ importLibraryShare: async request => {
+        assert.equal(request.code, code);
+        assert.deepEqual(await request.onReview({ entries }), { approved: true, enable: true, entryIndexes: [0, 1, 2, 3] });
+        return { skills: [entries[0]], agents: [entries[1]], workflows: [entries[2]], goals: [entries[3]] };
+      } }),
+    }),
+  });
+  ui.tui.value = 'Keep my text'; ui.tui.cursor = 4; ui.openSettings(); await ui.settings.run('core');
+  const task = ui.settings.run('library-import');
+  await waitFor(() => ui.tui.hidden && ui.tui.resolveInput); ui.tui.render();
+  assert.match(clean(frames.at(-1)), /ENTER CODE/);
+  input.write('\x1b[200~' + code + '\x1b[201~\r'); await task;
+  assert.equal(ui.settings.warning, false, ui.settings.message); assert.equal(ui.privateView, undefined);
+  assert.equal(ui.tui.panel, 'settings'); assert.equal(ui.settings.page, 'core');
+  const rows = ui.settings.rows().map(row => row.text).join('\n');
+  assert.match(rows, /Installed:[\s\S]*Skill · report-writing[\s\S]*Specialist agent · reviewer[\s\S]*Workflow · research[\s\S]*Goal · Review the supplied application/);
+  assert.doesNotMatch(rows, /goal-opaque-id|BZZY-LIBRARY/);
+  Object.assign(output, { columns: 80, rows: 24 }); ui.tui.render();
+  assert.ok(ui.tui.lastFrame.length <= 24); assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < 80));
+  ui.tui.setPanel('chat'); assert.equal(ui.tui.value, 'Keep my text'); assert.equal(ui.tui.cursor, 4);
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('standalone Settings honors the launch directory before any chat is selected', async () => {
+  const project = path.join(directory, 'workspace'), { ui } = terminal(project), calls = [];
+  delete ui.sessionId; delete ui.activeTab; ui.tui.cwd = '/unrelated-view';
+  ui.settings = new ClientSettings(ui, { hostLoader: async () => ({ coreHostStatus: async () => ({ running: true }) }),
+    libraryTransfer: async (operation, cwd) => { calls.push([operation, cwd]); } });
+  const sessionsBefore = listRecords('session');
+  ui.openSettings(); await ui.settings.run('core');
+  for (const action of ['library-export', 'library-import']) await ui.settings.run(action);
+  assert.deepEqual(calls, [['export', project], ['import', project]]);
+  assert.deepEqual(listRecords('session'), sessionsBefore); assert.equal(listRecords('execution').length, 0);
+});
+
+test('Library failures stay safe in Settings and a stopped or switched host cannot begin a transfer', async () => {
+  const { ui } = terminal(); let calls = 0;
+  ui.settings = new ClientSettings(ui, { hostLoader: async () => ({ coreHostStatus: async () => ({ running: true }) }),
+    libraryTransfer: async () => { calls++; throw new Error('private-code-and-runtime-detail'); } });
+  ui.openSettings(); await ui.settings.run('core'); await ui.settings.run('library-export');
+  assert.equal(ui.settings.warning, true); assert.match(ui.settings.message, /Library transfer failed/);
+  assert.doesNotMatch(ui.settings.message, /private-code/); assert.equal(ui.settings.busy, false);
+  ui.coreLifecycleInterrupted = true; await ui.settings.run('library-import');
+  assert.match(ui.settings.message, /Core is stopped/); assert.equal(calls, 1);
+  ui.coreLifecycleInterrupted = false; process.env.BZZY_HOME = path.join(directory, 'different-host');
+  await ui.settings.run('library-export'); assert.match(ui.settings.message, /private Core host changed/);
+  assert.equal(calls, 1); assert.equal(listRecords('execution').length, 0);
+});
+
 test('Default models has independent clickable provider/model/effort fields and preserves unsaved edits through Back', async () => {
   const { ui, output } = terminal(); ui.openSettings();
   await ui.settingsCommand('/settings modes'); assert.equal(ui.settings.page, 'default-models');
@@ -217,7 +306,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'update-bzzy', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'update-bzzy', 'back']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');

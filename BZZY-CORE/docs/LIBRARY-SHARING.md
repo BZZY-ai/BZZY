@@ -38,7 +38,17 @@ carries only the sender-selected immutable Library archive. Both hosts need the
 current Core/CLI. The existing Relay's LIBRARY support is sufficient; this code
 approval mode does not add a Relay server operation.
 
-Combined transfers use `/library`, `/library share` and `/library import`, or:
+To move the complete Library to a new installation, open **Settings → BZZY Core
+→ Export Library**. A single name list starts with all four kinds selected,
+including OFF definitions in the current project and Core/global Library.
+Types and scopes distinguish matching names, and saved goals show objective text.
+Uncheck any entries to omit them, then choose **Export → Copy code**. On the
+recipient, **Settings → BZZY Core → Import Library** uses the same paste-once
+flow as the individual tabs and shows newly installed names on return to Settings.
+Existing definitions and ON/OFF choices survive; new skills/agents install enabled.
+Other projects, chat history and private account settings are excluded.
+
+Combined transfers also use `/library`, `/library share` and `/library import`, or:
 
 ```sh
 bzzy library share agents skills

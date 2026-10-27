@@ -11,6 +11,7 @@ import { copyText } from './clipboard.js';
 import { PairingQRImage } from './pairing-qr-image.js';
 import { home } from './files.js';
 import { updateCommand } from './update-checker.js';
+import { transferLibrary, libraryTransferErrorMessage } from './library-ui.js';
 
 const loadRelay = () => {
   let location;
@@ -56,10 +57,11 @@ export class ClientSettings {
   #expiry;
   #approvalRequest;
   constructor(ui, { relayLoader = loadRelay, hostLoader = loadHost, workspaces = new CoreWorkspaces(),
-    qrImage = new PairingQRImage(), modelPicker = chooseDefaultModel, updater = updateCommand } = {}) {
+    qrImage = new PairingQRImage(), modelPicker = chooseDefaultModel, updater = updateCommand, libraryTransfer = transferLibrary } = {}) {
     this.ui = ui; this.relayLoader = relayLoader; this.workspaces = workspaces;
     this.hostLoader = hostLoader; this.hostHome = home();
     this.qrImage = qrImage; this.modelPicker = modelPicker; this.updater = updater;
+    this.libraryTransfer = libraryTransfer;
     this.defaults = new DefaultModels(ui, { modelPicker, isCurrent: () => !this.closed && this.page === 'default-models'
       && (!this.ui.tui?.panel || this.ui.tui.panel === 'settings') });
     this.message = ''; this.warning = false; this.focus = 0; this.page = 'main';
@@ -69,7 +71,7 @@ export class ClientSettings {
     return { main: 'Settings', core: 'BZZY Core', keys: 'API keys', 'default-models': 'Default models', pair: 'Pair iPhone', approve: 'Confirm iPhone' }[this.page] || 'Settings';
   }
   get pageSubtitle() {
-    return { main: 'Your workspace, connections and defaults', core: 'Background service, updates and status',
+    return { main: 'Your workspace, connections and defaults', core: 'Background service, Library, updates and status',
       'default-models': 'Provider, model and effort for every role · Save each group when ready',
       pair: 'Your iPhone · full access through Core', approve: 'Compare the complete fingerprint with your iPhone' }[this.page] || '';
   }
@@ -113,7 +115,7 @@ export class ClientSettings {
       rows.push({ text: 'Pair iPhone', action: 'pair', icon: '⌁', card: true, tone: 'accent',
         detail: this.pending().length ? 'iPhone waiting for approval' : this.grants().length ? 'iPhone paired' : 'Full access · QR or code' });
       rows.push({ text: 'Default models', action: 'default-models', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Core · Validate · Delegate · Consensus & Compactor' });
-      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, updates and status', value: this.hostStatus ? this.hostLabel() : undefined });
+      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, Library transfers, updates and status', value: this.hostStatus ? this.hostLabel() : undefined });
       return rows;
     }
     if (this.page === 'keys') {
@@ -134,6 +136,12 @@ export class ClientSettings {
       put('Stop', 'warning', 'core-stop');
       put('Restart', 'accent', 'core-restart');
       rows.slice(-3).forEach(row => { row.inline = 'lifecycle'; row.control = true; });
+      rows.push({ text: 'BZZY Library', section: true });
+      put('Export Library', 'accent', 'library-export');
+      put('Import Library', 'accent', 'library-import');
+      rows.slice(-2).forEach(row => { row.inline = 'library-transfer'; });
+      put('All skills, specialist agents, workflows and saved goals · current project + Core', 'muted');
+      if (this.libraryResult) for (const text of this.libraryResult.split('\n')) put(text, 'accent');
       rows.push({ text: 'Update BZZY CLI + Core', action: 'update-bzzy', icon: '↻', card: true, tone: 'accent',
         detail: 'Check the official release and update both products · this terminal reloads' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
@@ -316,6 +324,17 @@ export class ClientSettings {
       else if (action === 'core') { this.page = 'core'; this.focus = 0; await this.refreshHost(); }
       else if (action === 'core-status') await this.refreshHost();
       else if (['core-start', 'core-stop', 'core-restart'].includes(action)) await this.controlHost(action);
+      else if (['library-export', 'library-import'].includes(action)) {
+        if (home() !== this.hostHome) throw Object.assign(new Error(), { code: 'HOST_CONTEXT_CHANGED' });
+        if (this.ui.coreLifecycleInterrupted) throw Object.assign(new Error(), { code: 'CORE_STOPPED' });
+        const session = this.ui.sessionId && loadSession(this.ui.sessionId);
+        if (this.ui.sessionId && !session) throw Object.assign(new Error(), { code: 'CONFLICT' });
+        this.libraryResult = ''; this.changed();
+        await this.libraryTransfer(action === 'library-export' ? 'export' : 'import', session?.cwd || this.ui.launchCwd || this.ui.tui.cwd || process.cwd(), this.ui, {
+          onComplete: (_result, message) => { if (!this.closed) { this.libraryResult = message; this.changed(); } },
+        });
+        this.ui.tui.bodyCache = null;
+      }
       else if (action === 'pair') { this.page = 'pair'; this.focus = 0; await this.pair(); }
       else if (action === 'new-pair') await this.pair({ fresh: true });
       else if (action === 'back') { this.busy = false; this.back(); }
@@ -367,7 +386,7 @@ export class ClientSettings {
         }
       }
     } catch (error) {
-      this.message = error.code === 'ADAPTER_UNAVAILABLE' ? 'Core pairing adapter unavailable. Install Core and its Relay dependencies alongside the CLI.' : messages[error.code] || (this.page === 'core' ? 'Core service action failed. Check bzzy-core status and try again.' : 'Settings action failed. Check Core/Relay status and try again.');
+      this.message = error.code === 'ADAPTER_UNAVAILABLE' ? 'Core pairing adapter unavailable. Install Core and its Relay dependencies alongside the CLI.' : messages[error.code] || (action.startsWith('library-') ? libraryTransferErrorMessage(error) : this.page === 'core' ? 'Core service action failed. Check bzzy-core status and try again.' : 'Settings action failed. Check Core/Relay status and try again.');
       this.warning = true;
     } finally { this.busy = false; this.changed(); }
   }

@@ -97,13 +97,14 @@ export function shareLibraryBundle(cwd, review, ui, options = {}) {
 async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/core/relay'), copy = copyText, library, compact = false, assertContext = () => {} } = {}) {
   privateTerminal(ui);
   assertContext();
-  const label = library ? compact ? library.kinds?.[0] === 'skill' ? 'skills' : 'agents' : 'Library' : 'terminal';
+  const label = library ? compact && library.kinds?.length === 1
+    ? { skill: 'skills', agent: 'agents', workflow: 'workflows', goal: 'goals' }[library.kinds[0]] || 'Library' : 'Library' : 'terminal';
   if (ui.sessionMode === 'VIEW') throw new Error('Attach with control before sharing this terminal.');
   if ((!library && !session?.id) || !path.isAbsolute(session.cwd || '')) throw new Error('Choose an existing terminal project before sharing.');
   let service, share, state, cancelled = false;
   try {
     return await privateView(ui, compact ? `Export ${label}` : `Share ${label}`, async view => {
-      changeView(ui, view, { lines: compact ? [`${library.entries.length} ${label} selected. Preparing your code…`] : [
+      changeView(ui, view, { lines: compact ? [`${library.entries.length} ${label === 'Library' ? 'Library entries' : label} selected. Preparing your code…`] : [
         `Project: ${session.cwd}`,
         library ? 'Reviewed skills, specialist agents, workflows and saved goal text.' : 'Includes project files, full chats, .bzzy notes, memory and related execution/evidence context.',
         'Credentials, account bindings, device identities and live permissions are excluded.',

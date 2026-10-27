@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { UI } from '../src/ui.js';
-import { shareLibrary, importLibrary, importRelayShare, libraryCommand, transferLibraryTab } from '../src/library-ui.js';
+import { shareLibrary, importLibrary, importRelayShare, libraryCommand, transferLibraryTab, transferLibrary } from '../src/library-ui.js';
 import { forgetPrivateImportInput } from '../src/share-ui.js';
 import { privateChatCommand } from '../src/terminal-commands.js';
 import { createSession } from '@bzzy/core/engine/store.js';
@@ -15,6 +15,7 @@ import * as libraryBackend from '@bzzy/core/engine/definition-bundle.js';
 import { saveWorkflow } from '@bzzy/core/engine/workflows.js';
 import { saveGoalTemplate } from '@bzzy/core/engine/goal-templates.js';
 import { createSkill, setSkillEnabled } from '@bzzy/core/engine/skills.js';
+import { saveSubagentDefinition, setSubagentEnabled } from '@bzzy/core/engine/subagent-definitions.js';
 
 const code = 'BZZY-LIBRARY-' + 'L'.repeat(43), terminalCode = 'BZZY-TERMINAL-' + 'T'.repeat(43);
 const sender = 's'.repeat(43), recipient = 'r'.repeat(43), sourceDigest = 'e'.repeat(64);
@@ -80,6 +81,103 @@ function sourceTransport(calls, { state = 'complete' } = {}) {
   } };
 }
 const imported = { skills: [{}], agents: [{}], workflows: [{}], goals: [{}], skipped: [{ kind: 'skill', name: 'kept-local' }] };
+
+function wholeLibrary() {
+  const definition = { name: 'shared-checks', description: 'Review supplied controls.', instructions: 'Compare supplied offline positive and negative controls.' };
+  const skills = ['global', 'project'].map(scope => createSkill(definition, { scope, projectRoot: cwd }));
+  for (const scope of ['global', 'project']) {
+    const agent = saveSubagentDefinition(definition, { cwd, scope });
+    setSubagentEnabled(agent.name, false, { cwd, scope, expectedRevision: agent.revision });
+    saveWorkflow({ name: definition.name, instructions: definition.instructions }, { cwd, scope });
+  }
+  const goal = saveGoalTemplate({ objective: 'Review the supplied evidence and write a clear report.' });
+  return { skills, goal, catalog: libraryBackend.listLibraryExportChoices({ cwd, kinds: allKinds }) };
+}
+
+test('whole Library export preselects every type and scope, including OFF definitions, with distinct readable names', async () => {
+  const { catalog } = wholeLibrary(), transport = [], ui = mockUI();
+  await transferLibrary('export', cwd, ui, { loadBundle: async () => libraryBackend, relayLoader: async () => sourceTransport(transport) });
+  assert.equal(ui.typeMenus.length, 1); assert.equal(ui.menus.length, 0);
+  const menu = ui.typeMenus[0];
+  assert.equal(menu.choices.length, 7); assert.ok(menu.choices.every(choice => choice.selected));
+  assert.equal(new Set(menu.choices.map(choice => choice.label)).size, 7, 'type and scope distinguish matching names');
+  for (const [index, entry] of catalog.entries.entries()) {
+    const choice = menu.choices.find(row => row.value === String(index)); assert.ok(choice);
+    assert.match(choice.label, new RegExp(entry.kind === 'agent' ? 'agent' : entry.kind, 'i'));
+    if (entry.kind === 'goal') {
+      assert.ok(choice.label.includes('Review the supplied evidence and write a clear report.'));
+      assert.ok(!choice.label.includes(entry.name), 'saved goals use objective text instead of a hash-derived name');
+    } else {
+      assert.ok(choice.label.includes(entry.name));
+      assert.match(choice.label, entry.scope === 'global' ? /Core|global/i : /project/i);
+    }
+  }
+  const request = transport.find(call => call.operation === 'create').input;
+  assert.deepEqual(request.kinds, allKinds); assert.equal(request.approval, 'code');
+  assert.equal(request.excludeEntries?.length || 0, 0); assert.equal(request.excludeGoalIds?.length || 0, 0);
+  assert.ok(ui.frames.some(frame => frame.includes('Export Library')));
+  assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft');
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('whole Library export binds exactly the selected mixed entries and omits unchecked packages', async () => {
+  const { catalog } = wholeLibrary();
+  const selected = catalog.entries.filter(entry => entry.kind === 'goal' || entry.kind === 'skill' && entry.scope === 'project');
+  let reviewed;
+  const ui = mockUI({ typeChoices: [(_title, choices) => selected.map(entry => choices[catalog.entries.indexOf(entry)].value)] }), transport = [];
+  const backend = { ...libraryBackend, previewSelectedLibraryExport(input) { reviewed = input; return libraryBackend.previewSelectedLibraryExport(input); } };
+  await transferLibrary('export', cwd, ui, { loadBundle: async () => backend, relayLoader: async () => sourceTransport(transport) });
+  assert.deepEqual(reviewed.kinds, allKinds); assert.deepEqual(reviewed.selectedEntries, selected);
+  const request = transport.find(call => call.operation === 'create').input;
+  assert.deepEqual(request.kinds, allKinds);
+  assert.deepEqual(request.excludeEntries, catalog.entries.filter(entry => !selected.includes(entry)));
+  assert.equal(request.excludeGoalIds?.length || 0, 0);
+  assert.equal(ui.typeMenus.length, 1); assert.equal(listRecords('execution').length, 0);
+});
+
+test('whole Library cancelled selection and stale pins cannot publish a Relay code', async () => {
+  const { skills } = wholeLibrary(); let relayLoads = 0;
+  const options = { loadBundle: async () => libraryBackend, relayLoader: async () => { relayLoads++; assert.fail('No Relay operation is authorized'); } };
+  for (const selected of [null, []]) {
+    const ui = mockUI({ typeChoices: [selected] });
+    assert.equal(await transferLibrary('export', cwd, ui, options), null);
+    assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft');
+  }
+  const ui = mockUI({ typeChoices: [(_title, choices) => {
+    setSkillEnabled(skills[0].id, true, skills[0].revision);
+    return choices.map(choice => choice.value);
+  }] });
+  await assert.rejects(transferLibrary('export', cwd, ui, options), { code: 'STALE_REVIEW' });
+  assert.equal(relayLoads, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('whole Library import pastes once, includes all kinds and reports readable new entries without existing names', async () => {
+  const value = review(), version = '8'.repeat(64), goalText = 'Review the supplied evidence and write a clear report.';
+  Object.assign(value.entries.find(entry => entry.kind === 'goal'), { version, description: goalText });
+  value.entries.push({ ...value.entries[0], name: 'already-there' });
+  value.conflicts = [{ kind: 'skill', name: 'already-there', scope: 'global' }];
+  let decision;
+  const ui = mockUI({ secret: automaticCode });
+  ui.ask = async () => assert.fail('No extra fingerprint prompt is needed');
+  const result = await transferLibrary('import', cwd, ui, { loadBundle: async () => libraryBackend,
+    relayLoader: async () => ({ importLibraryShare: async request => {
+      decision = await request.onReview(value);
+      return { skills: [{ name: 'new-checks' }], agents: [{ name: 'new-reviewer' }], workflows: [{ name: 'new-process' }],
+        goals: [{ id: 'template:' + version, version }], skipped: [{ kind: 'skill', name: 'already-there' }] };
+    } }) });
+  assert.deepEqual(decision, { approved: true, enable: true, entryIndexes: [0, 1, 2, 3, 4] });
+  assert.equal(ui.prompts.length, 1); assert.match(ui.prompts[0], /^ENTER CODE/);
+  assert.equal(ui.typeMenus.length, 0); assert.equal(ui.menus.length, 0);
+  const message = ui.events[0].message;
+  for (const text of ['Skill · new-checks', 'Specialist agent · new-reviewer', 'Workflow · new-process', 'Goal · ' + goalText]) assert.ok(message.includes(text));
+  assert.doesNotMatch(message, /already-there|reviewed-goal|template:/);
+  assert.equal(result.goals.length, 1); assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft');
+  assert.equal(listRecords('execution').length, 0);
+  let loaded = false;
+  await assert.rejects(transferLibrary('import', cwd, mockUI(), { relayLoader: async () => { loaded = true; } }), /older code/);
+  assert.equal(await transferLibrary('import', cwd, mockUI({ secret: null }), { relayLoader: async () => { loaded = true; } }), null);
+  assert.equal(loaded, false);
+});
 
 test('tab export checks names only and generates a Relay code for exactly the selected packages', async () => {
   const definition = name => ({ name, description: 'Detailed fixture description.', instructions: 'Detailed fixture instructions.' });

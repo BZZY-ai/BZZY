@@ -123,7 +123,7 @@ Implemented:
   portable global definitions enabled for use, through Core's internal creator
   guides and validated atomic registration. Creation does not start a task.
 - Name-only checkbox Export and paste-once Import in Skills, Agents, Workflows
-  and the saved-goal picker using
+  and the saved-goal picker, plus combined **Settings → BZZY Core → Export Library / Import Library**, use
   expiring Relay codes, exact version pins and missing-entry imports. Resources and
   scopes survive without bindings or execution; goal labels use objective text.
   Imports leave workflow selections and running goals unchanged. Existing ZIP

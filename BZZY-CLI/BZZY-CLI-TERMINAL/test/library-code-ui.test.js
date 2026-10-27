@@ -7,10 +7,11 @@ import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { UI } from '../src/ui.js';
 import { shareLibraryBundle } from '../src/share-ui.js';
-import { transferLibraryTab } from '../src/library-ui.js';
+import { transferLibraryTab, transferLibrary } from '../src/library-ui.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { createSession } from '@bzzy/core/engine/store.js';
 import { libraryImportEntryIndexes } from '@bzzy/core/engine/definition-bundle.js';
+import { listRecords } from '@bzzy/core/engine/database.js';
 
 const code = 'BZZY-LIBRARY-2.' + Array(4).fill(Buffer.alloc(32, 11).toString('base64url')).join('.');
 const sender = Buffer.alloc(32, 12).toString('base64url');
@@ -111,5 +112,53 @@ test('Import is one hidden paste, actual download progress, install stage and on
     const complete = ui.tui.entries.map(entry => entry.text).join('\n');
     assert.match(complete, /Installed:[\s\S]*Skill · new-controls/); assert.doesNotMatch(complete, /already-there/); assert.ok(!complete.includes(code));
     assert.equal(ui.tui.value, 'Keep the existing draft'); assert.equal(ui.tui.cursor, 5);
+  } finally { screen.close(); await task?.catch(() => {}); }
+});
+
+test('whole Library import keeps Settings behind private progress and restores its saved chat draft', async () => {
+  const screen = terminal(), { ui, input, frames } = screen; let task;
+  const version = '7'.repeat(64), goalText = 'Review the supplied evidence and write the report.';
+  const entries = [
+    { kind: 'skill', name: 'new-controls', scope: 'project' },
+    { kind: 'agent', name: 'new-reviewer', scope: 'global' },
+    { kind: 'workflow', name: 'new-process', scope: 'project' },
+    { kind: 'goal', name: 'goal-' + version.slice(0, 48), scope: 'global', version, description: goalText },
+    { kind: 'skill', name: 'already-there', scope: 'global' },
+  ];
+  try {
+    ui.openSettings(); ui.settings.page = 'core'; ui.settings.busy = true;
+    ui.chooseMany = async () => assert.fail('The recipient should not select the entries again');
+    ui.chooseOne = async () => assert.fail('The recipient should not review another menu');
+    task = transferLibrary('import', cwd, ui, { loadBundle: async () => ({ libraryImportEntryIndexes }), relayLoader: async () => ({
+      importLibraryShare: async request => {
+        assert.equal(request.code, code); assert.equal(request.expectedSenderFingerprint, undefined);
+        request.onIdentity({ recipientFingerprint: sender }); request.onPhase('downloading');
+        request.onProgress({ received: 2048, total: 4096 });
+        ui.tui.render();
+        assert.equal(ui.tui.panel, 'settings'); assert.equal(ui.settings.page, 'core');
+        assert.ok(!ui.tui.hitTargets.some(hit => hit.type === 'settings'), 'private transfer has no live Settings actions');
+        request.onPhase('checking');
+        assert.deepEqual(await request.onReview({ entries, conflicts: [entries[4]] }),
+          { approved: true, enable: true, entryIndexes: [0, 1, 2, 3, 4] });
+        request.onPhase('installing');
+        return { skills: [{ name: 'new-controls' }], agents: [{ name: 'new-reviewer' }], workflows: [{ name: 'new-process' }],
+          goals: [{ id: 'template:' + version, version }], skipped: [{ kind: 'skill', name: 'already-there' }] };
+      },
+    }) });
+    await until(() => ui.tui.hidden && ui.tui.resolveInput); ui.tui.render();
+    assert.match(clean(frames.at(-1)), /ENTER CODE/);
+    assert.doesNotMatch(clean(frames.at(-1)), /Background service|Update BZZY|Keep the existing draft/);
+    input.write('\x1b[200~' + code + '\x1b[201~\r'); await task;
+    const rendered = frames.map(clean).join('\n');
+    assert.match(rendered, /50% · 2.0 KiB \/ 4.0 KiB/);
+    assert.match(rendered, /Checking package integrity/); assert.match(rendered, /Installing new entries/);
+    assert.equal(ui.privateView, undefined); assert.equal(ui.tui.panel, 'settings'); assert.equal(ui.settings.page, 'core');
+    const complete = ui.tui.entries.map(entry => entry.text).join('\n');
+    for (const label of ['Skill · new-controls', 'Specialist agent · new-reviewer', 'Workflow · new-process', 'Goal · ' + goalText]) assert.ok(complete.includes(label));
+    assert.doesNotMatch(complete, /already-there|goal-777|template:/); assert.ok(!complete.includes(code));
+    assert.ok(!JSON.stringify(ui.tui.history).includes(code));
+    ui.settings.busy = false; ui.tui.setPanel('chat');
+    assert.equal(ui.tui.value, 'Keep the existing draft'); assert.equal(ui.tui.cursor, 5);
+    assert.equal(listRecords('execution').length, 0);
   } finally { screen.close(); await task?.catch(() => {}); }
 });
