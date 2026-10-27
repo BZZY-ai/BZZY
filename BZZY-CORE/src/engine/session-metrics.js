@@ -61,20 +61,20 @@ export function resolveSessionMetricsScope(value, { goalId, goalMode, stopAt } =
   });
 }
 
-function family(root) {
+function family(root, { maxSessions = MAX_SESSIONS, maxDepth = 32 } = {}) {
   const sessions = new Map([[root.id, root]]); let frontier = [root.id], bounded = false;
-  for (let depth = 0; frontier.length && depth < 32; depth++) {
+  for (let depth = 0; frontier.length && depth < maxDepth; depth++) {
     const rows = database().prepare(`SELECT ${sessionColumns} FROM records WHERE kind='session'
-      AND json_extract(data,'$.parentSessionId') IN (SELECT value FROM json_each(?)) LIMIT ?`).all(JSON.stringify(frontier), MAX_SESSIONS + 1);
+      AND json_extract(data,'$.parentSessionId') IN (SELECT value FROM json_each(?)) LIMIT ?`).all(JSON.stringify(frontier), maxSessions === Number.MAX_SAFE_INTEGER ? maxSessions : maxSessions + 1);
     frontier = [];
     for (const row of rows) {
       if (sessions.has(row.id) || !id(row.id) || ['learning-review', 'knowledge-review', 'skill-writer'].includes(row.role) || row.purpose === 'agent' || row.purpose === 'document-draft') continue;
-      if (sessions.size >= MAX_SESSIONS) { bounded = true; continue; }
+      if (sessions.size >= maxSessions) { bounded = true; continue; }
       const parent = sessions.get(row.parentSessionId), job = row.assignmentId && assignment(row.assignmentId);
       if (!(job?.parentSessionId === parent?.id && job.workerSessionId === row.id || row.reviewParent === parent?.id || ['peer', 'bestie'].includes(row.role))) continue;
       sessions.set(row.id, row); frontier.push(row.id);
     }
-    if (rows.length > MAX_SESSIONS) bounded = true;
+    if (rows.length > maxSessions) bounded = true;
   }
   if (frontier.length) bounded = true;
   return { sessions, bounded };
@@ -82,11 +82,11 @@ function family(root) {
 
 // The diagnostic exporter uses the same explicit worker/review ancestry as
 // usage. Sharing a cwd alone never admits another conversation.
-export function sessionMetricsFamily(value) {
+export function sessionMetricsFamily(value, { full = false } = {}) {
   return readOnly(() => {
     const root = sessionRecord(typeof value === 'string' ? value : value?.id);
     if (!root) return { sessionIds: [], bounded: false };
-    const result = family(root);
+    const result = family(root, full ? { maxSessions: Number.MAX_SAFE_INTEGER, maxDepth: Number.MAX_SAFE_INTEGER } : {});
     return { sessionIds: [...result.sessions.keys()], bounded: result.bounded };
   });
 }

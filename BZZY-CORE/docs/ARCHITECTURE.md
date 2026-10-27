@@ -168,6 +168,13 @@ tool attempts. Diagnostics neither add model work nor grant authority or count
 as invocations. Historical gaps and inherited native schemas are explicit; see
 [session debugging](SESSION-DEBUG.md).
 
+`session-full-debug.js` extends that local read projection into a separate ZIP
+with complete scoped event/record/message streams, memory/compactor/learning
+state and individually validated project/execution files. `debug-archive.py`
+packages only the private sanitized stage. The full ZIP has its own manifest and
+explicit credential/path/capture exclusions, and is not an execution/import
+format. The shipped read-first guide is mirrored at the repository root.
+
 `src/engine/subagent-definitions.js` owns revision-checked project/global
 specialist definitions and immutable content versions. `subagents.js` resolves a
 definition and model selection against the current execution and starts the

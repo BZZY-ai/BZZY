@@ -126,3 +126,8 @@ resources and specialist instructions, with credential exclusion/redaction and
 explicit historical gaps. It adds no use counts and requires no running Core.
 It inspects BZZY's context delivery, discovery and orchestration; it does not
 infer correct behavior from invocation totals. See [session debug](SESSION-DEBUG.md).
+
+The adjacent **Full debug ZIP** action (**F**, `/full_debug_export`, or
+`bzzy debug full SESSION`) adds complete scoped execution/memory/learning data
+and project notes/ledgers/files to a ZIP. It retains the same read-only session
+and accounting boundary, with separate manifest exclusions and source-file limits.

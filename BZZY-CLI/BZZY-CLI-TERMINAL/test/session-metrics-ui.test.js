@@ -135,6 +135,20 @@ test('/debug stays local and stale exports cannot appear in another chat', async
   } finally { ui.close(); }
 });
 
+test('Full debug ZIP and /full_debug_export route to the full exporter without model input or draft changes', async () => {
+  const { ui, input, frame } = terminal(); const exported = [];
+  ui.sessionFullDebugExporter = async id => { exported.push(id); return { outputPath: '/project/chat_full_debug_26102026.zip', full: true }; };
+  try {
+    const pending = ui.ask('bzzy › '); await settle(); ui.tui.value = 'Keep this draft';
+    await ui.settingsCommand('/metrics'); await settle(); input.write('f'); await settle(); await ui.tui.metricsTask; ui.tui.render();
+    assert.deepEqual(exported, [firstId]); assert.match(frame(), /Full debug ZIP exported/); assert.match(frame(), /chat_full_debug_26102026.zip/);
+    ui.tui.goBack(); await ui.settingsCommand('/full_debug_export'); assert.deepEqual(exported, [firstId, firstId]);
+    assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.entries.length, 0); assert.equal(ui.permissionConnection, undefined);
+    assert.ok(commandSuggestions('/full_debug').some(item => item.command === '/full_debug_export'));
+    ui.tui.finish(null); await pending;
+  } finally { ui.close(); }
+});
+
 test('the production Metrics loader refreshes real durable Core receipts without restarting stopped Core or adding model work', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-metrics-read-')), before = process.env.BZZY_HOME;
   process.env.BZZY_HOME = directory;

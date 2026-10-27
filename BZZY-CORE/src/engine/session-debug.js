@@ -25,6 +25,7 @@ const eventFields = [...recordFields, 'text', 'message', 'error', 'code', 'name'
   'question', 'answer', 'expiresAt', 'executionState', 'elapsedSeconds', 'tokens', 'available', 'totalTokens', 'inputTokens', 'outputTokens',
   'setupId', 'transport', 'toolsSource', 'reportedTools', 'threadRef', 'instructions', 'prompt', 'delivery', 'backend',
   'executionId', 'requestId', 'agent', 'agentNamespace', 'childSessionId', 'turnId', 'itemId', 'previousProvider', 'previousModel', 'appliesTo',
+  'contextResult', 'resultSourceSha256', 'resultBytes',
   'method', 'url', 'backendState', 'localRequestObserved', 'tool', 'sourceSessionId', 'sourceGoalRevision', 'sourceRevision', 'acceptance', 'usage'];
 const knownEvents = new Set(['message.user', 'text', 'tool', 'coordination.tool', 'core.usage', 'skill.loaded', 'lifecycle', 'goal',
   'goal.completed', 'goal.paused', 'goal.cancelled', 'goal.stalled', 'summary', 'error', 'info', 'question', 'question.answered',
@@ -75,6 +76,7 @@ function filename(alias, at) {
   const date = [at.getDate(), at.getMonth() + 1, at.getFullYear()].map((value, index) => String(value).padStart(index === 2 ? 4 : 2, '0')).join('');
   return `${name}_debug_${date}.md`;
 }
+export { filename as sessionDebugFilename, sensitiveOperation as diagnosticPrivateOperation };
 
 function openOutput(cwd, requested, defaultName) {
   if (requested !== undefined && (typeof requested !== 'string' || !/\.(?:md|txt)$/i.test(requested))) fail('Choose a new .md or .txt debug file.');

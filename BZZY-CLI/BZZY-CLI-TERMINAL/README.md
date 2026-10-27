@@ -277,6 +277,18 @@ Pass a new `.md`/`.txt` path as the last argument to choose another name.
 The file contains private task content with automatic redaction; review it
 before sharing. See [debug contents and limits](../../BZZY-CORE/docs/SESSION-DEBUG.md).
 
+For the full archive, use `/full_debug_export`, **Metrics → Full debug ZIP**,
+or **F** in Metrics. From another terminal, run `bzzy debug full "session-name"`
+or `bzzy full_debug_export "session-name"`. This creates
+`session-name_full_debug_ddmmyyyy.zip` in the same current-directory flow.
+It includes the regular overview plus complete scoped event/record/message
+streams, memory/compaction/learning history, project notes and ledgers, source
+files, referenced evidence/snapshots and skill resources. Secrets/private stores
+remain excluded, and manifest.json lists missing/changing/unsafe files.
+Every ZIP includes the detailed [read-first guide](../../GUIDE_TO_BZZY_DEBUGGER.txt)
+for future debugging sessions; exporting neither executes its contents nor
+replays the investigation.
+
 When the active terminal model uses the DeepSeek API key, the top bar also shows
 the current USD balance; click it for freshness/source details. Subscription
 providers do not show an account balance control.

@@ -949,6 +949,7 @@ export class TerminalChat {
       else if (key.name === 'r' && !key.ctrl && !key.meta) this.metricsAction('refresh');
       else if (key.name === 'g' && !key.ctrl && !key.meta) this.metricsAction('history');
       else if (key.name === 'e' && !key.ctrl && !key.meta) this.metricsAction('export');
+      else if (key.name === 'f' && !key.ctrl && !key.meta) this.metricsAction('full-export');
       else if (key.name === 'up' || key.name === 'down') this.scroll = Math.max(0, this.scroll + (key.name === 'up' ? 1 : -1));
       else if (key.name === 'home') this.scroll = this.scrollbar?.maximum || 0;
       else if (key.name === 'end') this.scroll = 0;
@@ -1504,7 +1505,7 @@ export class TerminalChat {
       : this.panel === 'agents' ? this.ui.definitionBundleDraft?.panel === 'agents' ? 'ZIP review · Esc goes back' : this.ui.subagentCreatorDraft ? 'Agent preview · Esc returns to library' : 'Agents · ↑/↓ choose · Enter opens · F10 actions · Esc back'
       : this.panel === 'workflows' ? 'Workflows · ↑/↓ choose · Enter opens · F10 actions · Esc back'
       : this.panel === 'goals' ? 'Goals · ↑/↓ choose · Enter opens · F10 actions · Esc back'
-      : this.panel === 'metrics' ? '←/→ scope · Enter opens · G goals · R refresh · E export debug'
+      : this.panel === 'metrics' ? '←/→ scope · Enter · G goals · R refresh · E debug · F full ZIP'
       : this.ui.definitionBundleDraft?.panel === 'skills' && this.panel === 'skills' ? 'ZIP review · Esc goes back'
       : skillDirectoryInput ? 'Codex skills directory'
       : skillDetail ? 'Skill · Esc goes back'

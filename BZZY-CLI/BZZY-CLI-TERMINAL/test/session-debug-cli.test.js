@@ -30,6 +30,14 @@ test('a separate CLI exports a saved running session into the caller folder with
     assert.deepEqual(database().prepare('SELECT * FROM records ORDER BY kind,id').all(), state);
     assert.deepEqual(database().prepare('SELECT * FROM events ORDER BY seq').all(), events);
     assert.deepEqual(fs.readdirSync(original), []);
+    const full = spawnSync(process.execPath, [binary, 'full_debug_export', session.alias, '--json'], { cwd: current, env: process.env, encoding: 'utf8', timeout: 15000 });
+    assert.equal(full.status, 0, full.stderr + full.stdout);
+    const fullResult = full.stdout.trim().split('\n').map(JSON.parse).find(event => event.type === 'debug.exported');
+    const fullData = fullResult.data || fullResult; assert.equal(fullData.full, true); assert.equal(path.dirname(fullData.outputPath), current);
+    assert.match(path.basename(fullData.outputPath), /^nine-hour-session_full_debug_\d{8}\.zip$/);
+    assert.equal(runtimeInfo(), null); assert.equal(operatorStopRequested(), true); assert.equal(loadSession(session.id).executionState, 'running');
+    assert.deepEqual(database().prepare('SELECT * FROM records ORDER BY kind,id').all(), state);
+    assert.deepEqual(database().prepare('SELECT * FROM events ORDER BY seq').all(), events);
     const bad = spawnSync(process.execPath, [binary, 'debug', 'export', '--json'], { cwd: current, env: process.env, encoding: 'utf8', timeout: 15000 });
     assert.notEqual(bad.status, 0); assert.match(bad.stderr, /bzzy debug export SESSION/); assert.equal(runtimeInfo(), null);
   } finally {

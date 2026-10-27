@@ -33,6 +33,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /workflow          Choose one workflow or None for future goals; manage them from the Workflows tab.
 /metrics           Inspect recorded skill, specialist and worker usage for this goal or chat.
 /debug             Export this chat with skill/agent definitions to NAME_debug_ddmmyyyy.md here.
+/full_debug_export Export complete scoped session/memory/learning data and project context as a ZIP.
 /memory [query]    Search this engagement's findings, memory and past conversations.
 /learn             Review learning jobs, candidate skills and private user/host preferences.
 --import FILE.zip|CODE Restore a project ZIP or Relay terminal copy here; keeps work paused.
@@ -58,6 +59,7 @@ export const chatCommands = [
   { command: '/workflow', description: 'Choose a workflow or None for future goals' },
   { command: '/metrics', description: 'Inspect recorded goal and chat skill, specialist and worker usage' },
   { command: '/debug', description: 'Export session history and skill/agent definitions to a debug file' },
+  { command: '/full_debug_export', description: 'Export full session, memory, learning, notes and evidence as a ZIP' },
   { command: '/goal', description: 'Choose a saved goal, or add an objective to start a new one' },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/validate', description: 'Check the original goal and evidence; add a focus to review a reply' },

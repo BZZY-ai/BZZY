@@ -1,3 +1,37 @@
+# Full debug ZIP, memory/learning capture and read-first guide (2026-10-26)
+
+Node.js 24/macOS full suites: **798 Core tests passed, 2 skipped** (800 total)
+and **755 CLI tests passed, 21 skipped** (776 total), zero failures. Core and CLI
+syntax and repository whitespace checks pass. Core uses canonical
+`TMPDIR=/private/tmp`. Final focused ZIP checks also pass after adding explicit
+excluded-record-kind coverage metadata.
+
+Four new full-capture regressions verify complete 90,000-character chat/memory/
+learning/note/ledger material, 300-entry arrays/objects, a derived compaction
+conversation, existing recall-index data, usage reservations, immutable skill
+text and binary resources, referenced binary evidence, and no mutation of a
+running session's records/events. They cover split credentials, private native
+output/reasoning, structured HAR cookies, auth files, escaping links, numbered
+default collisions, existing-file/symlink protection, stage cleanup and explicit
+failure instead of clipping an oversized source. The root and shipped guide
+copies are checked for exact equality; the guide ships inside the actual ZIP.
+
+CLI subprocess coverage verifies `full_debug_export` writes into the calling
+folder while preserving Core's explicit stop intent and the saved running state.
+TUI keyboard/slash coverage exercises Full debug ZIP and `/full_debug_export`
+without model input, input ownership changes or loss of the unsent draft.
+Memory/knowledge/task-state tool diagnostics additionally retain scrubbed returned
+context with original-result hash/byte provenance for new model calls.
+
+Full data streams are separate from the bounded overview. Source files are
+individually validated, not an atomic snapshot of a live filesystem. Credentials,
+private stores, opaque unsafe containers and provider reasoning remain excluded;
+manifest coverage distinguishes exclusions from absent historical data. Tests
+use temporary homes and offline synthetic data. No live inference, user-session
+mutation, running-installation update, service restart or Relay deployment was
+performed. These tests establish export/adapter boundaries, not model attention
+or live vulnerability correctness.
+
 # Session debug export and BZZY pipeline diagnostics (2026-10-26)
 
 Node.js 24/macOS full suites: **794 Core tests passed, 2 skipped** (796 total)

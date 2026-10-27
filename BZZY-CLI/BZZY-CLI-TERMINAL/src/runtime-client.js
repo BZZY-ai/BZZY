@@ -255,7 +255,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           finally { modalTask = false; }
           continue;
         }
-        if (text === '/update' || text === '/yolo' || /^\/(?:settings|skills|agents|subagents|workflow|saved-goals|metrics|debug|session-action|library|create-skill|create-agent)(?:\s|$)/.test(text)) {
+        if (text === '/update' || text === '/yolo' || /^\/(?:settings|skills|agents|subagents|workflow|saved-goals|metrics|debug|full_debug_export|session-action|library|create-skill|create-agent)(?:\s|$)/.test(text)) {
           modalTask = true;
           try { await ui.settingsCommand(text); } finally { modalTask = false; }
           continue;

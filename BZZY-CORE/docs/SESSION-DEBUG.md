@@ -1,5 +1,9 @@
 # Session debug exports
 
+For the complete investigation workflow, read
+[GUIDE_TO_BZZY_DEBUGGER.txt](GUIDE_TO_BZZY_DEBUGGER.txt). The same detailed guide
+is available at the workspace root and ships inside full debug ZIPs.
+
 Use an export to inspect **BZZY's integration and orchestration**: how a skill
 reaches provider context, which specialist tools are exposed, what discovery
 returns, whether invocation admission succeeds, and what happens to a worker.
@@ -36,7 +40,45 @@ claim input, pause/replay work, invoke a model or change Library availability.
 It works while the service is stopped. It does not add a remote endpoint, model
 tool, project import format, sharing code or permission grant.
 
-## What travels in the file
+## Full diagnostic ZIP
+
+`/full_debug_export`, **Metrics → Full debug ZIP**, or **F** creates a separate
+`session-name_full_debug_ddmmyyyy.zip`. From another terminal use
+`bzzy debug full SESSION [FILE.zip]` or `bzzy full_debug_export SESSION [FILE.zip]`.
+The regular Markdown export remains available independently.
+
+The ZIP includes its read-first guide, the bounded overview, a manifest, complete
+scoped saved record/event streams and complete logical conversation text. It adds
+session-memory nodes, compactor jobs/outputs/controls, learning jobs/material/
+evaluations/publication references and relevant usage/settings. Derived recall
+documents are projected only if already present; export builds no memory/index
+and starts no learning work. Explicitly related learning/compaction conversations
+are included, while unrelated raw terminal histories remain outside scope.
+
+Project files include `.bzzy` notes, ledgers and compatibility projections.
+Project-shared knowledge and ledgers remain labeled shared context. Referenced
+safe evidence/snapshot/worker files and complete checked skill resources,
+including safe binary resources, are captured separately. The archive is not a
+project-import or execution package and copies no raw runtime database.
+
+The full streams have no overview text/array/family display clipping. Source
+files and individual logical messages have a 64 MiB limit; the full stage has a
+4 GiB limit. A size-limit failure publishes no clipped ZIP. The overview retains
+its own earlier cutoff/limits and can be unavailable without preventing full
+streams. File capture follows the database cutoff and validates each read;
+it cannot claim an atomic snapshot of a live project filesystem.
+
+Text-event payloads reference complete scrubbed messages, preventing credentials
+from escaping across streamed chunks. Native delta metadata is retained while
+completed outputs/messages supply text when recorded. Private reasoning, account
+bindings, auth stores, environment dumps, links/special files and opaque private
+database/archive containers remain excluded. Changed, unreadable, malformed
+structured and unsafe files are explicitly listed in `manifest.exclusions`.
+Source/exported hashes distinguish redaction from original bytes. A completed
+manifest means the operation finished, not that every excluded historical fact
+is available. Read the guide and exclusions before interpreting absence.
+
+## What travels in the regular file
 
 The Markdown report has a short review guide and sections of JSON lines. Each
 JSON line is one typed record, allowing a reviewer or script to inspect a large

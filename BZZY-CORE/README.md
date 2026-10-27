@@ -67,6 +67,10 @@ Implemented:
   preparation, provider tool exposure, transport acknowledgments and correlated
   tool attempts/outcomes, without starting diagnostic inference or changing use
   counts. Existing running sessions can export their already saved records.
+  The separate full ZIP adds memory/compactor/learning records, complete scoped
+  streams, project notes/ledgers/files and referenced execution evidence. It
+  includes the [detailed debugging guide](docs/GUIDE_TO_BZZY_DEBUGGER.txt), with
+  manifest exclusions and safe capture limits instead of silent text clipping.
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).

@@ -2,6 +2,7 @@ import { clean, cellWidth, clip, wrap } from './terminal-format.js';
 
 const loadRecordedMetrics = async id => (await import('@bzzy/core/engine/session-metrics.js')).sessionMetrics(id);
 const exportRecordedDebug = async id => (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug(id);
+const exportFullRecordedDebug = async id => (await import('@bzzy/core/engine/session-full-debug.js')).exportFullSessionDebug(id);
 const recordedCount = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
 const pad = (value, width) => value + ' '.repeat(Math.max(0, width - cellWidth(value)));
 const stalled = goal => ['stalled', 'blocked', 'usage_limited', 'budget_limited', 'budget_exhausted', 'awaiting_review'].includes(goal?.status) || goal?.status === 'paused' && goal.reason === 'turn_limit';
@@ -14,8 +15,9 @@ const goalLabel = goal => `${statusLabel(goal.status, goal.reason)} · ${goal.cr
 // Reads durable Core counters only. Opening this panel never starts Core,
 // launches a model, acquires an input lease or changes the selected session.
 export class SessionMetricsPanel {
-  constructor(ui, { load = loadRecordedMetrics, exportDebug = ui.sessionDebugExporter || exportRecordedDebug, intervalMs = 1000 } = {}) {
-    this.ui = ui; this.load = load; this.exportDebug = exportDebug; this.intervalMs = intervalMs;
+  constructor(ui, { load = loadRecordedMetrics, exportDebug = ui.sessionDebugExporter || exportRecordedDebug,
+    exportFullDebug = ui.sessionFullDebugExporter || exportFullRecordedDebug, intervalMs = 1000 } = {}) {
+    this.ui = ui; this.load = load; this.exportDebug = exportDebug; this.exportFullDebug = exportFullDebug; this.intervalMs = intervalMs;
     this.scope = 'goal'; this.revision = 0; this.epoch = 0;
   }
   changed() { this.revision++; this.ui.tui?.schedule(); }
@@ -58,6 +60,7 @@ export class SessionMetricsPanel {
       { action: 'history', text: 'Choose goal ▾', disabled: !this.data?.goals?.length },
       { action: 'refresh', text: this.loading ? 'Reading…' : 'Refresh' },
       { action: 'export', text: this.exporting ? 'Exporting…' : 'Export debug', disabled: this.exporting || !this.sessionId || this.data?.available === false },
+      { action: 'full-export', text: 'Full debug ZIP', disabled: this.exporting || !this.sessionId || this.data?.available === false },
     ];
   }
   async activate(action) {
@@ -68,14 +71,14 @@ export class SessionMetricsPanel {
       this.changed(); return;
     }
     if (action === 'refresh') { await this.refresh(); return; }
-    if (action === 'export') {
+    if (action === 'export' || action === 'full-export') {
       if (this.exporting || !this.sessionId || this.data?.available === false) return;
       const id = this.sessionId, epoch = this.epoch;
       this.exporting = true; this.exportError = null; this.exportResult = null; this.changed();
       try {
         // Let the visible button paint before reading a long saved history.
         await new Promise(resolve => setImmediate(resolve));
-        const result = await this.exportDebug(id);
+        const result = await (action === 'full-export' ? this.exportFullDebug(id) : this.exportDebug(id));
         if (!this.closed && id === this.sessionId && epoch === this.epoch) this.exportResult = result;
       } catch {
         if (!this.closed && id === this.sessionId && epoch === this.epoch) this.exportError = 'Could not export this chat. Check its original folder is writable, or use bzzy debug export NAME FILE.md from another terminal.';
@@ -116,7 +119,7 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
   put(buttons, 'accent', true); put();
   const data = panel.data;
   if (panel.exportResult) {
-    prose('Debug exported · ' + panel.exportResult.outputPath, 'goalSuccess');
+    prose((panel.exportResult.full ? 'Full debug ZIP exported · ' : 'Debug exported · ') + panel.exportResult.outputPath, 'goalSuccess');
     prose('Includes session history and skill/agent definitions. Review this private task content before sharing.', 'muted');
     put();
   }

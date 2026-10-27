@@ -389,7 +389,7 @@ export function setSkillEnabled(name, enabled, expectedRevision, options = {}) {
   });
 }
 
-function readRecord(record, { file = 'SKILL.md', offset = 0, limit = 16384, sessionId, modelUsage } = {}) {
+function readRecord(record, { file = 'SKILL.md', offset = 0, limit = 16384, sessionId, modelUsage } = {}, { raw = false } = {}) {
   if (!safePath(file) || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 32768) fail('Invalid skill file slice.');
   const item = record.files.find(item => item.path === file);
   if (!item) fail('File is not part of this skill version.');
@@ -400,6 +400,7 @@ function readRecord(record, { file = 'SKILL.md', offset = 0, limit = 16384, sess
   }
   const data = regularRead(absolute, 1024 * 1024);
   if (digest(data) !== item.sha256) fail('Skill content changed outside Core. Reimport and review it.');
+  if (raw) return data;
   const end = Math.min(data.length, offset + limit), chunk = data.subarray(offset, end);
   let text;
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(chunk, { stream: end < data.length }); }
@@ -426,13 +427,13 @@ export function readSkill(name, options = {}) {
 // Trusted local diagnostics may inspect an immutable version after removal or
 // disablement. This is deliberately absent from the model tool surface and
 // never emits a load receipt. Scope and file integrity checks still apply.
-export function skillVersionForDiagnostics(id, version, { session, file, offset = 0 } = {}) {
+export function skillVersionForDiagnostics(id, version, { session, file, offset = 0, raw = false } = {}) {
   if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(version || '') || !session) fail('Invalid diagnostic skill version.');
   const record = getRecord(versionKind, digest([id, version]));
   if (!record || !validName(record.name) || !['global', 'project'].includes(scopeOf(record)) || scopeOf(record) === 'project' && !validProjectId(record.projectId) ||
     !Array.isArray(record.files) || record.files.length > 1024 || record.files.some(item => !safePath(item.path)) ||
     idOf(record) !== id || record.version !== version || !permitted(record, { session, readOnly: true }) || digest(record.files) !== version) fail('Skill version is unavailable in this session scope.');
-  return file === undefined ? publicRecord(record) : readRecord(record, { file, offset, limit: 32768 });
+  return file === undefined ? publicRecord(record) : readRecord(record, { file, offset, limit: 32768 }, { raw });
 }
 
 function storedVersion(record, version) {

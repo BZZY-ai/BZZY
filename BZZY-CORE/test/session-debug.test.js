@@ -144,6 +144,7 @@ test('new live tool records prove discovery and loads, distinguish disabled-agen
     const prepared = conversationPrompt(parent, 'Check the local fixture.'); assert.ok(prepared.includes(method.name));
     await host.call('list_skills', {}); await host.call('read_skill', { name: method.name });
     await host.call('list_subagents', {});
+    await host.call('read_session_memory', {});
     await assert.rejects(host.call('spawn_subagent', { name: agent.name, requestId: 'blocked-agent', objective: 'Inspect fixture.', waitSeconds: 0 }), /disabled/);
     const before = snapshot(), counts = sessionMetrics(parent.id), result = exportSessionDebug(parent.id), rows = parseReport(result.outputPath);
     assert.deepEqual(snapshot(), before); assert.equal(counts.session.skillInvocations, 1); assert.equal(sessionMetrics(parent.id).session.skillInvocations, 1);
@@ -152,6 +153,7 @@ test('new live tool records prove discovery and loads, distinguish disabled-agen
     const failed = recorded.find(row => row.data.name === 'spawn_subagent' && row.data.outcome === 'failed'); assert.ok(failed);
     assert.ok(recorded.some(row => row.data.callId === failed.data.callId && row.data.outcome === 'started' && row.data.input.name === agent.name));
     assert.ok(recorded.some(row => row.data.name === 'list_skills' && row.data.outcome === 'returned' && row.data.discovery.items[0].version === method.version));
+    assert.ok(recorded.some(row => row.data.name === 'read_session_memory' && row.data.outcome === 'returned' && row.data.contextResult && row.data.resultSourceSha256));
     assert.ok(rows.some(row => row.kind === 'event' && row.type === 'diagnostic.catalog' && row.data.provenance === 'prepared-skill-prompt'));
   } finally { await host.close(); }
 });

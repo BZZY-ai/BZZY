@@ -76,6 +76,14 @@ orchestration. Existing running sessions export their saved history; newer
 pipeline diagnostics start with updated runners. See
 [session debugging](BZZY-CORE/docs/SESSION-DEBUG.md).
 
+For a deeper investigation, `/full_debug_export`, **Metrics → Full debug ZIP**
+or `bzzy debug full SESSION` creates `session-name_full_debug_ddmmyyyy.zip`.
+It adds complete scoped record/event/message streams, memory and learning state,
+project files/notes/ledgers, referenced evidence and safe binary skill resources.
+Start with [GUIDE_TO_BZZY_DEBUGGER.txt](GUIDE_TO_BZZY_DEBUGGER.txt); that detailed
+read-first guide is also included in every full ZIP. Credential/private-store
+exclusions and capture gaps remain explicit in its manifest.
+
 Transfer the [BZZY Library](BZZY-CORE/docs/LIBRARY-SHARING.md) between Mac and
 Linux with `bzzy library share` and `bzzy library import`. Expiring Relay codes
 carry skills, specialist agents, workflows and saved goal text; the receiver
