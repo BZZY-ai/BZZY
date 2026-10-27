@@ -1,3 +1,37 @@
+# Client tool-call trees independent of compactor memory (2026-10-27)
+
+Node 24/macOS: **997 Core tests passed, 2 skipped** and **770 CLI tests passed,
+21 skipped**. Both syntax checks and repository whitespace checks passed. The
+final focused terminal/boundary suites passed **54 tests**; Core projection and
+worker-mirror fixtures passed **4 tests**.
+
+The Hermes source checkout was inspected for its UI tool-trail/agent-detail
+pattern. BZZY's implementation uses its own native/Core event sources, existing
+credential redaction and CLI rendering; it imports no reference-checkout code.
+Native command, file, web and browser events become bounded client previews.
+Core tools emit separate display lifecycle metadata, and worker runners mirror
+sanitized tool lifecycles to their parent without forwarding outputs/reasoning.
+Returned status describes the tool event, never verified goal completion.
+No compactor, model-memory, model-instruction or execution-permission behavior
+was changed for this feature.
+
+CLI fixtures cover stable IDs, native/legacy duplicate notifications, failed exit
+codes, out-of-order completions, interrupted unknown results, scoped named-worker
+nesting, paging 58 calls, narrow widths, row expansion and visibility controls.
+Saved events rebuild the tree across native compaction notifications and view
+reset without writing events or starting work. Shared CLI/iOS native and legacy
+message-boundary fixtures retain original bodies and distinct reply copy targets.
+Drafts and goal state survive display interactions. Command credentials are
+redacted before preview bounds, including the separate live action indicator.
+
+An actual TerminalChat frame was rendered and inspected locally with BZZY's own
+calls plus a nested worker tree, file/command/web/browser previews and returned/
+running states. Its synthetic preview stayed outside the repository. Each tree
+shows 25 rows per page and retains 2,000 displayed rows with explicit older-event
+coverage. Original Core events remain saved; older missing worker details cannot
+be reconstructed. Live providers and native Linux were not exercised, and no
+running installation was updated.
+
 # Best-effort workspace copies preserve the original project cwd (2026-10-27)
 
 Node 24/macOS: **993 Core tests passed, 2 skipped** and **765 CLI tests passed,

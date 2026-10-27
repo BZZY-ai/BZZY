@@ -95,7 +95,8 @@ test('actual terminal activity animates visibly beside the action in compact and
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
       assert.equal(ui.tui.value, 'Preserve this draft'); assert.equal(ui.tui.cursor, 5);
     }
-    assert.equal(ui.tui.entries.length, 0); assert.equal(ui.tui.history.length, 0);
+    assert.equal(ui.tui.entries.length, 1); assert.equal(ui.tui.entries[0].toolTree.calls.length, 1);
+    assert.equal(ui.tui.history.length, 0, 'Animations and tool display do not create submitted chat input.');
     ui.updateSession(f.snapshot({ session: { id: 'chat', executionState: 'waiting_for_input', goal: { id: 'goal', status: 'active' } }, questions: [{ id: 'approval', kind: 'approval', question: 'Allow the synthetic action?' }] }));
     ui.tui.render(); const waiting = ui.tui.lastFrame.map(clean).join('\n');
     assert.match(waiting, /Waiting for your input/); assert.match(waiting, /Needs your input/); assert.doesNotMatch(waiting, /Pursuing goal/);

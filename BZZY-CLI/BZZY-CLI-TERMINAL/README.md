@@ -9,6 +9,23 @@ Reopening or switching to a saved chat assembles its initial history before
 painting the latest screen, without visibly scrolling through old event pages.
 Live updates then render normally; opening history starts no model work.
 
+Chat shows expandable **Tool calls** trees with command, file, browser and web
+previews. Named workers show their calls beneath their Agent row; other workers
+retain their own labels. Rows distinguish running, returned, failed and stopped
+with an unknown result, and show reported duration/exit codes. Click a tree header
+to collapse it or a row for more detail. **Ctrl+T** toggles the latest tree;
+**Ctrl+O** and **Hide tools / Show tools** control visibility. Longer trees page
+25 calls at a time using Previous/Next, with 2,000 rows retained per displayed
+tree and an explicit older-history notice beyond that. Original events stay saved.
+
+This is client activity display. It does not add compactor memory, expose private
+reasoning, start commands or establish goal completion. Previews select short
+descriptions and redact known credentials instead of showing file contents or
+tool output. Context compaction does not clear the tool tree, and saved native
+events rebuild older local activity when a session reopens. Detailed worker
+mirroring starts with updated runners; unavailable historical details cannot be
+reconstructed from an agent's summary.
+
 Metrics includes current-session BZZY health: workflow consultation coverage and
 blockers, native tool delivery/context planning, compaction/refresh state, memory
 indexing and background review reasons. These are read-only saved observations.

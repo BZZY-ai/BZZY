@@ -1,4 +1,5 @@
 import { clean, clip } from './terminal-format.js';
+import { createToolActivityProjector } from '@bzzy/core/engine/tool-activity.js';
 
 const activeStates = new Set(['queued', 'launching', 'running']);
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
@@ -12,11 +13,14 @@ export const feedbackClock = milliseconds => {
   return [Math.floor(seconds / 60), seconds % 60].map(value => String(value).padStart(2, '0')).join(':');
 };
 
-function progress(type, data, now) {
+function progress(type, data, now, project) {
   const at = Math.min(now, stamp(data.occurredAt) ?? stamp(data.updatedAt) ?? stamp(data.createdAt) ?? now);
   const base = { at, seq: Number.isSafeInteger(data.seq) ? data.seq : 0 };
   if (['text', 'peer.text'].includes(type) && data.text) return { ...base, kind: 'response', output: true, key: data.itemId || data.turnId || 'response', title: type === 'peer.text' ? 'Receiving agent output' : 'Receiving response' };
-  if (type === 'tool') return { ...base, kind: 'tool', title: `Running ${label(data.name) || 'tool'}`, detail: label(data.detail) };
+  if (type === 'tool') {
+    const action = project('tool.action', { callId: 'preview', phase: 'started', name: data.name, label: data.name || 'tool', detail: data.detail });
+    return { ...base, kind: 'tool', title: `Running ${label(action?.label) || 'tool'}`, detail: label(action?.detail) };
+  }
   if (type === 'activity' && data.status === 'running' && !data.closedAt) return { ...base, kind: 'activity', key: data.id, title: 'Reported activity', detail: label(data.summary) };
   if (type === 'worker.progress' && ['tool', 'summary', 'error'].includes(data.type)) return { ...base, kind: 'activity', key: data.workerSessionId,
     title: data.type === 'tool' ? 'Agent tool activity' : data.type === 'error' ? 'Agent reported an error' : 'Agent returned a report',
@@ -25,8 +29,10 @@ function progress(type, data, now) {
   if (type === 'backend') {
     const p = data.params || {}, item = p.item || {};
     if (data.method === 'item/commandExecution/outputDelta' && p.delta) return { ...base, kind: 'output', output: true };
-    if (data.method === 'tool.started' || data.method === 'item/started' && ['commandExecution', 'fileChange', 'mcpToolCall', 'webSearch'].includes(item.type))
-      return { ...base, kind: 'tool', key: item.id || p.id, title: `Running ${label(p.name || ({ commandExecution: 'shell', fileChange: 'edit', mcpToolCall: 'tool', webSearch: 'web search' })[item.type]) || 'tool'}`, detail: label(item.command) };
+    if (data.method === 'tool.started' || data.method === 'item/started' && ['commandExecution', 'fileChange', 'mcpToolCall', 'webSearch'].includes(item.type)) {
+      const action = project(type, data);
+      return { ...base, kind: 'tool', key: item.id || p.id, title: `Running ${label(action?.name || ({ commandExecution: 'shell', fileChange: 'edit', mcpToolCall: 'tool', webSearch: 'web search' })[item.type]) || 'tool'}`, detail: label(action?.detail) };
+    }
     if (data.method === 'tool.completed' || data.method === 'item/completed' && ['commandExecution', 'fileChange', 'mcpToolCall', 'webSearch'].includes(item.type))
       return { ...base, kind: 'tool-end', key: item.id || p.id, failed: p.failed === true || Number.isInteger(item.exitCode) && item.exitCode !== 0 };
     if (data.method === 'turn/started') return { ...base, kind: 'model', key: p.turn?.id, title: 'Waiting for model output' };
@@ -38,7 +44,7 @@ function progress(type, data, now) {
 // UI projection only: polling/animation never counts as model activity. Source
 // timestamps keep old replay honest; a runner observation does not prove progress.
 export class ExecutionFeedback {
-  constructor({ clock = Date.now } = {}) { this.clock = clock; this.recent = []; this.tools = new Map(); }
+  constructor({ clock = Date.now } = {}) { this.clock = clock; this.recent = []; this.tools = new Map(); this.toolActivity = createToolActivityProjector(); }
   connection(connected) { this.disconnected = !connected; }
   update(snapshot) {
     const now = this.clock(), session = snapshot.session || snapshot, job = snapshot.execution;
@@ -66,7 +72,7 @@ export class ExecutionFeedback {
     if (!active) this.tools.clear();
   }
   event(type, data = {}) {
-    const event = progress(type, data, this.clock());
+    const event = progress(type, data, this.clock(), this.toolActivity);
     if (!event) return;
     event.sessionId = data.eventSessionId;
     this.recent.push(event); if (this.recent.length > 64) this.recent.shift();

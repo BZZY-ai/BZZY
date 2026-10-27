@@ -9,6 +9,7 @@ import { home, privateDir } from './files.js';
 import { loadSession } from './store.js';
 import { getRecord, putRecord, listRecords, appendEvent, now, digest } from './database.js';
 import { recordRunDiagnostics, recordDiagnosticTool } from './session-diagnostics.js';
+import { createToolActivityProjector } from './tool-activity.js';
 import { checkpoint, checkpointState, remember, recall } from './memory.js';
 import { issue } from './project.js';
 import { captureEvidence, readArtifact, artifact, projectArtifact } from './evidence.js';
@@ -207,18 +208,28 @@ export class ToolHost {
   }
   async call(name, input) {
     const callId = randomUUID(), started = Date.now();
+    const display = phase => {
+      try {
+        this.toolActivity ||= createToolActivityProjector({ sessionId: this.session.id, runId: this.context.runId });
+        const action = this.toolActivity('tool.action', { callId, name, ...(phase === 'started' ? { input } : {}), phase, provenance: 'core-tool', durationMs: Date.now() - started });
+        if (action) this.ui.event('tool.action', action);
+      } catch { /* Optional tool display never changes tool admission or result. */ }
+    };
+    display('started');
     try { recordDiagnosticTool(this.session, this.context, { name, callId, started, phase: 'started', input }); }
     catch { /* Optional diagnostics cannot block tool admission. */ }
     let result;
     try {
       result = await this.executeTool(name, input, callId);
     } catch (error) {
+      display('failed');
       try { recordDiagnosticTool(this.session, this.context, { name, callId, started, error }); }
       catch { /* Never replace the tool's actual outcome with a telemetry error. */ }
       throw error;
     }
     try { recordDiagnosticTool(this.session, this.context, { name, callId, started, result }); }
     catch { /* A successful mutation must never look failed or be retried for diagnostics. */ }
+    display('completed');
     return result;
   }
   async executeTool(name, input, callId) {

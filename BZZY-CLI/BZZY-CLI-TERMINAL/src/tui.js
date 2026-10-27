@@ -26,6 +26,7 @@ import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
 import { SessionMetricsPanel, sessionMetricsLayout } from './session-metrics-ui.js';
 import { returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { recordInvocationEvent, reconcileInvocationEntries, invocationEntryLayout } from './invocation-ui.js';
+import { ToolTreeProjection, toolTreeLayout, changeToolTree } from './tool-tree-ui.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -39,6 +40,7 @@ export class TerminalChat {
     this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.panel = 'chat'; this.scroll = 0;
     this.assignments = new Map();
     this.executionFeedback = new ExecutionFeedback();
+    this.toolTrees = new ToolTreeProjection(); this.showTools = true;
     this.value = ''; this.cursor = 0; this.history = []; this.historyIndex = 0; this.drafts = new Map();
     this.entryLayouts = new WeakMap(); this.inputQueue = [];
     this.state = 'ready'; this.model = 'default'; this.provider = ''; this.frame = 0; this.lastFrame = [];
@@ -182,6 +184,8 @@ export class TerminalChat {
     this.contentRevision = (this.contentRevision || 0) + 1;
     const invocation = recordInvocationEvent(this.entries, type, data, { sessionId: this.ui.activeTab || this.ui.sessionId });
     if (invocation.changed && invocation.entry) this.entryLayouts.delete(invocation.entry);
+    const tools = this.toolTrees.event(this.entries, type, data, { sessionId: this.ui.activeTab || this.ui.sessionId });
+    for (const entry of tools.changed || []) this.entryLayouts.delete(entry);
     if (this.entries.length > 5000) this.entries.splice(0, 500);
     if (type === 'text' || type === 'peer.text') {
       const peerSessionId = type === 'peer.text' ? data.childSessionId || data.sessionId || data.agent : null;
@@ -189,9 +193,10 @@ export class TerminalChat {
       // Peer chunks can interleave. Stable response IDs keep one complete entry
       // per reply so its copy button includes chunks received between peers.
       const previous = peerSessionId && data.itemId ? this.entries.findLast(entry => entry.kind === 'assistant' && entry.peerSessionId === peerSessionId && entry.itemId === data.itemId && entry.turnId === data.turnId)
-        : this.entries.findLast(entry => entry.kind !== 'invocation');
-      if (previous?.kind === 'assistant' && previous.label === label && previous.peerSessionId === peerSessionId && previous.itemId === data.itemId && previous.turnId === data.turnId) previous.text += String(data.text ?? '');
-      else this.add('assistant', data.text, { label, peerSessionId, itemId: data.itemId, turnId: data.turnId });
+        : this.entries.findLast(entry => !['invocation', 'tool-tree'].includes(entry.kind));
+      if (previous?.kind === 'assistant' && previous.label === label && previous.peerSessionId === peerSessionId && previous.itemId === data.itemId && previous.turnId === data.turnId
+        && (peerSessionId || (previous.replyBoundary || 0) === (this.replyBoundary || 0))) previous.text += String(data.text ?? '');
+      else this.add('assistant', data.text, { label, peerSessionId, itemId: data.itemId, turnId: data.turnId, replyBoundary: this.replyBoundary || 0 });
       this.streaming = true;
     } else if (type === 'message.user') {
       if (data.kind === 'goal') { this.goal = { status: 'active', objective: clean(data.text) }; this.goalValidation = null; }
@@ -214,8 +219,9 @@ export class TerminalChat {
     }
     else if (type === 'question.expired') { if (this.pendingApproval?.id === data.id) this.pendingApproval = null; }
     else if (type === 'tool') {
-      this.currentTool = `${data.name}${data.detail ? ' · ' + clean(data.detail).slice(0, 250) : ''}`;
-      this.add('tool', this.currentTool); this.streaming = false;
+      this.replyBoundary = (this.replyBoundary || 0) + 1;
+      this.currentTool = clean(data.name || 'Tool');
+      if (!tools.handled) this.add('tool', this.currentTool); this.streaming = false;
     } else if (type === 'activity') {
       const worker = this.mode === 'delegate' && data.sessionId && data.sessionId !== (this.ui.activeTab || this.ui.sessionId);
       this.currentActivity = data.closedAt ? '' : (worker ? 'Hands · ' : '') + data.summary;
@@ -331,7 +337,7 @@ export class TerminalChat {
     if (message) this.add('notice', message);
   }
 
-  clear() { this.executionFeedback = new ExecutionFeedback(); this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.goalValidation = null; this.goalValidationVersions = new Map(); this.retiredGoalIds = new Set(); this.snapshotGoalId = null; this.schedule(); }
+  clear() { this.executionFeedback = new ExecutionFeedback(); this.toolTrees = new ToolTreeProjection(); this.toolFocus = null; this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.goalValidation = null; this.goalValidationVersions = new Map(); this.retiredGoalIds = new Set(); this.snapshotGoalId = null; this.schedule(); }
   selectTab(previous, next) {
     if (previous === next) return;
     this.textSelection = null;
@@ -675,6 +681,7 @@ export class TerminalChat {
       return;
     }
     if (hit?.type === 'debate-toggle') { this.toggleDebate(hit.entry); return; }
+    if (changeToolTree(hit)) { this.refreshToolTree(hit.group); return; }
     if (hit?.type === 'alias-save') { const value = this.aliasEdit?.value.trim(); this.aliasEdit = null; if (value) this.localCommand('/alias ' + value); this.schedule(); return; }
     if (hit?.type === 'alias-cancel') { this.aliasEdit = null; this.schedule(); return; }
     if (this.aliasEdit && hit?.type !== 'alias') { this.aliasEdit = null; this.schedule(); }
@@ -736,6 +743,10 @@ export class TerminalChat {
     if (cached) this.scroll = Math.max(0, this.scroll + this.entryLayout(entry, cached.width).lines.length - cached.lines.length);
     this.schedule();
   }
+  refreshToolTree(group) {
+    this.toolFocus = group.expanded ? group : null;
+    this.entryLayouts.delete(group.entry); this.contentRevision++; this.bodyCache = null; this.schedule();
+  }
   goBack() {
     if (this.selection) { this.finishSelection(null); return; }
     if (this.promptDraft) { this.finish(null); return; }
@@ -777,6 +788,7 @@ export class TerminalChat {
     if (this.promptDraft) { this.finish(null); return true; }
     if (this.completions().length) { this.completionDismissed = true; this.schedule(); return true; }
     if (this.panel === 'chat' && this.debateFocus?.expanded) { this.toggleDebate(this.debateFocus); return true; }
+    if (this.panel === 'chat' && this.toolFocus?.expanded) { this.toolFocus.expanded = false; this.refreshToolTree(this.toolFocus); return true; }
     if (this.panel === 'settings') { this.leaveSettings(); return true; }
     if (this.panel === 'skills' && returnToSkillLibrary(this.ui)) return true;
     if (this.panel === 'workflows') { workflowAction('back', this.ui); return true; }
@@ -913,6 +925,11 @@ export class TerminalChat {
     if (key.name === 'paste-end') { this.pasting = false; return; }
     if (key.ctrl && key.name === 'b' && this.panel === 'chat' && !this.promptDraft && !this.hidden && !this.pasting) {
       key.bzzyHandled = true; this.toggleDebate(this.entries.findLast(entry => entry.kind === 'debate')); return;
+    }
+    if (key.ctrl && key.name === 't' && this.panel === 'chat' && !this.promptDraft && !this.hidden && !this.pasting) {
+      const group = this.entries.findLast(entry => entry.toolTree)?.toolTree;
+      if (group) { group.expanded = !group.expanded; this.refreshToolTree(group); }
+      key.bzzyHandled = true; return;
     }
     if (key.name === 'pageup' || key.name === 'pagedown') {
       if (this.panel === 'settings' && !this.promptDraft) { this.settingsOffset = Math.max(0, Math.min(this.settingsMaximum || 0, (this.settingsOffset || 0) + (key.name === 'pageup' ? -8 : 8))); this.settingsEnsureFocus = false; }
@@ -1156,17 +1173,17 @@ export class TerminalChat {
     } else {
       let assistantSpeaker = null;
       for (const entry of this.entries) {
-        if (entry.kind === 'tool' && !this.showTools) continue;
+        if (['tool', 'tool-tree'].includes(entry.kind) && !this.showTools) continue;
         const layout = this.entryLayout(entry, width);
         const speaker = entry.kind === 'assistant' ? JSON.stringify([entry.label || 'BZZY', entry.peerSessionId || null]) : null;
         const continuation = speaker !== null && speaker === assistantSpeaker;
         const entryLines = continuation ? layout.lines.slice(1) : layout.lines;
         if (speaker !== null) assistantSpeaker = speaker;
-        else if (!['tool', 'invocation', 'notice'].includes(entry.kind)) assistantSpeaker = null;
+        else if (!['tool', 'tool-tree', 'invocation', 'notice'].includes(entry.kind)) assistantSpeaker = null;
         if (entry.kind === 'assistant') for (let offset = 0; offset < entryLines.length - 1; offset++)
           this.contentHits.push({ type: 'response', entry, row: lines.length + offset, left: 3, right: width - 2 });
         if (entry.kind === 'approval') this.contentHits.push({ type: 'approval-details', id: entry.questionId, row: lines.length, left: 3, right: width - 2 });
-        if (entry.kind === 'debate') for (const hit of layout.hits) this.contentHits.push({ ...hit, row: lines.length + hit.row });
+        if (entry.kind === 'debate' || entry.toolTree) for (const hit of layout.hits || []) this.contentHits.push({ ...hit, row: lines.length + hit.row });
         for (const line of entryLines) lines.push(line);
       }
     }
@@ -1175,13 +1192,18 @@ export class TerminalChat {
 
   entryLayout(entry, width) {
     const cached = this.entryLayouts.get(entry);
-    if (cached?.width === width && cached.text === entry.text) return cached;
+    if (cached?.width === width && cached.text === entry.text && (!entry.toolTree || cached.showTools === Boolean(this.showTools))) return cached;
+    if (entry.kind === 'tool-tree') {
+      const layout = { ...toolTreeLayout(entry.toolTree, width, this.theme), width, text: entry.text, showTools: Boolean(this.showTools) };
+      this.entryLayouts.set(entry, layout); return layout;
+    }
     if (entry.kind === 'debate') {
       const layout = { ...debateEntryLayout(entry, width, this.theme), width, text: entry.text };
       this.entryLayouts.set(entry, layout); return layout;
     }
     if (entry.kind === 'invocation') {
-      const layout = { ...invocationEntryLayout(entry, width, this.theme), width, text: entry.text };
+      const base = invocationEntryLayout(entry, width, this.theme), tools = entry.toolTree && this.showTools ? toolTreeLayout(entry.toolTree, width, this.theme, { nested: true }) : { lines: [], hits: [] };
+      const layout = { lines: [...base.lines, ...tools.lines], hits: tools.hits.map(hit => ({ ...hit, row: hit.row + base.lines.length })), width, text: entry.text, showTools: Boolean(this.showTools) };
       this.entryLayouts.set(entry, layout); return layout;
     }
     const { color } = this.theme;

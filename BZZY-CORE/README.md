@@ -12,6 +12,14 @@ the same engine and private state.
 
 Implemented:
 
+- Sanitized tool-activity display metadata for clients: native command/file/web/
+  browser lifecycles and Core tool calls, with durable worker-to-parent mirrors.
+  The CLI builds expandable trees from saved events independently of model
+  compaction. Short allowlisted previews exclude outputs and reasoning; activity
+  and returned/failed status grant no permission or verified goal outcome.
+  Existing native events remain intact; older workers have only their previously
+  recorded detail. This adds no model-memory or compactor behavior.
+
 - Workspace snapshots default to 1 GiB per file, 8 GiB total and 100,000 files,
   with size/count preflight before payload hashing. Explicit owner limits remain
   authoritative. Runtime caches, including `.cache/ms-playwright`, are excluded

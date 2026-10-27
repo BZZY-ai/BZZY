@@ -5,6 +5,7 @@ import { delay } from './delegation.js';
 import { config } from './providers.js';
 import { NotificationHub } from './notifications.js';
 import { terminalYolo, approvePendingWithYolo } from './terminal-permissions.js';
+import { createToolActivityProjector } from './tool-activity.js';
 
 export class RunnerUI {
   constructor(sessionId, options = {}) {
@@ -12,12 +13,21 @@ export class RunnerUI {
     // IDs supplied by a backend take precedence. The fallback is unique to this
     // execution and advances at turn/tool boundaries for backends without IDs.
     this.peerStreamId = randomUUID(); this.peerTurn = 0; this.peerReply = 0;
+    this.toolActivity = createToolActivityProjector({ sessionId, runId: this.peerStreamId });
   }
   event(type, data = {}) {
+    if (type === 'backend') data = { ...data, runId: data.runId || this.peerStreamId };
     if (type === 'backend' && data.method === 'turn/started') {
       this.peerNativeTurn = data.params?.turn?.id || data.params?.turnId; this.peerTurn++; this.peerReply = 0;
     }
     this.beforeOutput?.(); appendEvent(this.sessionId, type, data);
+    if (this.options.parentSessionId) {
+      try {
+        const action = this.toolActivity(type, data);
+        if (action) appendEvent(this.options.parentSessionId, 'worker.tool', { ...action, workerSessionId: this.sessionId,
+          assignmentId: this.options.assignmentId, agent: this.options.agent });
+      } catch { /* Activity display cannot change a worker's execution. */ }
+    }
     if (this.options.parentSessionId && ['tool', 'goal', 'error', 'summary'].includes(type)) appendEvent(this.options.parentSessionId, 'worker.progress', { workerSessionId: this.sessionId, agent: this.options.agent, type, ...data });
     if (this.options.parentSessionId && type === 'text' && this.options.peer) appendEvent(this.options.parentSessionId, 'peer.text', {
       agent: this.options.agent, sessionId: this.sessionId, childSessionId: this.sessionId, text: data.text,

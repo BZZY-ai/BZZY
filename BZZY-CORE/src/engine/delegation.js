@@ -477,7 +477,7 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
     const runtimeSeconds = job.subagentDefinition ? job.contract.limits.runtimeSeconds - (childSession.elapsedSeconds || 0) : job.contract.limits.runtimeSeconds;
     if (runtimeSeconds <= 0) throw new Error('Subagent runtime budget is exhausted.');
     const code = await runSession(provider, childSession, { cwd: childSession.cwd, pet: false, strictPolicy: true, policy: job.contract.policy,
-      runtimeSeconds, tokenBudget: job.contract.limits.tokenBudget, scopedAutonomy: true, captureNetwork: job.captureNetwork }, new RunnerUI(childSession.id, { unattended: true, parentSessionId: parent.id, agent: job.subagentDefinition?.name }), prompt);
+      runtimeSeconds, tokenBudget: job.contract.limits.tokenBudget, scopedAutonomy: true, captureNetwork: job.captureNetwork }, new RunnerUI(childSession.id, { unattended: true, parentSessionId: parent.id, assignmentId: id, agent: job.subagentDefinition?.name }), prompt);
     const report = getRecord('worker-report', childSession.id);
     const outputs = artifactsFor(childSession.id);
     const changes = inspectWorkspace(snapshot, job.workspace);
