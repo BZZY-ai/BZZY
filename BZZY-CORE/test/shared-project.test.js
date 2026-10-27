@@ -122,6 +122,7 @@ test('portable projects omit sender native context and runtime receipts while re
   const session = original(), runtimeFields = ['nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency',
     'coreSkillsProtocol', 'sessionMemoryRefresh', 'sessionMemorySeen'];
   for (const field of runtimeFields) session[field] = { marker: `sender-${field}` };
+  session.privateContext = { approvedSignupAliases: ['owner-alias@fixture.invalid'], policyRevision: 1 };
   saveSession(session);
   const runtimeKinds = ['native-compaction', 'core.conversation.source', 'core.conversation.pending', 'core.history.maintenance',
     'core.task-state.read', 'core.checkpoint.scope', 'core.checkpoint.request', 'core.workflow.work-unit', 'core.workflow.consultation'];
@@ -132,6 +133,8 @@ test('portable projects omit sender native context and runtime receipts while re
   assert.equal(manifest.status, 0, manifest.stderr);
   const decoded = JSON.parse(manifest.stdout), sharedSession = decoded.records.find(row => row.kind === 'session').data;
   for (const field of runtimeFields) assert.equal(sharedSession[field], undefined, field);
+  assert.equal(sharedSession.privateContext, undefined);
+  assert.ok(!manifest.stdout.includes('owner-alias@fixture.invalid'));
   assert.equal(decoded.records.some(row => runtimeKinds.includes(row.kind)), false);
   assert.ok(decoded.events.some(event => event.type === 'diagnostic.context'));
   const { primarySession } = await importSharedProject(zip.path, target);

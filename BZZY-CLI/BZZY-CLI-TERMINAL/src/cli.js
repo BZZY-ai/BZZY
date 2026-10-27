@@ -42,6 +42,7 @@ import { activateCLIHost, coreHostStatus, stopCoreHost, restartCoreHost } from '
 import { syncCodexSkills, skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
 import { knowledgeCLI, sessionMemoryCLI } from './knowledge-command.js';
 import { subagentsCLI } from '@bzzy/core/engine/subagents-cli.js';
+import { skillsAliasesCLI } from './skills-aliases-cli.js';
 import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
 import { workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { resolveInteractiveGoal } from './goal-controls.js';
@@ -56,6 +57,9 @@ Usage:
   bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
   bzzy skills sync                     Choose and import Codex skill folders
+  bzzy skills aliases set NAME EMAILS Set this host's explicit signup alias list
+  bzzy skills aliases show NAME       Read this host's approved signup aliases
+  bzzy skills aliases clear NAME      Clear this host's signup alias list
   bzzy subagents list                  List reusable specialist subagents
   bzzy subagents create FILE.json      Save a specialist definition for this project
   bzzy workflows list                 List reusable project/global goal instructions
@@ -588,7 +592,8 @@ export async function main(argv) {
     if (command === 'workflows') return workflowsCLI(rest, options, ui);
     if (command === 'library') { await libraryCommand(rest.join(' '), options.cwd, ui); return 0; }
     if (command === 'skills') {
-      if (rest.length !== 1 || rest[0] !== 'sync') throw new Error('Use bzzy skills sync, or open Skills in the terminal.');
+      if (rest[0] === 'aliases') return skillsAliasesCLI(rest.slice(1), options, ui);
+      if (rest.length !== 1 || rest[0] !== 'sync') throw new Error('Use bzzy skills sync, skills aliases set|show|clear, or open Skills in the terminal.');
       if (ui.interactive) { await terminalSkillsCommand('/skills sync', ui); return 0; }
       const result = syncCodexSkills({ cwd: options.cwd });
       ui.event('info', { ...skillSyncReport(result), message: skillSyncSummary(result) }); return 0;

@@ -1,3 +1,34 @@
+# Explicit owner-local signup aliases delivered with skill reads (2026-10-27)
+
+Core stores exact owner-supplied signup aliases in private
+`config.json.skillAccountPolicies[skillId].approvedSignupAliases`. Host CLI
+commands set/show/clear the list without starting Core, a chat or model work.
+Authorized primary terminal `read_skill` results receive the explicit array in
+separate `privateContext` metadata. Text, hashes, byte pages and usage receipts
+remain unchanged. Project/global identities stay separate, including a shadow
+change between skill read and policy resolution. Children, reviewers and
+persistent Agents do not inherit the owner's list. Invalid optional policy
+withholds aliases while leaving the immutable procedure readable; no raw private
+configuration fragment enters the error or tool result.
+
+Node 24/macOS: **81 focused Core tests** and **125 CLI tests** passed, plus
+both product syntax checks and whitespace checks. Tests cover exact values,
+authenticated tool-bridge serialization, revision checks, scope/role isolation,
+corrupt configuration, diagnostics without aliases, Library exclusion and
+structured project-state exclusion. Debug-export regressions retain recorded
+skill loads, specialist invocations and worker activity. Native backend history
+can retain private data delivered to the owner's model; it is not portable
+definition content.
+
+A separate owner-local verification imported the actual 43-entry Library into a
+fresh Core home with a simulated root home, confirmed that no alias policy was
+imported, explicitly configured the owner's list and received all four exact
+values through the authenticated model-tool bridge without creating a model
+execution. Actual account values and private bindings were kept outside source.
+No real mailbox, live signup or native Linux host was exercised. Existing
+installations were not automatically updated; another host configures its own
+explicit list after updating Core/CLI.
+
 # Root receiver path boundaries and safe import diagnostics (2026-10-27)
 
 Reproduced the reported Mac-to-root import rejection: the receiver matched its

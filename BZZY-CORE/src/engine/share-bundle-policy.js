@@ -9,7 +9,7 @@ export const sharedKinds = new Set(['session', 'acceptance', 'activity', 'artifa
   'issue', 'memory', 'operation', 'parallel', 'parallel-result', 'peer-cursor', 'peer-message', 'peer-review',
   'question', 'recovery', 'review', 'round', 'run', 'skill', 'snapshot', 'traffic', 'worker-report',
   'core.memory.revision', 'core.issue.revision', 'core.checkpoint.revision']);
-const privateField = /^(?:token|nonce|accessToken|refreshToken|ownerToken|apiKey|password|authorization|cookie|set-cookie|credentials|privateKey|signingSecret|boxSecret|environment|backendHomes|engineHome|backendProcess|runner|launcher|notifications|notificationDestinations|inputOwner|coreGrantId|accountBinding|accountBindings)$/i;
+const privateField = /^(?:token|nonce|accessToken|refreshToken|ownerToken|apiKey|password|authorization|cookie|set-cookie|credentials|privateKey|signingSecret|boxSecret|environment|backendHomes|engineHome|backendProcess|runner|launcher|notifications|notificationDestinations|inputOwner|coreGrantId|accountBinding|accountBindings|privateContext)$/i;
 const privateSuffix = /(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|AUTH_TOKEN|SECRET|PASSWORD)$/;
 const workflowAuthorityField = /^(?:workflowAdmission|workflowSelection|workflowBinding|goalWorkflow|workflowReceipt|workflowPin|subagentRouting)$/i;
 // These snapshots belong to the sender's native process and event sequence.

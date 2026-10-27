@@ -1,5 +1,6 @@
 import net from 'node:net';
 import { listSkills, readSkill } from './skills.js';
+import { getSkillSignupAliases } from './skill-account-policy.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -41,7 +42,7 @@ export function taskTools(session, { goalMode } = {}) {
   const tools = [
     skillFeedbackToolSpec,
     spec('list_skills', 'Search the enabled shared BZZY skills library. Page results rather than loading every workflow.', { query: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }),
-    spec('read_skill', 'Read an enabled BZZY skill or a text reference. Read SKILL.md before applying it. Skills never grant permissions or run scripts automatically. Offsets and limits are UTF-8 bytes.', { name: str, file: str, version: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 32768 } }, ['name']),
+    spec('read_skill', 'Read an enabled BZZY skill or a text reference. Read SKILL.md before applying it. An owner terminal can receive separately configured privateContext.approvedSignupAliases; these are local account-selection data, never credentials or tool permissions. Skills never grant permissions or run scripts automatically. Offsets and limits are UTF-8 bytes.', { name: str, file: str, version: str, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 32768 } }, ['name']),
     spec('activity', 'Publish human-readable progress for terminal and external viewers before substantial work, when the approach changes, on discoveries or blockers, and during long tasks. summary: one plain-language sentence, ideally under 100 characters; details: 1–3 understandable sentences explaining what you are doing and why. Never paste shell commands, flags, logs, credentials or private reasoning. Example summary: Checking the footer on paypal.com. Example details: I am opening paypal.com to locate its footer and extract the text. For assessments, distinguish observations from unverified hypotheses and link recorded evidence.',
       { id: str, summary: str, details: str, status: { type: 'string', enum: ['planned', 'running', 'completed', 'blocked', 'inconclusive'] }, category: str, target: str, observation: str, inference: str, nextCheck: str, issueId: str, evidence: strings }, ['summary', 'details']),
     spec('http_request', 'Make one real in-scope HTTP request and record host-observed traffic and a response artifact. Requires declared scope.allowedTargets. Redirects are not followed automatically. Credentials are redacted from the traffic index.',
@@ -273,6 +274,22 @@ export class ToolHost {
       const skill = readSkill(input.name, { ...input, enabledOnly: true, sessionId: session.id, session, modelUsage });
       if ((input.offset || 0) === 0) recordModelSkillUse(session, skill, modelUsage);
       recordRoutingSkillRead(session, skill, input, this.context);
+      const saved = !agentScope && loadSession(session.id);
+      const primary = value => value && !value.parentSessionId && !value.role && !value.agentId
+        && (!value.purpose || value.purpose === 'terminal');
+      if (primary(session) && primary(saved)
+        && ['cwd', 'parentSessionId', 'role', 'agentId', 'purpose'].every(key => (session[key] ?? null) === (saved[key] ?? null))) {
+        try {
+          const policy = getSkillSignupAliases(skill.id, { session, enabledOnly: true, expectedSkillVersion: skill.version, expectedSkillId: skill.id });
+          if (policy?.approvedSignupAliases.length) return { ...skill,
+            privateContext: { approvedSignupAliases: policy.approvedSignupAliases, policyRevision: policy.revision } };
+        } catch (error) {
+          if (error.code !== 'SKILL_ACCOUNT_POLICY_INVALID') throw error;
+          // Optional private settings never make the immutable procedure
+          // unreadable. Account-dependent steps require a nonempty valid list.
+          return { ...skill, privateContext: { approvedSignupAliases: [], unavailable: true } };
+        }
+      }
       return skill;
     }
     if (name === 'activity') { const record = recordActivity(session, input, this.ui); this.activityReporter?.explicit(record); return record; }

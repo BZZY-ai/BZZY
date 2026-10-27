@@ -167,6 +167,11 @@ It uses the same private code, progress and missing-entry import flow as the
 individual tabs. Newly installed names also remain visible on the Settings page.
 Existing names and ON/OFF states survive; new skills/agents install enabled.
 Account keys, private bindings and chat history do not travel with this Library.
+An exact signup-email list belongs in local skill configuration. Use
+`bzzy skills aliases set NAME 'alias1@example.invalid;alias2@example.invalid'`
+and `bzzy skills aliases show NAME` to inspect it. Core supplies the explicit
+list to owner-terminal `read_skill` calls as `privateContext.approvedSignupAliases`.
+It is configured independently on each host and supplies no mailbox credentials.
 Settings export uses the same blocked-entry diagnostics and explicit omission
 controls. Omitting every selected entry shows a result without creating a code.
 Import policy failures show the validated entry, safe reason and resource

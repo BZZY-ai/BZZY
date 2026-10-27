@@ -187,6 +187,37 @@ content-addressed directories; installs stage content before atomic publication.
 A small metadata catalog avoids putting every complete workflow into every
 prompt. Large libraries are discoverable through paginated search.
 
+## Explicit local signup aliases
+
+The local owner can give one skill a concrete approved email-alias list:
+
+```sh
+bzzy skills aliases set mail-reader 'tester+1@example.invalid;tester+2@example.invalid'
+bzzy skills aliases show mail-reader
+bzzy skills aliases clear mail-reader
+```
+
+The exact strings live in private Core `config.json` under
+`skillAccountPolicies[skillId].approvedSignupAliases`. Existing project/global
+skill identity determines that key. Configure each installation separately;
+Library exports carry generic behavior and never this owner configuration.
+
+After an authorized primary terminal calls `read_skill`, Core returns that list
+in a separate `privateContext.approvedSignupAliases` array with `policyRevision`.
+The immutable text, file hash, byte offsets and usage receipts stay unchanged.
+A skill that needs a fixed list should explicitly require this array and select
+only exact entries. A missing/empty list blocks that account-dependent step;
+the model must not guess an address. Invalid optional policy data leaves skill
+text readable with an empty, unavailable private context. Owner commands report
+a safe configuration error without printing private JSON fragments.
+
+Model tools cannot administer this list. Children, reviewers and persistent
+Agents do not inherit the owner's aliases. The list supplies no credentials,
+mailbox connection, testing scope or extra tool permissions. Account access
+still requires an existing authorized adapter. Private metadata is excluded from
+skill-read audit/diagnostic events and structured portable project state; native
+provider history can contain data already delivered to that owner's model.
+
 ## Import boundaries and limits
 
 A package is limited to 512 entries, 12 directory levels, 20 MiB total and 1 MiB

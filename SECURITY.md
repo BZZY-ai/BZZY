@@ -206,6 +206,16 @@ SAFE SHARING AND IMPORT
   codes and their secrets stay outside prompts, chat/history, logs and portable
   archives; the user can explicitly copy a code to the system clipboard.
 
+- An owner-configured skill signup-alias list is private account-selection data
+  in Core configuration, outside portable definitions and Library archives.
+  Only an authorized primary terminal skill read receives the explicit array;
+  children, reviewers and persistent Agents do not inherit it. Model tools cannot
+  edit it. It grants no mailbox authentication, account capability or testing
+  scope. Immutable skill hashes remain attached only to original package bytes;
+  private context is separate and excluded from skill-read audit/diagnostic
+  events and structured portable project state. Native provider history can
+  retain private data already supplied to the owner's model.
+
 - A complete-context copy includes the explicitly selected project's files,
   conversations, .bzzy notes, memory, evidence and history after deterministic
   validation and an exact data preview. This private content is shared only with

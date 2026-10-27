@@ -130,6 +130,11 @@ Implemented:
   APIs stay compatible. Root receivers accept relative filenames such as
   `00-scope/roots.txt`; receiver policy failures carry safe entry/resource
   diagnostics without matched private values.
+- Owner terminals can receive an explicit local signup-alias list alongside
+  `read_skill` as `privateContext.approvedSignupAliases`. Configure it with
+  `bzzy skills aliases set NAME EMAILS`; it stays in private Core configuration,
+  outside portable skill bytes and Library exports. Workers and persistent Agents
+  do not inherit it. This supplies account-selection data, never mailbox access.
 - Automatic host capture preserves closed work outcomes and queues bounded,
   source/model-pinned learning reviews. New procedures and exact-base corrections
   stage by default; reviewed policy may allow automatic new project skills.
