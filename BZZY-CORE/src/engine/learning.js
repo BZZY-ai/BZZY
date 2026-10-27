@@ -15,6 +15,7 @@ import { learningWorkingDirectory } from './learning-backend.js';
 import { backendStartupFailure } from './backend-startup.js';
 import { processIdentity, identityAlive, signalProcess } from './process-identity.js';
 import { sharedSecrets } from './share-bundle-policy.js';
+import { conversationRedactionContext } from './conversation-source.js';
 
 const kind = 'core.learning.job', active = new Map();
 const reasons = new Set(['finding', 'correction', 'verified_fix', 'goal_complete', 'explicit', 'evaluation',
@@ -35,12 +36,14 @@ const bounded = (value, maximum, name) => {
   return value.trim();
 };
 export function learningSettings() {
-  return { enabled: true, tokenBudget: 12000, runtimeSeconds: 45, dailyTokenBudget: 50000, maxPendingPerProject: 4,
+  return { enabled: true, duringForeground: false, foregroundCooldownSeconds: 300, tokenBudget: 12000, runtimeSeconds: 45, dailyTokenBudget: 50000, maxPendingPerProject: 4,
     revision: 0, ...getRecord('core.learning.settings', 'owner') };
 }
 export function configureLearning(input, { expectedRevision } = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['enabled', 'tokenBudget', 'runtimeSeconds', 'dailyTokenBudget', 'maxPendingPerProject'].includes(key)) ||
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['enabled', 'duringForeground', 'foregroundCooldownSeconds', 'tokenBudget', 'runtimeSeconds', 'dailyTokenBudget', 'maxPendingPerProject'].includes(key)) ||
       input.enabled !== undefined && typeof input.enabled !== 'boolean' ||
+      input.duringForeground !== undefined && typeof input.duringForeground !== 'boolean' ||
+      input.foregroundCooldownSeconds !== undefined && (!Number.isSafeInteger(input.foregroundCooldownSeconds) || input.foregroundCooldownSeconds < 60 || input.foregroundCooldownSeconds > 3600) ||
       input.tokenBudget !== undefined && (!Number.isSafeInteger(input.tokenBudget) || input.tokenBudget < 1000 || input.tokenBudget > 100000) ||
       input.runtimeSeconds !== undefined && (!Number.isSafeInteger(input.runtimeSeconds) || input.runtimeSeconds < 5 || input.runtimeSeconds > 120) ||
       input.dailyTokenBudget !== undefined && (!Number.isSafeInteger(input.dailyTokenBudget) || input.dailyTokenBudget < 1000 || input.dailyTokenBudget > 1000000) ||
@@ -222,7 +225,7 @@ export function learningMaterial(job) {
     if (!['correction', 'user_correction'].includes(trigger.reason)) continue;
     const match = new RegExp('^' + session.id + ':(\\d+)$').exec(trigger.sourceId);
     const row = match && database().prepare("SELECT seq,data FROM events WHERE session_id=? AND seq=? AND seq<=? AND type='message.user'").get(session.id, Number(match[1]), job.throughSeq);
-    if (row) add({ sourceId: `${session.id}:${row.seq}`, type: 'message.user', text: JSON.parse(row.data).text?.slice(0, 2000) });
+    if (row) add({ sourceId: `${session.id}:${row.seq}`, type: 'message.user', text: sanitizeLearningText(JSON.parse(row.data).text || '', secrets).slice(0, 2000) });
   }
   for (const recordKind of ['artifact', 'memory', 'issue', 'checkpoint']) {
     for (const record of listRecords(recordKind, { sessionId: session.id, limit: 20 })) {
@@ -234,10 +237,18 @@ export function learningMaterial(job) {
         completedWork: record.completedWork, decisions: record.decisions, unresolvedQuestions: record.unresolvedQuestions });
     }
   }
-  const rows = database().prepare("SELECT seq,type,data FROM events WHERE session_id=? AND seq<=? AND type IN ('message.user','text') ORDER BY seq DESC LIMIT 40").all(session.id, job.throughSeq).reverse();
+  const rows = database().prepare("SELECT seq,type FROM events WHERE session_id=? AND seq<=? AND type IN ('message.user','text') ORDER BY seq DESC LIMIT 40").all(session.id, job.throughSeq).reverse();
+  const seen = new Set();
   for (const row of rows) {
-    const data = JSON.parse(row.data);
-    if (typeof data.text === 'string') add({ sourceId: `${session.id}:${row.seq}`, type: row.type, text: data.text.slice(0, 2000) });
+    const context = conversationRedactionContext(session.id, row, job.throughSeq);
+    if (seen.has(context.key) || context.omitted || context.completionSeq > job.throughSeq) continue;
+    // A continuing legacy stream has no trustworthy seal at a snapshot tail.
+    if (row.type === 'text' && !context.completionSeq && context.end > job.throughSeq &&
+      ['running', 'starting', 'waiting_for_input', 'verifying'].includes(session.executionState)) continue;
+    seen.add(context.key);
+    const first = context.rows?.[0]?.seq || row.seq;
+    add({ sourceId: `${session.id}:${first}`, type: row.type, text: context.text.slice(0, 2000),
+      firstSeq: first, lastSeq: context.rows?.at(-1)?.seq || row.seq, sourceHash: context.sourceHash, provenance: 'sealed-conversation-message' });
   }
   return { session, project, material, allowedEvidence, sourcesHash: digest(material) };
 }
@@ -335,9 +346,10 @@ export async function runRestrictedLearningModel({ session, prompt, budget, sign
 
 function runnable(job) {
   const source = sourceSession(job.sessionId), project = projectFor(source);
-  if (operatorStopped() || ['paused', 'cancelled', 'running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState)) return false;
+  if (operatorStopped() || ['paused', 'cancelled'].includes(source.executionState)) return false;
+  if (!learningSettings().duringForeground && ['running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState)) return false;
   if (project.id !== job.projectId || project.root !== job.projectRoot || (source.agentNamespace ?? null) !== job.agentNamespace) throw error('LEARNING_SCOPE', 'Learning source changed scope.');
-  if (listRecords('execution', { sessionId: source.id, states: ['queued', 'starting', 'running', 'waiting_for_input'] }).length) return false;
+  if (!learningSettings().duringForeground && listRecords('execution', { sessionId: source.id, states: ['queued', 'starting', 'running', 'waiting_for_input'] }).length) return false;
   return source;
 }
 
@@ -386,6 +398,13 @@ export async function executeLearningOperation(id, { session, signal, runReview 
     if (previous.state !== 'queued') throw error('CONFLICT', 'Learning job is not queued.');
     source = runnable(previous);
     if (!source || !canRun()) throw error('LEARNING_PAUSED', 'Learning waits for idle authorized work.');
+    const settings = learningSettings(), foreground = ['running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState)
+      || listRecords('execution', { states: ['queued', 'launching', 'running'], limit: 1 }).length > 0;
+    if (foreground && settings.duringForeground) {
+      const last = getRecord('core.learning.dispatch', 'foreground')?.startedAt;
+      if (last && Date.now() - Date.parse(last) < settings.foregroundCooldownSeconds * 1000) throw error('LEARNING_PAUSED', 'Learning waits for the foreground maintenance cooldown.');
+      putRecord('core.learning.dispatch', 'foreground', { sessionId: source.id, jobId: previous.id, startedAt: now() }, db);
+    }
     // Publishing an already inspected result is a host-only continuation. It
     // cannot spend another model budget even if its interrupted reservation
     // was conservatively charged during recovery.
@@ -394,7 +413,7 @@ export async function executeLearningOperation(id, { session, signal, runReview 
       attemptBudget: { tokenBudget: 0, runtimeSeconds: 5 } } : reserveUsage(previous, db);
     if (reservation.stopped) return reservation.stopped;
     const record = { ...previous, ...reservation, state: 'running', runner: processIdentity(), lease: randomUUID(),
-      reviewStarted: false, startedAt: now(), updatedAt: now(), revision: previous.revision + 1 };
+      reviewStarted: false, scheduleReason: null, startedAt: now(), updatedAt: now(), revision: previous.revision + 1 };
     delete record.backendFailure;
     putRecord(kind, id, record, db); appendEvent(record.sessionId, 'learning.started', { id }, db); return record;
   });
@@ -531,7 +550,13 @@ export async function processLearningReviews({ limit = 1, canRun = () => true, r
     if (!parent || sessionDeleted(job.sessionId) || ['paused', 'cancelled'].includes(parent.executionState)) pauseLearningForSession(job.sessionId, 'source_paused');
   }
   if (operatorStopped()) pauseAllLearning('host_stopped');
-  if (operatorStopped() || !learningSettings().enabled || !canRun()) return [];
+  if (operatorStopped() || !learningSettings().enabled) return [];
+  if (!canRun()) {
+    for (const job of listRecords(kind, { state: 'queued', limit: 100 })) if (job.scheduleReason !== 'foreground_priority') {
+      putRecord(kind, job.id, { ...job, scheduleReason: 'foreground_priority', revision: job.revision + 1 });
+    }
+    return [];
+  }
   const results = [];
   for (const job of listRecords(kind, { state: 'queued', limit: 100 }).reverse()) {
     const parent = loadSession(job.sessionId);
@@ -539,6 +564,15 @@ export async function processLearningReviews({ limit = 1, canRun = () => true, r
       pauseLearningForSession(job.sessionId, 'source_paused'); continue;
     }
     try {
+      const settings = learningSettings(), last = getRecord('core.learning.dispatch', 'foreground')?.startedAt;
+      const busy = ['running', 'starting', 'waiting_for_input', 'verifying'].includes(parent.executionState)
+        || listRecords('execution', { states: ['queued', 'launching', 'running'], limit: 1 }).length > 0;
+      const reason = busy && !settings.duringForeground ? 'foreground_priority'
+        : busy && last && Date.now() - Date.parse(last) < settings.foregroundCooldownSeconds * 1000 ? 'foreground_cooldown' : null;
+      if (reason) {
+        if (job.scheduleReason !== reason) putRecord(kind, job.id, { ...job, scheduleReason: reason, revision: job.revision + 1 });
+        continue;
+      }
       if (runnable(job)) {
         const options = { canRun, ...(runReview ? { runReview } : {}) };
         results.push(job.reason === 'evaluation' ? await (await import('./learning-evaluation.js')).runLearningEvaluationJob(job.id, options) : await runLearningJob(job.id, options));

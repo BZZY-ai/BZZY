@@ -123,6 +123,24 @@ test('never exports private provider envelopes, arbitrary events, credentials or
   assert.ok(summary.coverage.reasons.includes('unsupported_event_types_omitted'));
 });
 
+test('long-run health, routing receipts and modern context events export without changing invocation counts', () => {
+  parent.nativeContextBudget = { tokens: 32768, source: 'conservative-local-fallback' };
+  parent.nativeContext = { epoch: 2, metrics: { modernCompleted: 2, completedDurationMs: 15000 }, refresh: { state: 'pending', reason: 'backend-capability-unadvertised' } };
+  parent.nativeBackendReadiness = { tools: { count: 3, source: 'submitted' }, phase: 'request-accepted' }; saveSession(parent);
+  putRecord('core.workflow.work-unit', 'fixture-unit', { id: 'fixture-unit', sessionId: parent.id, goalId: parent.goal?.id, classId: 'idor', state: 'open', specialist: { name: 'idor-agent' } });
+  putRecord('core.history.maintenance', parent.id, { sessionId: parent.id, indexedThroughSeq: 10, pendingMessages: 1 });
+  appendEvent(parent.id, 'diagnostic.context', { method: 'native-compaction', phase: 'completed', epoch: 2, metrics: parent.nativeContext.metrics, refresh: parent.nativeContext.refresh });
+  appendEvent(parent.id, 'message.finalized', { runId: 'fixture-run', threadRef: 'fixture-thread', turnId: 'fixture-turn', itemId: 'fixture-item' });
+  const before = snapshot(), usage = sessionMetrics(parent.id).session;
+  const result = exportSessionDebug(parent.id), rows = parseReport(result.outputPath);
+  assert.ok(rows.some(row => row.kind === 'core.workflow.work-unit' && row.data.classId === 'idor'));
+  assert.ok(rows.some(row => row.kind === 'event' && row.type === 'diagnostic.context' && row.data.metrics.modernCompleted === 2));
+  assert.ok(rows.some(row => row.kind === 'event' && row.type === 'message.finalized' && row.data.turnId === 'fixture-turn'));
+  const health = rows.find(row => row.kind === 'metrics').data.health;
+  assert.equal(health.native.contextBudget.tokens, 32768); assert.equal(health.maintenance.pendingMessages, 1);
+  assert.deepEqual(sessionMetrics(parent.id).session, usage); assert.deepEqual(snapshot(), before);
+});
+
 test('default filenames never replace an export, explicit existing paths and symlinks are protected', () => {
   const destination = path.join(directory, 'current-location'); fs.mkdirSync(destination);
   const at = new Date(2026, 9, 26), first = exportSessionDebug(parent.id, { cwd: destination, at });

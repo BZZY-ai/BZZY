@@ -5,6 +5,11 @@ import { loadSession, sessionPath, sessionDeleted, lockOwner } from './store.js'
 import { identityAlive } from './process-identity.js';
 
 const reject = (message, code, status = 409) => { throw Object.assign(new Error(message), { code, status }); };
+const derivedRuntimeKinds = ['native-compaction', 'core.conversation.source', 'core.conversation.pending',
+  'core.history.maintenance', 'core.task-state.read', 'core.checkpoint.scope'];
+const retainedReceiptKinds = ['core.checkpoint.request', 'core.workflow.work-unit', 'core.workflow.consultation'];
+const nativeRuntimeFields = ['nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency',
+  'coreSkillsProtocol', 'sessionMemoryRefresh', 'sessionMemorySeen'];
 export const terminalCatalogRevision = () => getRecord('terminal-catalog', 'current')?.revision || 'initial';
 
 function assertInactive(session) {
@@ -59,8 +64,20 @@ export function deleteTerminalConversation(sessionId, { requestId } = {}) {
       const event = appendEvent(item.id, 'session.deleted', { deletedAt, rootSessionId: sessionId }, db);
       putRecord('session-deletion', item.id, { sessionId: item.id, rootSessionId: sessionId, deletedAt, event,
         ...(item.id === sessionId ? { receipt } : {}) }, db);
-      putRecord('session', item.id, { ...item, deletedAt, updatedAt: deletedAt }, db);
+      const inactive = { ...item, deletedAt, updatedAt: deletedAt };
+      for (const field of nativeRuntimeFields) delete inactive[field];
+      putRecord('session', item.id, inactive, db);
       db.prepare("DELETE FROM records WHERE kind='input-owner' AND id=?").run(item.id);
+    }
+    // Sequence cursors, pending streams and native dedup state cannot survive
+    // deletion as runnable caches. Original events/checkpoint revisions remain.
+    db.prepare(`DELETE FROM records WHERE kind IN (SELECT value FROM json_each(?)) AND
+      (id IN (SELECT value FROM json_each(?)) OR json_extract(data,'$.sessionId') IN (SELECT value FROM json_each(?)))`)
+      .run(JSON.stringify(derivedRuntimeKinds), JSON.stringify([...ids]), JSON.stringify([...ids]));
+    // Retain request and routing provenance without an active execution view.
+    for (const row of db.prepare(`SELECT kind,id,data FROM records WHERE kind IN (SELECT value FROM json_each(?)) AND
+      json_extract(data,'$.sessionId') IN (SELECT value FROM json_each(?))`).all(JSON.stringify(retainedReceiptKinds), JSON.stringify([...ids]))) {
+      putRecord(row.kind, row.id, { ...JSON.parse(row.data), deletedAt, executionDisabled: true }, db);
     }
     // A phone's base transport grant can anchor its catalog to a now-deleted
     // terminal. Keep that pairing; the gateway supplies only its deletion shell.

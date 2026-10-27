@@ -4,7 +4,7 @@ const requireCondition = (condition, message) => { if (!condition) throw new Err
 
 // Deterministic agents exercise the host's real assignment/evidence/control flow
 // against a test-owned loopback service. No model or external target is contacted.
-export async function runDelegationCTF({ call, context, has }) {
+export async function runDelegationCTF({ call, context, prompt, has }) {
   async function wait(job) {
     let state = typeof job.round === 'object' ? job : await call('wait_assignment', { id: job.id, timeoutSeconds: 20 });
     while (['starting', 'running'].includes(state.round.state)) state = await call('wait_assignment', { id: job.id, timeoutSeconds: 20 });
@@ -41,7 +41,10 @@ export async function runDelegationCTF({ call, context, has }) {
   requireCondition(!JSON.stringify(context).includes('PARENT_PRIVATE_LEDGER_MARKER'), 'Worker received unrelated parent project history');
   const selected = context.selectedEvidence?.[0]; requireCondition(selected, 'Supervisor input evidence was not shared');
   const input = await call('read_artifact', { id: selected.id }); const setup = JSON.parse(input.content);
-  const followup = context.checkpoint?.completedWork?.includes('candidate-collected');
+  // The current explicit round request drives this fixture. A prior round's
+  // checkpoint is historical progress, never the new round's current state.
+  const currentRound = JSON.parse(prompt.split('FOLLOW-UP:\n').at(-1));
+  const followup = currentRound.feedback?.includes('Compare owned, foreign and unauthenticated requests') === true;
   const evidence = [];
   const requests = followup ? [
     { id: 1, headers: { authorization: 'Bearer fixture-account-a' }, status: 200 },

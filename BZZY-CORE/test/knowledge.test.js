@@ -166,7 +166,8 @@ test('history backfill remains bounded while indexing the recent tail, and delet
  transaction(() => { for (let i = 0; i < 2100; i++) appendEvent(source.id, 'text', { text: `Historical baseline ${i}.` }); });
  const latest = appendEvent(source.id, 'text', { text: 'RECENT_TAIL_SIGNAL' });
  const first = searchProjectKnowledge(target, { query: 'RECENT_TAIL_SIGNAL' });
- assert.equal(first.indexing.remaining, true); assert.ok(first.items.some(item => item.sourceId === latest.id));
+ assert.equal(first.indexing.remaining, true);
+ assert.ok(first.items.some(item => item.provenance === 'sealed-conversation-message' && item.firstSeq <= latest.seq && item.lastSeq >= latest.seq));
  assert.equal(searchProjectKnowledge(target, { query: 'baseline 2050' }).indexing.remaining, false);
  remember(source, { kind: 'hypothesis', statement: 'DELETED_SESSION_FACT' });
  assert.equal(searchProjectKnowledge(target, { query: 'DELETED_SESSION_FACT' }).items[0].kind, 'memory');

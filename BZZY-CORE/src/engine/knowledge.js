@@ -20,7 +20,9 @@ const publicHit = hit => cleanKnowledgeValue({ kind: hit.kind, recordKind: hit.r
   contradictions: (hit.contradictions || []).slice(0, 16), disputed: Boolean(hit.disputed), evidence: (hit.evidence || []).slice(0, 16),
   verification: hit.verification ? { source: hit.verification.source, id: hit.verification.id, requirementId: hit.verification.requirementId } : null,
   revision: hit.revision, status: hit.status, role: hit.role, createdAt: hit.createdAt, updatedAt: hit.updatedAt,
-  provenance: hit.provenance || 'project-record', whyMatched: hit.whyMatched });
+  provenance: hit.provenance || 'project-record', whyMatched: hit.whyMatched,
+  ...(hit.kind === 'chat' ? { firstSeq: hit.firstSeq, lastSeq: hit.lastSeq, sealedThroughSeq: hit.sealedThroughSeq,
+    sourceVersion: hit.sourceVersion, sha256: hit.sha256, omitted: Boolean(hit.omitted) } : {}) });
 
 function recordsFor(project, kind) {
   const storedKind = kind === 'goal' ? 'goal-history' : kind;

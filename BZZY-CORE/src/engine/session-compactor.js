@@ -28,21 +28,23 @@ const promptFor = material => `Summarize only these historical source records (e
 
 export function sessionCompactionSettings() {
   const background = backgroundModelSettings();
-  return { enabled: true, tokenBudget: 20000, runtimeSeconds: 45, dailyTokenBudget: 100000, revision: 0,
+  return { enabled: true, duringForeground: false, foregroundCooldownSeconds: 60, tokenBudget: 20000, runtimeSeconds: 45, dailyTokenBudget: 100000, revision: 0,
     ...getRecord(SETTINGS, 'owner'), selectionSource: background.source, backgroundModelRevision: background.revision, coordinatorRevision: background.coordinatorRevision,
     configured: background.configured, selection: background.selection,
     provider: background.selection?.provider ?? null, model: background.selection?.model ?? null, effort: background.selection?.effort ?? null };
 }
 export function configureSessionCompaction(input, { expectedRevision } = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['enabled', 'tokenBudget', 'runtimeSeconds', 'dailyTokenBudget'].includes(key)) ||
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['enabled', 'duringForeground', 'foregroundCooldownSeconds', 'tokenBudget', 'runtimeSeconds', 'dailyTokenBudget'].includes(key)) ||
       input.enabled !== undefined && typeof input.enabled !== 'boolean' ||
+      input.duringForeground !== undefined && typeof input.duringForeground !== 'boolean' ||
+      input.foregroundCooldownSeconds !== undefined && (!Number.isSafeInteger(input.foregroundCooldownSeconds) || input.foregroundCooldownSeconds < 10 || input.foregroundCooldownSeconds > 3600) ||
       input.tokenBudget !== undefined && (!Number.isSafeInteger(input.tokenBudget) || input.tokenBudget < 1000 || input.tokenBudget > 200000) ||
       input.runtimeSeconds !== undefined && (!Number.isSafeInteger(input.runtimeSeconds) || input.runtimeSeconds < 5 || input.runtimeSeconds > 120) ||
       input.dailyTokenBudget !== undefined && (!Number.isSafeInteger(input.dailyTokenBudget) || input.dailyTokenBudget < 1000 || input.dailyTokenBudget > 1000000)) throw fail('INVALID_COMPACTOR', 'Invalid compactor settings.');
   const value = atomic(db => {
     const prior = sessionCompactionSettings();
     if (expectedRevision !== prior.revision) throw fail('CONFLICT', 'Compactor settings changed. Reload before saving.');
-    const value = Object.fromEntries(['enabled', 'tokenBudget', 'runtimeSeconds', 'dailyTokenBudget'].map(key => [key, input[key] ?? prior[key]]));
+    const value = Object.fromEntries(['enabled', 'duringForeground', 'foregroundCooldownSeconds', 'tokenBudget', 'runtimeSeconds', 'dailyTokenBudget'].map(key => [key, input[key] ?? prior[key]]));
     Object.assign(value, { revision: prior.revision + 1, updatedAt: now() });
     putRecord(SETTINGS, 'owner', value, db); return sessionCompactionSettings();
   });
@@ -99,10 +101,10 @@ function discoverJobs(sessionId) {
 
 // Only completed-work hooks or an explicit owner action call this API. Reading
 // history/status never queues model requests or advances the source cursor.
-export function queueSessionCompaction(value, { throughSeq, force = false } = {}) {
+export function queueSessionCompaction(value, { throughSeq, force = false, maxParts } = {}) {
   const saved = source(value), previous = controlFor(saved.id);
   if (['paused', 'cancelled'].includes(saved.executionState)) pauseSessionCompaction(saved.id, 'source_paused');
-  const indexed = indexSessionMemory(saved, { throughSeq, force });
+  const indexed = indexSessionMemory(saved, { throughSeq, force, ...(maxParts === undefined ? {} : { maxParts }) });
   const current = controlFor(saved.id);
   const finalizedThroughSeq = throughSeq ?? indexed.throughSeq ?? database().prepare('SELECT coalesce(max(seq),0) AS seq FROM events WHERE session_id=?').get(saved.id).seq;
   putRecord(CONTROL, saved.id, { ...current, queued: true, indexingRemaining: indexed.deferred || indexed.indexingRemaining || false,
@@ -165,6 +167,21 @@ function foregroundIdle() {
   if (listRecords('execution', { states: ['queued', 'launching', 'starting', 'running', 'waiting_for_input'], limit: 1 }).length) return false;
   if (listRecords('round', { states: ['starting', 'running'] }).some(round => round.state === 'starting' || identityAlive(round.runner) || identityAlive(round.launcher))) return false;
   return !listRecords('run', { states: busyStates }).some(run => identityAlive(run.runner));
+}
+function schedulingReason(job, material, canRun) {
+  if (!canRun()) return 'host_priority';
+  if (requestInFlight()) return 'request_in_flight';
+  if (outputFor(job, material) || shortMaterial(material)) return null;
+  const settings = sessionCompactionSettings(), source = loadSession(job.sessionId);
+  const foreground = busyStates.includes(source?.executionState) || !foregroundIdle();
+  if (!foreground) return null;
+  if (!settings.duringForeground) return 'foreground_priority';
+  const last = controlFor(job.sessionId).lastForegroundDispatchAt;
+  return last && Date.now() - Date.parse(last) < settings.foregroundCooldownSeconds * 1000 ? 'foreground_cooldown' : null;
+}
+function deferJob(job, reason) {
+  if (job.scheduleReason !== reason) updateJob(job, { scheduleReason: reason });
+  return null;
 }
 function requestInFlight() {
   if (listRecords(JOB, { state: 'running', limit: 1 }).length) return true;
@@ -267,8 +284,9 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
   }
   if (preflight && ['queued', 'retry_wait', 'waiting_for_configuration', 'waiting_for_auth'].includes(preflight.state) && (!preflight.nextAttemptAt || Date.parse(preflight.nextAttemptAt) <= Date.now())) {
     const saved = authorized(preflight);
-    if (busyStates.includes(saved.executionState) || !foregroundIdle() || !canRun() || requestInFlight()) return null;
     const input = sessionMemoryMaterial(saved, preflight.nodeId);
+    const reason = schedulingReason(preflight, input, canRun);
+    if (reason) return deferJob(preflight, reason);
     if (!outputFor(preflight, input) && !shortMaterial(input)) {
       if (!preflight.selection) return updateJob(preflight, { state: 'waiting_for_configuration', error: 'COMPACTOR_SETUP_REQUIRED', nextAttemptAt: new Date(Date.now() + 60000).toISOString() });
       let provider;
@@ -284,8 +302,9 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
     const prior = getRecord(JOB, id);
     if (!prior || !['queued', 'retry_wait', 'waiting_for_configuration', 'waiting_for_auth'].includes(prior.state) || prior.nextAttemptAt && Date.parse(prior.nextAttemptAt) > Date.now()) return null;
     sourceSession = authorized(prior);
-    if (busyStates.includes(sourceSession.executionState) || !foregroundIdle() || !canRun() || requestInFlight()) return null;
     material = sessionMemoryMaterial(sourceSession, prior.nodeId);
+    const reason = schedulingReason(prior, material, canRun);
+    if (reason) return deferJob(prior, reason);
     if (material.generation !== prior.generation) throw fail('COMPACTOR_SCOPE', 'The memory generation changed.');
     cached = outputFor(prior, material);
     const short = shortMaterial(material);
@@ -302,9 +321,13 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
     if (usage.remainingTokens < available) return updateJob(prior, { state: 'retry_wait', error: 'COMPACTOR_DAILY_BUDGET', reasonPaused: 'daily_budget',
       nextAttemptAt: new Date(Date.parse(`${usage.day}T00:00:00Z`) + 86400000).toISOString() }, db);
     const reservationId = randomUUID();
+    if (!foregroundIdle() || busyStates.includes(sourceSession.executionState)) {
+      const control = controlFor(prior.sessionId);
+      putRecord(CONTROL, prior.sessionId, { ...control, lastForegroundDispatchAt: now() }, db);
+    }
     putRecord(RESERVATION, reservationId, { id: reservationId, jobId: prior.id, day: usage.day, tokens: available, state: 'reserved', createdAt: now() }, db);
     putRecord(USAGE, usage.day, { day: usage.day, tokensUsed: usage.tokensUsed, reservedTokens: usage.reservedTokens + available }, db);
-    return updateJob(prior, { state: 'running', runner: processIdentity(), lease: randomUUID(), startedAt: now(), dispatched: false,
+    return updateJob(prior, { state: 'running', scheduleReason: null, runner: processIdentity(), lease: randomUUID(), startedAt: now(), dispatched: false,
       reservationId, usageSettled: false, attemptBudget: { tokenBudget: available, runtimeSeconds: remainingMs / 1000 } }, db);
   });
   if (!job || job.state !== 'running') return job;
@@ -367,19 +390,32 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
   }
 }
 
+function maintenanceControls(cursorId, condition = '1', limit = 20) {
+  const cursor = getRecord(DISCOVERY, cursorId)?.after || '', db = database();
+  const page = (operator, count) => db.prepare(`SELECT data FROM records WHERE kind=? AND ${condition}
+    AND id ${operator} ? ORDER BY id LIMIT ?`).all(CONTROL, cursor, count).map(row => JSON.parse(row.data));
+  const controls = page('>', limit);
+  if (controls.length < limit) controls.push(...page('<=', limit - controls.length));
+  if (controls.length) putRecord(DISCOVERY, cursorId, { after: controls.at(-1).sessionId });
+  return controls;
+}
+
 export async function processSessionCompactions({ runModel = runRestrictedDocumentModel, canRun = () => true, authAvailable = authenticationAvailable } = {}) {
-  for (const control of listRecords(CONTROL)) {
+  // Each background tick inspects a bounded rotating page. Continuously busy
+  // sources must not keep later controls outside the maintenance window.
+  for (const control of maintenanceControls('maintenance-controls')) {
     const saved = loadSession(control.sessionId);
     if (!saved || sessionDeleted(control.sessionId) || ['paused', 'cancelled'].includes(saved.executionState)) {
       if (control.state === 'enabled') pauseSessionCompaction(control.sessionId, 'source_paused');
     }
   }
   if (stopped()) { pauseAllSessionCompactions('host_stopped'); return []; }
-  if (!sessionCompactionSettings().enabled || active.size || !canRun() || !foregroundIdle()) return [];
+  if (!sessionCompactionSettings().enabled || active.size || !canRun()) return [];
   // Backfill only previously queued source sessions, in bounded source pages.
-  for (const control of listRecords(CONTROL).filter(item => item.queued && item.indexingRemaining && item.state === 'enabled').slice(0, 20)) {
+  for (const control of maintenanceControls('backfill-controls', `json_extract(data,'$.queued')=1
+    AND json_extract(data,'$.indexingRemaining')=1 AND json_extract(data,'$.state')='enabled'`)) {
     const saved = loadSession(control.sessionId);
-    if (!saved || !sessionMemoryEligible(saved) || busyStates.includes(saved.executionState)) continue;
+    if (!saved || !sessionMemoryEligible(saved)) continue;
     try {
       const indexed = indexSessionMemory(saved, { ...(control.throughSeq !== undefined ? { throughSeq: control.throughSeq } : {}), force: control.force || false });
       const current = controlFor(saved.id);
@@ -389,16 +425,26 @@ export async function processSessionCompactions({ runModel = runRestrictedDocume
     catch { pauseSessionCompaction(control.sessionId, 'source_changed'); }
   }
   discoverJobs();
-  const candidates = database().prepare(`SELECT j.data FROM records j
+  const cursor = getRecord(DISCOVERY, 'scheduler-jobs')?.after || '';
+  const candidatePage = (operator, count) => database().prepare(`SELECT j.data FROM records j
     JOIN records c ON c.kind=? AND c.id=json_extract(j.data,'$.sessionId')
     JOIN records s ON s.kind='session' AND s.id=json_extract(j.data,'$.sessionId')
     WHERE j.kind=? AND json_extract(c.data,'$.state')='enabled'
     AND json_extract(j.data,'$.state') IN ('queued','retry_wait','waiting_for_configuration','waiting_for_auth')
     AND (json_extract(j.data,'$.nextAttemptAt') IS NULL OR json_extract(j.data,'$.nextAttemptAt')<=?
       OR json_extract(j.data,'$.state')='waiting_for_configuration' AND ?=1)
-    AND coalesce(json_extract(s.data,'$.executionState'),'idle') NOT IN ('starting','running','waiting_for_input','verifying','paused','cancelled')
-    ORDER BY json_extract(j.data,'$.createdAt'),j.id LIMIT 100`).all(CONTROL, JOB, now(), sessionCompactionSettings().configured ? 1 : 0).map(row => JSON.parse(row.data));
-  for (const job of candidates) {
+    AND coalesce(json_extract(s.data,'$.executionState'),'idle') NOT IN ('paused','cancelled')
+    AND j.id ${operator} ? ORDER BY j.id LIMIT ?`).all(CONTROL, JOB, now(), sessionCompactionSettings().configured ? 1 : 0, cursor, count).map(row => JSON.parse(row.data));
+  const candidates = candidatePage('>', 100);
+  if (candidates.length < 100) candidates.push(...candidatePage('<=', 100 - candidates.length));
+  // Retire obsolete source generations across this whole bounded page before
+  // a successful fresh job returns early from the dispatch loop.
+  const currentCandidates = [];
+  for (const job of candidates) { if (staleGeneration(job)) retireStaleJob(job); else currentCandidates.push(job); }
+  for (const job of currentCandidates) {
+    // Advance on consideration, including foreground/configuration deferrals.
+    // Otherwise the first 100 ineligible jobs can starve host-only summaries.
+    putRecord(DISCOVERY, 'scheduler-jobs', { after: job.id });
     if (controlFor(job.sessionId).state !== 'enabled') continue;
     try {
       if (staleGeneration(job)) { retireStaleJob(job); continue; }

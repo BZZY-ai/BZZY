@@ -25,6 +25,7 @@ import { sessionMemoryEligible } from './session-memory.js';
 import { queueSessionCompaction, pauseSessionCompaction } from './session-compactor.js';
 import { pauseLearningForSession } from './learning.js';
 import { randomUUID } from 'node:crypto';
+import { maintainSessionHistory } from './history-maintenance.js';
 
 export function classifyFailure(error) {
   const message = String(error.message || error);
@@ -60,7 +61,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   } else options = { ...options, agentScope: null };
   const policy = effectivePolicy(session, options);
   const unlock = lockSession(session), started = Date.now(), indicator = ui.executionIndicator?.(options.pet !== false && !ui.persistsEvents) || { start() {}, stop() {} }, abort = new AbortController();
-  let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, controls, processing = false, failedThisTurn = false;
+  let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, historyMaintenance, controls, processing = false, failedThisTurn = false;
   options = { ...options, goalMode: goal, policy, strictPolicy: Boolean(options.strictPolicy || options.readOnly || session.strictPolicy) }; session.policy = policy; session.captureNetwork = Boolean(options.captureNetwork);
   const run = { id: randomUUID(), sessionId: session.id, state: 'running', goalMode: goal, goalId: goal ? session.goal?.id || null : null,
     runner: processIdentity(), startedAt: now(), heartbeatAt: now() };
@@ -93,6 +94,9 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     const remainingMs = limit == null ? null : Math.max(0, limit - (session.goal?.runtimeUsedSeconds || 0)) * 1000;
     let deadline; if (remainingMs != null) deadline = setTimeout(() => stop('runtime_limit'), remainingMs);
     heartbeat = guardedInterval(() => { const record = getRecord('run', session.id); if (record) putRecord('run', session.id, { ...record, heartbeatAt: now() }); }, 2000, { label: 'Run heartbeat', onError: (_error, failures) => { if (failures >= 3) stop('persistence_failure'); } });
+    if (sessionMemoryEligible(session)) historyMaintenance = guardedInterval(() => {
+      if (!stopping) maintainSessionHistory(session);
+    }, 2000, { label: 'Finalized conversation indexing', onError: () => {} });
     let lastUsageKey, lastUsageAt = 0;
     controls = guardedInterval(async () => {
       if (processing) return; processing = true;
@@ -162,7 +166,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
         attempts++; checkpoint(session, { pendingActions: ['Repair failed acceptance criteria; inspect previousAcceptance using get_task_state.'] });
         if (attempts > (session.contract?.limits.maxRetries ?? 2)) { session.goal.status = 'awaiting_review'; session.goal.reason = 'Acceptance checks remain unsatisfied after bounded follow-ups.'; break; }
         session.goal.status = 'active'; session.executionState = 'running'; saveSession(session);
-        recorded.event('info', { message: session.acceptance.delegation?.passed === false ? session.acceptance.delegation.reason : 'Completion assessment found unmet requirements. Continuing with saved verification feedback.' });
+        recorded.event('info', { message: session.acceptance.routing?.passed === false ? session.acceptance.routing.reason : session.acceptance.delegation?.passed === false ? session.acceptance.delegation.reason : 'Completion assessment found unmet requirements. Continuing with saved verification feedback.' });
       } while (!stopping);
     } finally { clearTimeout(deadline); }
     if (stopping) {
@@ -181,7 +185,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     if (stopping) return budgetLimited ? 2 : 130;
     throw error;
   } finally {
-    clearInterval(heartbeat); clearInterval(controls); clearTimeout(killTimer); indicator.stop(); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); ui.beforeOutput = null;
+    clearInterval(heartbeat); clearInterval(historyMaintenance); clearInterval(controls); clearTimeout(killTimer); indicator.stop(); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); ui.beforeOutput = null;
     try {
       const cleanups = await Promise.allSettled([engine?.close(), host?.close(), traffic?.close()]);
       for (const cleanup of cleanups) if (cleanup.status === 'rejected') recorded.event('error', { message: `Cleanup failed: ${cleanup.reason.message}` });

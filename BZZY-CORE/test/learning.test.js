@@ -43,6 +43,32 @@ const fixtureDefinition = () => ({ name: 'Held-out decision cases', cases: [
 const expectedOutput = () => ({ text: JSON.stringify({ results: fixtureDefinition().cases.map(item => ({ id: item.id, verdict: item.expected })) }), tokens: 100 });
 const candidate = (name = 'authorization-review') => stageSkillCandidate({ name, description: 'Validate authorization claims with controls.', instructions: 'Compare resource ownership and authorized, unauthorized and anonymous observations. Classify unavailable proof as inconclusive. Require repeatable decisive evidence.' }, { session });
 
+test('foreground learning requires reviewed opt-in, retains reservations and observes a durable cooldown', async () => {
+  const job = queued('recorded_lesson'); session.executionState = 'running'; saveSession(session);
+  assert.deepEqual(await processLearningReviews({ runReview: () => assert.fail('Default policy must preserve foreground priority') }), []);
+  assert.equal(inspectLearningJob(job.id).scheduleReason, 'foreground_priority');
+  configureLearning({ duringForeground: true, foregroundCooldownSeconds: 60 }, { expectedRevision: 0 });
+  const [completed] = await processLearningReviews({ runReview: noChange });
+  assert.equal(completed.state, 'completed'); assert.equal(learningUsage().reservedTokens, 0);
+  const next = queued('recorded_lesson');
+  assert.deepEqual(await processLearningReviews({ runReview: () => assert.fail('No repeated paid request during cooldown') }), []);
+  assert.equal(inspectLearningJob(next.id).scheduleReason, 'foreground_cooldown');
+  pauseLearningForSession(session.id, 'owner_pause');
+  assert.deepEqual(await processLearningReviews({ runReview: () => assert.fail('Polling never resumes paused reviews') }), []);
+});
+
+test('learning masks complete streamed messages and never includes an unsealed native tail', () => {
+  const identity = { runId: 'fixture-run', threadRef: 'fixture-thread', turnId: 'fixture-turn', itemId: 'fixture-message' };
+  appendEvent(session.id, 'text', { ...identity, text: 'api_key=sk-learningStream' });
+  appendEvent(session.id, 'text', { ...identity, text: 'PrivateFixtureTail123456789\nSafe control result.' });
+  appendEvent(session.id, 'message.finalized', identity);
+  appendEvent(session.id, 'text', { ...identity, itemId: 'unsealed', text: 'UNFINISHED_PRIVATE_TAIL' });
+  session.executionState = 'running'; saveSession(session);
+  const material = JSON.stringify(learningMaterial(queued()).material);
+  assert.doesNotMatch(material, /learningStream|PrivateFixtureTail|UNFINISHED_PRIVATE_TAIL/);
+  assert.match(material, /Safe control result/); assert.match(material, /redacted/);
+});
+
 test('automatic triggers coalesce, keep idempotent receipts, and preserve stopped learning without inferred resume', async () => {
   const first = message(), a = queueLearningReview(session, { reason: 'finding_outcome', sourceId: first.id, requestId: 'once' });
   const duplicate = queueLearningReview(session, { reason: 'finding_outcome', sourceId: first.id, requestId: 'once' });

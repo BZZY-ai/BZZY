@@ -18,6 +18,7 @@ import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 import { assertSubagentDefinitionPin, assertSubagentDefinitionEnabled } from './subagent-definitions.js';
 import { normalizeValidationAssessment, naturalValidationSummary } from './validation-assessment.js';
 import { finalValidationReportProtocol, normalizeValidationDecision } from './validation-decision.js';
+import { reserveRoutingAssignment, recordRoutingReview, assertRoutingFollowup } from './workflow-routing.js';
 
 const contextKind = 'assignment-context';
 const contextText = (value, limit, label) => {
@@ -224,7 +225,9 @@ export function startAssignment(parent, input, { executor, snapshot, role = 'exe
     }
     const job = { id, parentSessionId: parent.id, goalId: subagent?.chatRunId ? null : parent.goal?.id || null, missionContext, selection, contract, role, closure: 'open', currentRound: 1, createdAt: now(), snapshotId: snapshot?.id || null, workspace: null, sharedEvidence, captureNetwork: Boolean(parent.captureNetwork),
       ...(reportProtocol ? { reportProtocol } : {}),
-      ...(subagent ? { subagentDefinition: subagent.definition, chatRunId: subagent.chatRunId || null, sourceGoalId: parent.goal?.id || null, subagentTaskContext: subagent.taskContext } : {}) };
+      ...(subagent ? { subagentDefinition: subagent.definition, chatRunId: subagent.chatRunId || null, sourceGoalId: parent.goal?.id || null, subagentTaskContext: subagent.taskContext,
+        ...(subagent.routing ? { subagentRouting: subagent.routing } : {}) } : {}) };
+    reserveRoutingAssignment(source, subagent?.routing, id, db);
     putRecord('assignment', id, job, db);
     if (subagent?.invocation) putRecord('subagent-invocation', subagent.invocation.id, { ...subagent.invocation, assignmentId: id }, db);
     putRecord('round', `${id}:1`, { assignmentId: id, number: 1, state: 'starting', requestId, createdAt: now(), feedback: null }, db);
@@ -274,6 +277,7 @@ export function followupAssignment(parent, id, input, { sharedEvidence, launch =
     const latest = getRecord('assignment', id);
     currentSource(source, latest);
     if (parentStopped(loadSession(parent.id), runScope)) throw new Error('The parent conversation is paused. No follow-up was launched.');
+    assertRoutingFollowup(source, latest);
     if (latest.currentRound !== job.currentRound || latest.closure !== 'open' || ['starting', 'running'].includes(getRecord('round', `${id}:${latest.currentRound}`)?.state)) throw new Error('Assignment is not ready for a follow-up.');
     if (job.currentRound >= maxRounds) throw new Error('Assignment follow-up limit reached; take over directly or record the unresolved result.');
     if (!job.chatRunId && parent.goal?.tokenBudget != null && budgetUsage(parent) >= parent.goal.tokenBudget) throw new Error('Parent usage budget is exhausted.');
@@ -358,6 +362,7 @@ export function reviewAssignment(parent, id, input) {
     currentSource(parent, input.outcome === 'accepted' ? latest : undefined);
     if (latest.currentRound !== job.currentRound || latest.closure !== 'open' || ['starting', 'running'].includes(latestRound?.state)) throw new Error('Assignment changed during review. Inspect its current round again.');
     putRecord('review', review.id, review, db); putRecord('assignment', id, { ...latest, closure: input.outcome, review }, db); appendEvent(parent.id, 'assignment.reviewed', review, db);
+    recordRoutingReview(parent, latest, review, db);
   });
   return review;
 }

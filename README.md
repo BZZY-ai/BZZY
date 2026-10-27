@@ -84,6 +84,12 @@ Start with [GUIDE_TO_BZZY_DEBUGGER.txt](GUIDE_TO_BZZY_DEBUGGER.txt); that detail
 read-first guide is also included in every full ZIP. Credential/private-store
 exclusions and capture gaps remain explicit in its manifest.
 
+[Long-run reliability](BZZY-CORE/docs/LONG-RUN-RELIABILITY.md) adds goal-scoped
+checkpoints, compact paged task state, rolling completed-message indexes, native
+context diagnostics and explicit workflow consultation receipts. The bug-bounty
+pack includes a structured JSON workflow for new goals. Existing goals retain
+their original workflow on resume; source updates do not patch live runners.
+
 Transfer the [BZZY Library](BZZY-CORE/docs/LIBRARY-SHARING.md) between Mac and
 Linux with `bzzy library share` and `bzzy library import`. Expiring Relay codes
 carry skills, specialist agents, workflows and saved goal text; the receiver

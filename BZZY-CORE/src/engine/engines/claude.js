@@ -17,6 +17,9 @@ import { recordClaudeQuota } from '../account-status.js';
 import { ActivityReporter } from '../live-activity.js';
 import { assertLearningWorkingDirectory } from '../learning-backend.js';
 import { recordBackendDiagnostics } from '../session-diagnostics.js';
+import { nativeContextBudget, prepareNativeReadiness, acknowledgeNativeReadiness, recordNativeCompaction,
+  pendingNativeRefresh, consumeNativeRefresh, nativeInputEstimate } from '../native-context.js';
+import { digest } from '../database.js';
 
 export function claudeEnvironment(backendHomes) {
   return subscriptionEnvironment('claude', { backendHomes });
@@ -67,14 +70,19 @@ export class ClaudeEngine {
       writeJson(configFile, { mcpServers: { bzzy_goal: { type: 'stdio', command: process.execPath,
         args: this.options.toolHost ? [path.join(root, 'bin', 'bzzy-engine.js'), 'internal-tools', this.options.toolHost.socket, this.options.toolHost.token] : [path.join(root, 'bin', 'bzzy-engine.js'), 'internal-mcp', this.session.id, nonce], env: { BZZY_HOME: home() } } } });
     }
-    let activity = false, text = '', streamed = false, result, stderr = '', tokens = 0;
+    let activity = false, text = '', result, stderr = '', tokens = 0;
     const priorTokens = this.session.usage?.tokens || 0;
     const messageUsage = new Map();
     const args = claudeArgs(this.session, this.options, configFile);
     const promptIndex = args.indexOf('--append-system-prompt');
+    const nativeInstructions = args[promptIndex + 1];
+    const contextBudget = nativeContextBudget(this.provider, this.session);
+    this.session.nativeContextBudget = contextBudget;
     const setupId = recordBackendDiagnostics(this.session, { method: 'claude-launch', outcome: 'prepared', transport: 'claude-stdio',
       toolsSource: configFile ? 'configured-mcp-allowlist' : 'no-core-mcp', tools: configFile ? taskTools(this.session, { goalMode: goal }) : [],
-      instructions: args[promptIndex + 1], model: this.session.model, delivery: Buffer.byteLength(args[promptIndex + 1]) > 32768 ? 'system-prompt-file' : 'system-prompt-argument' });
+      instructions: args[promptIndex + 1], model: this.session.model, delivery: Buffer.byteLength(args[promptIndex + 1]) > 32768 ? 'system-prompt-file' : 'system-prompt-argument', contextBudget,
+      readiness: prepareNativeReadiness(this.session, { backend: 'claude', threadId: this.session.engineThreadId,
+        tools: configFile ? taskTools(this.session, { goalMode: goal }) : [], instructions: args[promptIndex + 1], contextBudget }) });
     let promptFile;
     const cleanup = () => { for (const file of [configFile, promptFile]) if (file) fs.rmSync(file, { force: true }); };
     try {
@@ -99,7 +107,22 @@ export class ClaudeEngine {
       stopProcess(child, 'SIGTERM');
       clearTimeout(forceTimer); forceTimer = setTimeout(() => stopProcess(child, 'SIGKILL'), 1000);
     };
+    const refreshEpoch = this.session.nativeContext?.refresh?.epoch;
     const userMessage = { type: 'user', message: { role: 'user', content: conversationPrompt(this.session, goal ? continuationPrompt(this.session.goal) : prompt) }, parent_tool_use_id: null, session_id: this.session.engineThreadId || this.session.engineSessionId || this.session.id };
+    recordBackendDiagnostics(this.session, { method: 'context-admission', outcome: 'native-window-unreported',
+      inputEstimate: nativeInputEstimate({ contextBudget, instructions: nativeInstructions,
+        toolSchemaBytes: this.session.nativeBackendReadiness?.tools?.bytes || 0, prompt: userMessage.message.content,
+        mandatoryPrompt: goal ? continuationPrompt(this.session.goal) : prompt }) });
+    const sealed = new Set(), streamedMessages = new Map();
+    let currentMessageId = `${nonce}:message`, compactBoundary = 0, messageCounter = 0;
+    const messageIdentity = itemId => ({ itemId, runId: this.options.toolHost?.context?.runId || null,
+      threadRef: digest(this.session.engineThreadId || userMessage.session_id), turnId: nonce });
+    const seal = (itemId, boundary) => {
+      if (sealed.has(itemId)) return;
+      sealed.add(itemId); this.ui.event('message.finalized', { ...(streamedMessages.get(itemId) || messageIdentity(itemId)), boundary });
+      streamedMessages.delete(itemId);
+      if (sealed.size > 64) sealed.delete(sealed.values().next().value);
+    };
     const promptSetupId = recordBackendDiagnostics(this.session, { method: 'claude-message', outcome: 'prepared', delivery: 'stdio-message', prompt: userMessage.message.content }, 'diagnostic.prompt');
     const initializeId = `bzzy-init-${nonce}`;
     const initializeTimeout = setTimeout(() => {
@@ -118,7 +141,8 @@ export class ClaudeEngine {
           clearTimeout(initializeTimeout);
           if (event.response.subtype === 'success') {
             send(userMessage);
-            recordBackendDiagnostics(this.session, { setupId, method: 'claude-launch', outcome: 'control-initialized', transport: 'claude-stdio' });
+            recordBackendDiagnostics(this.session, { setupId, method: 'claude-launch', outcome: 'control-initialized', transport: 'claude-stdio', contextBudget,
+              readiness: acknowledgeNativeReadiness(this.session, { phase: 'control-initialized' }) });
             recordBackendDiagnostics(this.session, { setupId: promptSetupId, method: 'claude-message', outcome: 'written-to-stdio', delivery: 'stdio-message' }, 'diagnostic.prompt');
           }
           else terminate(new Error(event.response.error || 'Claude control initialization failed.'));
@@ -127,13 +151,17 @@ export class ClaudeEngine {
         } else if (event.type === 'control_request') {
           this.handleControl(event).then(response => send({ type: 'control_response', response: { subtype: 'success', request_id: event.request_id, response } }))
             .catch(error => { failure = error; send({ type: 'control_response', response: { subtype: 'error', request_id: event.request_id, error: error.message } }); });
+        } else if (event.type === 'stream_event' && !event.parent_tool_use_id && event.event?.type === 'message_start') {
+          currentMessageId = event.event.message?.id || `${nonce}:message:${++messageCounter}`;
         } else if (event.type === 'stream_event' && !event.parent_tool_use_id && event.event?.delta?.type === 'text_delta') {
-          streamed = true;
           const delta = event.event.delta.text;
           text += delta;
-          this.ui.event('text', { text: delta });
+          streamedMessages.set(currentMessageId, messageIdentity(currentMessageId));
+          this.ui.event('text', { text: delta, ...messageIdentity(currentMessageId) });
         } else if (event.type === 'system' && event.subtype === 'compact_boundary') {
-          this.session.sessionMemoryRefresh = true; saveSession(this.session);
+          recordNativeCompaction(this.session, { threadId: event.session_id || this.session.engineThreadId || userMessage.session_id,
+            turnId: nonce, itemId: event.uuid || `${nonce}:compact:${++compactBoundary}`, phase: 'completed', legacy: true });
+          pendingNativeRefresh(this.session, 'claude-awaiting-next-safe-prompt');
         } else if (event.type === 'assistant') {
           if (event.session_id) this.session.engineThreadId = event.session_id;
           if (event.message?.model && event.message.model !== '<synthetic>') this.session.resolvedModel = event.message.model;
@@ -144,11 +172,13 @@ export class ClaudeEngine {
               this.ui.event('backend', { method: 'tool.started', params: { id: block.id, name: block.name, input: block.input } });
               if (!block.name.startsWith('mcp__bzzy_goal__')) activity = true;
               this.ui.event('tool', { name: block.name, detail: block.input?.command || block.input?.file_path || block.input?.url });
-            } else if (block.type === 'text' && !streamed && !event.parent_tool_use_id) {
+            } else if (block.type === 'text' && !streamedMessages.has(event.message?.id || currentMessageId)
+              && !sealed.has(event.message?.id || currentMessageId) && !event.parent_tool_use_id) {
               text += block.text;
-              this.ui.event('text', { text: block.text });
+              this.ui.event('text', { text: block.text, ...messageIdentity(event.message?.id || currentMessageId) });
             }
           }
+          if (!event.parent_tool_use_id) seal(event.message?.id || currentMessageId, 'assistant-message-completed');
           if (event.message?.id) {
             const usage = event.message.usage || {};
             const current = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.output_tokens || 0);
@@ -167,7 +197,10 @@ export class ClaudeEngine {
             this.ui.event('backend', { method: 'tool.completed', params: { id: block.tool_use_id, failed: Boolean(block.is_error) } });
           }
         } else if (event.type === 'system' && event.subtype === 'init') {
-          recordBackendDiagnostics(this.session, { setupId, method: 'claude-init', outcome: 'backend-reported', reportedTools: Array.isArray(event.tools) ? event.tools.filter(tool => typeof tool === 'string') : [], model: event.model, threadId: event.session_id });
+          const reportedTools = Array.isArray(event.tools) ? event.tools.filter(tool => typeof tool === 'string') : undefined;
+          recordBackendDiagnostics(this.session, { setupId, method: 'claude-init', outcome: 'backend-reported', reportedTools, model: event.model, threadId: event.session_id,
+            contextBudget, readiness: acknowledgeNativeReadiness(this.session, { threadId: event.session_id, reportedTools, phase: 'backend-init-reported' }) });
+          consumeNativeRefresh(this.session, refreshEpoch, 'claude-backend-init-reported');
           this.session.engineThreadId = event.session_id;
           if (event.model) this.session.resolvedModel = event.model;
           saveSession(this.session);
@@ -177,6 +210,8 @@ export class ClaudeEngine {
         } else if (event.type === 'result') {
           result = event;
           if (event.session_id) this.session.engineThreadId = event.session_id;
+          for (const itemId of streamedMessages.keys()) seal(itemId, 'result-completed');
+          consumeNativeRefresh(this.session, refreshEpoch, 'claude-result-received');
           child.stdin.end();
           exitTimer = setTimeout(() => { resultClosedByHost = true; terminate(); }, 1500);
         }
@@ -199,7 +234,10 @@ export class ClaudeEngine {
       fs.rmSync(reportPath(this.session.id, nonce), { force: true });
       throw new Error(result?.errors?.join('\n') || result?.result || stderr.trim() || `Claude exited (${code}) without a successful result.`);
     }
-    if (!text && result.result) this.ui.event('text', { text: result.result + '\n' });
+    if (!text && result.result) {
+      this.ui.event('text', { text: result.result + '\n', ...messageIdentity(`${nonce}:result`) });
+      seal(`${nonce}:result`, 'result-completed');
+    }
     if (!tokens) tokens = (result.usage?.input_tokens || 0) + (result.usage?.cache_creation_input_tokens || 0) + (result.usage?.cache_read_input_tokens || 0) + (result.usage?.output_tokens || 0);
     completeConversationHandoff(this.session);
     return { activity, tokens, report: goal ? readReport(this.session.id, nonce) : null };

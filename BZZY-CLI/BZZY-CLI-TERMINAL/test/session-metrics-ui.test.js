@@ -38,6 +38,19 @@ const clickAction = (ui, action) => {
   assert.ok(hit, `Visible ${action} action`); ui.tui.mouse(0, hit.left, hit.row);
 };
 
+test('execution health separates routing blockers and native readiness from invocation counts', () => {
+  const data = snapshot(); data.health = { available: true, routing: { enforced: true, covered: 1, closed: 2, open: 1, blocked: 1, unmet: 2,
+    units: [{ classId: 'idor', state: 'open', specialist: 'idor-agent', missing: ['review'] }] },
+    native: { readiness: { tools: { source: 'unknown-legacy-native-thread' } }, refresh: { state: 'pending', reason: 'awaiting-safe-prompt' } },
+    memory: { indexedThroughSeq: 123, pendingNodes: 2 }, taskState: { bytes: 2048, repeatedReads: 3 } };
+  const panel = { data, scope: 'goal', actions: () => [], selectedGoalId: null };
+  const text = sessionMetricsLayout(panel, 100).lines.map(line => clean(line.text)).join('\n');
+  assert.match(text, /1 covered.*1 open.*1 blocked/); assert.match(text, /unknown for this retained native thread/);
+  assert.match(text, /indexed through event 123/); assert.match(text, /Skill model loads\s+3/);
+  panel.selectedGoalId = 'previous-goal';
+  assert.doesNotMatch(sessionMetricsLayout(panel, 100).lines.map(line => clean(line.text)).join('\n'), /BZZY execution health/);
+});
+
 test('Metrics scopes use Core counters and real input/clicks preserve the chat draft and header', async () => {
   let reads = 0;
   const { ui, input, output, frame } = terminal(async id => { reads++; return snapshot(id); }, { columns: 80, rows: 24 });

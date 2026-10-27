@@ -99,6 +99,17 @@ test('editing and deletion pin reviewed versions, Cancel is default, and unavail
   rows(); await workflowAction('clear', ui); assert.equal(workflowSelection(session.id).selected, null);
 });
 
+test('editing v2 workflow prose retains its structured routing contract for future goals', async () => {
+  const input = { ...definition(), schemaVersion: 2, routing: { version: 1, requireWorkUnits: true,
+    rules: [{ classId: 'http-review', specialist: 'http-analyst', skills: [], reportSkills: [], allowedDispositions: ['blocked'] }] } };
+  const workflow = saveWorkflow(input, { cwd: directory }); openWorkflows(ui); await workflowAction(view(workflow.name), ui);
+  const answers = ['Edited process description.', 'Review only the supplied fixture, retaining evidence and uncertainty.']; ui.ask = async () => answers.shift();
+  await workflowAction('edit', ui);
+  const edited = getWorkflow(workflow.name, { cwd: directory });
+  assert.equal(edited.revision, 2); assert.equal(edited.schemaVersion, 2); assert.deepEqual(edited.routing, workflow.routing);
+  assert.notEqual(edited.version, workflow.version); assert.equal(listRecords('execution').length, 0);
+});
+
 test('Back preserves origins and drafts; context or active worker-tab changes cancel pending edits', async () => {
   const workflow = saveWorkflow(definition(), { cwd: directory });
   for (const origin of ['skills', 'agents', 'chat']) {

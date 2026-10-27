@@ -9,13 +9,14 @@ import { startAssignment, assignmentStatus, followupAssignment, answerAssignment
 import { sanitizeMissionValue } from './mission-context.js';
 import { reasoningEffort } from './instructions.js';
 import { compactAssignmentStatus } from './assignment-views.js';
+import { assertRoutingSpawn } from './workflow-routing.js';
 
 const fail = message => { throw new Error(message); };
 const text = (value, limit, label) => {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > limit || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) fail(`Invalid subagent ${label}.`);
   return value.trim();
 };
-const fields = ['name', 'requestId', 'objective', 'context', 'evidence', 'policy', 'limits', 'waitSeconds'];
+const fields = ['name', 'requestId', 'objective', 'context', 'evidence', 'policy', 'limits', 'waitSeconds', 'workUnitId'];
 
 // Only top-level owner conversations can invoke specialists. Registry text and
 // imported worker metadata never establish a new execution principal.
@@ -55,6 +56,7 @@ export function spawnSubagent(parent, input, context = {}) {
     return subagentStatus(source, previous.assignmentId);
   }
   const definition = getSubagentDefinition(input.name, { cwd: source.projectRoot || source.cwd, enabledOnly: true });
+  const routing = assertRoutingSpawn(source, input, context, definition);
   const provider = getProvider(definition.provider || source.provider);
   const inheritedModel = provider.id === source.provider ? source.model : provider.model;
   const sameModel = provider.id === source.provider && (!definition.model || definition.model === source.model);
@@ -76,7 +78,7 @@ export function spawnSubagent(parent, input, context = {}) {
     limits: { runtimeSeconds, tokenBudget } });
   return startAssignment(source, payload, { executor: selection, role: 'executor', sharedEvidence: [...new Set(input.evidence || [])],
     ...(context.launch ? { launch: context.launch } : {}),
-    subagent: { definition, invocation, chatRunId: context.goalMode ? null : context.runId, taskContext,
+    subagent: { definition, invocation, ...(routing ? { routing } : {}), chatRunId: context.goalMode ? null : context.runId, taskContext,
       budget: context.goalMode ? source.goal?.tokenBudget : context.tokenBudget ?? null } });
 }
 

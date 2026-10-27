@@ -177,7 +177,8 @@ test('model effort choices retain the current setting, reject unsupported levels
   const next = { ...current, selectedEffort: chosen.effort, modelCapabilities: chosen.capabilities, engineHome: path.join(directory, 'codex') };
   assert.equal(reasoningEffort(next, { goalMode: true, effort: 'medium' }), 'xhigh', 'the later interactive choice overrides a launch flag');
   assert.ok(codexLaunch(BUILTINS.codex, next, { goalMode: true }).args.includes('model_reasoning_effort="xhigh"'));
-  const claude = { ...session('claude'), id: 'fixture-claude-session', selectedEffort: 'high', modelCapabilities: { supportedEfforts: ['medium', 'high'] } };
+  const claude = createSession(BUILTINS.claude, directory);
+  Object.assign(claude, { selectedEffort: 'high', modelCapabilities: { supportedEfforts: ['medium', 'high'] } }); saveSession(claude);
   const args = claudeArgs(claude, { goalMode: true }); assert.equal(args[args.indexOf('--effort') + 1], 'high');
   assert.equal(reasoningEffort({ ...next, selectedEffort: 'default' }, { effort: 'high' }), undefined);
   ui.chooseOne = async (_title, choices) => { await choices; return { value: 'fixture-light', effort: 'xhigh' }; };

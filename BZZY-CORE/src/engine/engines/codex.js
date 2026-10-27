@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { launch, root, version, assertCodexVersion, backendCommand } from '../process.js';
 import { home, privateDir, writeJson, saveSession } from '../store.js';
 import { apiKey, providerModelCapabilities, providerEffortPolicy, providerEffortCapabilities } from '../providers.js';
@@ -17,8 +18,24 @@ import { agentPermissionProfile, isolatedAgentCodexHome, tomlValue } from '../ag
 import { learningPermissionProfile, learningDisabledFeatures, learningCodexHome } from '../learning-backend.js';
 import { markBackendStartupFailure } from '../backend-startup.js';
 import { recordBackendDiagnostics } from '../session-diagnostics.js';
+import { nativeContextBudget, prepareNativeReadiness, acknowledgeNativeReadiness, recordNativeCompaction,
+  pendingNativeRefresh, consumeNativeRefresh, updateNativeRefresh } from '../native-context.js';
+import { nativeInputEstimate, assertNativeInputFits, observeContextPressure, nativeGoalTokenBudget } from '../native-context.js';
+import { digest, getRecord, listRecords } from '../database.js';
+import { delegationUsage } from '../delegation-usage.js';
 
 export { codexHome } from '../auth.js';
+
+function rotateNativeThread(session) {
+  if (session.engineThreadId) {
+    // A fresh native goal counts from zero. Preserve all prior consumption so
+    // a schema/home migration cannot replenish the owner's remaining budget.
+    if (Number.isFinite(session.goal?.nativeTokensUsed)) session.goal.nativeTokenOffset = Math.max(session.goal.nativeTokenOffset || 0, session.goal.nativeTokensUsed);
+    if (Number.isFinite(session.usage?.tokens)) session.engineTokenOffset = Math.max(session.engineTokenOffset || 0, session.usage.tokens);
+  }
+  session.engineThreadId = null;
+  session.conversationHandoff = { pending: true, throughSeq: conversationCursor(session.id) };
+}
 
 export function codexSandboxMode(options = {}) {
   // A strict-policy worker is already inside bzzy's bubblewrap filesystem
@@ -36,8 +53,7 @@ export function codexLaunch(provider, session, options = {}) {
   if (options.agentScope || options.learningReview) {
     const isolatedHome = options.learningReview ? learningCodexHome(provider, session) : isolatedAgentCodexHome(provider, session);
     if (session.engineHome !== isolatedHome || session.agentToolPolicy !== 1) {
-      session.engineThreadId = null;
-      session.conversationHandoff = { pending: true, throughSeq: conversationCursor(session.id) };
+      rotateNativeThread(session);
     }
     session.engineHome = isolatedHome; session.agentToolPolicy = 1;
   }
@@ -80,6 +96,8 @@ export function codexLaunch(provider, session, options = {}) {
   const effort = reasoningEffort(session, options);
   if (effort) override('model_reasoning_effort', effort);
   session.reasoningEffort = effort || 'provider default';
+  const contextBudget = nativeContextBudget(provider, session);
+  session.nativeContextBudget = contextBudget;
   if (options.scopedAutonomy) {
     override('agents.max_threads', 1); override('agents.enabled', false);
     override('features.multi_agent', false); override('features.multi_agent_v2', false);
@@ -89,7 +107,7 @@ export function codexLaunch(provider, session, options = {}) {
     const catalog = JSON.parse(fs.readFileSync(path.join(root, 'assets', 'model-template.json'), 'utf8'));
     Object.assign(catalog, {
       slug: session.model, display_name: session.model, description: `${provider.name} via bzzy`,
-      prefer_websockets: false, context_window: provider.contextWindow, max_context_window: provider.contextWindow,
+      prefer_websockets: false, context_window: contextBudget.tokens, max_context_window: contextBudget.maxTokens,
       default_reasoning_level: provider.reasoningEffort || 'high', default_reasoning_summary: 'none',
       tool_mode: null, shell_type: 'shell_command', model_specialty: null,
       guardian: null, node_repl_auto_review_required: false, requires_sandboxed_review: false,
@@ -100,7 +118,7 @@ export function codexLaunch(provider, session, options = {}) {
     if (provider.catalogFormat === 'experiential') {
       // A gateway slug does not inherit the template model's capabilities.
       // Unknown context uses a local planning budget, not an upstream claim.
-      catalog.context_window = catalog.max_context_window = 32768;
+      catalog.context_window = catalog.max_context_window = contextBudget.tokens;
       catalog.input_modalities = ['text'];
       catalog.default_reasoning_level = null; catalog.supported_reasoning_levels = [];
       catalog.supports_reasoning_summary_parameter = false; catalog.supports_reasoning_summaries = false;
@@ -114,7 +132,6 @@ export function codexLaunch(provider, session, options = {}) {
       catalog.supported_reasoning_levels = supported.map(effort => ({ effort, description: effort }));
       if (!supported.includes(catalog.default_reasoning_level) && !(provider.catalogFormat === 'experiential' && catalog.default_reasoning_level == null)) catalog.default_reasoning_level = supported[0];
     }
-    if (Number.isSafeInteger(capabilities?.contextWindow) && capabilities.contextWindow > 0) catalog.context_window = catalog.max_context_window = capabilities.contextWindow;
     if (capabilities?.inputModalities?.length) catalog.input_modalities = capabilities.inputModalities;
     const catalogPath = path.join(home(), 'runtime', `${session.id}-models.json`);
     writeJson(catalogPath, { models: [catalog] });
@@ -129,19 +146,20 @@ export function codexLaunch(provider, session, options = {}) {
     override('model_providers.bzzy_api.capabilities.remote_compaction', 'unsupported');
     override('web_search', 'disabled');
   } else override('model_provider', 'openai');
-  return { args, env };
+  return { args, env, contextBudget };
 }
 
 export class CodexEngine {
   constructor(provider, session, options, ui) {
     Object.assign(this, { provider, session, options, ui });
     this.activeTurns = new Set();
-    this.streamedItems = new Set();
+    this.streamedItems = new Map();
     this.operation = null;
     this.interrupted = false;
     this.startedTurns = 0;
     this.limiting = false;
     this.goalUpdates = 0;
+    this.finalizedItems = new Set();
     this.traffic = new BackendTraffic(session, ui);
     this.progress = options.activityReporter || new ActivityReporter(session, ui);
   }
@@ -151,12 +169,14 @@ export class CodexEngine {
     let startupStage = 'configuration';
     try {
       this.closing = null;
-      if (this.options.toolHost && this.session.coreSkillsProtocol !== 5) {
+      if (this.session.nativeContext?.refresh?.state === 'dispatching') {
+        updateNativeRefresh(this.session, { state: 'uncertain', reason: 'native-refresh-recovery-requires-safe-prompt' });
+      }
+      if (this.options.toolHost && this.session.coreSkillsProtocol !== 6) {
         if (this.session.engineThreadId) {
-          this.session.engineThreadId = null;
-          this.session.conversationHandoff = { pending: true, throughSeq: conversationCursor(this.session.id) };
+          rotateNativeThread(this.session);
         }
-        this.session.coreSkillsProtocol = 5;
+        this.session.coreSkillsProtocol = 6;
       }
       startupStage = 'version';
       const installed = version('codex');
@@ -172,7 +192,10 @@ export class CodexEngine {
       this.rpc.on('notification', (method, params) => this.notification(method, params));
       this.rpc.on('failure', error => this.operation?.reject(error));
       startupStage = 'initialize';
-      await this.rpc.request('initialize', { clientInfo: { name: 'bzzy', title: 'bzzy', version: '0.2.0' }, capabilities: { experimentalApi: true } });
+      const initialization = await this.rpc.request('initialize', { clientInfo: { name: 'bzzy', title: 'bzzy', version: '0.2.0' }, capabilities: { experimentalApi: true } });
+      // No supported backend currently promises a host-refresh steer contract.
+      // Unknown capability stays pending; normal user steering is unchanged.
+      this.hostRefreshCapability = initialization.capabilities?.hostContextRefresh || null;
       this.rpc.notify('initialized');
       if (this.options.agentScope || this.options.learningReview) {
         startupStage = 'permission_profile';
@@ -185,6 +208,7 @@ export class CodexEngine {
         : { approvalPolicy: this.options.yolo || this.options.scopedAutonomy ? 'never' : 'on-request', sandbox: codexSandboxMode(this.options) };
       const params = { cwd: this.session.cwd, ...policy,
         developerInstructions: agentInstructions(this.session, this.options) };
+      this.nativeInstructions = params.developerInstructions;
       if (this.options.learningReview) { params.dynamicTools = []; params.ephemeral = true; }
       const effort = reasoningEffort(this.session, this.options);
       if (effort) params.config = { model_reasoning_effort: effort };
@@ -199,13 +223,18 @@ export class CodexEngine {
         }
         const setupId = recordBackendDiagnostics(this.session, { method: 'thread/resume', outcome: 'prepared', transport: 'codex-app-server',
           toolsSource: 'inherited-native-thread; not re-enumerated by BZZY', instructions: params.developerInstructions, threadId: this.threadId,
-          model: params.model, policy });
+          model: params.model, policy, contextBudget: launchConfig.contextBudget,
+          readiness: prepareNativeReadiness(this.session, { backend: 'codex', threadId: this.threadId, resumed: true,
+            instructions: params.developerInstructions, contextBudget: launchConfig.contextBudget }) });
         const result = await this.rpc.request('thread/resume', { threadId: this.threadId, ...params });
         recordBackendDiagnostics(this.session, { setupId, method: 'thread/resume', outcome: 'accepted', transport: 'codex-app-server',
-          toolsSource: 'inherited-native-thread; not re-enumerated by BZZY', threadId: this.threadId, model: result.model || params.model });
+          toolsSource: 'inherited-native-thread; not re-enumerated by BZZY', threadId: this.threadId, model: result.model || params.model,
+          contextBudget: launchConfig.contextBudget, readiness: acknowledgeNativeReadiness(this.session, { threadId: this.threadId }) });
         startupStage = 'permission_activation';
         this.assertAgentPermissions(result);
         this.session.resolvedModel = result.model || this.session.model;
+        this.nativeToolSchemaBytes = this.session.nativeBackendReadiness?.tools?.bytes || 0;
+        this.nativeToolsKnown = Boolean(this.session.nativeBackendReadiness?.tools?.sha256);
         if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
         saveSession(this.session);
       } else {
@@ -213,12 +242,16 @@ export class CodexEngine {
         // delegation tools even when the first turn is chat; ToolHost still denies
         // using them until an explicit goal execution authorizes them.
         if (this.options.toolHost) params.dynamicTools = taskTools(this.session, { goalMode: this.session.mode === 'delegate' ? true : this.options.goalMode }).filter(t => !['get_goal', 'update_goal'].includes(t.name)).map(t => ({ type: 'function', name: t.name, description: t.name === 'delegate' ? t.description + ' Available only during an explicit /goal; ordinary chat cannot launch assignments.' : t.description, inputSchema: t.inputSchema }));
+        this.nativeToolSchemaBytes = Buffer.byteLength(JSON.stringify(params.dynamicTools || [])); this.nativeToolsKnown = true;
         startupStage = 'thread_start';
         const setupId = recordBackendDiagnostics(this.session, { method: 'thread/start', outcome: 'prepared', transport: 'codex-app-server',
-          toolsSource: 'submitted-dynamic-tools', tools: params.dynamicTools || [], instructions: params.developerInstructions, model: params.model, policy });
+          toolsSource: 'submitted-dynamic-tools', tools: params.dynamicTools || [], instructions: params.developerInstructions, model: params.model, policy,
+          contextBudget: launchConfig.contextBudget, readiness: prepareNativeReadiness(this.session, { backend: 'codex', tools: params.dynamicTools || [],
+            instructions: params.developerInstructions, contextBudget: launchConfig.contextBudget }) });
         const result = await this.rpc.request('thread/start', params);
         recordBackendDiagnostics(this.session, { setupId, method: 'thread/start', outcome: 'accepted', transport: 'codex-app-server',
-          toolsSource: 'submitted-dynamic-tools', threadId: result.thread.id, model: result.model || params.model });
+          toolsSource: 'submitted-dynamic-tools', threadId: result.thread.id, model: result.model || params.model,
+          contextBudget: launchConfig.contextBudget, readiness: acknowledgeNativeReadiness(this.session, { threadId: result.thread.id }) });
         startupStage = 'permission_activation';
         this.assertAgentPermissions(result);
         this.threadId = result.thread.id;
@@ -251,10 +284,17 @@ export class CodexEngine {
         if (this.interrupted) return;
         const params = { threadId: this.threadId, status: 'active', origin: 'user' };
         let promptSetupId;
-        const nativeBudget = this.session.goal.tokenBudget == null ? undefined : Math.max(0, this.session.goal.tokenBudget - (this.session.goal.nativeTokenOffset || 0));
-        if (resumeGoal && this.options.tokenBudget) params.tokenBudget = nativeBudget;
+        let refreshEpoch;
+        const budgetSession = this.session.goal.createdAt ? this.session : { ...this.session,
+          goal: { ...this.session.goal, createdAt: '9999-12-31T23:59:59.999Z' } };
+        const budget = nativeGoalTokenBudget(this.session.goal, delegationUsage(budgetSession).delegatedTokens);
+        const nativeBudget = budget.nativeBudget;
+        recordBackendDiagnostics(this.session, { method: 'goal-budget-admission', outcome: budget.remainingTokens === 0 ? 'rejected' : 'admitted', budgetState: budget });
+        if (budget.remainingTokens === 0) throw Object.assign(new Error('This goal has exhausted its aggregate token budget, including specialist and delegate usage. Raise the authorized goal budget before resuming.'), { code: 'GOAL_TOKEN_BUDGET_EXHAUSTED' });
+        if (resumeGoal && this.session.goal.tokenBudget != null) params.tokenBudget = nativeBudget;
         if (!resumeGoal || this.session.conversationHandoff?.pending) {
-          let objective = conversationPrompt(this.session, this.session.goal.objective);
+          refreshEpoch = this.session.nativeContext?.refresh?.epoch;
+          let objective = this.preparePrompt(this.session.goal.objective);
           promptSetupId = recordBackendDiagnostics(this.session, { method: 'thread/goal/set', outcome: 'prepared',
             delivery: objective.length > 500 && !this.options.agentScope ? 'objective-file-reference' : 'inline-objective', prompt: objective }, 'diagnostic.prompt');
           if (objective.length > 500 && !this.options.agentScope) {
@@ -269,14 +309,17 @@ export class CodexEngine {
         const version = this.goalUpdates;
         this.goalArmed = true;
         const result = await this.rpc.request('thread/goal/set', params);
+        if (params.objective) consumeNativeRefresh(this.session, refreshEpoch, 'accepted-native-goal-objective');
         recordBackendDiagnostics(this.session, { setupId: promptSetupId, method: 'thread/goal/set', outcome: 'accepted',
           delivery: params.objective ? 'prepared-objective' : 'resume-existing-native-objective', threadId: this.threadId }, 'diagnostic.prompt');
         if (this.goalUpdates === version) this.updateGoal(result.goal);
       } else {
         const effort = reasoningEffort(this.session, this.options);
-        const text = conversationPrompt(this.session, prompt);
+        const refreshEpoch = this.session.nativeContext?.refresh?.epoch;
+        const text = this.preparePrompt(prompt);
         const setupId = recordBackendDiagnostics(this.session, { method: 'turn/start', outcome: 'prepared', delivery: 'inline-message', prompt: text }, 'diagnostic.prompt');
         await this.rpc.request('turn/start', { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }], ...(effort ? { effort } : {}) });
+        consumeNativeRefresh(this.session, refreshEpoch, 'accepted-native-turn-input');
         recordBackendDiagnostics(this.session, { setupId, method: 'turn/start', outcome: 'accepted', delivery: 'inline-message', threadId: this.threadId }, 'diagnostic.prompt');
       }
       this.operation.pendingStart = false;
@@ -303,7 +346,17 @@ export class CodexEngine {
   notification(method, params) {
     if (method === 'account/rateLimits/updated' && this.provider.auth === 'subscription') { const quota = codexQuota(params); if (quota) this.ui.event('account.quota', quota); }
     if (params.threadId && this.threadId && params.threadId !== this.threadId) return;
-    if (method === 'thread/compacted') { this.session.sessionMemoryRefresh = true; saveSession(this.session); }
+    const identity = { runId: this.options.toolHost?.context?.runId || null, threadRef: digest(this.threadId || params.threadId || ''),
+      turnId: params.turnId || params.turn?.id || [...this.activeTurns][0] || null };
+    if (method === 'thread/compacted' || (['item/started', 'item/completed'].includes(method) && params.item?.type === 'contextCompaction')) {
+      const changed = recordNativeCompaction(this.session, { threadId: this.threadId || params.threadId, turnId: identity.turnId,
+        itemId: params.item?.id || params.itemId, phase: method === 'item/started' ? 'started' : 'completed', legacy: method === 'thread/compacted' });
+      if (changed && method === 'item/completed' && observeContextPressure(this.session, this.options.contextPressurePolicy)) {
+        this.session.nativeContext.pressure.pausePending = true; saveSession(this.session);
+      }
+      if (method !== 'item/started') pendingNativeRefresh(this.session, this.hostRefreshCapability ? 'native-refresh-builder-unavailable' : 'native-host-refresh-not-advertised');
+      if (method !== 'item/started') this.queueContextRefresh();
+    }
     if (method === 'item/started' || method === 'item/completed') {
       const item = params.item, phase = method === 'item/started' ? 'started' : 'completed';
       if (phase === 'started') {
@@ -326,6 +379,7 @@ export class CodexEngine {
     else if (method === 'turn/started') {
       if (this.operation) this.operation.seenTurn = true;
       this.activeTurns.add(params.turn.id);
+      this.queueContextRefresh();
       this.startedTurns++;
       if (this.operation?.goal && this.options.maxTurns && this.startedTurns > this.options.maxTurns && !this.limiting) {
         this.limiting = true;
@@ -334,9 +388,15 @@ export class CodexEngine {
     } else if (method === 'turn/completed') {
       if (this.operation) this.operation.seenTurn = true;
       this.activeTurns.delete(params.turn.id);
+      for (const [key, message] of this.streamedItems) if (message.identity.turnId === params.turn.id) {
+        this.finalizeMessage(message.itemId, message.identity, 'turn-completed');
+        this.streamedItems.delete(key); this.finalizedItems.delete(key);
+      }
+      for (const key of this.finalizedItems) if (key.startsWith(`${params.turn.id}:`)) this.finalizedItems.delete(key);
       this.session.turns++;
       if (this.session.goal && this.operation?.goal) this.session.goal.turns++;
       saveSession(this.session);
+      this.pauseForContextPressure();
       this.ui.newline();
       if (params.turn.status === 'failed') {
         if (this.session.goal?.status === 'active') { this.session.goal.status = 'blocked'; saveSession(this.session); }
@@ -347,29 +407,141 @@ export class CodexEngine {
         this.settle();
       } else this.settle();
     } else if (method === 'item/agentMessage/delta') {
-      this.streamedItems.add(params.itemId);
-      this.ui.event('text', { text: params.delta, itemId: params.itemId });
+      this.streamedItems.set(`${identity.turnId}:${params.itemId}`, { itemId: params.itemId, identity });
+      this.ui.event('text', { text: params.delta, itemId: params.itemId, ...identity });
     } else if (method === 'item/started') {
       const item = params.item;
       if (item.type === 'commandExecution') this.ui.event('tool', { name: 'shell', detail: item.command });
       else if (item.type === 'fileChange') this.ui.event('tool', { name: 'edit', detail: item.changes?.map(c => c.path).join(', ') });
       else if (item.type === 'mcpToolCall') this.ui.event('tool', { name: `${item.server}/${item.tool}` });
       else if (item.type === 'webSearch') this.ui.event('tool', { name: 'web', detail: item.action?.url || item.query });
-    } else if (method === 'item/completed' && params.item?.type === 'agentMessage' && !this.streamedItems.has(params.item.id)) {
-      this.ui.event('text', { text: params.item.text + '\n', itemId: params.item.id });
+    } else if (method === 'item/completed' && params.item?.type === 'agentMessage' && !this.streamedItems.has(`${identity.turnId}:${params.item.id}`)) {
+      this.ui.event('text', { text: params.item.text + '\n', itemId: params.item.id, ...identity });
     } else if (method === 'error') {
       const message = params.error?.message || params.message || 'Codex backend error.';
       this.ui.event('error', { message: message + (params.willRetry ? ' Retrying…' : '') });
       if (!params.willRetry) this.operation?.reject(new Error(message));
     }
+    if (method === 'item/completed' && params.item?.type === 'agentMessage') this.finalizeMessage(params.item.id, identity, 'item-completed');
+  }
+
+  finalizeMessage(itemId, identity, boundary) {
+    const key = `${identity.turnId}:${itemId}`;
+    if (!itemId || this.finalizedItems.has(key)) return;
+    this.finalizedItems.add(key);
+    this.ui.event('message.finalized', { ...identity, itemId, boundary });
+  }
+
+  queueContextRefresh() {
+    if (this.refreshOperation || this.refreshTimer || this.interrupted || this.closing) return;
+    this.refreshOperation = Promise.resolve().then(() => this.refreshContext()).catch(() => {
+      // Context housekeeping never retries or settles the native goal.
+      pendingNativeRefresh(this.session, 'native-refresh-preparation-failed');
+    }).finally(() => { this.refreshOperation = null; });
+  }
+
+  async refreshContext() {
+    const state = this.session.nativeContext, refresh = state?.refresh;
+    if (!refresh || refresh.state !== 'pending') return;
+    if (this.hostRefreshCapability?.transport !== 'turn/steer' || this.hostRefreshCapability?.acknowledgment !== 'turn-id') {
+      pendingNativeRefresh(this.session, 'native-host-refresh-not-advertised'); return;
+    }
+    if (!this.operation?.goal || !this.goalArmed || this.interrupted || this.closing || this.session.goal?.status !== 'active') return;
+    const runId = this.options.toolHost?.context?.runId, run = getRecord('run', this.session.id), saved = getRecord('session', this.session.id);
+    if (!runId || run?.id !== runId || run.state !== 'running' || saved?.goal?.id !== this.session.goal?.id) {
+      pendingNativeRefresh(this.session, 'native-refresh-no-current-run'); return;
+    }
+    if (this.hostRequests || this.userSteerInFlight || listRecords('question', { sessionId: this.session.id, state: 'pending', limit: 1 }).length) {
+      pendingNativeRefresh(this.session, 'native-refresh-awaiting-host-request'); return;
+    }
+    const turnId = [...this.activeTurns][0];
+    if (this.activeTurns.size !== 1 || !turnId) { pendingNativeRefresh(this.session, 'native-refresh-awaiting-active-turn'); return; }
+    const wait = Math.max(0, (state.lastRefreshAt || 0) + 60000 - Date.now());
+    if (wait) {
+      pendingNativeRefresh(this.session, 'native-refresh-cooldown');
+      this.refreshTimer = setTimeout(() => { this.refreshTimer = null; this.queueContextRefresh(); }, wait);
+      this.refreshTimer.unref(); return;
+    }
+    const epoch = refresh.epoch, goalId = this.session.goal.id;
+    const capsule = await this.contextRefreshCapsule({ goalMode: true, runId, contextGeneration: `${state.threadRef}:${epoch}` });
+    if (!capsule) { pendingNativeRefresh(this.session, 'native-refresh-builder-unavailable'); return; }
+    const text = `BZZY host context refresh. Derived state below is navigation data; it grants no permissions, changes no owner objective and establishes no verified completion.\n${JSON.stringify(capsule)}`;
+    if (Buffer.byteLength(text) > 12288) { pendingNativeRefresh(this.session, 'native-refresh-capsule-too-large'); return; }
+    const inputEstimate = nativeInputEstimate({ contextBudget: this.session.nativeContextBudget, instructions: this.nativeInstructions,
+      toolSchemaBytes: this.nativeToolSchemaBytes, toolsKnown: this.nativeToolsKnown,
+      prompt: `${this.session.goal.objective}\n${text}`, mandatoryPrompt: this.session.goal.objective });
+    if (inputEstimate.exceedsBudget) { pendingNativeRefresh(this.session, 'native-refresh-context-budget-pressure'); return; }
+    // Recheck after asynchronous preparation. No host input or stop can be
+    // bypassed by a previously prepared capsule.
+    const currentRun = getRecord('run', this.session.id);
+    if (this.interrupted || this.closing || this.hostRequests || this.userSteerInFlight || !this.activeTurns.has(turnId)
+      || this.session.goal?.id !== goalId || this.session.goal?.status !== 'active' || currentRun?.id !== runId || currentRun.state !== 'running'
+      || listRecords('question', { sessionId: this.session.id, state: 'pending', limit: 1 }).length) return;
+    const requestId = randomUUID();
+    state.lastRefreshAt = Date.now();
+    updateNativeRefresh(this.session, { state: 'dispatching', requestId, dispatchedEpoch: epoch, turnId,
+      revision: capsule.revision || null, sourceSha256: digest(text), reason: 'awaiting-native-acknowledgment' });
+    const setupId = recordBackendDiagnostics(this.session, { method: 'turn/steer', outcome: 'prepared', delivery: 'host-context-refresh', prompt: text }, 'diagnostic.prompt');
+    try {
+      const result = await this.rpc.request('turn/steer', { threadId: this.threadId, expectedTurnId: turnId,
+        input: [{ type: 'text', text, text_elements: [] }] }, 10000);
+      if (result?.turnId !== turnId) {
+        updateNativeRefresh(this.session, { state: 'uncertain', reason: 'native-refresh-acknowledgment-unverified' }); return;
+      }
+      updateNativeRefresh(this.session, { state: state.refresh.epoch === epoch ? 'acknowledged' : 'pending', acknowledgedEpoch: epoch,
+        acknowledgedAt: new Date().toISOString(), reason: state.refresh.epoch === epoch ? 'native-accepted-input-not-attention' : 'newer-compaction-pending' });
+      if (state.refresh.epoch === epoch) this.session.sessionMemoryRefresh = false;
+      saveSession(this.session);
+      recordBackendDiagnostics(this.session, { setupId, method: 'turn/steer', outcome: 'accepted', delivery: 'host-context-refresh', threadId: this.threadId }, 'diagnostic.prompt');
+    } catch {
+      // A timeout, closed pipe or error response is not proof the input was
+      // absent from the native context. Resume never blindly repeats it.
+      updateNativeRefresh(this.session, { state: 'uncertain', reason: 'native-refresh-dispatch-outcome-uncertain' });
+    }
+  }
+
+  async contextRefreshCapsule(context) {
+    const { compactTaskState } = await import('../recovery.js');
+    return typeof compactTaskState === 'function' ? compactTaskState(this.session, {}, context) : null;
+  }
+
+  preparePrompt(source) {
+    const estimate = prompt => nativeInputEstimate({ contextBudget: this.session.nativeContextBudget,
+      instructions: this.nativeInstructions, toolSchemaBytes: this.nativeToolSchemaBytes, toolsKnown: this.nativeToolsKnown,
+      prompt, mandatoryPrompt: source });
+    let prompt = conversationPrompt(this.session, source), inputEstimate = estimate(prompt), compactedDerived = false;
+    if (inputEstimate.exceedsBudget && !inputEstimate.mandatoryExceedsBudget) {
+      prompt = conversationPrompt(this.session, source, { compactDerived: true }); inputEstimate = estimate(prompt); compactedDerived = true;
+    }
+    recordBackendDiagnostics(this.session, { method: 'context-admission', outcome: inputEstimate.exceedsBudget ? 'rejected' : 'admitted',
+      inputEstimate: { ...inputEstimate, compactedDerived } });
+    assertNativeInputFits(inputEstimate);
+    return prompt;
+  }
+
+  pauseForContextPressure() {
+    if (!this.session.nativeContext?.pressure?.pausePending || !this.options.contextPressurePolicy || this.activeTurns.size || this.hostRequests
+      || this.interrupted || this.closing || !this.operation?.goal || !this.goalArmed || this.session.goal?.status !== 'active') return;
+    if (listRecords('question', { sessionId: this.session.id, state: 'pending', limit: 1 }).length) return;
+    this.session.nativeContext.pressure.pausePending = false;
+    this.session.nativeContext.pressure.pausedAt = new Date().toISOString(); saveSession(this.session);
+    const operation = this.operation; operation.contextPausePending = true;
+    this.interrupt('context_pressure').catch(error => operation.reject(error))
+      .finally(() => { operation.contextPausePending = false; this.settle(); });
   }
 
   settle() {
-    if (!this.operation || this.operation.pendingStart || this.activeTurns.size) return;
+    if (!this.operation || this.operation.pendingStart || this.operation.contextPausePending || this.activeTurns.size) return;
     if ((!this.operation.goal && this.operation.seenTurn) || this.interrupted || (this.operation.goal && this.session.goal?.status !== 'active')) this.operation.resolve();
   }
 
   async request(method, params) {
+    this.hostRequests = (this.hostRequests || 0) + 1;
+    try { return await this.handleRequest(method, params); }
+    finally { this.hostRequests--; this.pauseForContextPressure(); this.queueContextRefresh(); }
+  }
+
+  async handleRequest(method, params) {
     if (this.options.documentOnly || this.options.learningReview) {
       if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) return { decision: 'decline' };
       throw new Error('Documentation drafting has no tool access.');
@@ -406,6 +578,7 @@ export class CodexEngine {
 
   async interrupt(reason = 'interrupted') {
     this.interrupted = true;
+    clearTimeout(this.refreshTimer); this.refreshTimer = null;
     this.stopReason = reason;
     if (!this.rpc || !this.threadId) return;
     try {
@@ -427,6 +600,7 @@ export class CodexEngine {
   async close() {
     // Stop's kill grace and finally cleanup may both close the same native
     // transport. One close owns its TERM/KILL timers and process identity.
+    clearTimeout(this.refreshTimer); this.refreshTimer = null;
     this.closing ||= this.rpc?.close() || Promise.resolve();
     await this.closing; this.session.backendProcess = null;
   }
@@ -434,6 +608,8 @@ export class CodexEngine {
   async steer(text) {
     const turnId = [...this.activeTurns][0];
     if (!turnId) throw new Error('No active turn to steer.');
-    return this.rpc.request('turn/steer', { threadId: this.threadId, expectedTurnId: turnId, input: [{ type: 'text', text, text_elements: [] }] });
+    this.userSteerInFlight = true;
+    try { return await this.rpc.request('turn/steer', { threadId: this.threadId, expectedTurnId: turnId, input: [{ type: 'text', text, text_elements: [] }] }); }
+    finally { this.userSteerInFlight = false; }
   }
 }

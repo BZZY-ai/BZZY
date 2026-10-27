@@ -2,6 +2,7 @@ import { database, getRecord, digest, now } from './database.js';
 import { projectIdentityForSession, recordBelongsToProject, sessionBelongsToProject } from './project-identity.js';
 import { agentExecutionScope } from './agent-execution.js';
 import { sharedSecrets, assertShareText } from './share-bundle-policy.js';
+import { advanceConversationSource, conversationRedactionContext, conversationBody, conversationVisible } from './conversation-source.js';
 
 const ready = new WeakSet();
 export const knowledgeTypes = ['memory', 'issue', 'chat', 'checkpoint', 'goal'];
@@ -77,7 +78,7 @@ export function knowledgeDatabase() {
 export function indexKnowledgeRecord(project, kind, sourceId, sessionId, text, payload = {}) {
   if (!knowledgeTypes.includes(kind) || typeof sourceId !== 'string' || !sourceId.trim() || sourceId.length > 160
     || typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 160) return;
-  const body = cleanKnowledgeText(text), safePayload = cleanKnowledgeValue(JSON.parse(JSON.stringify(payload)));
+  const body = cleanKnowledgeText(text, kind === 'chat' && payload.sourceVersion === 2 ? 128 * 1024 : 6000), safePayload = cleanKnowledgeValue(JSON.parse(JSON.stringify(payload)));
   for (const key of ['statement', 'rationale', 'text', 'title', 'details', 'resolution']) if (typeof safePayload[key] === 'string') safePayload[key] = cleanKnowledgeText(safePayload[key]);
   const key = `${project.id}:${kind}:${sourceId}`, db = knowledgeDatabase(), encoded = JSON.stringify(safePayload);
   const previous = db.prepare('SELECT body,payload FROM knowledge_documents WHERE key=?').get(key);
@@ -101,35 +102,98 @@ export function allowedKnowledgeSessionIds(session, access = knowledgeAccess(ses
   return ids;
 }
 
-export function refreshKnowledgeHistory(session, access = knowledgeAccess(session), { limit = 2000 } = {}) {
-  const ids = allowedKnowledgeSessionIds(session, access), db = knowledgeDatabase();
+export function refreshKnowledgeHistory(session, access = knowledgeAccess(session), { limit = 2000, sessionOnly = false } = {}) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2000) throw new Error('Invalid history indexing page.');
+  const ids = sessionOnly ? [session.id] : allowedKnowledgeSessionIds(session, access), db = knowledgeDatabase();
   if (!ids.length) return { indexed: 0, remaining: false };
-  const cursorKey = `history:${access.project.id}:${access.restricted ? session.id : 'owner'}`;
-  const cursor = getRecord('core.knowledge.cursor', cursorKey)?.seq || 0;
-  const rows = db.prepare(`SELECT seq,session_id,type,data,created_at FROM events WHERE seq>? AND session_id IN
-    (SELECT value FROM json_each(?)) AND type IN ('message.user','text','debate.result') ORDER BY seq LIMIT ?`).all(cursor, JSON.stringify(ids), limit + 1);
-  const page = rows.slice(0, limit), tail = rows.length > limit ? db.prepare(`SELECT seq,session_id,type,data,created_at FROM events WHERE session_id IN
-    (SELECT value FROM json_each(?)) AND type IN ('message.user','text','debate.result') ORDER BY seq DESC LIMIT 128`).all(JSON.stringify(ids)) : [];
-  const candidates = [...new Map([...page, ...tail].map(row => [row.seq, row])).values()];
-  let last = page.at(-1)?.seq || cursor, indexed = 0;
-  for (const row of candidates) {
-    const data = JSON.parse(row.data), text = data.text || (row.type === 'debate.result' ? data.message : '');
-    if (!text || data.kind === 'documentation') continue;
-    indexKnowledgeRecord(access.project, 'chat', `${row.session_id}:${row.seq}`, row.session_id, text,
-      { text: cleanKnowledgeText(text), truth: 'historical', createdAt: row.created_at, eventType: row.type,
-        role: row.type === 'message.user' ? 'user' : 'assistant', provenance: 'visible-conversation-event', sha256: digest(text) });
-    indexed++;
+  const ownerKey = `history:${access.project.id}:${sessionOnly ? `session:${session.id}` : access.restricted ? session.id : 'owner'}`;
+  const previous = getRecord('core.knowledge.cursor', ownerKey), after = previous?.version === 2 ? previous.afterSessionId : null;
+  const ordered = [...ids].sort();
+  const start = after ? ordered.findIndex(id => id > after) : 0;
+  const selected = [...ordered.slice(start < 0 ? 0 : start), ...ordered.slice(0, Math.max(0, start))].slice(0, 32);
+  const deadline = Date.now() + 50;
+  const frontBudget = { bytes: 2 * 1024 * 1024, parts: 8192, deadline };
+  const tailBudget = { bytes: 512 * 1024, parts: 8192, deadline };
+  let indexed = 0, remaining = ids.length > selected.length, scanned = 0, lastSessionId = null, latest = 0;
+  for (const sessionId of selected) {
+    if (scanned >= limit || lastSessionId != null && Date.now() >= deadline) { remaining = true; break; }
+    lastSessionId = sessionId; // Deferred/legacy sources also yield their turn.
+    const saved = getRecord('session', sessionId);
+    if (!saved || getRecord('session-deletion', sessionId)) continue;
+    const running = ['starting', 'running', 'waiting_for_input', 'verifying'].includes(saved.executionState);
+    const sealed = running ? advanceConversationSource(saved) : null;
+    if (sealed?.deferred) { remaining = true; continue; }
+    const end = running ? sealed.sealedThroughSeq : db.prepare('SELECT coalesce(max(seq),0) AS seq FROM events WHERE session_id=?').get(sessionId).seq;
+    const cursorKey = `history:v2:${access.project.id}:${sessionId}`, cursor = getRecord('core.knowledge.cursor', cursorKey)?.seq || 0;
+    const budget = limit - scanned;
+    const rows = db.prepare(`SELECT e.seq,e.type,e.created_at, json_extract(e.data,'$.kind') AS kind FROM events e WHERE e.session_id=? AND e.seq>? AND e.seq<=?
+      AND ${conversationVisible} AND typeof(${conversationBody})='text' ORDER BY e.seq LIMIT ?`).all(sessionId, cursor, end, budget + 1);
+    const page = rows.slice(0, budget), contexts = new Map(), seen = new Set();
+    const tail = rows.length ? db.prepare(`SELECT e.seq,e.type,e.created_at,json_extract(e.data,'$.kind') AS kind FROM events e
+      WHERE e.session_id=? AND e.seq<=? AND ${conversationVisible} AND typeof(${conversationBody})='text' ORDER BY e.seq DESC LIMIT 32`).all(sessionId, end) : [];
+    const processRow = (row, workBudget) => {
+      if (row.kind === 'documentation') return true;
+      let context = contexts.get(row.seq);
+      if (!context) {
+        if (Date.now() >= workBudget.deadline) return false;
+        context = conversationRedactionContext(sessionId, row, end, { budget: workBudget });
+        if (context.deferred) return false;
+        contexts.set(row.seq, context);
+        for (const seq of context.offsets.keys()) contexts.set(seq, context);
+      }
+      if (seen.has(context.key)) return true;
+      seen.add(context.key);
+      const text = context.text, firstSeq = context.rows?.[0]?.seq || row.seq, lastSeq = context.rows?.at(-1)?.seq || row.seq;
+      if (!text) return true;
+      indexKnowledgeRecord(access.project, 'chat', `${sessionId}:${firstSeq}`, sessionId, text,
+        { text: cleanKnowledgeText(text), truth: 'historical', createdAt: context.rows?.[0]?.created_at || row.created_at, eventType: row.type,
+          role: row.type === 'message.user' || row.type === 'question.answered' ? 'user' : 'assistant',
+          provenance: 'sealed-conversation-message', sourceVersion: 2, firstSeq, lastSeq, sealedThroughSeq: context.completionSeq || end,
+          omitted: context.omitted, sha256: context.sourceHash || digest(text) });
+      indexed++; return true;
+    };
+    // Prefix work owns the cursor and must keep progressing under contention.
+    // Admit one fixed 32-row unit before cooperative clock checks, retaining
+    // the aggregate byte/part limits. A scheduler pause must not let repeated
+    // opportunistic tail reads spend every subsequent maintenance allowance.
+    frontBudget.deadline = Date.now() + 35;
+    let last = cursor, consumed = 0;
+    for (const row of page) {
+      const sliceDeadline = frontBudget.deadline;
+      if (scanned + consumed < Math.min(32, limit)) frontBudget.deadline = Infinity;
+      let processed;
+      try { processed = processRow(row, frontBudget); } finally { frontBudget.deadline = sliceDeadline; }
+      if (!processed) break;
+      last = row.seq; consumed++;
+    }
+    // Latest complete messages have an independent small time/byte allowance.
+    // Tail publication never advances the contiguous prefix cursor.
+    tailBudget.deadline = Date.now() + 15;
+    for (const row of tail) if (!processRow(row, tailBudget)) break;
+    const deferred = consumed < page.length;
+    if (!deferred && rows.length <= budget) last = end;
+    putHistoryCursor(cursorKey, { version: 2, sessionId, seq: last, sealedThroughSeq: end, updatedAt: now() });
+    latest = Math.max(latest, last); scanned += consumed;
+    remaining ||= deferred || rows.length > budget || Boolean(sealed?.remaining);
+    if (deferred) break;
   }
-  if (last !== cursor) db.prepare(`INSERT INTO records VALUES (?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at`).run(
-    'core.knowledge.cursor', cursorKey, JSON.stringify({ seq: last, updatedAt: now() }), now());
-  return { indexed, remaining: rows.length > limit };
+  // Legacy event-fragment documents can contain split credential fragments. V2
+  // readers only use whole-message documents; old source events remain intact.
+  putHistoryCursor(ownerKey, { version: 2, seq: Math.max(previous?.seq || 0, latest), afterSessionId: lastSessionId,
+    source: 'per-session-sealed-cursors', remaining, updatedAt: now() });
+  return { indexed, remaining, sourceVersion: 2 };
+}
+function putHistoryCursor(id, value) {
+  knowledgeDatabase().prepare(`INSERT INTO records VALUES (?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET
+    data=json_set(excluded.data,'$.seq',max(coalesce(json_extract(records.data,'$.seq'),0),coalesce(json_extract(excluded.data,'$.seq'),0))),updated_at=excluded.updated_at`)
+    .run('core.knowledge.cursor', id, JSON.stringify(value), now());
 }
 
 export function searchKnowledgeIndex(access, sessionIds, { query = '', limit = 12, offset = 0, types = knowledgeTypes, includeStale = true, excludeChatSessionId } = {}) {
   if (typeof query !== 'string' || query.length > 500 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || !Number.isSafeInteger(offset) || offset < 0
     || !Array.isArray(types) || types.some(type => !knowledgeTypes.includes(type))) throw new Error('Invalid project knowledge search.');
   const db = knowledgeDatabase(), tokens = [...new Set(query.match(/[\p{L}\p{N}_-]+/gu) || [])].slice(0, 24), match = tokens.map(token => '"' + token.replaceAll('"', '""') + '"*').join(' OR ');
-  const base = `d.project_id=? AND d.session_id IN (SELECT value FROM json_each(?)) AND d.kind IN (SELECT value FROM json_each(?))${includeStale ? '' : " AND COALESCE(json_extract(d.payload,'$.stale'),0)=0"}${excludeChatSessionId ? " AND NOT (d.kind='chat' AND d.session_id=?)" : ''}`;
+  const base = `d.project_id=? AND (d.kind!='chat' OR json_extract(d.payload,'$.sourceVersion')=2) AND d.session_id IN (SELECT value FROM json_each(?)) AND d.kind IN (SELECT value FROM json_each(?))${includeStale ? '' : " AND COALESCE(json_extract(d.payload,'$.stale'),0)=0"}${excludeChatSessionId ? " AND NOT (d.kind='chat' AND d.session_id=?)" : ''}`;
   const args = [access.project.id, JSON.stringify(sessionIds), JSON.stringify(types), ...(excludeChatSessionId ? [excludeChatSessionId] : [])];
   const rows = match ? db.prepare(`SELECT d.*,bm25(knowledge_fts) AS rank FROM knowledge_fts JOIN knowledge_documents d ON d.rowid=knowledge_fts.rowid WHERE ${base} AND knowledge_fts MATCH ? ORDER BY rank,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, match, limit + 1, offset)
     : db.prepare(`SELECT d.*,0 AS rank FROM knowledge_documents d WHERE ${base} ORDER BY CASE d.kind WHEN 'memory' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, limit + 1, offset);

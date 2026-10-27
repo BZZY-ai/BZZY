@@ -117,3 +117,33 @@ test('imported completion is historical and cannot emit new verified goal alerts
   assert.equal(getRecord('session', primarySession.id).goal.importedHistorical, undefined);
   assert.equal(getRecord('session', primarySession.id).goal.status, 'active');
 });
+
+test('portable projects omit sender native context and runtime receipts while retaining ordinary historical diagnostics', async () => {
+  const session = original(), runtimeFields = ['nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency',
+    'coreSkillsProtocol', 'sessionMemoryRefresh', 'sessionMemorySeen'];
+  for (const field of runtimeFields) session[field] = { marker: `sender-${field}` };
+  saveSession(session);
+  const runtimeKinds = ['native-compaction', 'core.conversation.source', 'core.conversation.pending', 'core.history.maintenance',
+    'core.task-state.read', 'core.checkpoint.scope', 'core.checkpoint.request', 'core.workflow.work-unit', 'core.workflow.consultation'];
+  for (const kind of runtimeKinds) putRecord(kind, randomUUID(), { sessionId: session.id, state: 'open', marker: 'sender-runtime-only' });
+  appendEvent(session.id, 'diagnostic.context', { outcome: 'pending', reason: 'Historical diagnostic, never recipient authority.' });
+  const zip = await exportSharedProject(session, path.join(directory, 'native-state-share.zip'));
+  const manifest = spawnSync('python3', ['-c', 'import json,sys,zipfile\nwith zipfile.ZipFile(sys.argv[1]) as z: print(z.read("bundle.json").decode())', zip.path], { encoding: 'utf8' });
+  assert.equal(manifest.status, 0, manifest.stderr);
+  const decoded = JSON.parse(manifest.stdout), sharedSession = decoded.records.find(row => row.kind === 'session').data;
+  for (const field of runtimeFields) assert.equal(sharedSession[field], undefined, field);
+  assert.equal(decoded.records.some(row => runtimeKinds.includes(row.kind)), false);
+  assert.ok(decoded.events.some(event => event.type === 'diagnostic.context'));
+  const { primarySession } = await importSharedProject(zip.path, target);
+  for (const field of runtimeFields) assert.equal(primarySession[field], undefined, field);
+  for (const kind of runtimeKinds) assert.equal(listRecords(kind, { sessionId: primarySession.id }).length, 0, kind);
+});
+
+test('shared import rejects injected native runtime snapshots before creating recipient state', async () => {
+  const session = original(), zip = await exportSharedProject(session, path.join(directory, 'clean-share.zip'));
+  const altered = path.join(directory, 'native-injected.zip');
+  const script = 'import json,zipfile,sys\nwith zipfile.ZipFile(sys.argv[1]) as z,zipfile.ZipFile(sys.argv[2],"w") as o:\n for i in z.infolist():\n  data=z.read(i)\n  if i.filename=="bundle.json":\n   m=json.loads(data)\n   next(r for r in m["records"] if r["kind"]=="session")["data"]["nativeContext"]={"epoch":99,"refresh":{"state":"dispatching"}}\n   data=json.dumps(m).encode()\n  o.writestr(i,data)\n';
+  const result = spawnSync('python3', ['-c', script, zip.path, altered], { encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr);
+  await assert.rejects(importSharedProject(altered, target), /runtime authority/);
+  assert.deepEqual(fs.readdirSync(target), []); assert.equal(listRecords('session').length, 1);
+});

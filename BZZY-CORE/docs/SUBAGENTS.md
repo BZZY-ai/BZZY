@@ -1,5 +1,22 @@
 # Reusable specialist subagents
 
+Core delivers a bounded enabled specialist index with descriptions, immutable
+versions and optional `capabilities: {"version":1,"tags":["web-api"]}` metadata.
+Tags aid scoped discovery and never grant permissions or select targets.
+`list_subagents` searches names, descriptions and tags; complete definitions
+remain behind `read_subagent`. A project OFF/deleted override continues to shadow
+the same global name. A bounded index explicitly advertises omitted entries.
+
+Version 2 workflows may require exact specialists for declared work units.
+Pass the returned `workUnitId` to `spawn_subagent`; Core checks that the admitted
+definition was read, pins it into one assignment, and links later supervisor
+review to that unit. A changed or unavailable definition is an explicit blocker,
+not authority to substitute another worker. Stable retries retain the assignment;
+new request IDs cannot multiply workers for one unit. Existing chat calls and
+legacy workflow goals remain compatible without `workUnitId`. See
+[workflow routing](WORKFLOWS.md#version-2-structured-consultation) for closure and
+completion requirements and their semantic limits.
+
 Specialist definitions belong to Core. CLI **Agents** in the top bar (or
 `/agents`) opens the library and definition editor, with plain Import and Export
 actions for specialists only. `/agents runs` opens this conversation's invocation

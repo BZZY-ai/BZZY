@@ -110,7 +110,7 @@ test('waiting notifications carry a unique question and an attach path', () => {
 test('tool socket requests and responses preserve UTF-8 split inside a character', async () => {
   const s = session(), host = await new ToolHost(s, { event() {} }).open();
   try {
-    const payload = Buffer.from(JSON.stringify({ token: host.token, method: 'call', name: 'get_task_state', arguments: { marker: 'Configuración 🐝' } }) + '\n');
+    const payload = Buffer.from(JSON.stringify({ token: host.token, method: 'call', name: 'get_task_state', arguments: { contextGeneration: 'Configuración 🐝' } }) + '\n');
     const split = payload.indexOf(Buffer.from('ó')) + 1;
     await new Promise((resolve, reject) => {
       const socket = net.createConnection(host.socket); const chunks = [];
@@ -119,7 +119,7 @@ test('tool socket requests and responses preserve UTF-8 split inside a character
       socket.on('end', () => { try { assert.ok(JSON.parse(Buffer.concat(chunks).toString()).result); resolve(); } catch (error) { reject(error); } });
     });
     const call = database().prepare("SELECT data FROM events WHERE session_id=? AND type='coordination.tool'").get(s.id);
-    assert.equal(JSON.parse(call.data).input.marker, 'Configuración 🐝');
+    assert.equal(JSON.parse(call.data).input.contextGeneration, 'Configuración 🐝');
   } finally { await host.close(); }
   const socketPath = path.join(directory, 'response.sock'), text = 'Configuración 🐝';
   const response = Buffer.from(JSON.stringify({ result: { text } })), split = response.indexOf(Buffer.from('ó')) + 1;

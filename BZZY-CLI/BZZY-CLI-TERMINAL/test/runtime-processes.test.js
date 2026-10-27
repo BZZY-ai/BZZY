@@ -197,8 +197,18 @@ test('the runtime stays shared while each execution receives the caller API key 
 
 test('a completed Claude reply does not hang when native shutdown ignores EOF and signals', async () => {
   fs.writeFileSync(process.env.BZZY_TEST_BACKEND_FILE, 'linger');
-  const launched = await start('claude'), job = await finished(launched.executionId);
+  const launched = await start('claude');
+  let backend;
+  // Startup can queue behind other fixture processes in the complete suite.
+  // Start the shutdown deadline from the reply, rather than from Core launch.
+  await until(() => {
+    backend ||= loadSession(launched.session.id)?.backendProcess;
+    return events(launched.session.id, 0, 1000).some(event => event.type === 'message.finalized');
+  }, 25000);
+  assert.ok(backend, 'The reply came from a tracked native backend.');
+  const job = await finished(launched.executionId);
   assert.equal(job.exitCode, 0, job.error); assert.equal(loadSession(launched.session.id).resolvedModel, 'resolved-claude-model');
+  assert.equal(identityAlive(backend), false, 'The native process ignoring EOF/TERM was forcibly reaped.');
 });
 
 test('macOS process identity uses ps start time and refuses to signal a reused PID', async () => {

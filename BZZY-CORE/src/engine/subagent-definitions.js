@@ -5,12 +5,13 @@ import { getProvider } from './providers.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 import { assertPortableDefinitionText } from './definition-portability.js';
 import { recordLibraryCreation } from './library-notifications.js';
+import { normalizeCapabilities } from './workflow-routing-schema.js';
 
 // Local-owner administration only. Models discover definitions but cannot edit
 // the reusable instructions or make their own durable permission grants.
 const kind = 'core.subagent.definition';
 const versionKind = 'core.subagent.definition.version';
-const fields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
+const fields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits', 'capabilities'];
 const controls = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/u;
 const fail = (message, code = 'INVALID_REQUEST') => { throw Object.assign(new Error(message), { code }); };
 const clone = value => structuredClone(value);
@@ -49,6 +50,7 @@ export function normalizeSubagentDefinition(input) {
   object(input, fields, 'subagent definition');
   const result = { name: nameOf(input.name), description: text(input.description, 1024, 'subagent description', true),
     instructions: text(input.instructions, 16000, 'subagent instructions') };
+  if (input.capabilities !== undefined) result.capabilities = normalizeCapabilities(input.capabilities);
   if (input.provider !== undefined) {
     if (typeof input.provider !== 'string' || !/^[a-z][a-z0-9_-]{0,39}$/.test(input.provider)) fail('Invalid subagent provider.');
     getProvider(input.provider); result.provider = input.provider;
@@ -117,7 +119,7 @@ export function listSubagentDefinitions(options = {}) {
   const visible = rows.filter(row => active(row) && (!enabledOnly || enabled(row)) && (scope === 'global' ? row.scope === 'global'
     : scope === 'project' ? row.scope === 'project' && row.projectRoot === selected.projectRoot
       : row.scope === 'project' && row.projectRoot === selected.projectRoot || row.scope === 'global' && !localNames.has(row.name)))
-    .filter(row => `${row.name} ${row.description}`.toLowerCase().includes(query.toLowerCase()))
+    .filter(row => `${row.name} ${row.description} ${(row.capabilities?.tags || []).join(' ')}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
   const page = visible.slice(offset, offset + limit);
   return { subagents: page.map(summary), total: visible.length, nextOffset: offset + page.length < visible.length ? offset + page.length : null };

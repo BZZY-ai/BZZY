@@ -43,6 +43,26 @@ const messages = id => conversationMessages(id, conversationCursor(id)).map(mess
 function counts() { return { sessions: listRecords('session').length, records: database().prepare('SELECT count(*) AS n FROM records').get().n,
   events: database().prepare('SELECT count(*) AS n FROM events').get().n }; }
 
+test('local project archives rebuild native context and derived source cursors rather than importing sender process state', async () => {
+  const session = original();
+  Object.assign(session, { nativeContext: { epoch: 50, refresh: { state: 'dispatching' } }, nativeContextBudget: { tokens: 32768 },
+    nativeBackendReadiness: { phase: 'request-accepted' }, contextEfficiency: { taskStateReads: 50 }, coreSkillsProtocol: 6,
+    sessionMemoryRefresh: true, sessionMemorySeen: { generation: 'sender-generation' } }); saveSession(session);
+  const kinds = ['native-compaction', 'core.conversation.source', 'core.conversation.pending', 'core.history.maintenance',
+    'core.task-state.read', 'core.checkpoint.scope', 'core.checkpoint.request', 'core.workflow.work-unit', 'core.workflow.consultation'];
+  for (const kind of kinds) putRecord(kind, randomUUID(), { sessionId: session.id, scanSeq: 900000, state: 'open' });
+  const state = collectProjectState(work, session.id);
+  assert.equal(state.records.some(row => kinds.includes(row.kind)), false);
+  const archive = await exportProject(session, path.join(directory, 'local-project.zip'));
+  recipient(); const result = await importProject(archive.path, target), restored = result.primarySession;
+  assert.notEqual(restored.id, session.id); assert.equal(restored.engineThreadId, null);
+  for (const field of ['nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency', 'coreSkillsProtocol', 'sessionMemoryRefresh', 'sessionMemorySeen']) {
+    assert.equal(restored[field], undefined, field);
+  }
+  for (const kind of kinds) assert.equal(listRecords(kind, { sessionId: restored.id }).length, 0, kind);
+  assert.ok(messages(restored.id).includes('Original complete assistant answer'));
+});
+
 test('authenticated exact archive retries survive restart without duplicate chats, events or local changes', async () => {
   const session = original(), archive = await exported(session, 'first');
   const first = await imported(archive.path), id = first.primarySession.id;

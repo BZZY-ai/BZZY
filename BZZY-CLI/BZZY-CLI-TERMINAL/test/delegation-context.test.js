@@ -14,6 +14,7 @@ import { contextFor, processIdentity } from '../src/recovery.js';
 import { ToolHost, taskTools } from '../src/tools.js';
 import { compactAssignmentRound } from '../src/assignment-views.js';
 import { assignmentStatus } from '../src/delegation.js';
+import { checkpoint } from '../src/memory.js';
 
 let dir, previousHome, parent;
 test.beforeEach(() => {
@@ -37,8 +38,8 @@ test('worker recovery includes only its contract, checkpoint and explicitly sele
   const selected = artifact(parent, 'Only this observation is relevant', 'selected evidence');
   const worker = createSession(BUILTINS.deepseek, dir); worker.role = 'executor'; worker.projectRoot = dir;
   worker.contract = { objective: 'Inspect the supplied response', context: 'Compare the two approved account controls', constraints: ['Keep scope fixed'] };
-  worker.allowedArtifactIds = [selected.id]; worker.assignmentId = randomUUID();
-  putRecord('checkpoint', worker.id, { pendingActions: ['Read the supplied response'] });
+  worker.allowedArtifactIds = [selected.id]; worker.assignmentId = randomUUID(); worker.assignmentRound = 1; saveSession(worker);
+  checkpoint(worker, { pendingActions: ['Read the supplied response'] });
   fs.mkdirSync(path.join(dir, '.bzzy', 'memory'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.bzzy', 'memory', randomUUID() + '.json'), JSON.stringify({ statement: 'UNRELATED-PARENT-LEDGER', rationale: 'x'.repeat(100000) }));
   const context = JSON.parse(contextFor(worker));

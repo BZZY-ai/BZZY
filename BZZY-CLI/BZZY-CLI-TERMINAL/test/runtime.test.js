@@ -23,6 +23,7 @@ import { suspendCoreHost, servicePlan } from '@bzzy/core/engine/host-service.js'
 import { beginCoreMaintenance } from '@bzzy/core/engine/maintenance.js';
 import { prepareChatDebate } from '../src/chat-debate.js';
 import { captureEvidence } from '../src/evidence.js';
+import { configureLearning, learningSettings } from '@bzzy/core/engine/learning.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 let dir, savedEnv;
@@ -54,6 +55,9 @@ async function finished(id, timeout = 25000) {
   throw new Error(`Execution timed out: ${JSON.stringify(getRecord('execution', id))}`);
 }
 test('runtime survives client detachment and view replays history without executing', async () => {
+  // Keep this read/replay fixture quiescent. Independently scheduled learning
+  // may append lifecycle events after the foreground execution has finished.
+  configureLearning({ enabled: false }, { expectedRevision: learningSettings().revision });
   process.env.BZZY_TEST_ADVANCED = 'wait';
   const session = makeSession(), launched = await start(session);
   await runtimeRequest(launched.info, 'POST', `/sessions/${session.id}/release`, { owner: launched.owner });
@@ -62,7 +66,7 @@ test('runtime survives client detachment and view replays history without execut
   const client = new BzzyClient(launched.info), history = await client.events(session.id);
   assert.ok(history.events.some(e => e.type === 'activity'));
   assert.ok(history.events.some(e => e.type === 'summary' && e.data.usage.totalTokens === 42));
-  const next = await client.events(session.id, history.nextCursor); assert.equal(next.events.length, 0);
+  const next = await client.events(session.id, history.nextCursor); assert.equal(next.events.length, 0, JSON.stringify(next.events.map(event => ({ type: event.type, data: event.data }))));
   assert.equal(fs.readFileSync(path.join(dir, 'backend.jsonl'), 'utf8'), before);
   assert.equal(loadSession(session.id).goal.status, 'complete');
   const activity = (await client.activities(session.id)).items[0];

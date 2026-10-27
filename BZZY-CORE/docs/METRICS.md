@@ -62,6 +62,14 @@ changes is required for sustained live streaming plus metrics.
 
 ## Session and goal usage
 
+The current-session health projection accompanies invocation counts. It shows
+version 2 workflow work units/coverage/blockers, requested versus acknowledged
+native tool delivery, context-budget provenance, compaction lifecycle time,
+pending refresh, memory source/index cursors and review scheduling reasons.
+Repeated task-state bytes/hash counters measure BZZY delivery overhead, not model
+attention. An older goal's usage view does not relabel current-session health as
+historical health. Reading Metrics submits no model work or index maintenance.
+
 CLI **Metrics** and `/metrics` read `sessionMetrics(sessionId)` from Core's
 `engine/session-metrics.js`. This is a local read-only projection of saved
 records, separate from the transient host telemetry above. It remains readable

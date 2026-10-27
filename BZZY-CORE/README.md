@@ -12,6 +12,12 @@ the same engine and private state.
 
 Implemented:
 
+- [Long-running goal continuity](docs/LONG-RUN-RELIABILITY.md): goal/round-scoped
+  checkpoints, compact revisioned task state, complete-message live indexing,
+  native compaction/readiness/budget diagnostics, bounded refresh and explicit
+  version 2 workflow consultation gates. Existing goal pins and invocation-count
+  semantics stay intact; optional foreground inference requires owner settings.
+
 - Native Codex-backed cancellation distinguishes deliberate transport cleanup
   from backend failures. Goal replacement waits for the old runner to stop;
   late interrupt responses do not produce a false connection-closed error.

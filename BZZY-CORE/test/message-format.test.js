@@ -116,11 +116,13 @@ test('format instructions preserve plain text, escaping, credential separation a
 
 test('every conversational role receives shared body instructions while document artifacts retain their own format', async () => {
   const { agentInstructions, generationSecurityPolicy } = await import('../src/engine/instructions.js');
+  const { createSession, saveSession } = await import('../src/engine/store.js');
+  const { getProvider } = await import('../src/engine/providers.js');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-message-format-'));
   const previous = process.env.BZZY_HOME;
   process.env.BZZY_HOME = path.join(directory, 'private');
   try {
-    const base = { id: 'format-test', provider: 'codex', cwd: directory, projectRoot: directory, policy: {},
+    const base = { provider: 'codex', cwd: directory, projectRoot: directory, policy: {},
       contract: { objective: 'Check message presentation', constraints: [], scope: {} },
       goal: { id: 'format-goal', createdAt: '2026-10-22T00:00:00.000Z', objective: 'Check message presentation' } };
     const roles = [
@@ -132,7 +134,8 @@ test('every conversational role receives shared body instructions while document
       [{ ...base, role: 'peer' }, { goalMode: true }],
       [{ ...base, role: 'bestie', bestiesSessionId: 'format-group' }, { goalMode: true }],
     ];
-    for (const [session, options] of roles) {
+    for (const [properties, options] of roles) {
+      const session = { ...createSession(getProvider('codex'), directory), ...properties }; saveSession(session);
       const instructions = agentInstructions(session, options);
       assert.equal(instructions.split(messageFormatInstructions).length - 1, 1, session.role);
       assert.ok(instructions.startsWith(generationSecurityPolicy), session.role);

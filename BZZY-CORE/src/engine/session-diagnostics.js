@@ -3,6 +3,7 @@ import { appendEvent, getRecord, digest } from './database.js';
 import { listSkills } from './skills.js';
 import { listSubagentDefinitions } from './subagent-definitions.js';
 import { diagnosticFields as pick, diagnosticRedactor } from './diagnostic-redaction.js';
+import { saveSession } from './store.js';
 
 const definitionFields = ['id', 'name', 'description', 'scope', 'version', 'revision', 'enabled', 'provider', 'model', 'effort', 'policy', 'limits'];
 export const diagnosticDefinition = value => pick(value, definitionFields);
@@ -52,6 +53,18 @@ export function recordDiagnosticTool(session, context, { name, callId, started, 
   else if (name === 'read_skill') data.resource = pick(result, ['id', 'name', 'version', 'file', 'sha256', 'nextOffset']);
   else if (['read_session_memory', 'expand_session_memory', 'search_knowledge', 'recall', 'get_task_state'].includes(name)) {
     data.contextResult = result; data.resultSourceSha256 = digest(result); data.resultBytes = Buffer.byteLength(JSON.stringify(result));
+    if (name === 'get_task_state') {
+      const previous = session.contextEfficiency || {}, identical = previous.lastPayloadSha256 === data.resultSourceSha256;
+      const revision = typeof result?.revision === 'string' ? result.revision : data.resultSourceSha256;
+      session.contextEfficiency = { version: 1, taskStateReads: (previous.taskStateReads || 0) + 1,
+        identicalPayloadReads: (previous.identicalPayloadReads || 0) + Number(identical),
+        repeatedPayloadBytes: (previous.repeatedPayloadBytes || 0) + (identical ? data.resultBytes : 0),
+        unchangedRevisionReads: (previous.unchangedRevisionReads || 0) + Number(previous.lastRevision === revision),
+        notModifiedReads: (previous.notModifiedReads || 0) + Number(result?.notModified === true),
+        lastPayloadSha256: data.resultSourceSha256, lastRevision: revision, lastBytes: data.resultBytes, measuredAt: new Date().toISOString() };
+      data.contextEfficiency = session.contextEfficiency;
+      saveSession(session);
+    }
   }
   appendEvent(session.id, 'diagnostic.tool', diagnosticRedactor({ roots: [session.cwd, session.projectRoot] }).scrub(data));
 }
@@ -66,7 +79,7 @@ export function recordBackendDiagnostics(session, input, type = 'diagnostic.back
     if (!run || run.state !== 'running') return setupId;
     const data = { version: 1, runId: run.id, goalId: run.goalMode ? run.goalId : null, setupId,
       provider: session.provider, backend: session.backend,
-      ...pick(input, ['method', 'outcome', 'transport', 'toolsSource', 'tools', 'reportedTools', 'model', 'policy', 'delivery', 'reason']) };
+      ...pick(input, ['method', 'outcome', 'transport', 'toolsSource', 'tools', 'reportedTools', 'model', 'policy', 'delivery', 'reason', 'contextBudget', 'readiness', 'inputEstimate', 'budgetState']) };
     if (input.threadId) data.threadRef = digest(input.threadId);
     for (const field of ['instructions', 'prompt']) if (typeof input[field] === 'string') data[field] = {
       sourceSha256: digest(input[field]), sourceBytes: Buffer.byteLength(input[field]), text: input[field] };

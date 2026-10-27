@@ -164,6 +164,25 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
   if (Object.hasOwn(usage, 'subagentFollowups')) metric('Specialist follow-ups', usage.subagentFollowups);
   metric('Worker assignments', usage.workerAssignments);
   if (Object.hasOwn(usage, 'workerFollowups')) metric('Worker follow-ups', usage.workerFollowups);
+  const health = data.health;
+  if (health?.available && (!panel.selectedGoalId || panel.selectedGoalId === data.currentGoalId)) {
+    put(); put('  BZZY execution health · current session', 'accent', true);
+    const routing = health.routing;
+    if (routing?.enforced) {
+      prose(`Workflow consultation · ${recordedCount(routing.covered ?? routing.closed)} covered · ${recordedCount(routing.open)} open · ${recordedCount(routing.blocked)} blocked`, routing.unmet ? 'warning' : 'text');
+      for (const unit of routing.units || []) prose(`${unit.classId} · ${unit.outcome || unit.state}${unit.specialist ? ' · ' + unit.specialist : ''}${unit.missing?.length ? ' · ' + unit.missing.join(', ') : ''}`, 'muted', 2);
+    } else if (data.currentGoalId) prose('Workflow consultation · no structured routing contract on this goal.', 'muted');
+    const native = health.native, readiness = native?.readiness;
+    if (readiness?.tools?.source === 'unknown-legacy-native-thread') prose('Core tool delivery · unknown for this retained native thread.', 'warning');
+    else if (readiness) prose(`Core tool delivery · ${recordedCount(readiness.tools?.count)} schemas · ${clean(readiness.phase || 'unknown').replaceAll('-', ' ')}`, 'muted');
+    if (native?.contextBudget?.tokens) prose(`Context planning · ${recordedCount(native.contextBudget.tokens)} tokens · ${clean(native.contextBudget.source).replaceAll('-', ' ')}`, 'muted');
+    if (native?.compaction) prose(`Native compactions · ${recordedCount(native.compaction.modernCompleted)} completed · ${Math.round((native.compaction.completedDurationMs || 0) / 1000).toLocaleString()}s lifecycle time`, 'muted');
+    if (native?.refresh && !['consumed', 'acknowledged'].includes(native.refresh.state)) prose('Context refresh · ' + clean(native.refresh.state) + ' · ' + clean(native.refresh.reason || 'awaiting a safe boundary').replaceAll('_', ' '), 'warning', 2);
+    if (health.memory) prose(`Session memory · indexed through event ${recordedCount(health.memory.indexedThroughSeq)} · ${recordedCount(health.memory.pendingNodes)} summaries pending`, 'muted');
+    const waiting = [...(health.retention?.jobs || []), ...(health.learning?.jobs || [])].filter(job => job.reason);
+    for (const job of waiting.slice(0, 3)) prose(`Background review · ${recordedCount(job.count)} ${clean(job.state)} · ${clean(job.reason).replaceAll('_', ' ')}`, 'muted');
+    if (health.taskState) prose(`Task state · ${recordedCount(health.taskState.bytes)} bytes · ${recordedCount(health.taskState.repeatedReads)} consecutive identical reads`, 'muted');
+  }
   const breakdown = (title, rows, empty, label, detail) => {
     put(); put('  ' + title, 'accent', true);
     if (!rows?.length) { prose(empty, 'muted'); return; }

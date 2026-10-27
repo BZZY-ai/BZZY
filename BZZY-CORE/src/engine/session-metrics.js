@@ -1,5 +1,6 @@
 import { database, transaction, digest } from './database.js';
 import { home } from './files.js';
+import { sessionHealth } from './session-health.js';
 
 const caches = new Map(), MAX_SESSIONS = 2048, MAX_EVENTS = 2000, MAX_TRACKED = 100000, MAX_ROWS = 4096;
 const id = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value);
@@ -217,6 +218,7 @@ export function sessionMetrics(value) {
       session: shown(state.total), chat: shown(state.chat), unattributed: shown(state.unknown),
       goals: [...goals.goals.values()].sort((a, b) => Number(b.id === root.goalId) - Number(a.id === root.goalId) || (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 512)
         .map(goal => ({ ...goal, ...shown(state.goals.get(goal.id) || blank()) })),
+      health: sessionHealth(root.id),
       updatedAt: state.updatedAt, coverage: { skills: 'recorded-model-loads', complete: reasons.length === 0, legacySkillReads,
         historicalEvents: state.historical, unattributedFollowups: state.unknownFollowups.size, reasons } };
   });

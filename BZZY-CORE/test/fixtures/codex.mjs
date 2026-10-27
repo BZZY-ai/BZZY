@@ -20,6 +20,15 @@ let goal;
 let pendingApproval = false;
 const turns = (status = 'complete') => {
   notify('turn/started', { turn: { id: 't1' } });
+  if (scenario.startsWith('context-')) {
+    const item = { id: 'compact-1', type: 'contextCompaction' };
+    notify('item/started', { turnId: 't1', item });
+    notify('item/started', { turnId: 't1', item });
+    notify('item/completed', { turnId: 't1', item });
+    notify('item/completed', { turnId: 't1', item });
+    notify('thread/compacted', { turnId: 't1' });
+    return;
+  }
   if (scenario === 'web') {
     const item = { id: 'open-page', type: 'webSearch', query: '', action: { type: 'openPage', url: 'https://www.paypal.com/?token=fixture-secret' } };
     notify('item/started', { item }); notify('item/completed', { item });
@@ -49,7 +58,9 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     continue;
   }
   let result = {};
-  if (request.method === 'initialize') result = { userAgent: 'fixture' };
+  if (request.method === 'initialize') result = { userAgent: 'fixture',
+    ...(['context-refresh', 'context-refresh-unacknowledged', 'context-refresh-rejected', 'context-refresh-held'].includes(scenario)
+      ? { capabilities: { hostContextRefresh: { transport: 'turn/steer', acknowledgment: 'turn-id' } } } : {}) };
   else if (request.method === 'permissionProfile/list') result = { data: agentProfileConfigured ? [{ id: agentProfile, allowed: true }] : [] };
   else if (request.method === 'thread/start' || request.method === 'thread/resume') result = { thread: { id: 'native-thread' },
     ...(agentProfileConfigured && request.params.permissions === agentProfile ? { activePermissionProfile: { id: agentProfile, extends: null } } : {}) };
@@ -86,6 +97,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       setTimeout(() => send({ id: request.id, result }), 100);
       continue;
     }
+  } else if (request.method === 'turn/steer') {
+    if (scenario === 'context-refresh-held') continue;
+    if (scenario === 'context-refresh-rejected') {
+      send({ id: request.id, error: { code: -32602, message: 'Fixture turn has already completed.' } }); continue;
+    }
+    result = scenario === 'context-refresh-unacknowledged' ? {} : { turnId: request.params.expectedTurnId };
   }
   if (request.id != null) send({ id: request.id, result });
 }

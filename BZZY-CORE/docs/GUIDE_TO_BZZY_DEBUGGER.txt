@@ -773,4 +773,132 @@ For a specific concern, add the symptom, approximate time/goal and expected BZZY
 behavior. Keep account authentication outside the prompt. The debugging assistant
 should then inspect the archive itself before asking for facts already present.
 
+22. UPDATED LONG-RUN AND STRUCTURED-WORKFLOW AUDIT
+--------------------------------------------------
+
+This section applies only when the exporting runner implements these records.
+Absence in an older archive remains an observability gap, not a retroactive fault.
+Read BZZY-CORE/docs/LONG-RUN-RELIABILITY.md for the shipped runtime contracts.
+
+A. Establish the actual workflow authority
+
+Inspect the immutable goal workflow binding, its full text and schemaVersion.
+Text-only/v1 requirements remain instructions; they are not silently converted
+into a host gate by a newer Library definition. Version 2 adds explicit routing
+rules, class IDs, named specialist/skill requirements and permitted dispositions.
+The bug-bounty JSON asset supplies all 25 class routes, with the report-writing
+skill required only at the confirmed reporting stage. Its Markdown authoring
+file alone does not install that contract. Assets do not enable the owner's
+Library automatically. A resumed old goal retains its original pin.
+
+For v2, follow core.workflow.work-unit and core.workflow.consultation plus
+workflow.routing.* events. Map each declared hypothesis to its class, exact
+admitted versions, availability, read receipts, assignment, current-round review
+and closure. A generic worker is not a matching specialist receipt. A partial
+SKILL.md page is not a complete consultation. A zero count can reflect an explicit
+missing/OFF dependency or irrelevant class; inspect the disposition. Blocked
+units are unresolved coverage and cannot count as achievement. Superseded blocked
+units retain history and point to an explicit same-class replacement. Do not
+require blind fan-out of all 25 specialists or irrelevant skills.
+
+This gate verifies declared Core-managed consultation. It cannot discover every
+investigation hidden inside native shell commands, establish the correctness of
+a class declaration, prove attention or independently validate a vulnerability.
+Report that limitation even when every recorded work unit is closed.
+
+B. Trace native readiness and context pressure
+
+Compare nativeBackendReadiness across starts/resumes/provider changes: submitted
+schema hashes/names, native thread identity, request acknowledgment and any
+backend-reported tools are separate observations. Successful setup does not prove
+the model had every advertised tool. Unknown inherited schemas stay unknown.
+Protocol 6 rotates incompatible native tool surfaces only on updated execution,
+retaining the BZZY goal and accumulated usage.
+
+nativeContextBudget describes the effective local planner setting and its source.
+An unknown-capability fallback is not the upstream provider's actual context
+limit. diagnostic.context input estimates include instructions, schemas, prepared
+prompt and output reserve; estimates are approximate. Inspect rejection or compact
+retry receipts rather than assuming full instructions were truncated.
+
+Pair modern compactions by their native-compaction receipt identity. Legacy
+signals can coalesce with a modern event and are not automatically extra jobs.
+Inspect bounded rolling metrics, union lifecycle duration, refresh epochs and
+pending/consumed/uncertain states. Lifecycle time is not CPU or billing. A pending
+refresh may mean the backend did not advertise the acknowledged host-refresh
+capability; ordinary user steering does not establish that capability. A prepared
+capsule is consumed only after accepted delivery. Uncertain delivery must never
+be interpreted as safe automatic replay. Explicit pressure pauses preserve the
+goal and remaining budgets and must not create a restart loop.
+
+C. Audit goal state without treating old completion as current
+
+New checkpoints have trusted goal/chat/assignment-round scope and revisions.
+Compare IDs, not objective strings or timestamps. core.checkpoint.scope is the
+current pointer for that scope; core.checkpoint.request records idempotent saves.
+Legacy/imported checkpoints stay historical and unattributed. A round-1 checkpoint
+is not automatically the current checkpoint of worker round 2; prior reports and
+conversation remain available separately.
+
+get_task_state now returns a capsule capped at 8 KiB. Its structural revision
+excludes routine usage/heartbeat changes. Cache responses are valid only within
+the same context generation. read_task_state_details pages the exact contract,
+recovery, mission, routing and other sections with structural/source revisions
+and UTF-8 offsets. The full pinned workflow remains in execution instructions.
+Repeated small responses can be appropriate; inspect contextEfficiency and
+core.task-state.read bytes/hashes/revisions to distinguish unnecessary identical
+payloads from a deliberate re-read after compaction.
+
+D. Check rolling source/index continuity
+
+message.finalized is a host boundary after visible native message completion.
+Use run/thread/turn/item identity together; item IDs may repeat. The bounded
+core.conversation.source cursor and core.conversation.pending identities retain
+interleaving. Its sealedThroughSeq is a contiguous frontier, so an individually
+completed message may have a completion marker beyond that frontier while an
+interleaved message remains open. Masking must still inspect that entire completed
+logical message before exposing any slice. Unsealed tails never enter derived
+material. Legacy streams without reliable native identity retain conservative
+visible-message/run-finish boundaries.
+
+Compare source scan/sealed positions, per-session knowledge cursors, session-memory
+positions and core.history.maintenance. Cursor sequence distance is not elapsed
+time or message count; check lagEvents/oldestPendingAt and source timestamps.
+Bounded backfill can span multiple maintenance ticks. Deferred sources and jobs
+must yield to later eligible work. Oversized logical messages have explicit
+128-KiB/4096-delta omission markers; original events remain saved.
+
+Source generation 2 masks complete logical messages for search, session memory
+and learning inputs. Old generation-1 maps/fragments are withheld from recall and
+rebuild into a new generation without rewriting original history. Historical
+nodes remain inspectable in the full export. Do not interpret withheld legacy
+summaries as deleted original chat or silently combine their generation hashes.
+
+E. Separate deterministic indexing from paid background work
+
+Live indexing requires no model inference. Short sanitized retention can publish
+verbatim. Paid retention and learning each have owner-only duringForeground and
+foregroundCooldownSeconds settings, defaulting to foreground priority. Inspect
+scheduleReason, control state, model selection, job/day reservations, source cutoff
+and uncertain-request receipts. An explicit opt-in does not resume paused jobs.
+Learning should be driven by meaningful outcomes/corrections, and empty validated
+output can be correct. Missing output alone does not prove the subsystem broken.
+
+F. Verify update/resume and privacy boundaries
+
+Updated source does not hot-patch a running backend. Pause safely, update and
+explicitly resume to obtain the new runner while retaining the saved goal. A new
+structured workflow applies to a new goal after owner installation/selection;
+resume does not rewrite an old workflow pin. Imported histories cannot reuse
+sender native cursors, schema receipts, routing acceptance or checkpoint ownership
+as recipient execution authority. Deletion tombstones must prevent stale writers
+from recreating live derived state.
+
+Use synthetic local fixtures to reproduce suspected BZZY failures. The shipped
+endurance suite covers 1,200 messages, compactions, reused/overlapping identities,
+interleaved secrets, more than 1,024 open messages, source migration and bounded
+scheduler fairness. It does not prove live optional provider capabilities or
+vulnerability-finding quality. Never replay private archive commands to test it.
+
+
 END OF READ-FIRST GUIDE

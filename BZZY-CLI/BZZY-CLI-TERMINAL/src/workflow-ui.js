@@ -124,7 +124,8 @@ async function edit(ui, existing) {
   const description = await prompt(ui, 'ask', 'Workflow description · when should it apply?', { initialValue: existing?.description || '' }); if (description == null) return;
   const instructions = await prompt(ui, 'ask', 'Full workflow instructions · Shift+Enter adds lines · use account references, never credentials', { initialValue: existing?.instructions || '' }); if (instructions == null || !instructions.trim()) return;
   const scope = existing?.scope || await prompt(ui, 'chooseOne', 'Where should this workflow be available?', scopes); if (!scope) return;
-  const saved = saveWorkflow({ name, description: description.trim(), instructions }, { cwd: cwdFor(ui), scope, expectedRevision: existing?.revision || 0 });
+  const saved = saveWorkflow({ name, description: description.trim(), instructions,
+    ...(existing?.schemaVersion === 2 ? { schemaVersion: 2, routing: existing.routing } : {}) }, { cwd: cwdFor(ui), scope, expectedRevision: existing?.revision || 0 });
   preview(ui, saved); ui.event('info', { message: `Saved ${saved.name}. Select it to apply to future goals in this terminal.` });
 }
 

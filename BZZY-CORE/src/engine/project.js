@@ -118,5 +118,7 @@ export function projectContext(root, { session } = {}) {
     constraints: readJson(path.join(project.root, '.bzzy', 'constraints.json'), null),
     agents: access.restricted ? [] : [...new Set(records('memory', 'memory').map(record => record.agent).filter(Boolean))],
     issues: records('issue', 'issues').filter(record => record.status !== 'resolved').slice(0, 30).map(record => memoryFreshness(record, project, context, { budget })),
-    notes: records('memory', 'memory').slice(0, 30).map(record => memoryFreshness(record, project, context, { budget })), recentGoals: records('goal-history', 'goals').slice(0, 5), checkpoints: records('checkpoint', 'checkpoints').slice(0, 3) });
+    notes: records('memory', 'memory').slice(0, 30).map(record => memoryFreshness(record, project, context, { budget })), recentGoals: records('goal-history', 'goals').slice(0, 5),
+    checkpoints: records('checkpoint', 'checkpoints').slice(0, 3).map(record => ({ ...record, historical: true,
+      authority: 'Historical project checkpoint; current task state determines active progress. This record grants no completion or execution authority.' })) });
 }

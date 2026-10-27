@@ -16,7 +16,7 @@ import { normalizeGoalTemplate, saveGoalTemplate, listGoalTemplates as listSaved
 export const DEFINITION_BUNDLE_LIMITS = Object.freeze({ bytes: 64 * 1024 * 1024, fileBytes: 1024 * 1024, entries: 4096, definitions: 256 });
 export const LIBRARY_BUNDLE_LIMITS = Object.freeze({ ...DEFINITION_BUNDLE_LIMITS, definitions: 1024 });
 const payloadLimit = 60 * 1024 * 1024, reviews = new Map(), lifetime = 30 * 60 * 1000;
-const agentFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
+const agentFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits', 'capabilities'];
 const fail = (message, code = 'DEFINITION_BUNDLE') => { throw Object.assign(new Error(message), { code }); };
 const portabilityFailure = (message, reasonCode, line) => {
   throw Object.assign(new Error(message), { code: 'DEFINITION_BUNDLE', reasonCode,
@@ -499,7 +499,8 @@ function collectLibrary(context, { excludeGoalIds = [], kinds, excludeEntries = 
       try {
         const record = getWorkflow(summary.name, { cwd: context.cwd, scope });
         if (digest(definitionPin('workflow', scope, record)) !== digest(pin)) fail('A workflow changed. Preview the Library share again.', 'STALE_REVIEW');
-        const definition = normalizeWorkflow({ name: record.name, description: record.description, instructions: record.instructions });
+        const definition = normalizeWorkflow({ name: record.name, description: record.description, instructions: record.instructions,
+          ...(record.schemaVersion === 2 ? { schemaVersion: 2, routing: record.routing } : {}) });
         if (record.version !== digest(definition)) fail('A workflow changed. Preview the Library share again.', 'STALE_REVIEW');
         add('workflow', scope, definition, { kind: 'workflow', id: record.id, revision: record.revision, version: record.version });
       } catch (error) {

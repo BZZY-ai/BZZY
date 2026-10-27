@@ -14,6 +14,8 @@ import { processIdentity, identityAlive } from '../src/engine/process-identity.j
 import { runtimeInfo, runtimeRequest, claimInput } from '../src/engine/runtime.js';
 import { createSessionAccess } from '../src/engine/session-access.js';
 import { newConversation } from '../src/engine/host-commands.js';
+import { checkpoint } from '../src/engine/memory.js';
+import { advanceConversationSource } from '../src/engine/conversation-source.js';
 
 let directory, previousHome, workspace;
 test.beforeEach(() => {
@@ -78,6 +80,37 @@ test('queued, active descendant and live runner work rejects deletion atomically
   assert.equal(getRecord('session-deletion', child.id), null);
   putRecord('run', child.id, { sessionId: child.id, state: 'interrupted' });
   assert.equal(remove(root.id).state, 'deleted');
+});
+
+test('deletion clears native and derived runtime state while retaining inert checkpoint and routing audit receipts', () => {
+  const root = create(), unrelated = create('Unrelated runtime');
+  const derived = ['native-compaction', 'core.conversation.source', 'core.conversation.pending', 'core.history.maintenance', 'core.task-state.read', 'core.checkpoint.scope'];
+  const receipts = ['core.checkpoint.request', 'core.workflow.work-unit', 'core.workflow.consultation'];
+  root.nativeContext = { epoch: 4, refresh: { state: 'pending' } }; root.nativeContextBudget = { tokens: 32768 };
+  root.nativeBackendReadiness = { phase: 'request-accepted' }; root.contextEfficiency = { taskStateReads: 3 };
+  root.coreSkillsProtocol = 6; root.sessionMemoryRefresh = true; root.sessionMemorySeen = { generation: 'private-generation' }; saveSession(root);
+  for (const kind of [...derived, ...receipts]) for (const session of [root, unrelated]) {
+    // Checkpoint request receipts intentionally do not duplicate their SQL ID.
+    putRecord(kind, `${session.id}:${kind}`, { sessionId: session.id, state: 'open', record: { source: 'saved-audit' } });
+  }
+  putRecord('core.checkpoint.revision', `${root.id}:1`, { sessionId: root.id, revision: 1, decisions: ['Historical progress.'] });
+  const receipt = remove(root.id);
+  for (const kind of derived) {
+    assert.equal(listRecords(kind, { sessionId: root.id }).length, 0, kind);
+    assert.equal(listRecords(kind, { sessionId: unrelated.id }).length, 1, `Keep unrelated ${kind}`);
+  }
+  for (const kind of receipts) {
+    const audit = getRecord(kind, `${root.id}:${kind}`);
+    assert.equal(audit.deletedAt, receipt.deletedAt); assert.equal(audit.executionDisabled, true); assert.equal(audit.record.source, 'saved-audit');
+    assert.equal(getRecord(kind, `${unrelated.id}:${kind}`).executionDisabled, undefined);
+  }
+  for (const field of ['nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency', 'coreSkillsProtocol', 'sessionMemoryRefresh', 'sessionMemorySeen']) {
+    assert.equal(getRecord('session', root.id)[field], undefined, field);
+  }
+  assert.ok(getRecord('core.checkpoint.revision', `${root.id}:1`));
+  assert.throws(() => checkpoint(root, { decisions: ['Stale write.'] }), /Deleted/);
+  assert.throws(() => advanceConversationSource(root), { code: 'SESSION_DELETED' });
+  assert.equal(listRecords('core.conversation.source', { sessionId: root.id }).length, 0);
 });
 
 test('deletion rejects persistent Agent contexts and changed input under an existing request identity', () => {

@@ -10,6 +10,7 @@ import { missionSourceRevision, missionResultRevision, missionContextCurrent, mi
 import { assessDebateGoal, assessObjectionDispositions, assessDebateEvidenceCoverage } from './debate-format.js';
 import { assessValidationAgreement } from './investigation.js';
 import { remapValidationAssessment, normalizeValidationAssessment } from './validation-assessment.js';
+import { assertRoutingCompletion, routingStatus } from './workflow-routing.js';
 
 function canonicalValidationReport(report, artifacts) {
   const aliases = new Map((artifacts || []).filter(item => !item.omitted).flatMap(item => [[item.originalId || item.id, item.id], [item.id, item.id]]));
@@ -123,7 +124,10 @@ export async function runCheck(session, check, { signal } = {}) {
   putRecord('operation', op.id, op); appendEvent(session.id, 'verification.completed', op); return op;
 }
 export async function assessCompletion(session, { signal, prerequisite = true, settledAssignmentIds = [] } = {}) {
-  if (!session.contract) return { passed: true, level: 'legacy-model-judgment', requirements: [], artifacts: [], checks: [] };
+  let routing;
+  try { routing = { ...assertRoutingCompletion(session), passed: true }; }
+  catch (error) { routing = { ...routingStatus(session, { limit: 0 }), passed: false, reason: error.message }; }
+  if (!session.contract) return { passed: prerequisite && !signal?.aborted && routing.passed, level: 'legacy-model-judgment', requirements: [], artifacts: [], checks: [], ...(routing.enforced ? { routing } : {}) };
   const requiredArtifacts = [];
   for (const required of session.contract.artifacts) {
     try {
@@ -182,9 +186,9 @@ export async function assessCompletion(session, { signal, prerequisite = true, s
     else if (delegation.declinedContext.length && !explicitSupport) delegation.reason = 'Declining missing worker context does not establish the parent goal. Record current evidence-backed assessments for every original requirement.';
     else if (!delegation.passed) delegation.reason = 'Delegate mode requires a bounded executor assignment for this goal and brain review of its result. Use delegate, inspect the evidence, then review_assignment before completing.';
   }
-  const passed = prerequisite && !signal?.aborted && requiredArtifacts.every(a => a.passed) && checks.length === session.contract.verification.length && checks.every(c => c.passed) && requirements.every(r => r.passed) && !openAssignments.length && (!delegation || delegation.passed);
+  const passed = prerequisite && routing.passed && !signal?.aborted && requiredArtifacts.every(a => a.passed) && checks.length === session.contract.verification.length && checks.every(c => c.passed) && requirements.every(r => r.passed) && !openAssignments.length && (!delegation || delegation.passed);
   const result = { id: randomUUID(), sessionId: session.id, goalId: session.goal?.id || null, passed, level: session.contract.acceptanceCriteria.some(c => c.modelJudgment) ? 'model-judgment-with-declared-checks' : 'evidence-and-supervisor-assessment',
-    requirements, artifacts: requiredArtifacts, checks, openAssignments: openAssignments.map(a => a.id), ...(delegation ? { delegation } : {}), createdAt: now() };
+    requirements, artifacts: requiredArtifacts, checks, openAssignments: openAssignments.map(a => a.id), ...(delegation ? { delegation } : {}), ...(routing.enforced ? { routing } : {}), createdAt: now() };
   putRecord('acceptance', result.id, result); appendEvent(session.id, 'acceptance', result); return result;
 }
 

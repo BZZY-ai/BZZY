@@ -62,6 +62,73 @@ records a compact `Workflow loaded` notice after the full text is admitted.
 
 ## Storage and boundaries
 
+### Version 2 structured consultation
+
+Existing text-only definitions and goal pins retain their exact version and
+advisory behavior. An owner can create a new definition with `schemaVersion: 2`
+and explicit routing metadata:
+
+```json
+{
+  "name": "fixture-review",
+  "description": "Review a supplied offline fixture.",
+  "instructions": "Preserve the original scope and evidence.",
+  "schemaVersion": 2,
+  "routing": {
+    "version": 1,
+    "requireWorkUnits": true,
+    "rules": [{
+      "classId": "request-forwarding",
+      "specialist": "http-analyst",
+      "skills": [],
+      "reportSkills": ["report-format"],
+      "allowedDispositions": ["blocked", "not_applicable"]
+    }]
+  }
+}
+```
+
+Routing is bounded to 64 distinct classes and 16 KiB. Each rule requires a named
+specialist or skills. Names are scoped Library names, not scripts, tool grants or
+private account identifiers. `skills` applies to investigated outcomes;
+`reportSkills` additionally applies to `confirmed`. The only bypass dispositions
+are `blocked`, `not_applicable` and `policy_excluded`, and each must be explicitly
+allowed in the pinned rule. There is no model-selected blanket bypass. Loading
+a `.json` workflow file validates the complete definition; ordinary UTF-8 files
+remain text-only workflows. Library codes preserve the structured contract.
+
+For a v2 goal, `declare_work_unit` records one bounded hypothesis, classId,
+optional scoped artifact IDs and a stable requestId. Core pins the currently
+enabled specialist/skill versions and records missing or disabled dependencies.
+The supervisor reads the admitted specialist, passes `workUnitId` to
+`spawn_subagent`, and retains one assignment per unit. Existing bounded worker
+policies, reservations, idempotency and evidence review still apply. Definitions
+cannot grant new permissions. Changed definitions require a distinct new unit;
+they never replace a running unit's pins.
+
+`close_work_unit` requires an outcome and factual rationale. Investigated,
+confirmed, disproved and inconclusive outcomes require the exact matching
+specialist, its current-round accepted evidence review and the rule's complete
+SKILL.md consultations. Full skill-read receipts track delivered byte coverage
+and are distinct from invocation metrics; neither receipt proves attention or
+semantic correctness. A generic Delegate worker, older goal receipt or different
+specialist cannot satisfy the route. A permitted blocked/excluded/not-applicable
+closure records a coverage limitation rather than a finding. Blocked units do
+not count as covered and prevent achievement until resolved. A new declaration
+may explicitly `supersedes` one blocked unit of the same class and current goal;
+it admits fresh pins and retains the old history. The replacement must close
+without an unresolved blocker. Completion requires at least one declared unit,
+no open units and no unresolved blocked units, in addition to the original goal's
+existing acceptance checks. No rule requires automatic fan-out of every class.
+
+This gate enforces declared Core-managed investigations and their consultation
+receipts. It cannot infer all semantic work hidden in native shell commands,
+verify a declared class or establish vulnerability truth. It does not widen
+scope, force live tests, start paused work, publish reports or change permissions.
+Older goals never acquire routing authority from prose, changed selections or
+new Library versions. New diagnostics expose routing readiness and missing work
+through task state, metrics and debug exports.
+
 Definitions have strict schemas, revision checks and immutable versions. Effective
 text, including Core's mandatory security instructions, is bounded to 128 KiB.
 Oversized or invalid input is rejected without truncation. File loads accept

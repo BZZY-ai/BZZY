@@ -149,7 +149,8 @@ test('create and use a specialist without starting inference or binding it to th
 test('editing preserves narrowed policies, uses a displayed revision, and rejects a stale detail action', async () => {
   const { ui, events } = terminal();
   try {
-    const saved = saveSubagentDefinition({ ...definition(), policy: { mode: 'read-only', network: 'disabled' }, limits: { runtimeSeconds: 45 } }, { cwd: directory });
+    const saved = saveSubagentDefinition({ ...definition(), policy: { mode: 'read-only', network: 'disabled' }, limits: { runtimeSeconds: 45 },
+      capabilities: { version: 1, tags: ['http-review'] } }, { cwd: directory });
     await subagentsCommand('/agents view:project:http-analyst', ui);
     const answers = ['A reviewed HTTP specialist.', 'Inspect evidence, distinguish hypotheses and return references.'];
     ui.ask = async (_question, options) => { assert.ok(options.initialValue); return answers.shift(); };
@@ -157,6 +158,7 @@ test('editing preserves narrowed policies, uses a displayed revision, and reject
     await subagentsCommand('/agents edit', ui);
     const edited = getSubagentDefinition(saved.name, { cwd: directory });
     assert.equal(edited.revision, 2); assert.deepEqual(edited.policy, saved.policy); assert.deepEqual(edited.limits, saved.limits);
+    assert.deepEqual(edited.capabilities, saved.capabilities);
     saveSubagentDefinition({ ...definition(), description: 'Changed independently.' }, { cwd: directory, expectedRevision: edited.revision });
     let asked = false; ui.ask = async () => { asked = true; return 'task'; };
     await subagentsCommand('/agents use', ui);

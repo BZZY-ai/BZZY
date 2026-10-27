@@ -30,7 +30,7 @@ async function call(name, input = {}) {
 async function work() {
   if (process.env.BZZY_TEST_ADVANCED === 'delegation-ctf') {
     const { runDelegationCTF } = await import('./delegation-ctf.mjs');
-    const result = await runDelegationCTF({ call, context, has: name => tools.some(tool => tool.name === name) });
+    const result = await runDelegationCTF({ call, context, prompt: currentPrompt, has: name => tools.some(tool => tool.name === name) });
     if (claude) {
       send({ type: 'stream_event', event: { delta: { type: 'text_delta', text: result.text } } });
       send({ type: 'result', subtype: 'success', result: result.text, usage: { input_tokens: 12, output_tokens: 8 } });

@@ -13,7 +13,7 @@ context window or lossless model recall.
 
 ## Index and recall
 
-After a finalized response, Core indexes visible user/assistant messages and
+During a continuing native goal and after finalized responses, Core indexes visible user/assistant messages and
 input questions/answers. Tool output, private reasoning, approval answers and
 intermediate debate transcripts are excluded. Leaves group eight logical messages
 or about 12 KB of source text, reading bounded Unicode slices. Ready sibling
@@ -68,6 +68,13 @@ replays an uncertain paid request.
 Session pause/cancel, Core stop, deletion and shutdown stop background work.
 An already dispatched summary can finish against immutable sources during an
 ordinary foreground turn. Paused compaction requires explicit resume.
+
+Completed native messages now advance deterministic indexing while the overall
+goal continues. Source generation 2 masks whole messages and excludes unfinished
+tails; older derived maps rebuild without rewriting original events. Owner-only
+settings can allow budgeted inference during foreground work, with a cooldown;
+the default retains foreground priority. See [long-run reliability](LONG-RUN-RELIABILITY.md)
+for update/resume behavior, source boundaries and scheduling controls.
 
 ## Owner controls
 

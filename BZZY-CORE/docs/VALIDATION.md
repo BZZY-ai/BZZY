@@ -1,3 +1,36 @@
+# Long-running goals and structured workflow consultation (2026-10-26)
+
+Node.js 24/macOS full suites: **864 Core tests passed, 2 skipped** (866 total)
+and **757 CLI tests passed, 21 skipped** (778 total), zero failures. Core and CLI
+syntax checks, repository whitespace checks and debugger-guide mirror comparison
+pass. Tests use canonical `TMPDIR=/private/tmp`; CLI uses `scripts/test.mjs` so
+fixture environment controls remain explicit.
+
+Regression coverage includes the exact v2 bug-bounty routing contract, full skill
+read coverage, pinned specialist invocation/evidence review, missing/OFF/budget
+and policy blockers, supersession, current-goal isolation and portable round trips.
+Checkpoint tests include concurrent SQLite writers, identical new objectives,
+chat/assignment-round boundaries, legacy attribution and revisioned UTF-8 pages.
+
+The continuing-goal fixture exercises 1,200 two-delta messages, 12 virtual native
+compactions, reused/overlapping identities, interleaved split credentials, 1,100
+pending starts, source-version migration, bounded/fair indexing and unchanged raw
+history. Deterministic clock contention verifies prefix progress independently of
+opportunistic recent-tail indexing. Native fixtures cover modern/legacy dedup,
+crash-atomic refresh state, schema migration, input admission, cumulative/delegated
+budgets, acknowledged/uncertain refresh and explicit pressure-policy boundaries.
+
+Import/deletion tests reject sender-native state and stale writer resurrection.
+Learning/retention tests cover whole-message source privacy, opt-in foreground
+admission, cooldowns, reservations and durable pause. Metrics/export tests retain
+read-only behavior and invocation counts. CLI compatibility tests preserve current
+workflow/capability metadata and use valid persisted execution identities.
+
+No live provider requests, target testing, installation update or running-session
+mutation was performed. Optional automatic mid-goal refresh remains gated on an
+explicit backend capability; fixtures do not establish live provider support.
+These tests validate BZZY execution contracts, not vulnerability-finding quality.
+
 # Full debug ZIP, memory/learning capture and read-first guide (2026-10-26)
 
 Node.js 24/macOS full suites: **798 Core tests passed, 2 skipped** (800 total)

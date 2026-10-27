@@ -35,7 +35,7 @@ async function until(check) {
   while (!check()) { if (Date.now() > deadline) throw new Error('The backend fixture did not reach its expected phase.'); await delay(5); }
 }
 const calls = () => fs.existsSync(process.env.BZZY_TEST_LOG)
-  ? fs.readFileSync(process.env.BZZY_TEST_LOG, 'utf8').trim().split('\n').map(JSON.parse) : [];
+  ? fs.readFileSync(process.env.BZZY_TEST_LOG, 'utf8').split('\n').slice(0, -1).map(JSON.parse) : [];
 
 for (const goal of [true, false]) test(`${goal ? 'goal' : 'chat'} cancellation tolerates a final notification arriving before the interrupt response`, async () => {
   const running = engine.run('Synthetic request', { goal }); running.catch(() => {});

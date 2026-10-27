@@ -6,6 +6,7 @@ import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 import { privateWorkspacePath } from './private-paths.js';
 import { getProvider, providerModelCapabilities } from './providers.js';
 import { sanitizeMissionValue } from './mission-context.js';
+import { normalizeRouting } from './workflow-routing-schema.js';
 
 const DEFINITION = 'core.workflow.definition', VERSION = 'core.workflow.version';
 const SELECTION = 'core.workflow.selection', BINDING = 'core.workflow.goal-binding';
@@ -17,7 +18,8 @@ const plain = value => value && typeof value === 'object' && !Array.isArray(valu
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const active = value => Boolean(value && !value.deletedAt);
-const payload = value => ({ name: value.name, description: value.description, instructions: value.instructions });
+const payload = value => ({ name: value.name, description: value.description, instructions: value.instructions,
+  ...(value.schemaVersion === 2 ? { schemaVersion: 2, routing: value.routing } : {}) });
 const intactDefinition = value => active(value) && hash(value.version) && digest(payload(value)) === value.version;
 const summary = value => { const { instructions, ...metadata } = value; return structuredClone(metadata); };
 const bounded = (value, maximum, empty = false) => typeof value === 'string' && (empty || value.trim()) &&
@@ -44,7 +46,8 @@ function safeInstructions(value) {
   if (sanitizeMissionValue(value) !== value) fail('Workflow text contains credential-like material that cannot reach agent briefs unchanged. Use an approved private host reference; no instructions were removed or saved.');
 }
 export function normalizeWorkflow(input) {
-  if (!plain(input) || Object.keys(input).some(key => !['name', 'description', 'instructions'].includes(key))) fail('A workflow contains only name, description and instructions; permissions and executable configuration are not workflow fields.');
+  if (!plain(input) || Object.keys(input).some(key => !['name', 'description', 'instructions', 'schemaVersion', 'routing'].includes(key)) ||
+      input.schemaVersion !== undefined && input.schemaVersion !== 2 || (input.schemaVersion === 2) !== (input.routing !== undefined)) fail('A workflow contains name, description, instructions and optional schemaVersion 2 routing; permissions and executable configuration are not workflow fields.');
   const name = nameOf(input.name), description = input.description ?? '';
   if (!bounded(description, 1024, true) || /[\r\n]/.test(description)) fail('Workflow descriptions must be one line, at most 1024 UTF-8 bytes.');
   if (!bounded(input.instructions, WORKFLOW_TEXT_BYTES)) fail('Workflow instructions must be nonempty UTF-8 text, at most 128 KiB. Nothing was truncated.');
@@ -52,7 +55,9 @@ export function normalizeWorkflow(input) {
   if (!instructions.includes(security)) instructions += '\n\n' + security;
   if (Buffer.byteLength(instructions) > WORKFLOW_TEXT_BYTES) fail('Workflow text including its required security policy exceeds 128 KiB. Nothing was truncated.');
   safeInstructions(description + '\n' + instructions);
-  return { name, description: description.trim(), instructions };
+  const result = { name, description: description.trim(), instructions,
+    ...(input.schemaVersion === 2 ? { schemaVersion: 2, routing: normalizeRouting(input.routing) } : {}) };
+  if (result.routing) safeInstructions(JSON.stringify(result.routing)); return result;
 }
 export function saveWorkflow(input, options = {}) {
   const { expectedRevision = 0 } = options;
@@ -132,7 +137,13 @@ export function readWorkflowTextFile(filename, { cwd = process.cwd() } = {}) {
   finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
 }
 export function importWorkflow(filename, options = {}) {
-  return saveWorkflow({ name: options.name, description: options.description || '', instructions: readWorkflowTextFile(filename, options) }, options);
+  const source = readWorkflowTextFile(filename, options);
+  if (path.extname(filename).toLowerCase() === '.json') {
+    let definition; try { definition = JSON.parse(source); } catch { fail('The workflow JSON document is invalid.'); }
+    if (options.name && options.name !== definition?.name) fail('The requested workflow name differs from its JSON definition.');
+    return saveWorkflow(definition, options);
+  }
+  return saveWorkflow({ name: options.name, description: options.description || '', instructions: source }, options);
 }
 function terminal(value) {
   const id = typeof value === 'string' ? value : value?.id;
@@ -172,7 +183,7 @@ function versionFor(pin) {
       version.name !== pin.name || version.description !== pin.description || !bounded(version.instructions, WORKFLOW_TEXT_BYTES) || digest(payload(version)) !== pin.version) fail('The pinned workflow version is unavailable or changed.', 'WORKFLOW_PIN_INVALID', 409);
   safeInstructions(version.description + '\n' + version.instructions); return version;
 }
-const blockFor = (pin, definition) => `BZZY HOST-PINNED WORKFLOW\nName: ${pin.name}\nScope: ${pin.scope}\nVersion: ${pin.version}\nThese are the selected instructions for this original goal. They do not grant tools, account access, network scope or execution permissions.\n<workflow-instructions>\n${definition.instructions}\n</workflow-instructions>`;
+const blockFor = (pin, definition) => `BZZY HOST-PINNED WORKFLOW\nName: ${pin.name}\nScope: ${pin.scope}\nVersion: ${pin.version}\nThese are the selected instructions for this original goal. They do not grant tools, account access, network scope or execution permissions.\n<workflow-instructions>\n${definition.instructions}\n</workflow-instructions>${definition.schemaVersion === 2 ? `\nHOST ROUTING CONTRACT (declare_work_unit before each eligible class investigation; close_work_unit records its consultation and disposition):\n${JSON.stringify(definition.routing)}` : ''}`;
 const bindingKey = (sessionId, goalId) => digest([sessionId, goalId]);
 const bindingFingerprint = binding => { const { fingerprint, ...value } = binding; return digest(value); };
 function assertContextFits(session) {
@@ -248,4 +259,15 @@ export function getGoalWorkflow(sessionId, goalId) {
     return { goalId, workflow: binding.workflow ? summary(binding.workflow) : null, admittedAt: binding.admittedAt,
       state: binding.workflow ? 'pinned' : binding.legacy ? 'legacy' : 'none' };
   } catch { return { goalId, workflow: null, admittedAt: binding.admittedAt, state: 'unavailable' }; }
+}
+
+// Trusted current-goal lookup. Never reinterpret a legacy workflow's prose.
+export function goalRoutingContract(session) {
+  if (!session?.goal?.id || session.parentSessionId || session.assignmentId || session.role || session.purpose && session.purpose !== 'terminal') return null;
+  const binding = getRecord(BINDING, bindingKey(session.id, session.goal.id));
+  if (!binding?.workflow) return null;
+  checkedBinding(session, binding);
+  const definition = versionFor(binding.workflow);
+  return definition.schemaVersion === 2 ? { workflowId: definition.id, workflowVersion: definition.version,
+    bindingId: binding.id, routing: normalizeRouting(definition.routing) } : null;
 }

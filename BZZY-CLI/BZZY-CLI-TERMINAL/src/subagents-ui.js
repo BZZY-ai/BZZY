@@ -10,7 +10,7 @@ import { libraryToggleRow } from './library-toggle-ui.js';
 import { libraryEntryMenu } from './library-entry-menu.js';
 import { openWorkflows } from './workflow-ui.js';
 
-const definitionFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits'];
+const definitionFields = ['name', 'description', 'instructions', 'provider', 'model', 'effort', 'policy', 'limits', 'capabilities'];
 const cwdFor = ui => (ui.sessionId && loadSession(ui.sessionId)?.cwd) || ui.tui?.cwd || process.cwd();
 const contextKey = ui => JSON.stringify([home(), ui.sessionId || null, cwdFor(ui)]);
 const reset = ui => { cancelDefinitionBundle(ui, 'agents'); ui.subagentCreatorDraft = null; ui.subagentPreview = null; ui.subagentOffset = 0; ui.subagentView = 'library'; ui.subagentRunId = null; ui.subagentRunOffset = 0; };

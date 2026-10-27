@@ -12,8 +12,7 @@ import { importSkill, inspectSkill, setSkillEnabled, readSkill } from '../src/en
 import { previewLibraryExport, buildLibraryArchive, previewLibraryImport, importLibraryBundle, discardDefinitionBundleReview } from '../src/engine/definition-bundle.js';
 
 const pack = fileURLToPath(new URL('../assets/bug-bounty/', import.meta.url));
-const workflowInput = () => ({ name: 'bug-bounty-methodology', description: 'Evidence-led authorized web/API hunting with 25 class specialists, embedded proof criteria and vuln-report-writer reporting.',
-  instructions: fs.readFileSync(path.join(pack, 'bug-bounty-methodology.md'), 'utf8').trim() });
+const workflowInput = () => JSON.parse(fs.readFileSync(path.join(pack, 'bug-bounty-methodology.json'), 'utf8'));
 const definitions = () => fs.readdirSync(path.join(pack, 'agents')).filter(name => !name.startsWith('._') && name.endsWith('.md')).sort().map(file => {
   const markdown = fs.readFileSync(path.join(pack, 'agents', file), 'utf8');
   const match = /^---\nname: ([a-z0-9-]+)\ndescription: ("[^\n]+")\n---\n\n([\s\S]+)$/.exec(markdown);
@@ -52,7 +51,7 @@ test('all 25 self-contained agents fit native schemas and sizes, inherit model s
 
 test('the complete pack round-trips through native Library ZIP validation with full criteria, enabled discovery and no execution', () => {
   const inputs = definitions().map(item => item.input), project = path.join(directory, 'source-project'); fs.mkdirSync(project);
-  const originals = inputs.map(input => saveSubagentDefinition(input, { scope: 'global' }));
+  const originals = inputs.map(input => saveSubagentDefinition({ ...input, capabilities: { version: 1, tags: [input.name.replace(/-agent$/, '')] } }, { scope: 'global' }));
   const workflow = saveWorkflow(workflowInput(), { scope: 'global' });
   const reporter = importSkill(path.join(pack, 'vuln-report-writer'), { scope: 'global' });
   setSkillEnabled(reporter.name, true, reporter.revision, { scope: 'global' });
@@ -68,9 +67,12 @@ test('the complete pack round-trips through native Library ZIP validation with f
   for (const original of originals) {
     const restored = getSubagentDefinition(original.name, { scope: 'global' });
     assert.equal(restored.instructions, original.instructions); assert.equal(restored.version, original.version); assert.equal(restored.enabled, true);
+    assert.deepEqual(restored.capabilities, original.capabilities);
   }
   assert.equal(listSubagentDefinitions({ scope: 'global', enabledOnly: true, limit: 100 }).total, 25);
   assert.equal(getWorkflow(workflow.name, { scope: 'global' }).instructions, workflow.instructions);
+  assert.deepEqual(getWorkflow(workflow.name, { scope: 'global' }).routing, workflow.routing);
+  assert.equal(getWorkflow(workflow.name, { scope: 'global' }).schemaVersion, 2);
   const skill = inspectSkill(reporter.name, { scope: 'global' }); assert.equal(skill.enabled, true); assert.equal(skill.version, reporter.version);
   const skillText = readSkill(reporter.name, { scope: 'global', limit: 32768 }).text;
   assert.match(skillText, /never publish gate passwords, bearer tokens/); assert.doesNotMatch(skillText, /\.\.\/findings|<real JWT>|No placeholders anywhere/);

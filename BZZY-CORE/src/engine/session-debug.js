@@ -11,28 +11,33 @@ import { privateWorkspacePath } from './private-paths.js';
 
 const sessionFields = ['id', 'alias', 'provider', 'backend', 'model', 'resolvedModel', 'selectedEffort', 'mode', 'role', 'purpose',
   'parentSessionId', 'assignmentId', 'createdAt', 'updatedAt', 'turns', 'executionState', 'goal', 'contract', 'policy', 'strictPolicy',
-  'usage', 'elapsedSeconds', 'reviewSource', 'importedUntrusted', 'importProvenance', 'allowedSkillIds'];
+  'usage', 'elapsedSeconds', 'reviewSource', 'importedUntrusted', 'importProvenance', 'allowedSkillIds',
+  'nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency'];
 const recordFields = ['id', 'sessionId', 'parentSessionId', 'goalId', 'workerSessionId', 'assignmentId', 'number', 'currentRound',
   'state', 'status', 'reason', 'createdAt', 'updatedAt', 'startedAt', 'finishedAt', 'objective', 'context', 'constraints', 'scope',
   'acceptanceCriteria', 'policy', 'limits', 'contract', 'workflow', 'tokensUsed', 'tokenBudget', 'runtimeUsedSeconds', 'evidence',
   'selection', 'role', 'closure', 'review', 'latestReport', 'missionContext', 'subagentDefinition', 'subagentTaskContext', 'chatRunId',
   'sourceGoalId', 'sharedEvidence', 'feedback', 'report', 'result', 'contextRequest', 'summary', 'details', 'title', 'resolution',
   'statement', 'rationale', 'truth', 'kind', 'freshness', 'provenance', 'decisions', 'completedWork', 'pendingActions', 'unresolvedQuestions',
-  'checks', 'requirements', 'passed', 'level', 'label', 'sha256', 'bytes', 'source', 'path', 'revision', 'importedUntrusted', 'importProvenance'];
+  'checks', 'requirements', 'passed', 'level', 'label', 'sha256', 'bytes', 'source', 'path', 'revision', 'importedUntrusted', 'importProvenance',
+  'schemaVersion', 'sourceVersion', 'contextGeneration', 'routing', 'subagentRouting', 'workUnitId', 'classId', 'hypothesis', 'specialist', 'reportSkills',
+  'workflowVersion', 'bindingId', 'allowedDispositions', 'admittedRunId', 'closedRunId', 'closedAt', 'supersedes', 'supersededBy',
+  'source', 'pendingMessages', 'sealedThroughSeq', 'indexedThroughSeq', 'scanSeq', 'scheduleReason', 'reasonPaused', 'generation', 'sourceHash'];
 const eventFields = [...recordFields, 'text', 'message', 'error', 'code', 'name', 'input', 'detail', 'action', 'outcome', 'round',
   'runId', 'version', 'callId', 'durationMs', 'skills', 'agents', 'tools', 'model', 'provider', 'effort', 'resource', 'discovery', 'definition',
   'skillId', 'skillVersion', 'rootSessionId', 'rootGoalId', 'attribution', 'file', 'offset', 'usageId', 'goalMode', 'nextOffset',
   'question', 'answer', 'expiresAt', 'executionState', 'elapsedSeconds', 'tokens', 'available', 'totalTokens', 'inputTokens', 'outputTokens',
   'setupId', 'transport', 'toolsSource', 'reportedTools', 'threadRef', 'instructions', 'prompt', 'delivery', 'backend',
   'executionId', 'requestId', 'agent', 'agentNamespace', 'childSessionId', 'turnId', 'itemId', 'previousProvider', 'previousModel', 'appliesTo',
-  'contextResult', 'resultSourceSha256', 'resultBytes',
+  'contextResult', 'resultSourceSha256', 'resultBytes', 'contextEfficiency', 'refresh', 'metrics', 'epoch', 'phase', 'legacy', 'receiptRef', 'metricMeaning',
+  'contextBudget', 'readiness', 'inputEstimate', 'budgetState', 'catalog', 'catalogReadiness', 'complete', 'omitted', 'total', 'revision',
   'method', 'url', 'backendState', 'localRequestObserved', 'tool', 'sourceSessionId', 'sourceGoalRevision', 'sourceRevision', 'acceptance', 'usage'];
 const knownEvents = new Set(['message.user', 'text', 'tool', 'coordination.tool', 'core.usage', 'skill.loaded', 'lifecycle', 'goal',
   'goal.completed', 'goal.paused', 'goal.cancelled', 'goal.stalled', 'summary', 'error', 'info', 'question', 'question.answered',
   'question.expired', 'input.required', 'activity', 'checkpoint', 'issue', 'memory', 'assessment', 'acceptance', 'artifact',
   'network.backend', 'network.request', 'network.response', 'usage.updated', 'delegation.usage', 'model.resolved', 'model.changed', 'provider.changed',
   'control.observed', 'control.failed', 'debate.result', 'diagnostic.run', 'diagnostic.run.finished', 'diagnostic.catalog', 'diagnostic.tool', 'diagnostic.backend', 'diagnostic.prompt']);
-const extraEvent = /^(?:assignment|peer|debate|workflow|session\.memory|conversation|execution)\./;
+const extraEvent = /^(?:assignment|peer|debate|workflow|session\.memory|conversation|execution|diagnostic)\.|^message\.finalized$/;
 const fail = message => { throw Object.assign(new Error(message), { code: 'SESSION_DEBUG' }); };
 const parse = value => { if (typeof value !== 'string') return value; try { return JSON.parse(value); } catch { return value; } };
 
@@ -154,6 +159,11 @@ export function exportSessionDebug(sessionId, { cwd, output, at = new Date() } =
       for (const kind of ['goal-history', 'checkpoint', 'issue', 'memory', 'assessment', 'acceptance', 'artifact', 'worker-report']) {
         for (const row of db.prepare('SELECT data FROM records WHERE kind=? AND json_extract(data,\'$.sessionId\') IN (SELECT value FROM json_each(?)) ORDER BY updated_at,id').iterate(kind, ids)) entry(kind, { data: pick(JSON.parse(row.data), recordFields) });
       }
+      for (const row of db.prepare(`SELECT kind,data FROM records WHERE kind IN
+        ('core.workflow.work-unit','core.workflow.consultation','core.checkpoint.scope','core.history.maintenance','core.conversation.source','core.task-state.read','native-compaction')
+        AND json_extract(data,'$.sessionId') IN (SELECT value FROM json_each(?)) ORDER BY updated_at,id`).iterate(ids)) {
+        entry(row.kind, { data: pick(JSON.parse(row.data), recordFields) });
+      }
       for (const row of db.prepare("SELECT data FROM records WHERE kind='round' AND json_extract(data,'$.assignmentId') IN (SELECT value FROM json_each(?)) ORDER BY updated_at,id").iterate(JSON.stringify(assignments))) entry('assignment.round', { data: pick(JSON.parse(row.data), recordFields) });
       end();
 
@@ -213,7 +223,7 @@ export function exportSessionDebug(sessionId, { cwd, output, at = new Date() } =
             else gaps.add('historical_agent_version_unavailable');
           }
         }
-        if (row.type === 'diagnostic.catalog') {
+        if (row.type === 'diagnostic.catalog' && data.kind !== 'specialists') {
           runCatalogs.add(data.runId);
           for (const skill of data.skills || []) addSkill(skill.id, skill.version, owner, 'prepared-skill-prompt');
         }
@@ -237,7 +247,7 @@ export function exportSessionDebug(sessionId, { cwd, output, at = new Date() } =
         }
         if (row.type === 'text' && typeof data.text === 'string') {
           const previous = pending.get(row.sessionId);
-          if (previous && previous.data.itemId !== data.itemId) flush(row.sessionId);
+          if (previous && (previous.data.itemId !== data.itemId || previous.data.runId !== data.runId || previous.data.threadRef !== data.threadRef)) flush(row.sessionId);
           const active = pending.get(row.sessionId);
           if (active) {
             const remaining = Math.max(0, 4 * 1024 * 1024 - active.data.text.length);
@@ -246,7 +256,7 @@ export function exportSessionDebug(sessionId, { cwd, output, at = new Date() } =
           }
           else {
             const retained = data.text.slice(0, 4 * 1024 * 1024);
-            pending.set(row.sessionId, { ...source, throughSeq: row.seq, type: 'assistant.text', data: { ...pick(data, ['itemId', 'turnId']), text: retained,
+            pending.set(row.sessionId, { ...source, throughSeq: row.seq, type: 'assistant.text', data: { ...pick(data, ['itemId', 'turnId', 'runId', 'threadRef']), text: retained,
               ...(retained.length < data.text.length ? { omittedCharacters: data.text.length - retained.length } : {}) } });
             if (retained.length < data.text.length) gaps.add('large_assistant_reply_limit');
           }
@@ -256,7 +266,7 @@ export function exportSessionDebug(sessionId, { cwd, output, at = new Date() } =
         if (row.type === 'backend') projected = backendEvent(data);
         else if (knownEvents.has(row.type) || extraEvent.test(row.type)) projected = { type: row.type, data: pick(data, eventFields) };
         if (!projected) { skipped[row.type === 'backend' ? `backend:${data.method || 'unknown'}:${data.params?.item?.type || ''}` : row.type] = (skipped[row.type === 'backend' ? `backend:${data.method || 'unknown'}:${data.params?.item?.type || ''}` : row.type] || 0) + 1; continue; }
-        if (row.type === 'message.user' || row.type === 'tool' || row.type === 'coordination.tool' || projected.type.startsWith('tool.') || row.type === 'lifecycle') flush(row.sessionId);
+        if (row.type === 'message.user' || row.type === 'message.finalized' || row.type === 'tool' || row.type === 'coordination.tool' || projected.type.startsWith('tool.') || row.type === 'lifecycle') flush(row.sessionId);
         if (row.type === 'coordination.tool' && sensitiveOperation(data.input)) projected.data.input = '[omitted: private operation]';
         if (row.type === 'tool' && sensitiveOperation(data.detail)) projected.data.detail = '[omitted: private operation]';
         emitEvent({ ...source, ...projected });

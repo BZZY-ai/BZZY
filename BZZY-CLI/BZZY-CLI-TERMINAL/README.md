@@ -1,5 +1,11 @@
 # bzzy 🐝
 
+Metrics includes current-session BZZY health: workflow consultation coverage and
+blockers, native tool delivery/context planning, compaction/refresh state, memory
+indexing and background review reasons. These are read-only saved observations.
+See [long-run reliability](../../BZZY-CORE/docs/LONG-RUN-RELIABILITY.md) before
+updating/resuming an existing goal or adopting the structured bug-bounty workflow.
+
 Supported targets: **Debian 12/13, Ubuntu 24.04+, and macOS 15+** on x64 or
 ARM64 with Node.js 24+. The installer uses a compatible existing Node or installs
 a private Node 24 runtime. Existing Codex/Claude executables remain separate.

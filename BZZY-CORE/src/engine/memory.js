@@ -252,10 +252,57 @@ export function rollbackMemory(session, id, { fromRevision, expectedRevision, ex
   writeProjectRecord({ ...session, agentNamespace: current.agent }, 'memory', id, result); return result;
 }
 
-export function checkpoint(session, input) {
-  const access = knowledgeAccess(session), previous = getRecord('checkpoint', session.id) || {};
-  const record = { ...previous, project: access.project.root, projectId: access.project.id, sessionId: session.id, objective: session.goal?.objective || session.contract?.objective,
-    constraints: [...new Set([...(session.contract?.constraints || []), ...(previous.constraints || []), ...(input.constraints || [])])], revision: (previous.revision || 0) + 1, updatedAt: now() };
+// Attribution comes from the live host, never from a checkpoint's model input.
+// Runs of one goal share progress; ordinary chat and assignment rounds do not
+// inherit a saved goal's completion claims merely because its text is similar.
+export function checkpointScope(session, context = {}) {
+  const assignment = session.assignmentId || null, goal = context.goalMode !== false ? session.goal?.id || null : null;
+  return { version: 1, kind: assignment ? 'assignment' : goal ? 'goal' : 'chat', sessionId: session.id,
+    goalId: assignment ? session.missionContext?.brief?.goal?.id || goal : goal,
+    assignmentId: assignment, assignmentRound: assignment ? session.assignmentRound ?? null : null,
+    chatId: assignment || goal ? null : session.id, chatRunId: assignment || goal ? null : context.runId || null };
+}
+const checkpointScopeId = scope => `${scope.sessionId}:${digest(scope)}`;
+const attributedCheckpoint = record => record?.schemaVersion === 2 && record.provenance === 'core-checkpoint'
+  && record.scope?.version === 1 && !record.importedUntrusted && !record.importProvenance;
+const checkpointRevision = record => Number.isSafeInteger(record?.revision) && record.revision > 0 ? record.revision : 0;
+function assertCheckpointScope(session, scope) {
+  const saved = getRecord('session', session.id);
+  if (getRecord('session-deletion', session.id) || !saved || saved.deletedAt) throw new Error('Deleted sessions cannot read or write checkpoints.');
+  if (scope.kind === 'goal' && saved && saved.goal?.id !== scope.goalId) throw new Error('Checkpoint goal changed. Refresh the current task.');
+  if (scope.kind === 'assignment' && saved && (saved.assignmentId !== scope.assignmentId || (saved.assignmentRound ?? null) !== scope.assignmentRound)) throw new Error('Checkpoint assignment changed. Refresh the current task.');
+}
+export function checkpointState(session, context = {}) {
+  knowledgeAccess(session);
+  const scope = checkpointScope(session, context), latest = getRecord('checkpoint', session.id);
+  assertCheckpointScope(session, scope);
+  const selected = getRecord('core.checkpoint.scope', checkpointScopeId(scope));
+  const current = [selected, latest].find(record => attributedCheckpoint(record) && digest(record.scope) === digest(scope)) || null;
+  const historical = latest && (!current || latest.revision !== current.revision) ? {
+    revision: latest.revision ?? null, updatedAt: latest.updatedAt || null,
+    scope: attributedCheckpoint(latest) ? latest.scope : null,
+    reason: attributedCheckpoint(latest) ? 'different-execution-scope' : 'legacy-or-imported-unattributed',
+    authority: 'Historical progress only; it does not complete or instruct the current task.'
+  } : null;
+  return { scope, current, historical };
+}
+function assertCheckpointWriter(session, scope, context) {
+  assertCheckpointScope(session, scope);
+  const run = getRecord('run', session.id);
+  if (scope.assignmentId) {
+    const job = getRecord('assignment', scope.assignmentId);
+    if (job && (job.workerSessionId !== session.id || job.currentRound !== scope.assignmentRound || job.closure === 'cancelled')) throw new Error('Checkpoint assignment is no longer current.');
+  }
+  if (context.runId && run && (run.id !== context.runId || !['starting', 'running', 'waiting_for_input'].includes(run.state))) throw new Error('Checkpoint run is no longer active.');
+}
+
+export function checkpoint(session, input, context = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['decisions', 'completedWork', 'pendingActions', 'unresolvedQuestions', 'constraints', 'evidence', 'expectedRevision', 'requestId'].includes(key))) throw new Error('Invalid checkpoint fields. Execution attribution is host-owned.');
+  if (input.expectedRevision != null && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0)) throw new Error('Checkpoint expectedRevision must be a nonnegative revision.');
+  if (input.requestId != null && (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId))) throw new Error('Use a bounded checkpoint request ID.');
+  const access = knowledgeAccess(session), scope = checkpointScope(session, context), fields = {};
+  if (access.disabled) throw new Error('Checkpoints are unavailable for this review role.');
+  if (input.constraints != null) fields.constraints = list(input.constraints, 50).map(value => text(value, 2000));
   if (input.decisions != null) {
     if (!Array.isArray(input.decisions) || input.decisions.length > 50) throw new Error('Checkpoint decisions must be a bounded list.');
     const normalize = (value, depth = 0) => {
@@ -272,17 +319,42 @@ export function checkpoint(session, input) {
         return [key, key === 'evidence' ? validEvidence(session, item, access) : normalize(item, depth + 1)];
       }));
     };
-    record.decisions = input.decisions.map(value => {
+    fields.decisions = input.decisions.map(value => {
       if (typeof value !== 'string' && (!value || Array.isArray(value) || typeof value !== 'object')) throw new Error('Checkpoint decisions need a string or decision object.');
       const decision = normalize(value); assertKnowledgeText(JSON.stringify(decision), 8192); return decision;
     });
-    if (Buffer.byteLength(JSON.stringify(record.decisions)) > 64 * 1024) throw new Error('Checkpoint decisions exceed the 64 KiB limit.');
+    if (Buffer.byteLength(JSON.stringify(fields.decisions)) > 64 * 1024) throw new Error('Checkpoint decisions exceed the 64 KiB limit.');
   }
   for (const key of ['completedWork', 'pendingActions', 'unresolvedQuestions', 'evidence']) {
-    if (input[key] != null) record[key] = list(input[key], key === 'evidence' ? 32 : 50).map(value => key === 'evidence' ? value : text(value, 2000));
+    if (input[key] != null) fields[key] = list(input[key], key === 'evidence' ? 32 : 50).map(value => key === 'evidence' ? value : text(value, 2000));
   }
-  if (record.evidence) validEvidence(session, record.evidence, access);
-  atomic(db => { putRecord('checkpoint', session.id, record, db); putRecord('core.checkpoint.revision', `${session.id}:${record.revision}`, record, db); appendEvent(session.id, 'checkpoint', record, db); });
+  const record = atomic(db => {
+    assertCheckpointWriter(session, scope, context);
+    const requestKey = input.requestId && `${checkpointScopeId(scope)}:${input.requestId}`, hash = digest(input);
+    const receipt = requestKey && getRecord('core.checkpoint.request', requestKey);
+    if (receipt) { if (receipt.digest !== hash) throw new Error('Checkpoint request ID was reused with different content.'); return receipt.record; }
+    // Read and compare inside the write transaction, including competing hosts.
+    const latest = getRecord('checkpoint', session.id), previous = checkpointState(session, context).current || {};
+    if (input.expectedRevision != null && input.expectedRevision !== checkpointRevision(previous)) throw new Error('Checkpoint changed. Refresh its revision.');
+    const revision = Math.max(checkpointRevision(latest), checkpointRevision(previous)) + 1;
+    if (!Number.isSafeInteger(revision)) throw new Error('Checkpoint revision limit reached.');
+    const record = { ...previous, ...fields, schemaVersion: 2, provenance: 'core-checkpoint', scope,
+      project: access.project.root, projectId: access.project.id, sessionId: session.id,
+      objective: scope.kind === 'goal' ? session.goal?.objective : scope.kind === 'assignment' ? session.contract?.objective : undefined,
+      goalId: scope.goalId, runId: context.runId || null, assignmentId: scope.assignmentId, assignmentRound: scope.assignmentRound,
+      constraints: [...new Set([...(session.contract?.constraints || []), ...(previous.constraints || []), ...(fields.constraints || [])])],
+      revision, updatedAt: now() };
+    if (record.evidence) validEvidence(session, record.evidence, access);
+    if (latest) {
+      const legacyKey = `${session.id}:${checkpointRevision(latest) || `legacy:${digest(latest)}`}`;
+      if (!getRecord('core.checkpoint.revision', legacyKey)) putRecord('core.checkpoint.revision', legacyKey, latest, db);
+    }
+    putRecord('checkpoint', session.id, record, db);
+    putRecord('core.checkpoint.scope', checkpointScopeId(scope), record, db);
+    putRecord('core.checkpoint.revision', `${session.id}:${record.revision}`, record, db);
+    if (requestKey) putRecord('core.checkpoint.request', requestKey, { sessionId: session.id, scope, digest: hash, record }, db);
+    appendEvent(session.id, 'checkpoint', record, db); return record;
+  });
   writeProjectRecord(session, 'checkpoints', session.id, record);
   indexKnowledgeRecord(access.project, 'checkpoint', session.id, session.id, JSON.stringify({ objective: record.objective, decisions: record.decisions, pendingActions: record.pendingActions, unresolvedQuestions: record.unresolvedQuestions }), record);
   return record;

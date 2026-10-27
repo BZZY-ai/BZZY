@@ -18,7 +18,7 @@ import { openProjectImport, knownImportedRecord, prepareProjectImport, commitPro
 
 const helper = fileURLToPath(new URL('./archive.py', import.meta.url));
 const uuid = /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi;
-const ephemeral = kind => /^(?:telegram-|project-import(?:-|$)|access-token$|input-owner$|account-status$|outbox$|notification|run$|control$|assignment-control$|assignment-context$|core\.(?:learning|skill|knowledge|project|memory|checkpoint|issue|mission|workflow)(?:\.|$))/.test(kind);
+const ephemeral = kind => /^(?:telegram-|project-import(?:-|$)|access-token$|input-owner$|account-status$|outbox$|notification|run$|control$|assignment-control$|assignment-context$|native-compaction$|core\.(?:learning|skill|knowledge|project|memory|checkpoint|issue|mission|workflow|conversation|history|task-state)(?:\.|$))/.test(kind);
 const within = (file, root) => file === root || file.startsWith(root + path.sep);
 const present = file => { try { fs.lstatSync(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
 

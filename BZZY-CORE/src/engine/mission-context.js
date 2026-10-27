@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { database, digest, getRecord, putRecord, now, transaction } from './database.js';
 import { sharedSecrets } from './share-bundle-policy.js';
 import { inside } from './evidence.js';
+import { checkpointState } from './memory.js';
 
 const fail = message => { throw Object.assign(new Error(message), { code: 'MISSION_CONTEXT_UNAVAILABLE' }); };
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
@@ -93,8 +94,9 @@ export function createMissionContext(parent, { purpose = 'delegate', independent
   if (!Array.isArray(evidenceIds) || evidenceIds.length > 4096 || evidenceIds.some(id => !uuid(id))) fail('Mission evidence must contain bounded recorded artifact IDs.');
   const source = critical(parent), secrets = sharedSecrets();
   const chat = purpose === 'subagent' && taskContext?.mode === 'chat';
-  const checkpoint = !independent && !chat && getRecord('checkpoint', parent.id);
-  const currentCheckpoint = checkpoint && checkpoint.objective === source.objective && (!parent.goal?.createdAt || checkpoint.updatedAt >= parent.goal.createdAt) ? checkpoint : null;
+  // Exact host-owned execution scope binds progress. Similar objective text or
+  // a recent timestamp cannot turn legacy/imported completion into this goal.
+  const currentCheckpoint = !independent && !chat ? checkpointState(parent).current : null;
   const rows = chat ? [] : userDirectives(parent);
   if (rows.length > 256) fail('The mission has too many user directives for a safe automatic handoff. Consolidate the instructions explicitly.');
   const directives = rows.map(row => { const data = JSON.parse(row.data); return { sourceId: `${parent.id}:${row.seq}`, text: typeof data.text === 'string' ? data.text : '' }; });

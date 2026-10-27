@@ -32,7 +32,8 @@ test('ordinary chat avoids the goal audit while explicit goals retain durable co
   assert.doesNotMatch(agentInstructions(session), /YOU ARE THE SUPERVISOR/);
   assert.equal(reasoningEffort(session), 'medium');
   const goal = agentInstructions(session, { goalMode: true });
-  assert.match(goal, /A large previous investigation/);
+  assert.doesNotMatch(goal, /A large previous investigation/);
+  assert.match(goal, /legacy-or-imported-unattributed/);
   assert.match(goal, /assess explicit acceptance criteria/);
   assert.equal(reasoningEffort(session, { goalMode: true }), undefined);
   assert.equal(reasoningEffort(session, { goalMode: true, effort: 'high' }), 'high');

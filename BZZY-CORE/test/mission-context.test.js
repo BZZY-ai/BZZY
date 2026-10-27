@@ -13,6 +13,7 @@ import { createMissionContext, missionContextCurrent, missionSourceRevision, mis
 import { prepareChatDebate } from '../src/engine/chat-debate.js';
 import { assessCompletion, assessRequirement } from '../src/engine/verification.js';
 import { randomUUID } from 'node:crypto';
+import { checkpoint } from '../src/engine/memory.js';
 
 let directory, previousHome, source;
 test.beforeEach(() => {
@@ -35,10 +36,24 @@ test('automatic mission preserves complete user instructions and pins new direct
 
 test('independent brief excludes prior opinions and unrelated ledgers while retaining exact scope', () => {
   source.contract.scope = { allowedTargets: ['https://offline.example.test'], excludedActions: ['Modify accounts'] }; saveSession(source);
-  putRecord('checkpoint', source.id, { sessionId: source.id, objective: source.goal.objective, updatedAt: new Date(Date.now() + 100).toISOString(), decisions: [{ decision: 'OTHER_MODEL_OPINION' }], unresolvedQuestions: ['Check the control.'] });
+  checkpoint(source, { decisions: [{ decision: 'OTHER_MODEL_OPINION' }], unresolvedQuestions: ['Check the control.'] });
   const shared = createMissionContext(source); assert.equal(shared.brief.decisions.length, 1);
   const independent = createMissionContext(source, { independent: true }); assert.deepEqual(independent.brief.decisions, []);
   assert.equal(independent.brief.scope.allowedTargets[0], 'https://offline.example.test'); assert.doesNotMatch(JSON.stringify(independent), /OTHER_MODEL_OPINION/);
+});
+
+test('mission progress requires exact current host attribution rather than objective text, timestamps or imported goal IDs', () => {
+  const objective = source.goal.objective;
+  putRecord('checkpoint', source.id, { sessionId: source.id, objective, updatedAt: '9999-01-01T00:00:00.000Z', completedWork: ['LEGACY-COMPLETE'], decisions: ['LEGACY-DECISION'] });
+  assert.deepEqual(createMissionContext(source).brief.completedWork, []);
+  assert.deepEqual(createMissionContext(source).brief.decisions, []);
+  const local = checkpoint(source, { completedWork: ['Current controls recorded.'], decisions: ['Retain the negative control.'] });
+  assert.deepEqual(createMissionContext(source).brief.completedWork, local.completedWork);
+  source.goal = newGoal(objective); saveSession(source);
+  const fresh = createMissionContext(source); assert.deepEqual(fresh.brief.completedWork, []); assert.deepEqual(fresh.brief.decisions, []);
+  const forged = { ...local, scope: { ...local.scope, goalId: source.goal.id }, goalId: source.goal.id, importedUntrusted: true, importProvenance: { source: 'fixture' }, updatedAt: '9999-01-01T00:00:00.000Z' };
+  putRecord('checkpoint', source.id, forged);
+  assert.deepEqual(createMissionContext(source).brief.completedWork, []);
 });
 
 test('nested credential bindings are redacted before persistent mission publication', () => {

@@ -175,3 +175,10 @@ execution path works. A prepared catalog is not proof of model attention; worker
 agreement is not verification. Diagnostic instrumentation is best effort and
 cannot change tool results, cause mutation retries, grant permissions or count
 as additional skill/agent use.
+
+Updated runners add `message.finalized`, `diagnostic.context`, structured
+`workflow.routing.*` events and native readiness/input-estimate fields. Both
+exports include current health; the full ZIP also retains scoped consultation,
+checkpoint, source/index maintenance and compaction dedup records. Unknown legacy
+delivery remains unknown. See [long-run reliability](LONG-RUN-RELIABILITY.md) and
+the read-first guide's source-generation/routing audit checklist.

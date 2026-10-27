@@ -18,8 +18,8 @@ const fileLimit = 64 * 1024 * 1024, totalLimit = 4 * 1024 * 1024 * 1024;
 const kinds = new Set(['session', 'goal-history', 'goal-event', 'checkpoint', 'issue', 'memory', 'activity', 'artifact', 'artifact-read', 'artifact-import',
   'snapshot', 'run', 'execution', 'operation', 'acceptance', 'assessment', 'assignment', 'round', 'worker-report', 'review', 'recovery', 'coordination-history',
   'parallel', 'parallel-result', 'besties', 'besties-result', 'conversation-debate', 'peer-message', 'peer-review', 'peer-cursor', 'question', 'control',
-  'assignment-control', 'assignment-context', 'assignment-context-answer', 'assignment-apply', 'subagent-invocation', 'core.usage', 'core.mission.context']);
-const kindPrefix = /^core\.(?:session\.(?:memory|compactor)|learning|memory\.revision|issue\.revision|checkpoint\.revision|knowledge\.cursor|workflow\.(?:binding|goal-binding)|skill\.(?:candidate|history|deleted|archived))(?:\.|$)/;
+  'assignment-control', 'assignment-context', 'assignment-context-answer', 'assignment-apply', 'subagent-invocation', 'native-compaction', 'core.usage', 'core.mission.context']);
+const kindPrefix = /^core\.(?:session\.(?:memory|compactor)|learning|memory\.revision|issue\.revision|checkpoint\.(?:revision|scope|request)|conversation\.(?:source|pending)|history\.maintenance|task-state\.read|knowledge\.cursor|workflow\.(?:binding|goal-binding|work-unit|consultation)|skill\.(?:candidate|history|deleted|archived))(?:\.|$)/;
 const settings = new Set(['core.learning.settings', 'core.session.compactor.settings', 'core.background-model']);
 const relation = /^(?:sessionId|parentSessionId|sourceSessionId|rootSessionId|workerSessionId|reviewSessionId|documentSourceSessionId|learningSourceSessionId|jobId|learningJobId|documentTaskId|assignmentId|goalId|sourceGoalId|missionContextId|nodeId|candidateId|evaluationId|reservationId|skillId)$/;
 const projectKinds = /^(?:memory|issue|checkpoint|core\.(?:memory|issue|checkpoint|knowledge|skill\.candidate))/;

@@ -64,6 +64,16 @@ assistant by default. Changing defaults starts no work and grants no permissions
 Compaction retains durable usage reservations and explicit recovery after uncertain requests. See
 BZZY-CORE/docs/SESSION-MEMORY.md for bounds and provider billing limitations.
 
+Version 2 workflow consultation records pin the declared current-goal hypothesis,
+specialist/skill versions, read coverage and reviewed assignment. They gate declared
+work-unit completion, never tool permissions, semantic coverage or vulnerability
+truth. Imported execution receipts and native source/readiness/refresh cursors
+cannot become recipient execution authority. Checkpoint saves and source cursors
+recheck deletion/ownership inside their transactions. Complete-message masking
+precedes derived slices, including learning review inputs; unsealed tails are
+excluded. Optional foreground reviews keep owner policy, cooldowns, reservations,
+restricted no-tool execution and durable stop/uncertain-request handling.
+
 Goal workflows are scoped reusable text, with credential rejection and Core's
 mandatory generation policy. The host pins the complete selected version before
 goal dispatch and verifies the original binding on resume. Workflow text grants
