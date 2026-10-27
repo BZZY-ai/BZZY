@@ -50,6 +50,7 @@ bzzy_root_preflight() {
 import os, pathlib, stat, sys
 checked = set()
 def owned(value):
+    value = os.fspath(value)
     if not pathlib.Path(value).is_absolute() or any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise RuntimeError()
     current = pathlib.Path(value).resolve(strict=True)

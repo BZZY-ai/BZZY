@@ -1,3 +1,18 @@
+# Root installer accepts pathlib paths during ownership traversal (2026-10-27)
+
+The embedded ownership preflight now normalizes filesystem paths with
+`os.fspath` before checking string characters. A fresh root source install
+previously raised `TypeError: 'PosixPath' object is not iterable` when discovering
+its Core/Relay siblings, before any Node probe or host activation.
+
+The regression reproduced that exact exception before the fix and now exercises
+the real preflight with sibling products, package symlinks, a directory cycle,
+Node aliases, the private runtime and an absent initial Node. Only ownership
+metadata is simulated on macOS; path traversal remains real. **61 installer and
+updater tests passed**, followed by the extended positive traversal test. Shell
+syntax and whitespace checks passed. Existing checkouts can pull and rerun the
+installer; no state or launcher cleanup is needed for this preflight failure.
+
 # Linux root installation and the saved session's project folder (2026-10-27)
 
 Node 24/macOS: **1,014 Core tests passed, 2 skipped**; the complete CLI run

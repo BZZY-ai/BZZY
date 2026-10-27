@@ -207,3 +207,40 @@ test('root installation rejects a spoofed identity or unsafe source before any N
     assert.equal(fs.existsSync(marker), false); assert.equal(fs.existsSync(bin), false);
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 });
+
+test('root preflight traverses trusted sibling products, dependency links and both runtime candidates', t => {
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-root-preflight-paths-')));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const workspace = path.join(temporary, 'BZZY'), checkout = path.join(workspace, 'BZZY-CLI', 'BZZY-CLI-TERMINAL');
+  const core = path.join(workspace, 'BZZY-CORE'), relay = path.join(workspace, 'BZZY-RELAY');
+  for (const directory of [checkout, core, relay]) { fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, 'package.json'), '{}'); }
+  const modules = path.join(checkout, 'node_modules', '@bzzy'); fs.mkdirSync(modules, { recursive: true });
+  fs.symlinkSync(core, path.join(modules, 'core'));
+  const coreModules = path.join(core, 'node_modules', '@bzzy'), relayModules = path.join(relay, 'node_modules', '@bzzy');
+  fs.mkdirSync(coreModules, { recursive: true }); fs.mkdirSync(relayModules, { recursive: true });
+  fs.symlinkSync(relay, path.join(coreModules, 'relay')); fs.symlinkSync(core, path.join(relayModules, 'core'));
+  const node = path.join(temporary, 'node'), privateNode = path.join(checkout, '.bzzy-runtime', 'node', 'bin', 'node');
+  fs.mkdirSync(path.dirname(privateNode), { recursive: true });
+  for (const file of [node, privateNode]) fs.writeFileSync(file, '#!/bin/sh\nexit 97\n', { mode: 0o755 });
+  const alias = path.join(temporary, 'node-alias'); fs.symlinkSync(node, alias);
+  const source = fs.readFileSync(path.join(root, 'install.sh'), 'utf8');
+  const preflight = /<<'PY'\n([\s\S]*?)\nPY/.exec(source)?.[1]; assert.ok(preflight);
+  // Only root ownership/mode metadata is simulated. The actual embedded code
+  // walks real sibling directories, pathlib objects, symlinks and executables.
+  const simulatedRoot = `import os,pathlib
+def trusted(method):
+ def read(self,*args,**kwargs):
+  fields=list(method(self,*args,**kwargs));fields[0]&=~0o022;fields[4]=0
+  return os.stat_result(fields)
+ return read
+pathlib.Path.stat=trusted(pathlib.Path.stat)
+pathlib.Path.lstat=trusted(pathlib.Path.lstat)
+`;
+  for (const selected of [alias, privateNode, '']) {
+    const result = spawnSync('python3', ['-I', '-c', simulatedRoot + preflight, checkout, selected, privateNode], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), selected ? fs.realpathSync(selected) : '');
+    assert.doesNotMatch(result.stderr, /Traceback|TypeError/);
+  }
+  assert.equal(fs.existsSync(path.join(temporary, '.bzzy')), false);
+});
