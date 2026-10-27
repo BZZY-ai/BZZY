@@ -23,6 +23,8 @@ import { runtimeInfo, runtimeRequest } from '../src/runtime.js';
 import { identityAlive } from '../src/process-identity.js';
 import { transferLibrary } from '../src/library-ui.js';
 import { libraryImportEntryIndexes } from '@bzzy/core/engine/definition-bundle.js';
+import * as libraryBackend from '@bzzy/core/engine/definition-bundle.js';
+import { createSkill } from '@bzzy/core/engine/skills.js';
 
 let directory, previous;
 const providerKeys = ['DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY', 'EXPLABS_API_KEY'];
@@ -208,6 +210,48 @@ test('Settings Library import uses the same private code flow and shows the comp
   assert.ok(ui.tui.lastFrame.length <= 24); assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < 80));
   ui.tui.setPanel('chat'); assert.equal(ui.tui.value, 'Keep my text'); assert.equal(ui.tui.cursor, 4);
   assert.equal(listRecords('execution').length, 0);
+});
+
+test('Settings export shows the exact blocked package and safe reason, then exports the explicitly retained selection', async () => {
+  const { ui, output } = terminal(), calls = [];
+  createSkill({ name: 'mail-reader', description: 'Read approved messages.', instructions: 'Use the fixed account private-fixture@example.invalid.' }, { scope: 'global' });
+  createSkill({ name: 'safe-checks', description: 'Review supplied fixtures.', instructions: 'Review supplied controls.' }, { scope: 'global' });
+  const code = 'BZZY-LIBRARY-2.' + Array(4).fill(Buffer.alloc(32, 9).toString('base64url')).join('.');
+  ui.settings = new ClientSettings(ui, {
+    hostLoader: async () => ({ coreHostStatus: async () => ({ running: true }) }),
+    libraryTransfer: (operation, cwd, target, options) => transferLibrary(operation, cwd, target, { ...options,
+      loadBundle: async () => libraryBackend, relayLoader: async () => ({ CoreTerminalSharing: class {
+        async start() {}
+        async createLibraryShare(request) { calls.push(request); return { shareId: randomUUID(), code, approval: 'code', senderFingerprint: Buffer.alloc(32, 10).toString('base64url'), expiresAt: Date.now() + 60000 }; }
+        async status() { return { state: 'complete', pending: [] }; }
+        async close() {}
+      } }),
+    }),
+  });
+  ui.chooseMany = async (_title, choices) => choices.map(choice => choice.value);
+  ui.tui.value = 'Preserve this draft'; ui.tui.cursor = 3;
+  ui.openSettings(); await ui.settings.run('core');
+  const before = listRecords('core.skill'), task = ui.settings.run('library-export');
+  try {
+    await waitFor(() => ui.tui.selection?.title === 'Some selected entries cannot be shared' && !ui.tui.selection.loading);
+    assert.equal(calls.length, 0); assert.equal(ui.settings.busy, true);
+    const blocked = ui.tui.selection.choices.find(choice => choice.value === 'blocked:0');
+    assert.match(blocked.label, /mail-reader · global/);
+    assert.match(blocked.description, /SKILL\.md:\d+/); assert.match(blocked.description, /account address is embedded/);
+    for (const [columns, rows] of [[80, 24], [50, 20]]) {
+      Object.assign(output, { columns, rows }); ui.tui.render();
+      const rendered = ui.tui.lastFrame.map(clean).join('\n');
+      assert.doesNotMatch(rendered, /private-fixture@example\.invalid|Core service action failed/);
+      assert.ok(ui.tui.lastFrame.length <= rows); assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
+    }
+    ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'return' }); await task;
+    assert.equal(ui.settings.warning, false, ui.settings.message); assert.equal(ui.settings.busy, false);
+    assert.equal(calls.length, 1); assert.deepEqual(calls[0].excludeEntries.map(entry => entry.name), ['mail-reader']);
+    assert.deepEqual(listRecords('core.skill'), before, 'omitting a package never edits or disables the source');
+    assert.equal(ui.tui.panel, 'settings'); assert.equal(ui.settings.page, 'core');
+    ui.tui.setPanel('chat'); assert.equal(ui.tui.value, 'Preserve this draft'); assert.equal(ui.tui.cursor, 3);
+    assert.equal(listRecords('execution').length, 0);
+  } finally { ui.tui.finishSelection(null); await task.catch(() => {}); }
 });
 
 test('standalone Settings honors the launch directory before any chat is selected', async () => {

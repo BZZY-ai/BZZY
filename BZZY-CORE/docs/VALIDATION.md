@@ -1,3 +1,24 @@
+# Actionable blocked-entry diagnostics in Settings exports (2026-10-27)
+
+Name-checkbox exports now reuse Library's safe per-entry diagnostics and explicit
+omission controls instead of reducing blockers to a generic Settings message.
+Names/scopes, safe reasons and resource file/line are available without matched
+private values. Goals retain safe-ID diagnostics. Only the remaining original
+selection is exported after omission; all original exact pins, including newly
+omitted entries, are rechecked before retry. Empty remaining selections show a
+result without preparing a Relay code. Source definitions and ON/OFF states are
+not edited by omission.
+
+Node 24/macOS: **119 focused CLI tests** and **48 Core Library tests** passed,
+plus CLI syntax and whitespace checks. Regressions use real Core validation for
+mixed resource and saved-goal blockers, sequential omission, Back/all-blocked
+cases, changed selected/omitted revisions, later additions and malformed
+diagnostics. A real Settings/TUI test covers safe details, explicit omission,
+draft restoration and 80×24 / 50×20 layouts. Existing imports, legacy Library
+reviews, exact archive rules and credential checks remain covered. Tests use
+local fixtures and a local Relay; no deployed Relay or native Linux host is
+claimed validated by these checks.
+
 # Combined Library transfer in Settings (2026-10-27)
 
 **Settings → BZZY Core** now offers **Export Library / Import Library** using

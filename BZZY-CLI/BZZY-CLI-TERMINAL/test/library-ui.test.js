@@ -14,7 +14,7 @@ import { listRecords } from '@bzzy/core/engine/database.js';
 import * as libraryBackend from '@bzzy/core/engine/definition-bundle.js';
 import { saveWorkflow } from '@bzzy/core/engine/workflows.js';
 import { saveGoalTemplate } from '@bzzy/core/engine/goal-templates.js';
-import { createSkill, setSkillEnabled } from '@bzzy/core/engine/skills.js';
+import { createSkill, importSkill, setSkillEnabled } from '@bzzy/core/engine/skills.js';
 import { saveSubagentDefinition, setSubagentEnabled } from '@bzzy/core/engine/subagent-definitions.js';
 
 const code = 'BZZY-LIBRARY-' + 'L'.repeat(43), terminalCode = 'BZZY-TERMINAL-' + 'T'.repeat(43);
@@ -94,6 +94,14 @@ function wholeLibrary() {
   return { skills, goal, catalog: libraryBackend.listLibraryExportChoices({ cwd, kinds: allKinds }) };
 }
 
+const safeDefinition = name => ({ name, description: 'Review supplied controls.', instructions: 'Compare supplied offline controls.' });
+function blockedSkill() {
+  const source = path.join(directory, 'unsafe-source'); fs.mkdirSync(path.join(source, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(source, 'SKILL.md'), '---\nname: blocked-checks\ndescription: Review supplied controls.\n---\nCompare offline controls.\n');
+  fs.writeFileSync(path.join(source, 'scripts', 'setup.py'), '# Offline setup\npassword = "fixture-private-literal-value"\n');
+  return importSkill(source, { scope: 'global', projectRoot: cwd });
+}
+
 test('whole Library export preselects every type and scope, including OFF definitions, with distinct readable names', async () => {
   const { catalog } = wholeLibrary(), transport = [], ui = mockUI();
   await transferLibrary('export', cwd, ui, { loadBundle: async () => libraryBackend, relayLoader: async () => sourceTransport(transport) });
@@ -148,6 +156,104 @@ test('whole Library cancelled selection and stale pins cannot publish a Relay co
     return choices.map(choice => choice.value);
   }] });
   await assert.rejects(transferLibrary('export', cwd, ui, options), { code: 'STALE_REVIEW' });
+  assert.equal(relayLoads, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('selected Library export diagnoses blocked resources and goals, then explicitly exports only the remaining original entries', async () => {
+  createSkill(safeDefinition('safe-checks'), { scope: 'global' });
+  const unsafe = blockedSkill(), privateGoal = saveGoalTemplate({ objective: 'Read /Users/fixture-owner/private-case before checking controls.' });
+  saveSubagentDefinition(safeDefinition('safe-reviewer'), { cwd, scope: 'project' });
+  saveWorkflow({ name: 'safe-process', instructions: 'Compare supplied offline controls.' }, { cwd, scope: 'global' });
+  saveGoalTemplate({ objective: 'Review the supplied controls.' });
+  const transport = [], attempts = []; let kept;
+  const backend = { ...libraryBackend, previewSelectedLibraryExport(input) {
+    attempts.push(structuredClone(input.selectedEntries));
+    const value = libraryBackend.previewSelectedLibraryExport(input); kept = value.entries; return value;
+  } };
+  const ui = mockUI({ choices: ['blocked:0', 'back', 'omit', 'omit'] });
+  await transferLibrary('export', cwd, ui, { loadBundle: async () => backend, relayLoader: async () => sourceTransport(transport) });
+  assert.deepEqual(attempts.map(entries => entries.length), [6, 5, 4]);
+  assert.deepEqual(kept.map(entry => entry.kind).sort(), allKinds);
+  const details = ui.menus[0].content.choices.find(choice => choice.value === 'blocked:0');
+  assert.match(details.label, /Skill · blocked-checks · global/); assert.match(details.description, /scripts\/setup\.py:2/);
+  assert.match(details.description, /literal credential or account/);
+  const goals = ui.menus.find(menu => menu.title === 'Some saved goals cannot be shared'); assert.ok(goals);
+  assert.ok(goals.content.description.includes(('template:' + privateGoal.id).slice(0, 18)));
+  const request = transport.find(call => call.operation === 'create').input;
+  assert.deepEqual(request.excludeEntries.map(entry => entry.id), [unsafe.id]);
+  assert.deepEqual(request.excludeGoalIds, ['template:' + privateGoal.id]);
+  assert.ok(ui.frames.some(frame => frame.includes('Export Library')));
+  const diagnostics = JSON.stringify({ menus: ui.menus, events: ui.events, transport });
+  assert.doesNotMatch(diagnostics, /fixture-private-literal-value|\/Users\/fixture-owner|Read \/Users/);
+  assert.equal(listRecords('execution').length, 0); assert.equal(ui.tui.value, 'Unsent draft');
+});
+
+test('blocked selected exports cancel unchanged or report that no portable entries remain without contacting Relay', async () => {
+  blockedSkill(); const before = listRecords('core.skill'); let relayLoads = 0;
+  for (const action of ['back', 'omit']) {
+    const ui = mockUI({ choices: [action] }); let completion;
+    const result = await transferLibrary('export', cwd, ui, { loadBundle: async () => libraryBackend,
+      relayLoader: async () => { relayLoads++; }, onComplete: (_result, message) => { completion = message; } });
+    assert.equal(result, null); assert.equal(relayLoads, 0);
+    assert.deepEqual(listRecords('core.skill'), before); assert.equal(ui.tui.value, 'Unsent draft');
+    if (action === 'back') { assert.equal(completion, undefined); assert.equal(ui.events.length, 0); }
+    else { assert.equal(completion, 'No portable entries remain to export.'); assert.equal(ui.events[0].message, completion); }
+  }
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('omission rejects changes to healthy and just-omitted original selected pins before another export attempt', async () => {
+  const safe = createSkill(safeDefinition('safe-checks'), { scope: 'global' }), unsafe = blockedSkill();
+  let relayLoads = 0;
+  for (const target of [safe, unsafe]) {
+    const ui = mockUI({ choices: [() => { setSkillEnabled(target.id, true, target.revision); return 'omit'; }] });
+    await assert.rejects(transferLibrary('export', cwd, ui, { loadBundle: async () => libraryBackend,
+      relayLoader: async () => { relayLoads++; } }), { code: 'STALE_REVIEW' });
+    assert.equal(ui.menus.length, 1); assert.equal(ui.privateView, undefined);
+  }
+  assert.equal(relayLoads, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('omitting blockers never adds later catalog entries or initially unchecked definitions', async () => {
+  const safe = createSkill(safeDefinition('safe-checks'), { scope: 'global' }), unchecked = createSkill(safeDefinition('unchecked-checks'), { scope: 'global' });
+  const unsafe = blockedSkill(), transport = []; let later, kept;
+  const ui = mockUI({ typeChoices: [(_title, choices) => choices.filter(choice => !choice.label.includes(unchecked.name)).map(choice => choice.value)],
+    choices: [() => { later = createSkill(safeDefinition('later-checks'), { scope: 'global' }); return 'omit'; }] });
+  const backend = { ...libraryBackend, previewSelectedLibraryExport(input) {
+    const value = libraryBackend.previewSelectedLibraryExport(input); kept = value.entries; return value;
+  } };
+  await transferLibrary('export', cwd, ui, { loadBundle: async () => backend, relayLoader: async () => sourceTransport(transport) });
+  assert.deepEqual(kept.map(entry => entry.name), [safe.name]);
+  const request = transport.find(call => call.operation === 'create').input;
+  assert.deepEqual(request.excludeEntries.map(entry => entry.id).sort(), [unchecked.id, unsafe.id, later.id].sort());
+  assert.equal(ui.typeMenus.length, 1); assert.equal(listRecords('execution').length, 0);
+});
+
+test('unknown, duplicate or changed blocked diagnostics cannot omit unrelated selected entries', async () => {
+  createSkill(safeDefinition('safe-checks'), { scope: 'global' }); blockedSkill();
+  const pin = libraryBackend.listLibraryExportChoices({ cwd, kinds: allKinds }).entries.find(entry => entry.name === 'blocked-checks');
+  const entry = { ...pin, reason: 'A literal credential is embedded.', file: 'scripts/setup.py', line: 2 };
+  let relayLoads = 0;
+  const invalid = [
+    { code: 'LIBRARY_BLOCKED_ENTRIES', blockedEntries: [{ ...entry, name: 'unknown-checks' }] },
+    { code: 'LIBRARY_BLOCKED_ENTRIES', blockedEntries: [{ ...entry, revision: entry.revision + 1 }] },
+    { code: 'LIBRARY_BLOCKED_ENTRIES', blockedEntries: [entry, entry] },
+    { code: 'LIBRARY_BLOCKED_GOALS', blockedGoals: [{ id: blockedId, reason: 'Private text.' }] },
+  ];
+  for (const diagnostic of invalid) {
+    const ui = mockUI(), backend = { ...libraryBackend, previewSelectedLibraryExport() { throw Object.assign(new Error('Unsafe diagnostic.'), diagnostic); } };
+    await assert.rejects(transferLibrary('export', cwd, ui, { loadBundle: async () => backend,
+      relayLoader: async () => { relayLoads++; } }), { code: 'STALE_REVIEW' });
+    assert.equal(ui.menus.length, 0);
+  }
+  assert.equal(relayLoads, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('changing terminal during blocked-entry diagnostics cancels before an omission retry', async () => {
+  createSkill(safeDefinition('safe-checks'), { scope: 'global' }); blockedSkill(); let relayLoads = 0;
+  const ui = mockUI({ choices: [() => { ui.nextSession = { id: randomUUID() }; return 'omit'; }] });
+  await assert.rejects(transferLibrary('export', cwd, ui, { loadBundle: async () => libraryBackend,
+    relayLoader: async () => { relayLoads++; } }), /host or terminal changed/);
   assert.equal(relayLoads, 0); assert.equal(listRecords('execution').length, 0);
 });
 

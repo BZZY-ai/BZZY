@@ -62,6 +62,10 @@ function tabKind(kind) {
   return kind;
 }
 const entryKey = entry => JSON.stringify([entry.kind, entry.scope || 'global', entry.name]);
+const pinFields = ['kind', 'scope', 'name', 'id', 'revision', 'version'];
+const entryPin = entry => Object.fromEntries(pinFields.map(field => [field, entry[field]]));
+const samePin = (left, right) => JSON.stringify(entryPin(left)) === JSON.stringify(entryPin(right));
+const changedSelection = () => Object.assign(new Error('The selected Library entries changed. Reopen Export.'), { code: 'STALE_REVIEW' });
 async function selectNames(ui, before, operation, kind, entries, labels = {}) {
   const label = entry => {
     const name = labels[entryKey(entry)] || entry.name;
@@ -113,10 +117,26 @@ async function transferLibrarySelection(operation, kind, cwd, ui, { loadBundle =
   }
   const indexes = await selectNames(ui, before, 'Export', kind, catalog.entries.map((entry, index) => ({ entry, index })), catalog.labels);
   if (!indexes) return null;
-  const selectedEntries = indexes.map(index => catalog.entries[index]);
+  const originalSelection = indexes.map(index => catalog.entries[index]);
+  let selectedEntries = [...originalSelection];
   let review;
   try {
-    review = await checked(ui, before, () => backend.previewSelectedLibraryExport({ cwd: before.root, kinds, selectedEntries }));
+    while (!review) {
+      const current = await checked(ui, before, () => backend.listLibraryExportChoices({ cwd: before.root, kinds }));
+      const available = new Map((current.entries || []).map(entry => [entryKey(entry), entry]));
+      if (originalSelection.some(entry => !available.has(entryKey(entry)) || !samePin(entry, available.get(entryKey(entry))))) throw changedSelection();
+      if (!selectedEntries.length) {
+        const message = 'No portable entries remain to export.';
+        ui.event('info', { message }); options.onComplete?.(null, message); return null;
+      }
+      try { review = await checked(ui, before, () => backend.previewSelectedLibraryExport({ cwd: before.root, kinds, selectedEntries })); }
+      catch (error) {
+        const omitted = await omitBlockedEntries(ui, before, error, selectedEntries);
+        if (!omitted) return null;
+        const definitions = new Set(omitted.entries.map(entryKey)), goals = new Set(omitted.goalIds);
+        selectedEntries = selectedEntries.filter(entry => entry.kind === 'goal' ? !goals.has(entry.id) : !definitions.has(entryKey(entry)));
+      }
+    }
     if (!Array.isArray(review.kinds) || JSON.stringify([...review.kinds].sort()) !== JSON.stringify(kinds) ||
       JSON.stringify(review.entries.map(entryKey).sort()) !== JSON.stringify(selectedEntries.map(entryKey).sort())) throw new Error('The selected Library entries changed. Reopen Export.');
     return await shareLibraryBundle(before.root, review, ui, { ...options, compact: true, assertContext: () => check(ui, before) });
@@ -145,6 +165,44 @@ async function inspectBlockedEntry(ui, before, entry) {
     if (action === 'next' && page + 1 < lines.length) page++;
     else if (action === 'previous' && page) page--;
   }
+}
+
+async function omitBlockedEntries(ui, before, error, selectedEntries) {
+  if (error?.code === 'LIBRARY_BLOCKED_ENTRIES' && Array.isArray(error.blockedEntries) && error.blockedEntries.length) {
+    const blocked = error.blockedEntries, seen = new Set();
+    for (const entry of blocked) {
+      const key = entryKey(entry), selected = selectedEntries?.find(item => entryKey(item) === key);
+      if (!['skill', 'agent', 'workflow'].includes(entry.kind) || seen.has(key)
+        || selectedEntries && (!selected || !samePin(entry, selected))) throw changedSelection();
+      seen.add(key);
+    }
+    while (true) {
+      const action = await checked(ui, before, () => ui.chooseOne('Some selected entries cannot be shared', {
+        description: `${blocked.length} blocked entries. Select an entry to read its complete safe diagnostic.`,
+        choices: [{ value: 'back', label: '← Back without sharing', selected: true },
+          { value: 'omit', label: `Omit these ${blocked.length} blocked entries and ${selectedEntries ? 'export' : 'review'} the rest` },
+          ...blocked.map((entry, index) => ({ value: `blocked:${index}`, label: `${names[entry.kind]} · ${entry.name} · ${entry.scope}`,
+            description: blockedDetails(entry) }))],
+      }));
+      const index = /^blocked:(\d+)$/.exec(action);
+      if (index && blocked[Number(index[1])]) { await inspectBlockedEntry(ui, before, blocked[Number(index[1])]); continue; }
+      return action === 'omit' ? { entries: blocked.map(entryPin), goalIds: [] } : null;
+    }
+  }
+  if (error?.code !== 'LIBRARY_BLOCKED_GOALS' || !Array.isArray(error.blockedGoals) || !error.blockedGoals.length) throw error;
+  const blocked = error.blockedGoals, seen = new Set();
+  for (const entry of blocked) {
+    if (typeof entry.id !== 'string' || seen.has(entry.id)
+      || selectedEntries && !selectedEntries.some(item => item.kind === 'goal' && item.id === entry.id)) throw changedSelection();
+    seen.add(entry.id);
+  }
+  const action = await checked(ui, before, () => ui.chooseOne('Some saved goals cannot be shared', {
+    description: `${blocked.length} goals contain private or nonportable data. They cannot enter this Library bundle.\n${blocked.map(item => `${String(item.id).slice(0, 18)}… · ${item.reason}`).join('\n')}`,
+    descriptionRows: 10,
+    choices: [{ value: 'back', label: '← Back without sharing', selected: true },
+      { value: 'omit', label: `Omit these ${blocked.length} blocked goals and ${selectedEntries ? 'export' : 'review'} the remaining Library` }],
+  }));
+  return action === 'omit' ? { entries: [], goalIds: blocked.map(item => item.id) } : null;
 }
 
 async function inspectEntry(ui, before, backend, review, index) {
@@ -214,36 +272,10 @@ export async function shareLibrary(cwd, ui, { loadBundle = () => import('@bzzy/c
   while (!review) {
     try { review = await checked(ui, before, () => backend.previewLibraryExport({ cwd: before.root, kinds: selectedKinds, excludeEntries, excludeGoalIds })); }
     catch (error) {
-      if (error?.code === 'LIBRARY_BLOCKED_ENTRIES' && Array.isArray(error.blockedEntries) && error.blockedEntries.length) {
-        const blocked = error.blockedEntries;
-        let action;
-        while (true) {
-          action = await checked(ui, before, () => ui.chooseOne('Some selected entries cannot be shared', {
-            description: `${blocked.length} blocked entries. Select an entry to read its complete safe diagnostic.`,
-            choices: [{ value: 'back', label: '← Back without sharing', selected: true },
-              { value: 'omit', label: `Omit these ${blocked.length} blocked entries and review the rest` },
-              ...blocked.map((entry, index) => ({ value: `blocked:${index}`, label: `${names[entry.kind]} · ${entry.name} · ${entry.scope}`,
-                description: blockedDetails(entry) }))],
-          }));
-          const index = /^blocked:(\d+)$/.exec(action);
-          if (!index || !blocked[Number(index[1])]) break;
-          await inspectBlockedEntry(ui, before, blocked[Number(index[1])]);
-        }
-        if (action !== 'omit') return null;
-        const pins = blocked.map(entry => Object.fromEntries(['kind', 'scope', 'name', 'id', 'revision', 'version'].map(key => [key, entry[key]])));
-        excludeEntries = [...new Map([...excludeEntries, ...pins].map(entry => [JSON.stringify(entry), entry])).values()];
-        continue;
-      }
-      if (error?.code !== 'LIBRARY_BLOCKED_GOALS' || !Array.isArray(error.blockedGoals) || !error.blockedGoals.length) throw error;
-      const blocked = error.blockedGoals;
-      const action = await checked(ui, before, () => ui.chooseOne('Some saved goals cannot be shared', {
-        description: `${blocked.length} goals contain private or nonportable data. They cannot enter this Library bundle.\n${blocked.map(item => `${String(item.id).slice(0, 18)}… · ${item.reason}`).join('\n')}`,
-        descriptionRows: 10,
-        choices: [{ value: 'back', label: '← Back without sharing', selected: true },
-          { value: 'omit', label: `Omit these ${blocked.length} blocked goals and review the remaining Library` }],
-      }));
-      if (action !== 'omit') return null;
-      excludeGoalIds = [...new Set([...excludeGoalIds, ...blocked.map(item => item.id)])];
+      const omitted = await omitBlockedEntries(ui, before, error);
+      if (!omitted) return null;
+      excludeEntries = [...new Map([...excludeEntries, ...omitted.entries].map(entry => [JSON.stringify(entry), entry])).values()];
+      excludeGoalIds = [...new Set([...excludeGoalIds, ...omitted.goalIds])];
     }
   }
   try {

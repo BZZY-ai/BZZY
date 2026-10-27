@@ -152,7 +152,9 @@ installed names. No second selection or manual fingerprint entry is needed for
 new Library codes. Matching names never overwrite existing definitions or their ON/OFF
 state. Duplicate project/Core names have a scope suffix. Complete skill resources
 and scopes are preserved; private bindings, history and case/evidence packages
-are excluded. Unsafe selected packages block export. Neither operation starts
+are excluded. Blocked selected packages show their name, scope, safe reason and
+resource file/line when available. Inspect a diagnostic, go back, or explicitly
+omit those packages and export the remaining selection. Neither operation starts
 agents, models or scripts. Open an entry to read its full details.
 
 For a new installation, open **Settings → BZZY Core → Export Library** on the
@@ -165,6 +167,8 @@ It uses the same private code, progress and missing-entry import flow as the
 individual tabs. Newly installed names also remain visible on the Settings page.
 Existing names and ON/OFF states survive; new skills/agents install enabled.
 Account keys, private bindings and chat history do not travel with this Library.
+Settings export uses the same blocked-entry diagnostics and explicit omission
+controls. Omitting every selected entry shows a result without creating a code.
 
 Combined transfers also remain available through `/library`. It includes skills, specialist agents,
 workflows and saved goal text. `bzzy library share` generates an expiring
