@@ -1,5 +1,18 @@
 # bzzy 🐝
 
+Chat displays **Session .bzzy** from the selected saved session's Core project
+binding. Click it to copy the complete path, or use `/session-folder` to display
+the full location and availability. It follows attachment and selected worker
+tabs, including legacy project roots that differ from cwd. Missing directories
+are marked without recreating them or changing the chat.
+
+For explicit root execution on a dedicated Linux host, install from a fresh
+root-owned checkout with `./install.sh --allow-root`.
+The direct launcher keeps each cwd and the Core system service runs as root.
+Root uses its own private state/provider homes; existing non-root history and
+pairing remain separate. Later updates retain this setup. See
+[host installation](../../BZZY-CORE/docs/HOST-SERVICE.md#explicit-linux-root-installation).
+
 Type `$` anywhere in a chat or `/goal` draft to choose an enabled skill or
 specialist agent. Keep typing to filter; arrows choose a row and Enter/Tab or a
 click inserts the reference at the cursor. Skills insert `$skill-name`; agents

@@ -7,6 +7,41 @@ or installs provider executables, provider accounts or operating-system packages
 Install a release on an internal persistent disk before enabling startup. Do not
 point a service at a removable checkout or a temporary npx runtime.
 
+## Explicit Linux root installation
+
+For a dedicated test server whose owner chooses root execution, install a fresh
+root-owned checkout under root's home:
+
+```sh
+./install.sh --allow-root
+```
+
+Run this from the CLI package as root. `--allow-root` records an owner-only
+approval in root's private Core home, normally `/root/.bzzy`, and prepares a
+system unit under `/etc/systemd/system`. This root installation also
+replaces recognized root-owned `runuser`/`sudo` BZZY wrappers after retaining
+backups in Core's private `runtime/launcher-backups`. The generated direct
+launcher preserves cwd, arguments and terminal streams. Root launch therefore
+initializes each new terminal's `.bzzy`
+at its own launch directory, without per-project ACL setup or a home fallback.
+Unrelated launchers and unsafe source/runtime paths are rejected.
+
+The root unit uses `User=root`, `UMask=0077` and system-manager lifecycle commands.
+Ordinary accounts keep their user services; macOS root installation is not
+supported. Installation prepares the unit without starting it. Plain `bzzy`
+or `bzzy-core start` starts it; existing stop/restart and execution-preservation
+contracts still apply. Root's private approval survives normal updates.
+
+An existing non-root installation remains separate: its history, credentials,
+provider homes and pairing are neither copied nor reassigned. Configure root's
+provider logins and pairing in that context. Keep root's code, Node executable
+and all parent directories root-owned and non-writable by other accounts.
+The local approval governs managed installation/gateway access; existing direct
+development execution remains a separate path. Runtime task policies, native
+backend restrictions, evidence checks and credential exclusions remain in force.
+
+## Ordinary user installation
+
 ```sh
 ./install.sh
 bzzy-core doctor

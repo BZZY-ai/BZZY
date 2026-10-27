@@ -10,7 +10,7 @@ import re
 from pathlib import PurePosixPath
 
 PRIVATE_NAMES = {'.env', '.ssh', '.aws', '.azure', '.gnupg', '.codex', '.claude', '.git',
-                 'auth.json', 'credentials.json', 'credentials', 'cookies', 'cookies.sqlite',
+                 'auth.json', 'root-execution.json', 'credentials.json', 'credentials', 'cookies', 'cookies.sqlite',
                  'login data', 'keychain', 'keychains', 'host.identity.json', 'listener.json',
                  '.netrc', '_netrc', '.npmrc', '.pypirc', '.git-credentials', '.boto', '.claude.json',
                  'credentials.db', 'cookies.txt', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', '.kube'}
@@ -50,6 +50,9 @@ def create(spec):
     def add(archive, source, name, parent_fd=None, child_name=None):
         nonlocal count, total
         if os.path.abspath(source) in excluded:
+            return
+        # Host installation approval never becomes project/backup authority.
+        if 'root-execution.json' in name.lower().split('/') and not portable:
             return
         if portable and (private_name(name) or name.endswith('/.DS_Store')):
             excluded_names.append(name)
@@ -175,6 +178,8 @@ def extract(spec):
                     or name in names):
                 raise ValueError('Invalid or duplicate bundle entry: ' + item.filename)
             names.add(name)
+            if 'root-execution.json' in name.lower().split('/'):
+                raise ValueError('Root execution authorization cannot be imported from a project bundle')
             if portable and (private_name(name) or item.file_size > limits['fileBytes']):
                 raise ValueError('Shared archive contains a private authentication path or oversized file')
             mode = item.external_attr >> 16

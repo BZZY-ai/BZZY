@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { root, backendCommand } from '../src/process.js';
 
@@ -118,5 +119,91 @@ test('installer reports missing Python before changing launchers or invoking pac
       PATH: [guards, path.dirname(process.execPath), process.env.PATH].join(path.delimiter), BZZY_BIN_DIR: bin }, encoding: 'utf8', timeout: 15000 });
     assert.equal(result.status, 1); assert.match(result.stderr, /Python 3\.9\+/);
     assert.equal(fs.existsSync(bin), false);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+test('private Node bootstrap keeps installer ownership and prepare-only leaves host state unchanged', t => {
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(process.getuid?.() === 0 ? os.homedir() : os.tmpdir(), 'bzzy-node-bootstrap-')));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const checkout = path.join(temporary, 'standalone', 'checkout'), guards = path.join(temporary, 'guards');
+  fs.mkdirSync(checkout, { recursive: true }); fs.mkdirSync(guards);
+  fs.copyFileSync(path.join(root, 'install.sh'), path.join(checkout, 'install.sh'));
+  const metadata = path.join(checkout, 'node_modules', '@bzzy', 'core', 'package.json');
+  fs.mkdirSync(path.dirname(metadata), { recursive: true }); fs.writeFileSync(metadata, '{}');
+  const archiveName = `node-fixture-${process.platform}-${process.arch}.tar.gz`, archive = path.join(temporary, archiveName);
+  const made = spawnSync('python3', ['-c', `import io,shlex,sys,tarfile
+with tarfile.open(sys.argv[1], 'w:gz') as bundle:
+ entry=tarfile.TarInfo('node-runtime/bin/node');entry.uid=12345;entry.gid=12345;entry.mode=0o755
+ body=('#!/bin/sh\\nexec '+shlex.quote(sys.argv[2])+' "$@"\\n').encode();entry.size=len(body);bundle.addfile(entry,io.BytesIO(body))`, archive, process.execPath], { encoding: 'utf8' });
+  assert.equal(made.status, 0, made.stderr);
+  const sums = path.join(temporary, 'SHASUMS256.txt');
+  fs.writeFileSync(sums, createHash('sha256').update(fs.readFileSync(archive)).digest('hex') + '  ' + archiveName + '\n');
+  fs.writeFileSync(path.join(guards, 'node'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(guards, 'curl'), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+ case "$1" in -o) destination=$2; shift 2;; https://*) address=$1; shift;; *) shift;; esac
+done
+case "$address" in */SHASUMS256.txt) cp "$BZZY_TEST_BOOTSTRAP_SUMS" "$destination";; *) cp "$BZZY_TEST_BOOTSTRAP_ARCHIVE" "$destination";; esac
+`, { mode: 0o755 });
+  const coreHome = path.join(temporary, 'private'), bin = path.join(temporary, 'bin');
+  const result = spawnSync('/bin/bash', ['install.sh', '--prepare-only'], { cwd: checkout, encoding: 'utf8', timeout: 15000,
+    env: { ...process.env, PATH: [guards, path.dirname(process.execPath), process.env.PATH].join(path.delimiter),
+      BZZY_INSTALL_PREPARED: '1', BZZY_HOME: coreHome, BZZY_BIN_DIR: bin,
+      BZZY_TEST_BOOTSTRAP_SUMS: sums, BZZY_TEST_BOOTSTRAP_ARCHIVE: archive } });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stdout, /Release prepared/);
+  const runtime = path.join(checkout, '.bzzy-runtime', 'node', 'bin', 'node');
+  assert.equal(fs.statSync(runtime).uid, process.getuid?.());
+  assert.equal(spawnSync(runtime, ['--version'], { encoding: 'utf8' }).stdout.trim(), process.version);
+  assert.equal(fs.existsSync(coreHome), false); assert.equal(fs.existsSync(bin), false);
+});
+
+test('service setup failure leaves the prior launchers intact', () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-install-order-'));
+  try {
+    const checkout = path.join(temporary, 'checkout'), bin = path.join(temporary, 'bin');
+    fs.mkdirSync(checkout); fs.mkdirSync(bin);
+    copyBundledCore(checkout);
+    fs.mkdirSync(path.join(checkout, 'scripts')); fs.mkdirSync(path.join(checkout, 'bin'));
+    fs.copyFileSync(path.join(root, 'install.sh'), path.join(checkout, 'install.sh'));
+    fs.copyFileSync(path.join(root, 'scripts/install-launcher.mjs'), path.join(checkout, 'scripts/install-launcher.mjs'));
+    fs.writeFileSync(path.join(checkout, 'bin/bzzy-core.js'), 'process.stderr.write("fixture service setup failed\\n"); process.exit(31);\n');
+    const prior = '#!/bin/sh\n# bzzy-managed launcher\necho retained launcher\n';
+    for (const name of ['bzzy', 'bzzy-core']) fs.writeFileSync(path.join(bin, name), prior, { mode: 0o755 });
+    const result = spawnSync('bash', ['install.sh'], { cwd: checkout, env: { ...process.env,
+      PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH, BZZY_BIN_DIR: bin, BZZY_INSTALL_PREPARED: '1' }, encoding: 'utf8', timeout: 15000 });
+    assert.equal(result.status, 31, result.stderr);
+    for (const name of ['bzzy', 'bzzy-core']) assert.equal(fs.readFileSync(path.join(bin, name), 'utf8'), prior);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+test('root installation rejects a spoofed identity or unsafe source before any Node probe', t => {
+  if (!fs.existsSync('/usr/bin/python3')) return t.skip('root installation requires the OS Python interpreter');
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-root-install-preflight-'));
+  try {
+    const checkout = path.join(temporary, 'checkout'), guards = path.join(temporary, 'guards'), bin = path.join(temporary, 'bin');
+    fs.mkdirSync(checkout); fs.mkdirSync(guards);
+    fs.copyFileSync(path.join(root, 'install.sh'), path.join(checkout, 'install.sh'));
+    const marker = path.join(temporary, 'node-was-executed');
+    fs.writeFileSync(path.join(guards, 'id'), '#!/bin/sh\nprintf "0\\n"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(guards, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(guards, 'node'), '#!/bin/sh\nprintf invoked > "$BZZY_NODE_PROBE_MARKER"\nexit 97\n', { mode: 0o755 });
+    // On a root CI worker ownership is real; this writable source must still
+    // fail before its fake Node executable can run. On developer Macs the
+    // source is additionally foreign to the simulated root invocation.
+    fs.chmodSync(path.join(checkout, 'install.sh'), 0o666);
+    const result = spawnSync('/bin/bash', ['install.sh', '--allow-root', '--replace-account-wrapper'], { cwd: checkout,
+      env: { ...process.env, PATH: guards + path.delimiter + process.env.PATH, BZZY_BIN_DIR: bin, BZZY_NODE_PROBE_MARKER: marker },
+      encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, process.getuid?.() === 0 && process.platform === 'linux'
+      ? /Root installation requires root-owned source/ : /Root installation options require Linux and the root account/);
+    const source = fs.readFileSync(path.join(root, 'install.sh'), 'utf8');
+    const preflight = /<<'PY'\n([\s\S]*?)\nPY/.exec(source)?.[1]; assert.ok(preflight);
+    const checked = spawnSync('/usr/bin/python3', ['-I', '-c', preflight, checkout, path.join(guards, 'node'), path.join(checkout, 'missing-node')],
+      { encoding: 'utf8', timeout: 10000 });
+    assert.equal(checked.status, 1, checked.stderr);
+    assert.match(checked.stderr, /Root installation requires root-owned source/);
+    assert.equal(fs.existsSync(marker), false); assert.equal(fs.existsSync(bin), false);
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 });

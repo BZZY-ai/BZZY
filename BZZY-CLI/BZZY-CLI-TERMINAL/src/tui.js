@@ -689,6 +689,12 @@ export class TerminalChat {
       return;
     }
     if (hit?.type === 'session-new') { this.localCommand('/new'); return; }
+    if (hit?.type === 'session-project-path') {
+      const location = this.ui.refreshSessionProjectLocation();
+      if (location.path) this.clipboardTask = this.copySelection(location.path);
+      else this.ui.showSessionProjectLocation();
+      return;
+    }
     if (hit?.type === 'top-skills') { this.localCommand('/skills'); return; }
     if (hit?.type === 'top-agents') { this.localCommand('/agents'); return; }
     if (hit?.type === 'top-workflows') { this.localCommand('/workflow library'); return; }
@@ -1936,6 +1942,14 @@ export class TerminalChat {
     }
     if (!this.ui.minimal && !this.topBarHasMetrics && width >= 60) {
       header.push(color(clip('  ' + hostMetricsCompact(this.ui.hostMetrics), width), palette.muted));
+    }
+    if (this.ui.sessionId) {
+      const location = this.ui.sessionProjectLocation;
+      const label = width >= 32 ? 'Session .bzzy' : '.bzzy';
+      const status = location?.status === 'exists' ? '' : location?.status === 'missing' ? ' (missing)' : ' (unavailable)';
+      const text = `  ${label}${status}: ${location?.path || 'unknown'}${location?.path ? ' · click to copy' : ''}`;
+      this.hitTargets.push({ type: 'session-project-path', row: header.length + 1, left: 3, right: width });
+      header.push(color(clip(text, width), location?.status === 'exists' ? palette.muted : palette.warning));
     }
     if (this.panel !== 'chat' && this.panel !== 'settings' && !this.promptDraft) {
       this.hitTargets.push({ type: 'back', row: header.length + 1, left: 3, right: 9 });

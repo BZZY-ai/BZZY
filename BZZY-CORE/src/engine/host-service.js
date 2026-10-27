@@ -10,6 +10,7 @@ import { canonicalPath } from '../paths.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { beginCoreMaintenance, assertCoreAvailable } from './maintenance.js';
 import { processIdentity, identityAlive } from './process-identity.js';
+import { rootExecutionAllowed, assertRootExecutable } from './root-execution.js';
 export { beginCoreMaintenance } from './maintenance.js';
 
 const marker = 'BZZY managed host service v1';
@@ -35,9 +36,10 @@ const real = canonicalPath;
 const manifestSnapshots = new Map();
 
 export function servicePlan({ platform = process.platform, userHome = os.homedir(), coreHome = home(), node = process.execPath,
-  entry = fileURLToPath(new URL('../../bin/bzzy-core.js', import.meta.url)), env = process.env, uid = process.getuid?.() } = {}) {
+  entry = fileURLToPath(new URL('../../bin/bzzy-core.js', import.meta.url)), env = process.env, uid = process.getuid?.(),
+  rootExecution = rootExecutionAllowed({ platform, uid, coreHome }) } = {}) {
   if (!['linux', 'darwin'].includes(platform)) throw failure('SERVICE_PLATFORM_UNSUPPORTED', 'Managed services support Linux systemd and macOS launchd.');
-  if (!Number.isSafeInteger(uid) || uid <= 0) throw failure('SERVICE_NON_ROOT_REQUIRED', 'Install the host service as an ordinary user, without sudo.');
+  if (!Number.isSafeInteger(uid) || uid < 0 || uid === 0 && (platform !== 'linux' || rootExecution !== true)) throw failure('SERVICE_NON_ROOT_REQUIRED', 'Use an ordinary user, or explicitly install Linux root execution with install.sh --allow-root.');
   userHome = absolute(real(absolute(userHome))); coreHome = absolute(real(absolute(coreHome)));
   node = absolute(real(absolute(node))); entry = absolute(real(absolute(entry)));
   if (coreHome === userHome || coreHome === path.parse(coreHome).root) throw failure('SERVICE_PATH_INVALID', 'Choose a separate private BZZY_HOME.');
@@ -51,10 +53,11 @@ export function servicePlan({ platform = process.platform, userHome = os.homedir
     const manifest = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<!-- ${marker} ${id} -->\n<plist version="1.0"><dict>\n<key>Label</key><string>${label}</string>\n<key>ProgramArguments</key><array><string>${xml(node)}</string><string>${xml(entry)}</string><string>serve</string></array>\n<key>WorkingDirectory</key><string>${xml(coreHome)}</string>\n<key>EnvironmentVariables</key><dict>${Object.entries(environment).map(([key, value]) => `<key>${key}</key><string>${xml(value)}</string>`).join('')}</dict>\n<key>RunAtLoad</key><true/>\n<key>Disabled</key><true/>\n<key>KeepAlive</key><true/>\n<key>ThrottleInterval</key><integer>10</integer>\n<key>Umask</key><integer>63</integer>\n<key>AbandonProcessGroup</key><true/>\n<key>StandardOutPath</key><string>${xml(logPath)}</string>\n<key>StandardErrorPath</key><string>${xml(logPath)}</string>\n</dict></plist>\n`;
     return { version: 1, platform, manager: '/bin/launchctl', uid, label, id, coreHome, userHome, node, entry, file, logPath, environment, manifest, startup: 'At this user’s graphical login; the Mac must remain awake.' };
   }
-  const name = `bzzy-core-${id}.service`, file = path.join(userHome, '.config', 'systemd', 'user', name);
-  const manifest = `# ${marker} ${id}\n[Unit]\nDescription=BZZY Core private host\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${unit(node, true)} ${unit(entry, true)} serve\nWorkingDirectory=${unitDirectory(coreHome)}\n${Object.entries(environment).map(([key, value]) => `Environment=${unit(`${key}=${value}`)}`).join('\n')}\nUMask=0077\nRestart=always\nRestartSec=5\nTimeoutStopSec=20\nKillMode=process\nStandardOutput=journal\nStandardError=inherit\n\n[Install]\nWantedBy=default.target\n`;
+  const scope = uid === 0 ? 'system' : 'user';
+  const name = `bzzy-core-${id}.service`, file = scope === 'system' ? path.join('/etc/systemd/system', name) : path.join(userHome, '.config', 'systemd', 'user', name);
+  const manifest = `# ${marker} ${id}\n[Unit]\nDescription=BZZY Core private host\nAfter=network-online.target\n\n[Service]\n${scope === 'system' ? 'User=root\n' : ''}Type=simple\nExecStart=${unit(node, true)} ${unit(entry, true)} serve\nWorkingDirectory=${unitDirectory(coreHome)}\n${Object.entries(environment).map(([key, value]) => `Environment=${unit(`${key}=${value}`)}`).join('\n')}\nUMask=0077\nRestart=always\nRestartSec=5\nTimeoutStopSec=20\nKillMode=process\nStandardOutput=journal\nStandardError=inherit\n\n[Install]\nWantedBy=${scope === 'system' ? 'multi-user' : 'default'}.target\n`;
   return { version: 1, platform, manager: fs.existsSync('/usr/bin/systemctl') ? '/usr/bin/systemctl' : '/bin/systemctl', uid, label: name, id,
-    coreHome, userHome, node, entry, file, logPath, environment, manifest, startup: 'At this user’s login; boot without login requires administrator-enabled systemd lingering.' };
+    scope, coreHome, userHome, node, entry, file, logPath, environment, manifest, startup: scope === 'system' ? 'Linux system service running as root; enabled on an explicit start.' : 'At this user’s login; boot without login requires administrator-enabled systemd lingering.' };
 }
 
 function ownerOnly(file, { directory = false, privateMode = false, uid = process.getuid?.() } = {}) {
@@ -96,10 +99,12 @@ function installed(plan, { exact = false } = {}) {
 }
 // Filesystem-only discovery for the engine's no-detached-fallback boundary.
 export function preparedServiceInstalled() {
-  if (!['darwin', 'linux'].includes(process.platform) || !process.getuid?.()) return false;
+  if (!['darwin', 'linux'].includes(process.platform) || !Number.isSafeInteger(process.getuid?.())) return false;
+  if (process.getuid() === 0 && !rootExecutionAllowed()) return false;
   return installed(servicePlan());
 }
 const defaultRun = (command, args) => spawnSync(command, args, { encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 });
+const systemctl = (plan, ...args) => [plan.scope === 'system' ? '--system' : '--user', ...args];
 const invoke = (run, plan, args, optional = false) => {
   const result = run(plan.manager, args);
   if (!optional && (result?.error || result?.status !== 0)) throw failure('SERVICE_MANAGER_UNAVAILABLE', 'The user service manager could not complete the operation. Check service status and user login.');
@@ -107,6 +112,7 @@ const invoke = (run, plan, args, optional = false) => {
 };
 
 export function installService(plan, { run = defaultRun } = {}) {
+  if (plan.uid === 0) { assertRootExecutable(plan.node); assertRootExecutable(plan.entry); }
   if (installed(plan)) {
     if (fs.readFileSync(plan.file, 'utf8') === plan.manifest) return { installed: true, changed: false, file: plan.file };
     const manager = serviceStatus(plan, { run });
@@ -188,7 +194,7 @@ export function serviceStatus(plan, { run = defaultRun, inspectMissing = false }
   const present = installed(plan);
   if (!present && !inspectMissing) return { installed: false, running: false, loaded: false, available: true, state: 'not-installed', file: plan.file };
   const args = plan.platform === 'darwin' ? ['print', `gui/${plan.uid}/${plan.label}`]
-    : ['--user', 'show', plan.label, '--property=LoadState,ActiveState,SubState,MainPID,UnitFileState', '--no-pager'];
+    : systemctl(plan, 'show', plan.label, '--property=LoadState,ActiveState,SubState,MainPID,UnitFileState', '--no-pager');
   const result = invoke(run, plan, args, true), output = result?.stdout || '';
   if (result?.error || result?.status !== 0) {
     // A missing job and an inaccessible manager are different states. A
@@ -223,8 +229,8 @@ export async function startService(plan, { run = defaultRun, runtimeRunning = as
     if (status.loaded === false) invoke(run, plan, ['bootstrap', `gui/${plan.uid}`, plan.file]);
     invoke(run, plan, ['kickstart', `gui/${plan.uid}/${plan.label}`]);
   } else {
-    invoke(run, plan, ['--user', 'daemon-reload']);
-    invoke(run, plan, ['--user', 'enable', '--now', plan.label]);
+    invoke(run, plan, systemctl(plan, 'daemon-reload'));
+    invoke(run, plan, systemctl(plan, 'enable', '--now', plan.label));
   }
   return { ...serviceStatus(plan, { run }), requested: 'start' };
 }
@@ -243,7 +249,7 @@ export function stopService(plan, { run = defaultRun, inspectMissing = false } =
       const status = serviceStatus(plan, { run, inspectMissing });
       if (!status.available || status.loaded !== false) throw failure('SERVICE_MANAGER_UNAVAILABLE', 'Core could not verify that its user service was unloaded. Check service status and user login.');
     }
-  } else invoke(run, plan, ['--user', 'disable', '--now', plan.label]);
+  } else invoke(run, plan, systemctl(plan, 'disable', '--now', plan.label));
   const status = serviceStatus(plan, { run, inspectMissing });
   return { ...status, ...(nativeStopped(plan, status) ? { state: 'stopped' } : {}), requested: 'stop' };
 }
@@ -252,7 +258,7 @@ const nativeStopped = (plan, status) => status.available === true &&
 export function uninstallService(plan, options = {}) {
   if (!installed(plan)) return { installed: false, removed: false };
   stopService(plan, options); fs.unlinkSync(plan.file);
-  if (plan.platform === 'linux') invoke(options.run || defaultRun, plan, ['--user', 'daemon-reload']);
+  if (plan.platform === 'linux') invoke(options.run || defaultRun, plan, systemctl(plan, 'daemon-reload'));
   return { installed: false, removed: true, preservedPrivateData: true };
 }
 
@@ -266,12 +272,13 @@ export function installationDoctor({ env = process.env, platform = process.platf
   if (info) contextReady = info.isDirectory() && !info.isSymbolicLink() && info.uid === process.getuid?.() && !(info.mode & 0o077);
   const manager = platform === 'darwin' ? '/bin/launchctl' : platform === 'linux' ? fs.existsSync('/usr/bin/systemctl') ? '/usr/bin/systemctl' : '/bin/systemctl' : null;
   const managerReady = Boolean(manager && fs.existsSync(manager));
+  const scope = platform === 'linux' && process.getuid?.() === 0 && rootExecutionAllowed() ? 'system' : 'user';
   return { ready: major >= 24 && pythonReady && contextReady && managerReady,
     checks: { node: { ready: major >= 24, version: nodeVersion, executable: process.execPath, required: '24+' },
       python: { ready: pythonReady, version: pythonReady ? python.stdout.trim() : null, required: '3.9+', purpose: 'Project ZIP sharing/import' },
       privateContext: { ready: contextReady, directory, exists: Boolean(info), required: 'Owned private directory (mode 700)' },
-      userService: { ready: managerReady, manager, required: 'macOS graphical user login or Linux systemd user manager' } },
-    next: 'Configure provider accounts privately on this host, set workspace root, enroll the public Relay identity, then explicitly install/start the user service. No model is required for pairing/settings.' };
+      userService: { ready: managerReady, manager, scope, required: scope === 'system' ? 'Linux systemd system manager' : 'macOS graphical user login or Linux systemd user manager' } },
+    next: 'Configure provider accounts privately on this host, set workspace root, enroll the public Relay identity, then explicitly install/start the Core service. No model is required for pairing/settings.' };
 }
 
 async function lifecycleRuntime() {

@@ -23,6 +23,7 @@ import { ConnectionStatusMonitor } from './connection-status.js';
 import { shareSavedSession, deleteSavedSession } from './session-browser.js';
 import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 import { cancelDefinitionBundle } from './definition-bundle-ui.js';
+import { sessionProjectLocation, sessionProjectDetails } from './session-project-path.js';
 import { recordInvocationEvent, reconcileInvocationEntries } from './invocation-ui.js';
 export { clean } from './terminal-format.js';
 
@@ -119,12 +120,14 @@ export class UI {
       this.knowledgeView = null; this.knowledgeState = null; this.knowledgeHits = null; this.knowledgeContextKey = null;
     }
     this.sessionId = id; this.sessionMode = mode;
+    this.refreshSessionProjectLocation();
     if (this.interactive) { this.openTerminal(); this.renderFooter(); }
     else this.event('session', { sessionId: id, message: `Session: ${id} · ${mode}` });
   }
   setTabs(groupId, children, selectedId = groupId) {
     this.tui?.selectTab(this.activeTab || this.sessionId, selectedId);
     this.sessionId = groupId; this.tabs = [{ id: groupId, agent: 'Overview' }, ...children]; this.activeTab = selectedId;
+    this.refreshSessionProjectLocation();
     this.renderFooter();
   }
   clearHistory() { this.tui?.clear(); this.invocationEntries = []; this.lineOpen = false; }
@@ -132,6 +135,7 @@ export class UI {
   executionConnection(connected) { this.tui?.executionFeedback.connection(connected); this.tui?.schedule(); }
   redrawPrompt() { if (this.tui) this.tui.schedule(); else if (this.reader && !this.lineOpen) this.reader.prompt(true); }
   updateSession(snapshot) {
+    this.refreshSessionProjectLocation();
     if (snapshot.permissions) this.sessionPermissionStates.set(this.sessionId || snapshot.session?.id, snapshot.permissions.yolo === true);
     this.tui?.update(snapshot);
     if (!this.tui && !this.json) for (const entry of reconcileInvocationEntries(this.invocationEntries || [], snapshot,
@@ -140,6 +144,13 @@ export class UI {
       this.accountMonitor ||= new AccountStatusMonitor(status => { this.accountStatus = status; this.tui?.schedule(); });
       this.accountMonitor.update(snapshot.session || snapshot);
     }
+  }
+  refreshSessionProjectLocation() {
+    this.sessionProjectLocation = sessionProjectLocation(this.activeTab || this.sessionId);
+    return this.sessionProjectLocation;
+  }
+  showSessionProjectLocation() {
+    this.event('info', { message: sessionProjectDetails(this.refreshSessionProjectLocation()) });
   }
   showAccountStatus() { this.event('info', { message: accountStatusDetails(this.accountStatus) }); }
   async showProviderBalance(providerId = this.tui?.provider) {
@@ -155,6 +166,7 @@ export class UI {
   }
   openSettings() { this.openTerminal(); this.settings ||= new ClientSettings(this); this.tui?.setPanel('settings'); }
   async settingsCommand(input) {
+    if (input.trim() === '/session-folder') { this.showSessionProjectLocation(); return true; }
     if (await createDefinitionCommand(input, this)) return true;
     if (/^\/color(?:\s|$)/.test(input.trim())) {
       const name = input.trim().slice(6).trim().toLowerCase();

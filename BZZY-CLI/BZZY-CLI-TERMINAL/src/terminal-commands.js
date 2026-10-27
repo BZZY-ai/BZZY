@@ -16,6 +16,7 @@ Pause with /pause or /goal pause before either switch. History and the saved goa
 --parallel, --besties, --validate, --delegate reuse their saved presets automatically.
 --default requires a matching saved preset.
 /alias [name]      Name this session; omit the name to open a prompt.
+/session-folder    Show the actual .bzzy folder tied to this saved chat; click its header path to copy it.
 --alias NAME       Name a new session, e.g. bzzy --alias trabajo_01.
 /sessions          Open named terminal chats; ↑/↓ select, Enter open, Esc back.
 bzzy sessions      The same alias-only list, newest activity first; restores the original directory.
@@ -73,6 +74,7 @@ export const chatCommands = [
   { command: '/delegate', description: 'Switch this paused chat to Delegate' },
   { command: '/solo', description: 'Switch this paused chat back to a single agent' },
   { command: '/alias', description: 'Name this session and keep its working directory' },
+  { command: '/session-folder', description: 'Show this saved chat’s actual .bzzy folder and its status' },
   { command: '/sessions', description: 'Open a saved named terminal chat' },
   { command: '/export', description: 'Export the complete project and context as a ZIP' },
   { command: '/share', description: 'Share a complete paused terminal copy through Relay' },

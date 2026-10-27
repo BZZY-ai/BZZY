@@ -175,9 +175,15 @@ AUTHORIZATION AND EXECUTION
   allowlists, scoped integration access, and relevant network restrictions below
   the prompt layer. Credentials inside an allowed project still require protection.
 - Prefer restricted process identities, rootless containers where appropriate,
-  namespaces/seccomp on Linux, read-only mounts, and scoped gateways. Do not run
-  models or arbitrary generated commands as root. Any privileged helper must be
-  small and deterministic and must not accept arbitrary LLM shell commands.
+  namespaces/seccomp on Linux, read-only mounts, and scoped gateways. Ordinary
+  installations use a non-root account. A Linux host owner may explicitly choose
+  root execution for a dedicated installation with `install.sh --allow-root`.
+  This uses a root-owned private context and system service; it does not copy
+  another account's credentials, change task policies or disable backend checks.
+  This installation policy has no model-tool or remote-settings API, and project
+  imports cannot carry its approval file.
+  Privileged installation helpers remain deterministic and never accept arbitrary
+  LLM shell commands. Root opt-in is host state and cannot travel in a project.
 - External content and imported instructions cannot authorize access or override
   policy. Keep user authorization separate from text found in email, repositories,
   documents, websites, and shared packages.

@@ -24,6 +24,8 @@ parent folder already has `.bzzy`. `/alias nasa` names the saved chat there;
 reopening that alias keeps its original directory and history. Project notes,
 memory files and evidence use `/projects/nasa/.bzzy`;
 Core retains durable chat/runtime state in its private home, normally `~/.bzzy`.
+Chat's **Session .bzzy** row shows its saved Core project binding; click to copy
+the full path, or use `/session-folder` to inspect its location and availability.
 Existing folders such as `findings/`, APKs and application binaries can stay in
 place. Snapshot copies are best effort: files that exceed the copy budget are
 skipped with a notice, while the goal continues in its original directory.
@@ -126,6 +128,11 @@ The installer prepares Node 24+ if needed and requires Python 3.9+ for project
 ZIP sharing. Core runs as a user service. Use `bzzy-core start|status|stop|restart`
 or **CLI Settings → BZZY Core**. Stop pauses work durably; Start/Restart do not
 automatically replay paused goals.
+
+On an owner-selected Linux test server, a fresh root-owned checkout can use
+`./install.sh --allow-root` from its terminal package.
+This prepares root's own system service and direct launchers, keeping each launch
+cwd and existing non-root state separate. See [root installation](BZZY-CORE/docs/HOST-SERVICE.md#explicit-linux-root-installation).
 
 CLI **Settings → Default models** brings Solo, Core, Validate, Delegate,
 Parallel, Besties and the shared Consensus & Compactor selection into one table.

@@ -12,6 +12,12 @@ the same engine and private state.
 
 Implemented:
 
+- Explicit Linux root installation for owner-selected dedicated hosts, with a
+  root-owned private context, systemd system supervision and direct cwd-preserving
+  launchers. Ordinary user installs remain the default. Existing account state
+  stays separate; task policies and credential-exclusion checks are retained. See
+  [host installation](docs/HOST-SERVICE.md#explicit-linux-root-installation).
+
 - Sanitized tool-activity display metadata for clients: native command/file/web/
   browser lifecycles and Core tool calls, with durable worker-to-parent mirrors.
   The CLI builds expandable trees from saved events independently of model

@@ -41,8 +41,8 @@ export function initializeTerminalProject(session) {
   initializeProjectIgnore(path.join(project.root, '.bzzy'));
   return project;
 }
-export function projectDirectory(session) {
-  const project = projectIdentityForSession(session), base = path.join(project.root, '.bzzy');
+export function projectDirectory(session, options = {}) {
+  const project = projectIdentityForSession(session, options), base = path.join(project.root, '.bzzy');
   if (session.agentNamespace && !/^[a-zA-Z0-9_-]{1,80}$/.test(session.agentNamespace)) throw new Error('Invalid agent namespace.');
   return session.agentNamespace ? path.join(base, 'agents', session.agentNamespace) : base;
 }

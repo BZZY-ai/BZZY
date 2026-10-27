@@ -140,7 +140,12 @@ The repair downloads the official updater at a verified commit and invokes the s
 separate-release installer. It preserves the original checkout, private state,
 existing launcher location and active execution sources. Reopen BZZY afterward;
 future updates use `bzzy --update`. Core’s supervised service requires a
-non-root account; run installation from that account with its existing private
-Core state. A manual/nonstandard launcher can use explicit
+non-root account by default; run installation from that account with its existing
+private Core state. Owners who explicitly choose root execution on Linux use a
+fresh root-owned checkout and `install.sh --allow-root`
+instead of this identity-preserving repair. Root's separate private opt-in,
+direct managed launchers and system service then survive normal updates. See
+[root installation](../../../BZZY-CORE/docs/HOST-SERVICE.md#explicit-linux-root-installation).
+A manual/nonstandard launcher can use explicit
 `--installation /absolute/package` and `--node /absolute/node` paths after saving
 the script locally. No private account configuration is part of the repair.

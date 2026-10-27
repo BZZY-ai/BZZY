@@ -1,3 +1,45 @@
+# Linux root installation and the saved session's project folder (2026-10-27)
+
+Node 24/macOS: **1,014 Core tests passed, 2 skipped**; the complete CLI run
+passed **792 tests, 21 skipped** with concurrency four. The final private-backup
+refinement passed **13 installer/launcher tests**. Product syntax, installer
+shell syntax and whitespace checks passed. An earlier default-concurrency CLI
+run missed an unchanged five-second pause assertion; that test passed in
+isolation and in the controlled full run. No deadline was relaxed.
+
+The combined installer retains the ordinary Debian/Ubuntu/macOS path and adds
+explicit Linux root setup with `./install.sh --allow-root`. Root setup records
+private local approval, prepares a systemd system unit and replaces recognized
+owned account-switching wrappers with direct launchers after retaining private
+backups under Core's private `runtime/launcher-backups`. Normal updates retain
+the selected execution account and private home.
+Existing non-root source, chats, provider bindings and pairing stay separate.
+
+Fixtures cover same-UID/cwd/argv launch from two different directories, literal
+shell characters, private wrapper parsing without evaluation, unrelated/unsafe
+launcher refusal, canonical Node selection, early root source/runtime/npm
+ownership checks, read-only preparation, and service failure before launcher
+activation. An offline fresh-Node bootstrap uses archive entries with another
+UID and verifies installer ownership without changing launchers or Core state.
+Linux-root plans and lifecycle manager calls use `--system`, preserve stop intent
+and retain detached executions during restart. Root consent is excluded from
+snapshots, evidence and both shared/private project transport; injected consent
+files are rejected before extraction. Existing provider/runtime restrictions
+remain unchanged.
+
+CLI's persistent **Session .bzzy** row resolves the selected saved session using
+Core's read-only project identity lookup. Click copies the full path;
+`/session-folder` shows its complete location and availability. Tests cover a
+legacy pinned ancestor different from cwd, alias/reopen, worker namespaces,
+changed shell directories, Unicode/long paths, missing moved directories and
+unchanged identity records. Ordinary/minimal layouts preserve drafts and history;
+settings/import/pairing keep their dedicated layouts and complete 80×24 QR.
+
+Validation uses Node 24 on macOS with private fixtures and fake providers.
+Root-only filesystem ownership is simulated where needed for launcher tests;
+native Linux root installation, systemd boot and live providers were not exercised.
+No running installation or private account configuration was changed locally.
+
 # Launch-directory workspaces and inline skill/agent selection (2026-10-27)
 
 Node 24/macOS: **1,007 Core tests passed, 2 skipped** and **779 CLI tests passed,

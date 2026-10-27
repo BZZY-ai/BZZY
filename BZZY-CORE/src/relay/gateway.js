@@ -6,6 +6,7 @@ import { terminalCatalogRevision } from '../engine/session-deletion.js';
 import { CoreVoiceChat } from '../engine/voice-chat.js';
 import { setTerminalYolo } from '../engine/terminal-permissions.js';
 import { enqueueGoalTurn } from '../engine/session-operations.js';
+import { rootExecutionAllowed } from '../engine/root-execution.js';
 import { parseGoalCommand } from '../engine/goals.js';
 import { authorizedUpdateGrant as authorizedOwnPhone } from '../engine/update-access.js';
 import { EventEmitter } from 'node:events';
@@ -149,7 +150,7 @@ export class RelayGateway extends EventEmitter {
 
   async start() {
     this.#check();
-    if (process.getuid?.() === 0) fail('NON_ROOT_REQUIRED', 'Run the gateway and model execution as a non-root user.');
+    if (process.getuid?.() === 0 && !rootExecutionAllowed()) fail('NON_ROOT_REQUIRED', 'Linux root execution requires explicit local installation with --allow-root.');
     if (this.#started) return this.status();
     this.#unlock = lockFile(path.join(privateRelayDirectory(), 'gateway.lock'), 'A Core Relay gateway already owns this host identity.');
     try {
