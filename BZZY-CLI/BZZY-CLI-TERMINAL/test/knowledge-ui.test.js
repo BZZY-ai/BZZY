@@ -42,6 +42,39 @@ function terminal(session = sessionAt(alpha)) {
 function answers(ui, values) { ui.ask = async () => values.shift(); }
 const rowsText = ui => skillRows(ui).map(row => row.text).join('\n');
 
+test('Learn shows pinned inputs, staged defaults, project facts and optional retrieval without starting inference', async () => {
+  const { ui, session } = terminal();
+  try {
+    ui.tui.value = 'preserve unsent draft';
+    await knowledgeCommand('/learn', ui); await knowledgeAction('settings', ui);
+    assert.match(rowsText(ui), /Skill policy: new stage.*corrections stage/);
+    const memory = remember(session, { kind: 'hypothesis', statement: 'Owner fact projection fixture stays attributed.' });
+    await knowledgeAction('facts', ui); answers(ui, [memory.id]); ui.chooseOne = async () => 'yes';
+    await knowledgeAction('facts-pin', ui); assert.match(rowsText(ui), /Owner fact projection fixture/);
+    await knowledgeAction('retrieval', ui); assert.match(rowsText(ui), /Local embeddings: off/);
+    assert.equal(listRecords('core.learning.job').length, 0);
+    await knowledgeCommand('/learn review', ui);
+    assert.ok(ui.knowledgeState.packetId); await knowledgeAction('packet', ui);
+    assert.match(rowsText(ui), /Pinned learning packet/); assert.match(rowsText(ui), /sourceCutoff/);
+    assert.equal(ui.tui.value, 'preserve unsent draft'); assert.equal(listRecords('execution').length, 0);
+  } finally { ui.close(); }
+});
+
+test('reviewed skill policy updates use the displayed owner revision and preserve conversation changes', async () => {
+  const { ui } = terminal(), api = new CoreKnowledge();
+  try {
+    await knowledgeCommand('/learn settings', ui);
+    const picks = ['stage', 'off', 'yes']; ui.chooseOne = async () => picks.shift();
+    await knowledgeAction('evolution-policy', ui);
+    assert.equal(ui.knowledgeState.evolution.newSkills, 'stage'); assert.equal(ui.knowledgeState.evolution.updates, 'off');
+    const shownRevision = ui.knowledgeState.evolution.revision;
+    api.request('skill.evolution.settings', { settings: { updates: 'stage' }, expectedRevision: shownRevision, reviewed: true });
+    const stalePicks = ['stage', 'off', 'yes']; ui.chooseOne = async () => stalePicks.shift();
+    await assert.rejects(knowledgeAction('evolution-policy', ui), /changed/);
+    assert.equal(listRecords('core.learning.job').length, 0);
+  } finally { ui.close(); }
+});
+
 test('opening memory, learning and candidates preserves the composer and performs no model work', async () => {
   const { ui, session, events } = terminal();
   try {

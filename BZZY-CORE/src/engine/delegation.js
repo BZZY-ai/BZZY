@@ -7,7 +7,7 @@ import { createSession, saveSession, loadSession } from './store.js';
 import { getRecord, putRecord, listRecords, removeRecord, reserveRequest, appendEvent, now, transaction, database, digest } from './database.js';
 import { normalizeContract } from './contracts.js';
 import { childPolicy } from './policy.js';
-import { snapshotWorkspace, inspectWorkspace, inside, captureEvidence, artifactsFor, artifact, fileInfo } from './evidence.js';
+import { snapshotWorkspace, copyWorkspaceSnapshot, inspectWorkspace, inside, captureEvidence, artifactsFor, artifact, fileInfo } from './evidence.js';
 import { home, privateDir, writeJson, readJson } from './files.js';
 import { root, runtimeEnv } from './process.js';
 import { identityAlive, processIdentity, reconcileSession } from './recovery.js';
@@ -450,7 +450,7 @@ export async function runAssignment(id, number) {
       job.snapshotId = snapshot.id;
       // A worker edits its own copy; review snapshots remain fixed.
       const work = path.join(home(), 'workers', id); privateDir(path.dirname(work));
-      fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
+      copyWorkspaceSnapshot(snapshot, work, { sessionId: parent.id });
       job.workspace = work; putRecord('assignment', id, job);
     }
     const provider = getProvider(job.selection.provider);

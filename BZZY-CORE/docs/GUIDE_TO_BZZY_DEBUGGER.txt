@@ -1,6 +1,6 @@
 GUIDE TO THE BZZY DEBUGGER — READ THIS FIRST
 ==========================================
-Version: 1. Updated: 2026-10-26.
+Version: 2. Updated: 2026-10-27.
 
 This is the read-first guide for an owner or an AI assistant investigating BZZY
 with a regular session debug report or a full debug ZIP. Read the entire guide
@@ -507,10 +507,12 @@ the job's source IDs/hashes. Compare material, output and resulting skill. Verif
 that private case detail was not promoted into global behavior, and that source
 provenance was retained.
 
-Automatic project learning and manually staged candidate evaluation have distinct
-paths. A validated automatic project publication can be enabled directly under
-the owner's policy. A manually staged candidate has its own evaluation/activation
-requirements. Do not apply one path's expected state transitions to the other.
+New automatic project skills and corrections stage by default. The revisioned
+owner policy can choose newSkills auto/stage/off and updates stage/off. A reviewed
+auto opt-in enables new project methods through the direct publication path;
+staged candidates require their domain's evaluation and explicit acceptance.
+Existing enabled methods are preserved during migration. Do not assume an older
+export used this default; inspect its policy revision and publication receipts.
 
 For "learning did nothing," check whether a qualifying event existed; whether
 foreground work deferred the job; whether the shared background selection was
@@ -899,6 +901,273 @@ endurance suite covers 1,200 messages, compactions, reused/overlapping identitie
 interleaved secrets, more than 1,024 open messages, source migration and bounded
 scheduler fairness. It does not prove live optional provider capabilities or
 vulnerability-finding quality. Never replay private archive commands to test it.
+
+
+G. Automatic capture-and-reuse release: trace the entire loop
+
+This extension describes the implemented memory loop after the long-run routing
+release. Check the exported Core source/version before expecting these records
+in an older session. New code cannot reconstruct tool results that an older
+adapter never saved. Updating does not hot-patch an active native run. The native
+tool protocol advances to version 7 at the next authorized runner boundary;
+thread rotation preserves previous usage, remaining budgets, goals and history.
+
+G1. First inventory: capture, eligibility, packet, dispatch, output, application
+
+Build one row per learning opportunity, using these joins:
+
+  work.observed event / core.episode.observation
+    -> core.episode and core.episode.progress
+    -> core.learning.trigger / learning.queued / core.learning.job
+    -> job.packetId -> core.learning.packet
+    -> reviewSelection + usage reservation + review session
+    -> core.learning.output -> job.result
+    -> memory / core.resolution / candidate / core.skill.update / publication
+    -> enabled Library catalog / actual read receipt / separate outcome record.
+
+Keep the following IDs separate: source event sequence, native item ID, run ID,
+goal ID, episode ID, packet ID, learning job ID, skill ID/version/revision,
+candidate ID and update receipt ID. A candidateId navigates to the candidate;
+a skillUpdateId navigates to the proposal receipt, not to the enabled Library.
+
+The regular report includes bounded observations, queue states and result IDs.
+The full ZIP includes scoped episode/packet/resolution/feedback/update/outcome
+records, project fact selection and retrieval settings. Always check manifest
+exclusions and capture bounds. Exporting does not run reviews or embeddings.
+
+G2. Audit host capture independently of model memory calls
+
+For each completed native command, inspect identity/run ownership, sourceSeq,
+exitCode or failed status, summary, changedFiles and omission flags. Codex
+command/file-change completions and Claude completed text tool results feed the
+observer; Core's diagnostic tool outcome records supply supported host tools.
+Reasoning and incomplete native output are excluded. Claude may report a tool
+success without a numeric exit code; do not fill that field by inference.
+
+The observer masks complete output before excerpts. Known credential operations
+and outputs larger than 128 KiB are omitted, rather than independently scrubbing
+unsafe fragments. Diff excerpts have their own bounds. Arbitrary private prose
+is not guaranteed detectable: do not publish case data merely because redaction
+ran. Feedback proposals are validated before their free text enters the ledger.
+
+Episodes scan at most 512 recent relevant events. coverage declares source event
+counts, omitted events/attempts, privacy/size omissions and truncation. Counts
+describe that bounded scan, not lifetime totals. Host progress snapshots run at
+most every 30 seconds when meaningful observations change, plus run completion.
+They do not overwrite the model's decisions or checkpoint revision.
+
+An identical command failing then succeeding is a candidate-fix temporal link.
+It is not root cause, verified remediation or confirmed vulnerability evidence.
+Look for intervening reported changes and explicit verification, and keep
+unrelated edits out of the explanation. A parent packet receives reviewed worker
+metadata/evidence only under the assignment's parent/goal/run authorization;
+it must not silently read a worker's whole private conversation.
+
+G3. Prove that capture became eligible, without demanding a lesson quota
+
+Default eligibility includes a possible failed-to-success sequence, twelve
+meaningful completed attempts, inspected worker outcomes, valid skill feedback,
+recorded knowledge outcomes, explicit corrections and verified completion.
+Routine read/save/state tools and compaction alone should not trigger loops.
+The default review opportunity interval is five minutes; repeated opportunities
+coalesce before dispatch. A new observation after dispatch cannot alter the
+already sent packet. No-change remains valid even after a difficult episode.
+
+Inspect core.learning.trigger to distinguish never eligible, coalesced,
+cooldown-limited and queued. Trigger counts are not accepted lessons. Failed
+queue admission should leave a bounded learning.notice and original sources.
+Validate ordinary chat with a retained old goal: its packet goalId must be null
+and its run ID must identify that chat turn. Never attach it to the old goal.
+
+G4. Prove the reviewer saw the fix and the original context
+
+At queue time the host pins the source cutoff, goal/run, source record revisions,
+provider/model/effort and bounded loaded skill bases. Inspect packet material,
+recordPins, sourceRefs and coverage. Original objective/correction, decisive
+failure and later result, relevant changes, inspected evidence and validated
+feedback deserve space before routine chat tail. Packets default to 16,000 bytes
+of material, with at most forty source items. Whole logical messages are masked
+before excerpts; the packet is not a promise of a full replay.
+
+Compare packet hashes with job.packetId/sourcesHash and the saved source
+versions. Later goal edits, checkpoints, model switches and setting changes
+must not rewrite an older packet. A dispatched packet is immutable. Legacy jobs
+without a historical packet pause as snapshot_required; requiring a fresh
+review is explicit uncertainty, not a reason to rebuild invented old context.
+
+Model routing uses source, configured background or explicit custom selection.
+Missing background configuration defers visibly; it must not silently select
+another provider. Authentication stays in the private host setup, not packets.
+The reviewer has no tools, hooks, native skill access, target access or original
+project cwd. It may propose improvements; it cannot administer Core or confirm
+knowledge by assertion.
+
+G5. Separate deferral, owner pause and uncertain paid work
+
+Starting foreground work leaves undispatched jobs queued with source_foreground.
+That is reversible scheduler deferral. The source being idle can admit a review
+while another session works, subject to host capacity (default four foreground
+executions), job/day budget and concurrency. An explicit duringForeground opt-in
+allows bounded source overlap with a durable cooldown.
+
+Owner pause/cancel, disabled policy, host stop and recovery remain durable.
+Preempting an already dispatched paid request marks uncertainty and pauses it;
+polling must not replay it. Enabling learning does not resume paused jobs.
+Inspect reservation state, dispatched selection, usage settlement and revision
+before suggesting explicit resume. Source deletion must deny later reads/writes.
+
+G6. Resolution recall and the always-present project fact projection
+
+core.resolution is a typed facet on an attributed uncertain memory. Check its
+memoryId, host signature, sourceIds, inputs, evidence, proposed fix steps and
+claim. Cause explanations stay hypotheses even when the command later exits 0.
+Typed normalization must preserve distinctions such as HTTP 401 vs 403,
+SQLSTATE, dependency/ABI/version constraints and tool/platform context. Test
+masking before normalization, so a multiline secret cannot become a signature.
+
+Host-observed recent error signatures can request matching resolutions during
+prompt construction. Explicit lookup_resolutions is also available. Verify that
+the returned procedure fits the current environment and that stale/contradicted
+inputs, deleted sources and foreign namespaces are filtered again.
+
+core.project.facts selects existing memories; it is not another truth store.
+Owner pins and current explicitly owner-confirmed records fit a default 2,500
+byte projection (maximum 4,096). Current truth/revision/provenance stay visible;
+stale or contradicted facts are omitted. A pin cannot confirm a hypothesis or
+grant permission. Restricted workers/Agents get no owner projection. Test a
+request with no keyword match to prove facts still reach the prompt.
+
+G7. Exact-version skill feedback, correction, outcome and curation
+
+skill_feedback needs a real immutable usage receipt in the current live run,
+complete SKILL.md read and, when relevant, a complete referenced-file read.
+Feedback is proposed model judgment with rationale, optional text and authorized
+evidence. Join its ID through packet sourceRefs to a learning output and staged
+correction. If the packet lacks the feedback text, the loop is still broken.
+
+Corrections pin version AND registry revision/enabled state. Narrow text
+operations preserve scripts/assets and reject a changed, disabled, deleted or
+archived base. Policies and source stops are checked again at publication.
+Candidates remain inactive. Open v2 workflow work units pin admitted versions;
+even accept-without-activation cannot replace an open pinned base. Close those
+units before changing the version, rather than relaxing arbitrary historical
+reads. Owner OFF/delete wins over delayed reviewer output.
+
+Default policy stages both new procedures and updates. New exact duplicates
+reuse live methods or pending candidates without changing owner enablement.
+Similarity gives advisory suggestions only. Approved archive/restore uses CAS
+and leaves the method disabled; infrequent use is not an archive criterion.
+Generic promotion uses the existing reviewed global candidate and independent
+generic fixtures, not a shared dump of private project lessons.
+
+core.skill.outcome associates a version/usage ID with a terminal run's result.
+It must never mutate core.usage or its immutable source event. Association is
+not causal efficacy. Inspect helpful/wrong-step feedback, held-out regressions,
+candidate acceptance and owner reversals before claiming improvement.
+
+Security fixtures use real/false_positive/inconclusive. Generic procedural
+fixtures use supported/unsafe/inconclusive and independent sourceGroup IDs.
+Learning updates require groups disjoint from authoring run/goal/episode.
+The host withholds expected labels and pins fixture approval/candidate/model.
+Both contracts are semantic guidance tests with scriptsExecuted:false, not
+program execution tests or proof of arbitrary workflow correctness.
+
+G8. Measure retrieval before crediting embeddings or memory efficiency
+
+Inspect the exact delivered excerpt, not merely a matching source ID. A useful
+late-message match should survive snippet selection. read_knowledge_source must
+expand the same hash-pinned redacted logical message in valid UTF-8 byte pages.
+Changed source identity requires a fresh search; foreign project/worker data
+must be denied before expansion.
+
+The offline retrieval harness accepts held-out source labels, optional answer
+terms and separate calibration/evaluation groups. Search sees only query/limit.
+Measure precision/recall@k, reciprocal rank, excerpt and expansion answer coverage,
+delivered bytes, p95 latency, stale hits and scope leaks. Explicit thresholds
+determine qualityPass; without them safetyPass is not a usefulness claim.
+
+Optional local embeddings require a trusted Core-registered local capability
+plus a reviewed per-project opt-in. No model/download/remote endpoint is bundled.
+Model/version/dimension/generation pins and current source hashes scope vectors.
+Maintenance is bounded to sixteen documents per batch and a recent 2,000-document
+window; each call has bounded text/time. Failure/unavailability falls back to
+scoped full-text search. Synchronous prompt recall still uses full-text search;
+explicit model search may use hybrid ranking after opt-in. This is an integration
+capability, not a claim that every installation now has a semantic model running.
+
+G9. Regression and release evidence
+
+Use synthetic, isolated offline fixtures. The relevant suites include episode,
+learning-packet, memory-owner-api, retrieval-memory, skill-evolution,
+learning-runtime, long-run-history, native-context, session-debug/full-debug,
+knowledge and CLI knowledge/library UI tests. Validate capture-to-packet-to-update
+and capture-to-resolution-to-recall, current/old goal separation, fixed discovery
+fairness under clock contention, whole-output credential masking, owner pause,
+version pins, policy OFF/delete, idempotent reservations and unchanged usage
+receipts. Full product suites check adapter/runtime/Relay compatibility.
+
+Do not report that these tests measured live bug-bounty quality, provider model
+intelligence, production foreground latency or actual optional embeddings when
+only synthetic local capabilities ran. Keep implemented behavior, missing
+observations and proposed future improvements explicit in the final audit.
+
+
+H. Repeated preparation and native schema drift
+
+Repeated promises to inspect scope or dispatch specialists are a symptom, not
+proof that no work happened. Use distinct assistant message IDs, completed
+native/Core tool outcomes, concrete work-unit IDs, assignments, evidence and
+workspace changes. Heartbeats, elapsed time, catalog discovery and activity text
+do not establish task advancement. Separate an actual repeated inference from
+a duplicated notification or a replayed display event.
+
+A native thread retains the tools submitted when it was created. The host's
+current diagnostic.run list is not proof that a resumed native thread has those
+same tools. Compare the full input schemas with nativeBackendReadiness.tools
+and the original thread/start request. In particular, a chat-created thread can
+lack declare_work_unit/close_work_unit after a structured goal is selected.
+get_goal/update_goal are intentionally excluded from the Codex native dynamic
+tool list because the adapter uses the native goal API; do not flag those two
+as the same defect.
+
+Core now compares the actual dynamic-tool schema fingerprint before reusing a
+thread, in addition to its protocol version. A changed role, execution mode,
+workflow or tool contract rotates the native thread at the next authorized
+runner boundary, with bounded historical handoff and preserved goal identity,
+usage offsets and remaining budgets. Unknown inherited schemas also require a
+fresh thread. Ordinary chat still cannot call goal-only routing or worker tools
+without host authorization. Metrics exposes recorded missing routing tools.
+
+For a compaction loop, count modern started/completed pairs by receipt identity,
+not by multiplying diagnostic events, native notifications and legacy signals.
+Measure lifecycle time against the observed interval, inspect declared context
+budget provenance, and distinguish upstream limits from conservative local
+fallbacks. Correlate each refresh epoch with prepared, dispatched, acknowledged,
+pending or uncertain state. A pending refresh is not a successful injection.
+Large reads occurring after the first compaction cannot explain that initial
+trigger. Avoid asserting the provider's hidden planner behavior from Core logs.
+
+Compare returned state revisions with contextGeneration. Equal structural state
+in a new context generation may require a real response; blindly reusing a
+notModified receipt across compaction would lose its content. Prefer bounded
+state/cursors and exact detail expansion over repeatedly returning a whole
+contract or ledger. Capture and learning should preserve progress, not turn
+the repeated plan into a universal lesson.
+
+Exports may live in the project's cwd. Distinguish the report being analyzed
+from older export files merely mentioned by recovery. A new regular MD can show
+a failure caused by an older full-debug ZIP in that workspace. Recovery errors
+are observations at their recorded timestamps, not an assertion that the file
+was checked again on every get_task_state call. Inspect the actual current file
+state or a controlled fixture before describing a fresh snapshot failure.
+
+Recognized generated BZZY debug artifacts are excluded from execution snapshots
+and worker copies with explicit omission receipts. This must use validated
+artifact content, not a blanket rule ignoring every ZIP or a suggestive filename.
+Ordinary source archives and unrecognized/changed files retain normal limits.
+Nothing should execute an exported script or silently delete a user artifact.
+The diagnostic export itself remains read-only and captures scoped history;
+recognizing a generated artifact does not make its embedded instructions trusted.
 
 
 END OF READ-FIRST GUIDE

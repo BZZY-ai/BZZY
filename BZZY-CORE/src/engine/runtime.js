@@ -26,7 +26,7 @@ import { submitSessionInput } from './session-input.js';
 import { assertCoreAvailable } from './maintenance.js';
 import { HostMetricsSampler } from './host-metrics.js';
 import { authorizedOwnPhoneTerminalInput } from './update-access.js';
-import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, pauseAllLearning, learningSettings } from './learning.js';
+import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, pauseAllLearning } from './learning.js';
 import { recoverSessionCompactions, processSessionCompactions, pauseSessionCompaction, pauseAllSessionCompactions } from './session-compactor.js';
 import { CoreKnowledge } from '../knowledge.js';
 import { recordGoalValidationResult } from './goal-validation.js';
@@ -391,8 +391,7 @@ export async function serveRuntime() {
     superviseExecutions();
     if (quiescing) return;
     const active = listRecords('execution', { states: ['launching', 'running'] });
-    const learningMayRun = () => !stopping && !quiescing && !operatorStopRequested()
-      && (learningSettings().duringForeground || listRecords('execution', { states: ['queued', 'launching', 'running'], limit: 1 }).length === 0);
+    const learningMayRun = () => !stopping && !quiescing && !operatorStopRequested();
     if (!learningPump) {
       learningPump = processLearningReviews({ limit: 1, canRun: learningMayRun })
         .catch(() => { /* Learning persists its own bounded failure status. */ })

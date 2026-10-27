@@ -16,10 +16,17 @@ export function sessionHealth(id) {
   const compaction = database().prepare(`SELECT json_extract(data,'$.state') AS state,
     coalesce(json_extract(data,'$.scheduleReason'),json_extract(data,'$.reasonPaused')) AS reason,count(*) AS count
     FROM records WHERE kind='core.session.compactor.job' AND json_extract(data,'$.sessionId')=? GROUP BY state,reason`).all(session.id);
-  return { version: 1, available: true, goalId: session.goal?.id || null, routing: routingStatus(session, { limit: 5 }),
+  const routing = routingStatus(session, { limit: 5 }), nativeTools = session.nativeBackendReadiness?.tools;
+  const missingRoutingTools = routing.enforced && Array.isArray(nativeTools?.names)
+    ? ['declare_work_unit', 'close_work_unit'].filter(name => !nativeTools.names.includes(name)) : [];
+  return { version: 1, available: true, goalId: session.goal?.id || null, routing,
     native: { readiness: session.nativeBackendReadiness || null, contextBudget: session.nativeContextBudget || null,
+      routingToolCoverage: routing.enforced && session.backend === 'codex' ? { known: Array.isArray(nativeTools?.names),
+        missing: missingRoutingTools, basis: nativeTools?.source || 'unknown-native-thread',
+        meaning: 'Recorded submitted/inherited tool schemas, not proof of model attention.' } : null,
       compaction: session.nativeContext?.metrics || null, refresh: session.nativeContext?.refresh || null, efficiency: session.contextEfficiency || null },
     memory, maintenance: getRecord('core.history.maintenance', session.id), taskState: getRecord('core.task-state.read', session.id),
-    learning: { jobs: learning, policy: 'Meaningful outcomes and corrections may queue reviews; absent output does not prove learning is disabled.' },
+    episode: getRecord('core.episode.progress', session.id),
+    learning: { jobs: learning, policy: 'Closed work episodes, meaningful outcomes, skill feedback and corrections may queue bounded reviews. No-change is a valid result.' },
     retention: { jobs: compaction, control: getRecord('core.session.compactor.control', session.id) } };
 }

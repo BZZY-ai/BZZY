@@ -8,6 +8,8 @@ import { database, transaction, getRecord, putRecord, digest, appendEvent, now }
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 import { resolveProjectIdentity, projectIdentityForSession } from './project-identity.js';
 import { recordLibraryCreation } from './library-notifications.js';
+import { skillEvolutionSettings } from './skill-evolution-policy.js';
+import { fixtureApprovalHash, assertHeldOutSources } from './learning-fixture-contract.js';
 
 // Trusted host administration lives here; models receive only list/read tools.
 // One immutable, content-addressed copy per version, independent of providers.
@@ -24,11 +26,19 @@ const safePath = value => typeof value === 'string' && value.length <= 240 && !v
 const validProjectId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
 const scopeOf = record => record.scope || 'global';
 const idOf = record => record.id || (scopeOf(record) === 'project' ? `project:${record.projectId}:${record.name}` : record.name);
+const procedureFingerprint = definition => {
+  const policy = fs.readFileSync(new URL('../../assets/generation-security.txt', import.meta.url), 'utf8').trim();
+  let instructions = definition.instructions.trim().replace(/\r\n/g, '\n');
+  while (instructions.endsWith(policy)) instructions = instructions.slice(0, -policy.length).trimEnd();
+  return digest([definition.description.trim().replace(/\r\n/g, '\n'), instructions, definition.domain || 'security']);
+};
 const privatePackage = files => files.some(file => /(?:^|\/)(?:project-scope\.json$|run-records\.jsonl$|source-goal\.json$|evidence(?:\/|\.json$))/i.test(file.path));
 const needsScopeReview = record => scopeOf(record) === 'global' && (privatePackage(record.files) ||
   !record.scope && Boolean(getRecord('core.skill.codex-sync', record.name)));
 const publicRecord = record => record && ({ id: idOf(record), name: record.name, description: record.description,
   scope: scopeOf(record), ...(record.projectId ? { projectId: record.projectId } : {}), enabled: record.enabled,
+  ...(record.archived ? { archived: true } : {}),
+  ...(record.domain ? { domain: record.domain } : {}),
   version: record.version, revision: record.revision, files: record.files.map(file => ({ path: file.path, bytes: file.bytes })),
   updatedAt: record.updatedAt, ...(record.review ? { review: record.review } : {}), ...(needsScopeReview(record) ? { needsScopeReview: true } : {}),
   ...(record.provenance ? { provenance: Object.fromEntries(['kind', 'jobId', 'sourceSessionId', 'sourceGoalId'].filter(key =>
@@ -255,7 +265,9 @@ export function importSkill(source, options = {}) {
       fail('Project evidence and run records need project scope. Global promotion accepts a separate generic workflow.');
     }
     const version = digest(files), id = skillStorageId(metadata.name, selected);
+    if (options.domain !== undefined && !['security', 'general'].includes(options.domain)) fail('Choose security or general skill evaluation.');
     const prepared = { ...metadata, ...selected, id, version, files, enabled: false,
+      ...(options.domain ? { domain: options.domain } : {}),
       provenance: provenance(options.provenance, candidate ? 'learning' : 'owner') };
     const target = location(prepared);
     if (expectedVersion !== undefined && version !== expectedVersion) fail('Skill source changed. Run sync again.');
@@ -320,10 +332,12 @@ export function createSkill({ name, description, instructions }, options = {}) {
 export function publishLearnedSkill(definition, options = {}) {
   const { session, requestId } = options;
   if (!session?.id || typeof requestId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(requestId) ||
-      !validName(definition?.name) || typeof definition.description !== 'string' || typeof definition.instructions !== 'string') fail('A learned skill needs its source session, stable publication request and reusable definition.');
+      !validName(definition?.name) || typeof definition.description !== 'string' || typeof definition.instructions !== 'string' ||
+      definition.domain !== undefined && !['security', 'general'].includes(definition.domain)) fail('A learned skill needs its source session, stable publication request and reusable definition.');
   const selected = selectedScope({ session, scope: 'project' }, true), source = provenance(options.provenance, 'learning');
   if (source.kind !== 'learning' || !source.jobId || source.sourceSessionId !== session.id) fail('Learned skill provenance must identify its source job and conversation.');
-  const proposed = { name: definition.name, description: definition.description, instructions: definition.instructions };
+  const proposed = { name: definition.name, description: definition.description, instructions: definition.instructions,
+    ...(definition.domain ? { domain: definition.domain } : {}) };
   const inputHash = digest({ definition: proposed, ...selected, provenance: source }), id = digest([selected.projectId, requestId]);
   return atomic(db => {
     const previous = getRecord(learningPublicationKind, id);
@@ -331,10 +345,54 @@ export function publishLearnedSkill(definition, options = {}) {
       if (previous.inputHash !== inputHash || previous.jobId !== source.jobId || previous.sourceSessionId !== session.id) fail('Learning publication request conflicts with its earlier result.');
       return { ...previous };
     }
+    const policy = skillEvolutionSettings();
+    if (policy.newSkills === 'off') {
+      const record = { id, requestId, inputHash, jobId: source.jobId, sourceSessionId: session.id,
+        projectId: selected.projectId, skillId: null, candidateId: null, state: 'off', policyRevision: policy.revision, createdAt: now() };
+      putRecord(learningPublicationKind, id, record, db); return record;
+    }
+    // Exact content coalesces; similarity never authorizes a merge or changes an
+    // owner's enable decision. Keep the new source receipt without a new skill.
+    const fingerprint = procedureFingerprint(proposed);
+    const duplicates = db.prepare(`SELECT data FROM records WHERE kind=? AND json_extract(data,'$.scope')='project'
+      AND json_extract(data,'$.projectId')=? AND json_extract(data,'$.provenance.kind') IN ('learning','learning-update') LIMIT 512`).all(kind, selected.projectId);
+    for (const row of duplicates) {
+      const existing = JSON.parse(row.data);
+      let existingFingerprint = existing.procedureFingerprintSchema === 2 ? existing.procedureFingerprint : null;
+      if (!existingFingerprint) {
+        try { const markdown = readRecord(existing, { file: 'SKILL.md' }, { raw: true }).toString('utf8');
+          const body = /^---\r?\n[\s\S]*?\r?\n---\r?\n([\s\S]+)$/.exec(markdown)?.[1];
+          if (body) existingFingerprint = procedureFingerprint({ description: existing.description, instructions: body, domain: existing.domain });
+        } catch { continue; }
+      }
+      if (existingFingerprint !== fingerprint) continue;
+      const record = { id, requestId, inputHash, jobId: source.jobId, sourceSessionId: session.id,
+        skillId: idOf(existing), requestedName: proposed.name, name: existing.name, scope: selected.scope, projectId: selected.projectId,
+        version: existing.version, enabled: Boolean(existing.enabled), state: 'reused', createdAt: now() };
+      putRecord(learningPublicationKind, id, record, db);
+      appendEvent(session.id, 'learning.skill-reused', { publicationId: id, skillId: record.skillId, version: record.version, jobId: source.jobId }, db);
+      return record;
+    }
+    const pending = db.prepare(`SELECT data FROM records WHERE kind=? AND json_extract(data,'$.scope')='project'
+      AND json_extract(data,'$.projectId')=? AND json_extract(data,'$.provenance.kind')='learning'
+      AND json_extract(data,'$.state') IN ('pending','evaluated') LIMIT 512`).all(candidateKind, selected.projectId);
+    for (const row of pending) {
+      const existing = JSON.parse(row.data);
+      try {
+        const markdown = readRecord(existing, { file: 'SKILL.md' }, { raw: true }).toString('utf8');
+        const body = /^---\r?\n[\s\S]*?\r?\n---\r?\n([\s\S]+)$/.exec(markdown)?.[1];
+        if (!body || procedureFingerprint({ description: existing.description, instructions: body, domain: existing.domain }) !== fingerprint) continue;
+      } catch { continue; }
+      const record = { id, requestId, inputHash, jobId: source.jobId, sourceSessionId: session.id,
+        skillId: null, candidateId: existing.id, candidateVersion: existing.version, requestedName: proposed.name, name: existing.name,
+        scope: selected.scope, projectId: selected.projectId, enabled: false, state: 'staged-reused', policyRevision: policy.revision, createdAt: now() };
+      putRecord(learningPublicationKind, id, record, db); return record;
+    }
     // A new project method must not silently shadow an owner's existing local
     // or global method. Stable suffixes also make interrupted retries repeatable.
     let name = proposed.name;
-    const occupied = value => getRecord(kind, skillStorageId(value, selected)) || getRecord(kind, value);
+    const occupied = value => getRecord(kind, skillStorageId(value, selected)) || getRecord(kind, value) ||
+      db.prepare(`SELECT 1 FROM records WHERE kind=? AND json_extract(data,'$.skillId')=? AND json_extract(data,'$.state') IN ('pending','evaluated') LIMIT 1`).get(candidateKind, skillStorageId(value, selected));
     if (occupied(name)) {
       name = null;
       for (let attempt = 0; attempt < 32; attempt++) {
@@ -344,9 +402,18 @@ export function publishLearnedSkill(definition, options = {}) {
       }
       if (!name) fail('No unused learned skill name is available. Existing skills were kept.');
     }
-    const saved = createSkill({ ...proposed, name }, { ...selected, provenance: source, expectedRevision: 0 });
+    if (policy.newSkills === 'stage') {
+      const candidate = stageSkillCandidate({ ...proposed, name }, { ...selected, provenance: source, requestId: id });
+      const record = { id, requestId, inputHash, jobId: source.jobId, sourceSessionId: session.id,
+        skillId: null, candidateId: candidate.id, candidateVersion: candidate.version, requestedName: proposed.name, name,
+        scope: selected.scope, projectId: selected.projectId, enabled: false, state: 'staged', policyRevision: policy.revision, createdAt: now() };
+      putRecord(learningPublicationKind, id, record, db);
+      appendEvent(session.id, 'learning.skill-staged', { publicationId: id, candidateId: candidate.id, version: candidate.version, jobId: source.jobId }, db);
+      return record;
+    }
+    const saved = createSkill({ ...proposed, name }, { ...selected, provenance: source, expectedRevision: 0, ...(proposed.domain ? { domain: proposed.domain } : {}) });
     const inactive = getRecord(kind, saved.id);
-    const enabled = { ...inactive, enabled: true, revision: inactive.revision + 1, updatedAt: now() };
+    const enabled = { ...inactive, enabled: true, procedureFingerprint: fingerprint, procedureFingerprintSchema: 2, revision: inactive.revision + 1, updatedAt: now() };
     putRecord(kind, saved.id, enabled, db); audit(enabled, inactive, 'learning-enable', db);
     const record = { id, requestId, inputHash, jobId: source.jobId, sourceSessionId: session.id,
       skillId: saved.id, requestedName: proposed.name, name, scope: selected.scope, projectId: selected.projectId,
@@ -368,7 +435,7 @@ export function deleteSkill(name, expectedRevision, options = {}) {
     audit({ ...current, revision, updatedAt: deletedAt }, current, 'delete', db);
     putRecord('core.skill.deleted', id, { ...current, enabled: false, revision, deletedAt }, db);
     db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, id);
-    const publications = db.prepare("SELECT id,data FROM records WHERE kind=? AND json_extract(data,'$.skillId')=? AND json_extract(data,'$.state')='published'").all(learningPublicationKind, id);
+    const publications = db.prepare("SELECT id,data FROM records WHERE kind=? AND json_extract(data,'$.skillId')=? AND json_extract(data,'$.state') IN ('published','reused')").all(learningPublicationKind, id);
     for (const item of publications) {
       const receipt = JSON.parse(item.data);
       putRecord(learningPublicationKind, item.id, { ...receipt, state: 'deleted', deletedAt, deletedRevision: revision }, db);
@@ -384,6 +451,7 @@ export function setSkillEnabled(name, enabled, expectedRevision, options = {}) {
   return atomic(db => {
     const record = getRecord(kind, idOf(selected));
     if (!record || record.revision !== expectedRevision) fail('Skill changed. Reload before enabling or disabling.');
+    if (enabled && record.archived) fail('Restore this archived skill before enabling it.');
     const changed = { ...record, enabled, revision: record.revision + 1, updatedAt: now() };
     putRecord(kind, idOf(record), changed, db); audit(changed, record, enabled ? 'enable' : 'disable', db); return publicRecord(changed);
   });
@@ -515,7 +583,7 @@ function publicCandidate(record) {
   return { ...publicRecord(record), id: record.id, skillId: record.skillId, state: record.state,
     domain: record.domain, baseRevision: record.baseRevision, baseVersion: record.baseVersion,
     provenance: record.provenance, createdAt: record.createdAt,
-    evaluation: record.evaluation || null, acceptedAt: record.acceptedAt || null };
+    evaluation: record.evaluation || null, acceptedAt: record.acceptedAt || null, ...(record.update ? { update: record.update } : {}) };
 }
 
 function saveCandidate(prepared, previous, options, db) {
@@ -530,7 +598,7 @@ function saveCandidate(prepared, previous, options, db) {
   if (!['security', 'general'].includes(domain)) fail('Choose security or general skill evaluation.');
   const record = { ...prepared, id, skillId: prepared.id, enabled: false, domain, state: 'pending',
     revision: 1, baseRevision: previous?.revision || 0, baseVersion: previous?.version || null,
-    createdAt: now(), updatedAt: now() };
+    ...(options.update ? { update: options.update } : {}), createdAt: now(), updatedAt: now() };
   rememberVersion({ ...prepared, revision: 0, updatedAt: record.createdAt }, db);
   putRecord(candidateKind, id, record, db);
   return publicCandidate(record);
@@ -541,6 +609,44 @@ export function stageSkillCandidate(definition, options = {}) {
   const previous = getRecord(kind, skillStorageId(definition.name, selected));
   return createSkill(definition, { ...options, ...selected, candidate: true,
     domain: definition.domain || options.domain || 'security', expectedRevision: previous?.revision || 0 });
+}
+
+// A trusted learning processor may propose text changes, never mutate active
+// content. The unchanged package resources are copied and hash-checked in full.
+export function stageSkillTextUpdate(identifier, changes, options = {}) {
+  const current = findSkill(identifier, { session: options.session });
+  if (!current.enabled || getRecord('core.skill.deleted', idOf(current))?.revision >= current.revision ||
+      current.version !== options.baseVersion || current.revision !== options.expectedRevision) fail('Skill changed, is disabled or was deleted. Reopen its current version before proposing an update.');
+  if (!Array.isArray(changes) || !changes.length || changes.length > 8 || changes.some(change => !change ||
+      Object.keys(change).some(key => !['path', 'text'].includes(key)) || typeof change.text !== 'string' ||
+      !safePath(change.path) || change.path !== 'SKILL.md' && !/^references\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*\.(?:md|txt)$/.test(change.path))) fail('Skill updates are limited to SKILL.md and safe text references.');
+  const selected = { scope: scopeOf(current), ...(current.projectId ? { projectId: current.projectId } : {}) };
+  privateDir(root()); const stage = fs.mkdtempSync(path.join(root(), '.update-'));
+  try {
+    for (const file of current.files) {
+      const data = readRecord(current, { file: file.path }, { raw: true });
+      fs.mkdirSync(path.dirname(path.join(stage, file.path)), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(stage, file.path), data, { mode: 0o600, flag: 'wx' });
+    }
+    for (const change of changes) {
+      fs.mkdirSync(path.dirname(path.join(stage, change.path)), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(stage, change.path), change.text, { mode: 0o600 });
+    }
+    const markdown = fs.readFileSync(path.join(stage, 'SKILL.md'), 'utf8');
+    if (skillMetadata(markdown).name !== current.name || !markdown.includes(fs.readFileSync(new URL('../../assets/generation-security.txt', import.meta.url), 'utf8').trim())) fail('A proposed update must preserve the skill identity and mandatory security policy.');
+    const result = importSkill(stage, { ...selected, session: options.session, expectedRevision: current.revision,
+      candidate: true, domain: current.domain || 'security', requestId: options.requestId, provenance: options.provenance,
+      update: { ...options.update, baseEnabled: true, baseVersion: current.version, baseRevision: current.revision } });
+    return result;
+  } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+}
+
+export function activeSkillVersionPins(skillId, version) {
+  return database().prepare(`SELECT u.id FROM records u JOIN records s ON s.kind='session' AND s.id=json_extract(u.data,'$.sessionId')
+    WHERE u.kind='core.workflow.work-unit' AND json_extract(u.data,'$.state')='open'
+    AND json_extract(u.data,'$.goalId')=json_extract(s.data,'$.goal.id') AND json_extract(s.data,'$.deletedAt') IS NULL
+    AND (EXISTS(SELECT 1 FROM json_each(u.data,'$.skills') pin WHERE json_extract(pin.value,'$.id')=? AND json_extract(pin.value,'$.version')=?)
+      OR EXISTS(SELECT 1 FROM json_each(u.data,'$.reportSkills') pin WHERE json_extract(pin.value,'$.id')=? AND json_extract(pin.value,'$.version')=?)) LIMIT 257`).all(skillId, version, skillId, version).map(row => row.id);
 }
 
 function findCandidate(id, options = {}) {
@@ -588,6 +694,11 @@ function evaluationFor(candidate, evaluationId) {
         fixture.revision !== evaluation.fixtureRevision || fixture.projectId && fixture.projectId !== candidate.projectId) {
       fail('Approved fixture changed, was revoked, or belongs to another project.');
     }
+    if (fixture.approvalHash && (fixture.approvalHash !== fixtureApprovalHash(fixture) || evaluation.fixtureApprovalHash !== fixture.approvalHash)) fail('Fixture evaluation contract or source approval changed.');
+    const contract = fixture.contract || 'security-decision-v1';
+    if (contract !== (candidate.domain === 'general' ? 'procedure-review-v1' : 'security-decision-v1') ||
+        evaluation.contract !== undefined && evaluation.contract !== contract) fail('The approved fixture contract must match the candidate evaluation domain.');
+    assertHeldOutSources(candidate, fixture);
   }
   return evaluation;
 }
@@ -623,6 +734,7 @@ export function acceptSkillCandidate(id, { expectedRevision, expectedSkillRevisi
   if (candidate.domain === 'security' && ['real', 'false_positive', 'inconclusive'].some(category => !categories.has(category))) {
     fail('Security skills need real, false-positive and inconclusive fixture coverage.');
   }
+  if (candidate.domain === 'general' && ['supported', 'unsafe', 'inconclusive'].some(category => !categories.has(category))) fail('General procedures need supported, unsafe and inconclusive fixture coverage.');
   for (const file of candidate.files) {
     if (digest(regularRead(path.join(location(candidate), file.path), 1024 * 1024)) !== file.sha256) fail('Candidate content changed outside Core.');
   }
@@ -632,6 +744,7 @@ export function acceptSkillCandidate(id, { expectedRevision, expectedSkillRevisi
         (previous?.revision || 0) !== expectedSkillRevision || (previous?.revision || 0) !== candidate.baseRevision ||
         digest(current.evaluation) !== digest(candidate.evaluation)) fail('Candidate, active skill or evaluation changed. Reload before approval.');
     if (digest(evaluationFor(current, expectedEvaluationId)) !== digest(evaluation)) fail('Evaluation or approved fixture changed before approval.');
+    if (previous && previous.version !== candidate.version && activeSkillVersionPins(candidate.skillId, previous.version).length) fail('Active workflow work units pin this skill version. Close them before selecting its replacement.');
     const record = { id: candidate.skillId, name: candidate.name, description: candidate.description,
       scope: candidate.scope, projectId: candidate.projectId, version: candidate.version, files: candidate.files,
       domain: candidate.domain, enabled: activate, revision: (previous?.revision || 0) + 1, updatedAt: now(), provenance: candidate.provenance,

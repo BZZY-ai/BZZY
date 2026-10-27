@@ -55,6 +55,10 @@ function refresh(ui) {
   else if (ui.knowledgeView === 'proposals') proposals(ui);
   else if (ui.knowledgeView === 'fixtures') fixtures(ui);
   else if (ui.knowledgeView === 'fixture') fixture(ui, state.id, state.offset);
+  else if (ui.knowledgeView === 'facts') show(ui, 'facts', request(ui, 'facts.read'));
+  else if (ui.knowledgeView === 'curation') show(ui, 'curation', request(ui, 'skill.curation.suggest'));
+  else if (ui.knowledgeView === 'evolution') show(ui, 'evolution', request(ui, 'skill.evolution', { id: state.skill.id }));
+  else if (ui.knowledgeView === 'retrieval') show(ui, 'retrieval', request(ui, 'retrieval.status'));
   else overview(ui);
 }
 
@@ -66,10 +70,15 @@ export function knowledgeRows(ui) {
     rows.push({ text: 'Project memory & learning', tone: 'accent' },
       muted(`Learning ${settings.enabled ? 'on' : 'paused'} · ${settings.tokenBudget || 0} tokens/review · ${settings.runtimeSeconds || 0}s`),
       muted(`Today ${usage.tokensUsed || 0} used · ${usage.reservedTokens || 0} reserved · ${usage.remainingTokens || 0} available`));
-    if (view === 'settings') rows.push(action(settings.enabled ? 'Pause learning' : 'Enable learning', 'toggle-learning'), action('Edit review and daily budgets', 'edit-budgets'));
+    if (view === 'settings') rows.push(muted(`Model route: ${settings.modelRoute?.source || 'source'} · packets ${settings.packetMaxBytes || 16000} bytes · complex work ${settings.complexTurnAttempts || 12} attempts`),
+      action(settings.enabled ? 'Pause learning' : 'Enable learning', 'toggle-learning'), action('Edit review and daily budgets', 'edit-budgets'), action('Choose learning model route', 'learning-model'),
+      action(settings.duringForeground ? 'Review only when this conversation is idle' : 'Allow bounded reviews during this conversation’s work', 'learning-foreground'),
+      muted(`Skill policy: new ${data.evolution?.newSkills || 'stage'} · corrections ${data.evolution?.updates || 'stage'}`), action('Review skill evolution policy', 'evolution-policy'));
     else rows.push(action('Search project memory and history', 'memory'), action('Review this conversation now', 'review'), action('Learning jobs', 'jobs'),
       action('Skill candidates', 'candidates'), action('User and computer profiles', 'profiles'), action('Profile proposals', 'proposals'),
-      action('Approved offline fixtures', 'fixtures'), action('Learning controls and budgets', 'settings'));
+      action('Project facts in the prompt', 'facts'), action('Find earlier problem resolutions', 'resolutions'), action('Review similar learned skills', 'curation'),
+      action('Retrieval measurements and local search', 'retrieval'), action('Approved offline fixtures', 'fixtures'), action('Learning controls and budgets', 'settings'));
+    if (data.episode?.episodeId) rows.push(muted(`Automatic capture: ${data.episode.counts?.attempts || 0} attempts · through event ${data.episode.observedThroughSeq || 0}`), action('Inspect host-observed progress', 'episode'));
   } else if (view === 'memory') {
     rows.push({ text: 'Project memory & history', tone: 'accent' }, action(`Search${ui.knowledgeQuery ? ': ' + ui.knowledgeQuery : '…'}`, 'search'),
       action(ui.knowledgeIncludeStale ? 'Hide stale knowledge' : 'Include stale knowledge', 'stale'));
@@ -90,7 +99,42 @@ export function knowledgeRows(ui) {
     if (data.verification) rows.push(muted('Verification: ' + data.verification.source));
     if (data.whyMatched) rows.push(muted('Matched: ' + (typeof data.whyMatched === 'string' ? data.whyMatched : JSON.stringify(data.whyMatched))));
     if (data.kind === 'memory') rows.push(action('Review this knowledge decision', 'review-memory'), action('Mark stale with a reason', 'invalidate-memory'), action('Version history and restoration', 'memory-history'));
+    if (data.kind === 'chat' && data.sha256) rows.push(action('Open the exact matched source', 'source'));
     rows.push(action('Back to search results', 'memory'));
+  } else if (view === 'source') {
+    rows.push({ text: 'Original scoped knowledge source', tone: 'accent' }, { text: data.text || data.content || '' }, muted(`Source ${data.sourceId} · ${data.offset || 0} bytes`));
+    if (data.hasMore) rows.push(action('Next source page', 'source-next'));
+    rows.push(action('Back to search results', 'memory'));
+  } else if (view === 'facts') {
+    rows.push({ text: 'Project facts included in prompts', tone: 'accent' }, muted(`Revision ${data.revision || 0} · ${data.enabled ? 'on' : 'off'} · ${data.maxBytes || 2500} byte budget`));
+    for (const item of data.items || []) rows.push({ text: item.statement }, muted(`${item.truth} · ${item.pinned ? 'owner pinned' : 'owner confirmed'} · ${item.id} · revision ${item.revision}`));
+    for (const item of data.omitted || []) rows.push(muted(`Omitted ${short(item.id)}: ${item.reason}`));
+    rows.push(action('Select existing memory IDs to pin', 'facts-pin'), action(data.enabled ? 'Disable project fact projection' : 'Enable project fact projection', 'facts-toggle'));
+  } else if (view === 'resolutions') {
+    rows.push({ text: 'Earlier proposed resolutions', tone: 'accent' }, muted('Historical procedures need current evidence and applicability checks.'));
+    for (const item of data.items || []) rows.push({ text: item.symptom }, { text: (item.fixSteps || []).join('\n') }, muted(`${item.truth} · ${item.match} · cause ${item.causeStatus} · memory ${item.memoryId}`));
+    if (!data.items?.length) rows.push(muted('No matching resolution in this project.'));
+    rows.push(action('Search another exact error', 'resolutions'));
+  } else if (view === 'episode' || view === 'packet') {
+    rows.push({ text: view === 'episode' ? 'Host-observed progress' : 'Pinned learning packet', tone: 'accent' }, { text: JSON.stringify(data, null, 2) });
+  } else if (view === 'retrieval') {
+    rows.push({ text: 'Retrieval measurements', tone: 'accent' }, muted(`Local embeddings: ${data.settings?.localEmbeddingsEnabled ? 'on' : 'off'} · capability ${data.settings?.available ? 'available' : 'unavailable'} · fallback scoped full-text search`),
+      muted('A local embedding model is not bundled. Installing a model or contacting a remote embedding endpoint is not part of this setting.'));
+    for (const item of data.samples || []) rows.push(muted(`${item.mode} · ${Math.round(item.latencyMs)} ms · ${item.returned} results · ${item.deliveredBytes} delivered bytes`));
+    rows.push(action(data.settings?.localEmbeddingsEnabled ? 'Disable local semantic retrieval' : 'Review local semantic retrieval opt-in', 'retrieval-toggle'));
+    if (data.settings?.localEmbeddingsEnabled) rows.push(action('Index one bounded local batch', 'retrieval-refresh'));
+  } else if (view === 'curation') {
+    rows.push({ text: 'Learned skill review suggestions', tone: 'accent' }, muted('Similarity is advisory. Nothing is automatically merged or archived.'));
+    for (const suggestion of data.suggestions || []) for (const item of suggestion.skills || []) rows.push(action(`Compare ${short(item.id)} · revision ${item.revision}`, 'evolution:' + encode(item.id)));
+    if (!data.suggestions?.length) rows.push(muted('No near-duplicate learned procedures found in the bounded scan.'));
+    rows.push(action('Inspect a skill’s feedback and outcome timeline', 'evolution-select'));
+  } else if (view === 'evolution') {
+    rows.push({ text: `${data.skill?.name} · feedback and changes`, tone: 'accent' }, muted(data.summary?.caution || 'Outcome associations do not measure skill efficacy.'));
+    for (const item of data.feedback || []) rows.push({ text: `${item.kind}: ${item.rationale}` }, muted(`Version ${short(item.skillVersion)} · ${item.createdAt}`));
+    for (const item of data.outcomes || []) rows.push(muted(`Observed run outcome ${item.state || item.runState || 'recorded'} · version ${short(item.skillVersion)}`));
+    for (const item of data.updates || []) rows.push(item.candidateId ? action('Inspect staged correction ' + short(item.candidateId), 'candidate:' + encode(item.candidateId)) : muted(`Correction ${item.state || 'skipped'} · ${short(item.id)}`));
+    for (const item of data.curation || []) rows.push(muted(`${item.action} · ${item.createdAt} · revision ${item.revision}`));
+    if (['learning', 'learning-update'].includes(data.skill?.provenance?.kind) && data.skill.scope === 'project') rows.push(action(data.skill.archived ? 'Review and restore as disabled' : 'Review and archive this learned skill', data.skill.archived ? 'restore-skill' : 'archive-skill'));
   } else if (view === 'memory-history' || view === 'profile-history') {
     const memory = view === 'memory-history';
     rows.push({ text: `${memory ? 'Knowledge' : data.target + ' profile'} · version history`, tone: 'accent' });
@@ -111,10 +155,15 @@ export function knowledgeRows(ui) {
     rows.push({ text: `Learning ${data.state}`, tone: 'accent' }, muted(`Job ${data.id} · revision ${data.revision}`),
       muted(`Reason ${data.reason} · ${data.tokensUsed || 0} tokens used`));
     if (data.reasonPaused) rows.push(muted('Paused: ' + data.reasonPaused));
+    if (data.scheduleReason) rows.push(muted('Deferred: ' + data.scheduleReason));
+    if (data.selection) rows.push(muted(`Pinned reviewer: ${data.selection.provider} · ${data.selection.model || 'provider default'} · ${data.selection.effort}`));
+    if (data.packetId) rows.push(action('Inspect the exact pinned input and coverage', 'packet'));
     if (data.failure) rows.push(muted('Review stopped. Inspect its saved status before retrying.'));
     if (data.result) {
       const publications = data.result.skillPublications || [], ids = [...new Set([...(data.result.skillIds || []), ...publications.map(item => item.skillId).filter(Boolean)])];
       rows.push(muted(`Result: ${(data.result.lessonIds || []).length} lessons · ${ids.length} learned skills · ${(data.result.candidateIds || []).length} skill candidates · ${(data.result.profileProposalIds || []).length} profile proposals${data.result.noChange ? ' · no change needed' : ''}`));
+      if (data.result.resolutionIds?.length) rows.push(muted(`${data.result.resolutionIds.length} proposed resolutions saved with uncertain causes`));
+      for (const id of data.result.candidateIds || []) rows.push(action('Review staged skill ' + short(id), 'candidate:' + encode(id)));
       for (const id of ids) {
         const item = publications.find(entry => entry.skillId === id);
         if (item?.state === 'deleted') rows.push(muted(`${item.name || id} · deleted from Library`));
@@ -203,7 +252,7 @@ function readFixtureJSON(file) {
 export async function knowledgeAction(command, ui) {
   const split = command.indexOf(':'), verb = split < 0 ? command : command.slice(0, split), argument = split < 0 ? '' : decode(command.slice(split + 1));
   const shown = ui.knowledgeState || {};
-  const navigation = new Set(['home', 'memory', 'search', 'jobs', 'candidates', 'profiles', 'proposals', 'fixtures', 'settings', 'library', 'refresh']);
+  const navigation = new Set(['home', 'memory', 'search', 'jobs', 'candidates', 'profiles', 'proposals', 'fixtures', 'settings', 'library', 'refresh', 'facts', 'resolutions', 'curation', 'retrieval']);
   if (ui.knowledgeContextKey && ui.knowledgeContextKey !== key(ui) && !navigation.has(verb)) throw new Error('Conversation changed. Reopen knowledge for this project before acting.');
   if (verb === 'library') { ui.knowledgeView = null; ui.skillPreview = null; return; }
   if (verb === 'home') overview(ui);
@@ -212,6 +261,43 @@ export async function knowledgeAction(command, ui) {
   else if (verb === 'stale') { ui.knowledgeIncludeStale = !ui.knowledgeIncludeStale; ui.knowledgeOffset = 0; search(ui); }
   else if (verb === 'memory-next' || verb === 'memory-previous') { ui.knowledgeOffset = Math.max(0, (ui.knowledgeOffset || 0) + (verb.endsWith('next') ? 12 : -12)); search(ui); }
   else if (verb === 'hit') { const item = ui.knowledgeHits?.[Number(argument)]; if (!item) throw new Error('Refresh project search before opening this record.'); show(ui, 'hit', item); }
+  else if (verb === 'source' || verb === 'source-next') show(ui, 'source', request(ui, 'source.read', { sourceId: shown.sourceId, sha256: shown.sha256, offset: verb === 'source' ? 0 : shown.nextOffset, limit: 8192 }));
+  else if (verb === 'facts') show(ui, 'facts', request(ui, 'facts.read'));
+  else if (verb === 'facts-toggle' || verb === 'facts-pin') {
+    const settings = verb === 'facts-toggle' ? { enabled: !shown.enabled } : null;
+    if (!settings) {
+      const answer = await prompt(ui, 'ask', 'Existing project memory IDs to include, separated by commas; empty clears manual pins');
+      if (answer == null) return;
+      const ids = answer.split(',').map(value => value.trim()).filter(Boolean);
+      if (!await confirm(ui, `Pin ${ids.length} existing memories? Truth and freshness checks still apply.`)) return;
+      request(ui, 'facts.configure', { settings: { ids }, expectedRevision: shown.revision, reviewed: true });
+    } else if (await confirm(ui, settings.enabled ? 'Include the bounded project fact view in prompts?' : 'Disable project fact projection?')) request(ui, 'facts.configure', { settings, expectedRevision: shown.revision, reviewed: true });
+    show(ui, 'facts', request(ui, 'facts.read'));
+  } else if (verb === 'resolutions') {
+    const query = await prompt(ui, 'ask', 'Exact error text or problem to recall from this project');
+    if (query?.trim()) show(ui, 'resolutions', request(ui, 'resolutions.search', { query: query.trim(), limit: 6 }));
+  } else if (verb === 'episode') show(ui, 'episode', request(ui, 'episode.read', { runId: shown.episode?.runId, goalId: shown.episode?.goalId, maxBytes: 16000 }));
+  else if (verb === 'packet') show(ui, 'packet', request(ui, 'learning.packet', { id: shown.id }));
+  else if (verb === 'curation') show(ui, 'curation', request(ui, 'skill.curation.suggest'));
+  else if (verb === 'retrieval') show(ui, 'retrieval', request(ui, 'retrieval.status'));
+  else if (verb === 'retrieval-toggle') {
+    const enabled = !shown.settings.localEmbeddingsEnabled;
+    if (await confirm(ui, enabled ? 'Enable the registered local embedding capability for this project? No model is downloaded; full-text search remains available.' : 'Disable local embeddings and discard their derived vectors?')) request(ui, 'retrieval.configure', { settings: { localEmbeddingsEnabled: enabled }, expectedRevision: shown.settings.revision, reviewed: true });
+    show(ui, 'retrieval', request(ui, 'retrieval.status'));
+  } else if (verb === 'retrieval-refresh') {
+    const original = key(ui), result = await request(ui, 'retrieval.refresh', { limit: 8 });
+    if (key(ui) !== original) throw new Error('Conversation changed. Reopen retrieval for this project.');
+    show(ui, 'retrieval', request(ui, 'retrieval.status')); ui.event('info', { message: `Local retrieval indexed ${result.indexed || 0} sources${result.fallback ? ': ' + result.fallback : ''}.` });
+  }
+  else if (verb === 'evolution' || verb === 'evolution-select') {
+    const id = argument || await prompt(ui, 'ask', 'Skill name or ID to inspect');
+    if (id?.trim()) show(ui, 'evolution', request(ui, 'skill.evolution', { id: id.trim() }));
+  } else if (verb === 'archive-skill' || verb === 'restore-skill') {
+    const action = verb === 'archive-skill' ? 'archive' : 'restore';
+    if (!await confirm(ui, `${action} ${shown.skill.name}? It will remain disabled; open workflow pins prevent this operation.`)) return;
+    request(ui, 'skill.curation', { id: shown.skill.id, action, expectedRevision: shown.skill.revision, requestId: randomUUID(), reviewed: true });
+    show(ui, 'evolution', request(ui, 'skill.evolution', { id: shown.skill.id }));
+  }
   else if (verb === 'review-memory') {
     const truth = await prompt(ui, 'chooseOne', 'Review the recorded claim and its current evidence', ['confirmed', 'disproved', 'inconclusive'].map(value => ({ value, label: value })));
     if (!truth) return;
@@ -241,6 +327,29 @@ export async function knowledgeAction(command, ui) {
   else if (['pause-job', 'resume-job', 'cancel-job'].includes(verb)) {
     request(ui, 'learning.control', { id: shown.id, action: verb.split('-')[0], expectedRevision: shown.revision }); job(ui, shown.id);
   } else if (verb === 'settings') show(ui, 'settings', request(ui, 'status'));
+  else if (verb === 'learning-foreground') {
+    const settings = { duringForeground: !shown.settings.duringForeground };
+    if (await confirm(ui, settings.duringForeground ? 'Allow bounded reviews while this conversation works, subject to capacity and cooldown?' : 'Defer reviews until this conversation is idle?')) request(ui, 'learning.settings', { settings, expectedRevision: shown.settings.revision, reviewed: true }, false);
+    show(ui, 'settings', request(ui, 'status'));
+  } else if (verb === 'learning-model') {
+    const source = await prompt(ui, 'chooseOne', 'Learning model route · queued jobs keep their existing selection', [
+      { value: 'source', label: 'Use the source conversation’s model at queue time' }, { value: 'background', label: 'Use the configured Core background model' }, { value: 'custom', label: 'Use an explicit installed provider and model' }]);
+    if (!source) return;
+    const route = { source };
+    if (source === 'custom') {
+      route.provider = (await prompt(ui, 'ask', 'Installed Core provider ID'))?.trim(); if (!route.provider) return;
+      route.model = (await prompt(ui, 'ask', 'Model ID; empty uses the provider default'))?.trim() || null;
+      route.effort = (await prompt(ui, 'ask', 'Effort; empty uses default'))?.trim() || 'default';
+    }
+    if (await confirm(ui, 'Save learning model route: ' + JSON.stringify(route))) request(ui, 'learning.settings', { settings: { modelRoute: route }, expectedRevision: shown.settings.revision, reviewed: true }, false);
+    show(ui, 'settings', request(ui, 'status'));
+  } else if (verb === 'evolution-policy') {
+    const newSkills = await prompt(ui, 'chooseOne', 'New learned skills', [{ value: 'stage', label: 'Stage for owner review' }, { value: 'off', label: 'Do not create new proposals' }, { value: 'auto', label: 'Automatically enable new project skills' }]);
+    if (!newSkills) return;
+    const updates = await prompt(ui, 'chooseOne', 'Corrections to existing skills', [{ value: 'stage', label: 'Stage exact-version corrections' }, { value: 'off', label: 'Do not propose corrections' }]);
+    if (updates && await confirm(ui, `Save skill policy: new ${newSkills}, corrections ${updates}? Existing resources and owner enable decisions remain in force.`)) request(ui, 'skill.evolution.settings', { settings: { newSkills, updates }, expectedRevision: shown.evolution.revision, reviewed: true }, false);
+    show(ui, 'settings', request(ui, 'status'));
+  }
   else if (verb === 'toggle-learning') {
     if (!await confirm(ui, shown.settings.enabled ? 'Pause learning and its queued work?' : 'Enable bounded learning? Previously paused jobs still need explicit resume.')) return;
     request(ui, 'learning.settings', { settings: { enabled: !shown.settings.enabled }, expectedRevision: shown.settings.revision, reviewed: true }, false); overview(ui);

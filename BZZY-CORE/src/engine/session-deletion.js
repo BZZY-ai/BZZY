@@ -6,7 +6,7 @@ import { identityAlive } from './process-identity.js';
 
 const reject = (message, code, status = 409) => { throw Object.assign(new Error(message), { code, status }); };
 const derivedRuntimeKinds = ['native-compaction', 'core.conversation.source', 'core.conversation.pending',
-  'core.history.maintenance', 'core.task-state.read', 'core.checkpoint.scope'];
+  'core.history.maintenance', 'core.task-state.read', 'core.checkpoint.scope', 'core.episode.progress', 'core.retrieval.vector', 'core.retrieval.metric'];
 const retainedReceiptKinds = ['core.checkpoint.request', 'core.workflow.work-unit', 'core.workflow.consultation'];
 const nativeRuntimeFields = ['nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency',
   'coreSkillsProtocol', 'sessionMemoryRefresh', 'sessionMemorySeen'];

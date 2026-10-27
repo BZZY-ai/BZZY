@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Coordinator } from './coordination.js';
@@ -7,7 +6,7 @@ import { createSession, loadSession, saveSession, home, privateDir } from './sto
 import { getProvider, apiKey } from './providers.js';
 import { newGoal } from './goals.js';
 import { putRecord, getRecord, listRecords, appendEvent, now } from './database.js';
-import { snapshotWorkspace } from './evidence.js';
+import { snapshotWorkspace, copyWorkspaceSnapshot } from './evidence.js';
 import { writeProjectRecord } from './project.js';
 import { configuredParallel } from './parallel-setup.js';
 import { conversationPrompt } from './conversation.js';
@@ -29,7 +28,7 @@ export async function runParallel(session, options, ui) {
       for (const [index, selection] of choices.entries()) {
         const namespace = `${selection.provider}-${index + 1}-${session.goal.id.slice(0, 8)}${session.modeRevision ? '-' + session.modeRevision : ''}`;
         const work = path.join(home(), 'parallel', session.id, namespace); privateDir(path.dirname(work));
-        fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
+        copyWorkspaceSnapshot(snapshot, work, { sessionId: session.id });
         const child = createSession(getProvider(selection.provider), work, selection.model);
         const tokenBudget = session.goal.tokenBudget == null ? undefined : Math.max(1, Math.floor((session.goal.tokenBudget - coordinator.tokenOffset) / choices.length));
         Object.assign(child, { mode: 'solo', role: 'peer', parentSessionId: session.id, projectRoot: session.cwd, agentNamespace: namespace,

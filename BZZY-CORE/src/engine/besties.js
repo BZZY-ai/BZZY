@@ -1,11 +1,10 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { Coordinator } from './coordination.js';
 import { createSession, loadSession, saveSession, home, privateDir } from './store.js';
 import { getProvider, apiKey, config } from './providers.js';
 import { newGoal } from './goals.js';
 import { getRecord, putRecord, listRecords, now } from './database.js';
-import { snapshotWorkspace } from './evidence.js';
+import { snapshotWorkspace, copyWorkspaceSnapshot } from './evidence.js';
 import { enqueueExecution } from './execution-queue.js';
 import { reconcileSession } from './recovery.js';
 import { peerCollaborationState } from './peer-collaboration.js';
@@ -33,7 +32,7 @@ export async function runBesties(session, options, ui) {
       const snapshot = snapshotWorkspace(session, 'besties-common-input'), peers = [];
       for (const [index, selection] of choices.entries()) {
         const namespace = `${selection.provider}-bestie-${index + 1}-${session.goal.id.slice(0, 8)}${session.modeRevision ? '-' + session.modeRevision : ''}`, work = path.join(home(), 'besties', session.id, namespace);
-        privateDir(path.dirname(work)); fs.cpSync(snapshot.directory, work, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
+        privateDir(path.dirname(work)); copyWorkspaceSnapshot(snapshot, work, { sessionId: session.id });
         const child = createSession(getProvider(selection.provider), work, selection.model);
         Object.assign(child, { mode: 'solo', role: 'bestie', parentSessionId: session.id, bestiesSessionId: session.id, parallelSessionId: session.id,
           projectRoot: session.cwd, agentNamespace: namespace, selectedEffort: selection.effort, modelCapabilities: selection.capabilities,

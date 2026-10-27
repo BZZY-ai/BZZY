@@ -7,13 +7,15 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { nativeContextBudget, prepareNativeReadiness, acknowledgeNativeReadiness, recordNativeCompaction,
   consumeNativeRefresh, markNativeRefreshPrepared, nativeInputEstimate, assertNativeInputFits, observeContextPressure, nativeGoalTokenBudget } from '../src/engine/native-context.js';
-import { CodexEngine } from '../src/engine/engines/codex.js';
+import { CodexEngine, codexDynamicTools, synchronizeCodexTools } from '../src/engine/engines/codex.js';
 import { ClaudeEngine } from '../src/engine/engines/claude.js';
 import { createSession, loadSession, saveSession } from '../src/engine/store.js';
 import { appendEvent, events, getRecord, putRecord, removeRecord } from '../src/engine/database.js';
 import { getProvider } from '../src/engine/providers.js';
 import { newGoal } from '../src/engine/goals.js';
 import { recordDiagnosticTool } from '../src/engine/session-diagnostics.js';
+import { saveWorkflow, selectWorkflow, preflightGoalWorkflow } from '../src/engine/workflows.js';
+import { normalizeContract } from '../src/engine/contracts.js';
 
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_HOME', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_LOG', 'BZZY_TEST_SCENARIO', 'BZZY_ENV_ALLOW', 'EXPLABS_API_KEY'];
 let directory, saved, session, engine, observed;
@@ -243,7 +245,7 @@ test('a pause during asynchronous context preparation prevents native dispatch',
 test('recovery marks an unacknowledged dispatch uncertain without replaying it', async () => {
   recordNativeCompaction(session, { threadId: 'native-thread', turnId: 'previous', itemId: 'old-compaction', phase: 'completed' });
   session.nativeContext.refresh.state = 'dispatching'; session.nativeContext.refresh.requestId = 'previous-request';
-  session.engineThreadId = 'native-thread'; session.coreSkillsProtocol = 6; saveSession(session);
+  session.engineThreadId = 'native-thread'; session.coreSkillsProtocol = 7; saveSession(session);
   createEngine(); await engine.open();
   assert.equal(session.nativeContext.refresh.state, 'uncertain');
   assert.equal(session.nativeContext.refresh.reason, 'native-refresh-recovery-requires-safe-prompt');
@@ -298,13 +300,37 @@ test('schema migration rotates only the native thread and cannot replenish nativ
   createEngine(); const running = engine.run('Fixture', { goal: true, resumeGoal: true }); running.catch(() => {});
   await until(() => engine.activeTurns.size > 0);
   const goalSet = calls().find(call => call.method === 'thread/goal/set' && call.params.status === 'active');
-  assert.equal(session.coreSkillsProtocol, 6); assert.equal(session.goal.id, goalId);
+  assert.equal(session.coreSkillsProtocol, 7); assert.equal(session.goal.id, goalId);
   assert.equal(session.goal.nativeTokenOffset, 70); assert.equal(session.engineTokenOffset, 90);
   assert.equal(goalSet.params.tokenBudget, 30); assert.ok(goalSet.params.objective);
   assert.ok(calls().some(call => call.method === 'thread/start'));
   assert.equal(calls().some(call => call.method === 'thread/resume'), false);
   await engine.interrupt('user_pause'); await running;
   assert.equal(getRecord('session', session.id).goal.id, goalId);
+});
+
+test('a chat-created native thread rotates for newly required goal routing tools even at the same protocol', async () => {
+  const host = { context: { runId: 'context-run' } }, chat = { toolHost: host, goalMode: false }, goal = { toolHost: host, goalMode: true };
+  const chatTools = codexDynamicTools(session, chat);
+  session.contract = normalizeContract({}, session.goal.objective); saveSession(session);
+  const workflow = saveWorkflow(JSON.parse(fs.readFileSync(new URL('../assets/bug-bounty/bug-bounty-methodology.json', import.meta.url), 'utf8')), { cwd: session.cwd });
+  selectWorkflow(session, workflow.name, { expectedRevision: 0 }); preflightGoalWorkflow(session);
+  const goalTools = codexDynamicTools(session, goal);
+  assert.equal(chatTools.some(tool => tool.name === 'declare_work_unit'), false);
+  for (const name of ['declare_work_unit', 'close_work_unit']) assert.ok(goalTools.some(tool => tool.name === name));
+  session.engineThreadId = 'chat-thread'; session.coreSkillsProtocol = 7;
+  // prepareNativeReadiness binds the actual native identity without inventing
+  // a backend re-enumeration or granting ordinary chat additional tools.
+  prepareNativeReadiness(session, { backend: 'codex', tools: chatTools }); acknowledgeNativeReadiness(session, { threadId: 'chat-thread' });
+  const unchanged = synchronizeCodexTools(session, chat); assert.equal(unchanged.rotated, false);
+  session.goal.nativeTokensUsed = 70; session.usage = { tokens: 90 }; session.goal.tokenBudget = 100;
+  const goalId = session.goal.id, changed = synchronizeCodexTools(session, goal);
+  assert.equal(changed.rotated, true); assert.equal(session.engineThreadId, null); assert.equal(session.goal.id, goalId);
+  assert.equal(session.goal.nativeTokenOffset, 70); assert.equal(session.engineTokenOffset, 90); assert.equal(session.conversationHandoff.pending, true);
+  assert.ok(events(session.id).some(row => row.type === 'diagnostic.backend' && row.data.method === 'native-tool-schema' && row.data.reason === 'tool-schema-changed'));
+  createEngine(); engine.options.goalMode = true; await engine.open();
+  const start = calls().find(call => call.method === 'thread/start');
+  for (const name of ['declare_work_unit', 'close_work_unit']) assert.ok(start.params.dynamicTools.some(tool => tool.name === name));
 });
 
 test('native goal budgets subtract actual delegated usage once across same-thread resume and thread migration', async () => {

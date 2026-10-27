@@ -41,11 +41,13 @@ const clickAction = (ui, action) => {
 test('execution health separates routing blockers and native readiness from invocation counts', () => {
   const data = snapshot(); data.health = { available: true, routing: { enforced: true, covered: 1, closed: 2, open: 1, blocked: 1, unmet: 2,
     units: [{ classId: 'idor', state: 'open', specialist: 'idor-agent', missing: ['review'] }] },
-    native: { readiness: { tools: { source: 'unknown-legacy-native-thread' } }, refresh: { state: 'pending', reason: 'awaiting-safe-prompt' } },
+    native: { readiness: { tools: { source: 'unknown-legacy-native-thread' } }, refresh: { state: 'pending', reason: 'awaiting-safe-prompt' },
+      routingToolCoverage: { known: true, missing: ['declare_work_unit', 'close_work_unit'] } },
     memory: { indexedThroughSeq: 123, pendingNodes: 2 }, taskState: { bytes: 2048, repeatedReads: 3 } };
   const panel = { data, scope: 'goal', actions: () => [], selectedGoalId: null };
   const text = sessionMetricsLayout(panel, 100).lines.map(line => clean(line.text)).join('\n');
   assert.match(text, /1 covered.*1 open.*1 blocked/); assert.match(text, /unknown for this retained native thread/);
+  assert.match(text, /Workflow tools missing from native thread/); assert.match(text, /declare_work_unit/);
   assert.match(text, /indexed through event 123/); assert.match(text, /Skill model loads\s+3/);
   panel.selectedGoalId = 'previous-goal';
   assert.doesNotMatch(sessionMetricsLayout(panel, 100).lines.map(line => clean(line.text)).join('\n'), /BZZY execution health/);

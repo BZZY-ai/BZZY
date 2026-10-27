@@ -18,6 +18,7 @@ import { claudeArgs } from '../src/engine/engines/claude.js';
 import { learningWorkingDirectory } from '../src/engine/learning-backend.js';
 import { knowledgeProfileProposals, listKnowledgeProfiles } from '../src/engine/knowledge.js';
 import { processIdentity, identityAlive } from '../src/engine/process-identity.js';
+import { configureSkillEvolution } from '../src/engine/skill-evolution-policy.js';
 
 let root, session, prior;
 const names = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_ENV_ALLOW', 'BZZY_TEST_LEARNING_LOG', 'BZZY_TEST_LEARNING_BAD_PROFILE'];
@@ -30,6 +31,9 @@ test.beforeEach(() => {
   const cwd = path.join(root, 'project'); fs.mkdirSync(cwd);
   session = createSession(getProvider('codex'), cwd, 'offline-review-model'); session.projectRoot = cwd;
   projectIdentityForSession(session, { create: true }); saveSession(session);
+  // These legacy publication tests exercise the explicit automatic opt-in.
+  // New installations stage new learned procedures by default.
+  configureSkillEvolution({ newSkills: 'auto' }, { expectedRevision: 0, reviewed: true });
 });
 test.afterEach(() => { for (const name of names) if (prior[name] === undefined) delete process.env[name]; else process.env[name] = prior[name]; fs.rmSync(root, { recursive: true, force: true }); });
 const message = (text = 'Compare owner and anonymous baselines; keep missing proof inconclusive.') => appendEvent(session.id, 'message.user', { text });
@@ -46,7 +50,7 @@ const candidate = (name = 'authorization-review') => stageSkillCandidate({ name,
 test('foreground learning requires reviewed opt-in, retains reservations and observes a durable cooldown', async () => {
   const job = queued('recorded_lesson'); session.executionState = 'running'; saveSession(session);
   assert.deepEqual(await processLearningReviews({ runReview: () => assert.fail('Default policy must preserve foreground priority') }), []);
-  assert.equal(inspectLearningJob(job.id).scheduleReason, 'foreground_priority');
+  assert.equal(inspectLearningJob(job.id).scheduleReason, 'source_foreground');
   configureLearning({ duringForeground: true, foregroundCooldownSeconds: 60 }, { expectedRevision: 0 });
   const [completed] = await processLearningReviews({ runReview: noChange });
   assert.equal(completed.state, 'completed'); assert.equal(learningUsage().reservedTokens, 0);

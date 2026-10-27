@@ -20,12 +20,14 @@ import { activeAssignmentsFor, delegationUsage, assignmentCounts } from './deleg
 import { duration } from './format-duration.js';
 import { delegationTokenLines } from './delegation-format.js';
 import { agentExecutionScope } from './agent-execution.js';
-import { learningForTurn } from './learning-hooks.js';
+import { learningForTurn, learningForEpisode } from './learning-hooks.js';
 import { sessionMemoryEligible } from './session-memory.js';
 import { queueSessionCompaction, pauseSessionCompaction } from './session-compactor.js';
-import { pauseLearningForSession } from './learning.js';
+import { deferLearningForSession } from './learning.js';
 import { randomUUID } from 'node:crypto';
 import { maintainSessionHistory } from './history-maintenance.js';
+import { captureEpisode } from './episode.js';
+import { captureSkillOutcomes } from './skill-feedback.js';
 
 export function classifyFailure(error) {
   const message = String(error.message || error);
@@ -52,7 +54,7 @@ export function printGoalSummary(session, ui) {
 }
 export async function runSession(provider, session, options, ui, prompt, { goal = false, resumeGoal = false } = {}) {
   if (session.modelSelectionRequired) throw new Error('Select a model before sending a message.');
-  pauseLearningForSession(session.id, 'foreground_work');
+  deferLearningForSession(session.id);
   const agentScope = agentExecutionScope(session);
   if (agentScope) {
     if (session.contract?.verification?.length || session.contract?.artifacts?.length) throw Object.assign(new Error('Persistent Agent acceptance commands and file assertions need an authorized isolated integration; no host command was started.'), { code: 'UNSUPPORTED_POLICY' });
@@ -94,8 +96,15 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     const remainingMs = limit == null ? null : Math.max(0, limit - (session.goal?.runtimeUsedSeconds || 0)) * 1000;
     let deadline; if (remainingMs != null) deadline = setTimeout(() => stop('runtime_limit'), remainingMs);
     heartbeat = guardedInterval(() => { const record = getRecord('run', session.id); if (record) putRecord('run', session.id, { ...record, heartbeatAt: now() }); }, 2000, { label: 'Run heartbeat', onError: (_error, failures) => { if (failures >= 3) stop('persistence_failure'); } });
+    let lastEpisodeAt = 0;
     if (sessionMemoryEligible(session)) historyMaintenance = guardedInterval(() => {
-      if (!stopping) maintainSessionHistory(session);
+      if (stopping) return;
+      maintainSessionHistory(session);
+      if (Date.now() - lastEpisodeAt >= 30000) {
+        lastEpisodeAt = Date.now();
+        const episode = captureEpisode(session, { runId: run.id, goalId: run.goalId });
+        learningForEpisode(session, episode, { runId: run.id, goalMode: goal });
+      }
     }, 2000, { label: 'Finalized conversation indexing', onError: () => {} });
     let lastUsageKey, lastUsageAt = 0;
     controls = guardedInterval(async () => {
@@ -211,7 +220,12 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
       catch { /* Optional diagnostics do not change a completed run's outcome. */ }
       closeOpenActivities(session);
       writeProjectRecord(session, 'goals', session.goal?.id || session.id, { sessionId: session.id, goal: session.goal, summary: session.summary, acceptance: session.acceptance || null });
-      learningForTurn(session, prompt, { goal, stopped: Boolean(stopping || failedThisTurn) });
+      try {
+        const episode = captureEpisode(session, { runId: run.id, goalId: run.goalId });
+        if (!stopping && !failedThisTurn) learningForEpisode(session, episode, { runId: run.id, goalMode: goal });
+        captureSkillOutcomes(session, run.id);
+      } catch { /* Source execution remains authoritative if derived learning is unavailable. */ }
+      learningForTurn(session, prompt, { goal, runId: run.id, stopped: Boolean(stopping || failedThisTurn) });
       if (sessionMemoryEligible(session)) {
         try {
           if (stopping || failedThisTurn) pauseSessionCompaction(session.id, 'source_stopped');

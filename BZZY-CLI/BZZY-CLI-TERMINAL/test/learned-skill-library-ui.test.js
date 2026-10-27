@@ -14,6 +14,7 @@ import { initializeProject } from '@bzzy/core/engine/project.js';
 import { saveSession } from '@bzzy/core/engine/store.js';
 import { getRecord, listRecords } from '@bzzy/core/engine/database.js';
 import { publishLearnedSkill, inspectSkill, listSkills, readSkill, setSkillEnabled } from '@bzzy/core/engine/skills.js';
+import { configureSkillEvolution } from '@bzzy/core/engine/skill-evolution-policy.js';
 
 let directory, previous, project, session, ui, input, events, publication;
 function conversation(cwd) {
@@ -24,6 +25,7 @@ test.beforeEach(() => {
   previous = process.env.BZZY_HOME; directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-learned-skill-ui-')));
   process.env.BZZY_HOME = path.join(directory, 'private'); project = path.join(directory, 'project'); fs.mkdirSync(project);
   fs.writeFileSync(path.join(project, 'retained-source.txt'), 'The original project file must remain unchanged.'); session = conversation(project);
+  configureSkillEvolution({ newSkills: 'auto' }, { expectedRevision: 0, reviewed: true });
   const jobId = randomUUID();
   publication = publishLearnedSkill({ name: 'dated-controls', description: 'Check supplied birth and observation dates.', instructions: 'Compare supplied dated records and preserve missing-evidence caveats.' },
     { session, requestId: 'automatic-method-1', provenance: { kind: 'learning', jobId, sourceSessionId: session.id } });
@@ -38,7 +40,7 @@ const command = value => skillsCommand('/skills ' + value, ui);
 const text = () => skillRows(ui).map(row => row.text).join('\n');
 function back() { ui.tui.render(); const hit = ui.tui.hitTargets.find(item => item.type === 'back'); assert.ok(hit); input.write(`\x1b[<0;${hit.left};${hit.row}M`); }
 
-test('automatically learned skills appear enabled in Library with source, history and immediate disable controls', async () => {
+test('explicit automatic learning opt-in shows enabled Library skills with source, history and disable controls', async () => {
   let prompts = 0; ui.chooseOne = async () => { prompts++; return 'cancel'; };
   await command(''); assert.match(text(), /\[ ON \] dated-controls/); assert.doesNotMatch(text(), /dated-controls · learned/);
   assert.equal(listSkills({ session, enabledOnly: true }).skills.some(item => item.id === publication.skillId), true);

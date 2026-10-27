@@ -20,7 +20,7 @@ async function until(check, timeout = 8000) {
   throw new Error('The isolated learning runtime did not reach its expected state.');
 }
 
-test('the real Core scheduler reviews only when idle, stops learning durably, and needs explicit owner resume', { timeout: 45000 }, async () => {
+test('the real Core scheduler uses source idleness, stops learning durably, and needs explicit owner resume', { timeout: 45000 }, async () => {
   const names = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_ENV_ALLOW', 'BZZY_TEST_LEARNING_LOG',
     'BZZY_TEST_LEARNING_MODE', 'BZZY_TEST_LEARNING_BAD_PROFILE', 'NODE_OPTIONS'];
   const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
@@ -62,22 +62,32 @@ await import(${JSON.stringify(new URL('./fixtures/learning-codex.mjs', import.me
     info = await ensureRuntime();
 
     // A verified, test-owned idle process represents unrelated foreground work
-    // in the real execution catalog. The scheduler must defer the review.
+    // in the real execution catalog. An idle source can still use spare host
+    // capacity; another conversation must not stall all learning indefinitely.
     blocker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore', env: { ...process.env, NODE_OPTIONS: '' } });
     await new Promise((resolve, reject) => { blocker.once('spawn', resolve); blocker.once('error', reject); });
     blockerIdentity = processIdentity(blocker.pid); assert.ok(blockerIdentity);
     const foreign = createSession(getProvider('codex'), directory, 'no-model'); foreign.executionState = 'running'; saveSession(foreign);
     const executionId = randomUUID(); putRecord('execution', executionId,
       { id: executionId, sessionId: foreign.id, state: 'running', runner: blockerIdentity, createdAt: new Date().toISOString() });
-    const deferred = await automatic('deferred'); assert.ok(deferred);
+    const independent = await automatic('other-source-busy'); assert.ok(independent);
+    await until(() => getRecord('core.learning.job', independent.id)?.state === 'completed');
+    assert.equal(turns(), 1);
+    // The same execution now belongs to the source itself. Its own ordinary
+    // work defers a queued review until source idleness, without owner resume.
+    source.executionState = 'running'; saveSession(source);
+    putRecord('execution', executionId, { ...getRecord('execution', executionId), sessionId: source.id });
+    const deferred = await automatic('own-source-busy'); assert.ok(deferred);
     await owner('status'); await owner('search', { query: 'banner' }); await owner('learning.inspect', { id: deferred.id });
     await delay(350);
-    assert.equal(getRecord('core.learning.job', deferred.id).state, 'queued'); assert.equal(turns(), 0);
+    assert.equal(getRecord('core.learning.job', deferred.id).state, 'queued'); assert.equal(turns(), 1);
+    assert.equal(getRecord('core.learning.job', deferred.id).scheduleReason, 'source_foreground');
     putRecord('execution', executionId, { ...getRecord('execution', executionId), state: 'completed' });
+    source.executionState = 'idle'; saveSession(source);
     foreign.executionState = 'idle'; saveSession(foreign);
     signalProcess(blockerIdentity, 'SIGKILL', { group: true }); await until(() => !identityAlive(blockerIdentity));
     await until(() => getRecord('core.learning.job', deferred.id)?.state === 'completed');
-    assert.equal(turns(), 1);
+    assert.equal(turns(), 2);
     const firstStart = nativeCalls().find(item => item.method === 'thread/start');
     assert.equal(firstStart.params.permissions, 'bzzy_learning_review_v1'); assert.deepEqual(firstStart.params.dynamicTools, []);
     assert.equal(nativeCalls().find(item => item.id === 900 && !item.method).result.decision, 'decline');
@@ -87,7 +97,7 @@ await import(${JSON.stringify(new URL('./fixtures/learning-codex.mjs', import.me
     const held = await automatic('running'); assert.ok(held);
     const backend = learningBackend = await until(() => {
       const job = getRecord('core.learning.job', held.id), review = job?.reviewSessionId && loadSession(job.reviewSessionId);
-      return job?.state === 'running' && review?.backendProcess && turns() === 2 && review.backendProcess;
+      return job?.state === 'running' && review?.backendProcess && turns() === 3 && review.backendProcess;
     });
     const pending = await automatic('pending'); assert.ok(pending); assert.notEqual(pending.id, held.id);
     await runtimeRequest(info, 'POST', '/operator-stop', { shutdown: false });
@@ -104,11 +114,11 @@ await import(${JSON.stringify(new URL('./fixtures/learning-codex.mjs', import.me
     assert.notEqual(info.identity.pid, stoppedInfo.identity.pid);
     await owner('status'); await owner('learning.list'); await owner('learning.inspect', { id: pending.id });
     await delay(350);
-    assert.equal(turns(), 2); assert.equal(getRecord('core.learning.job', held.id).state, 'paused');
+    assert.equal(turns(), 3); assert.equal(getRecord('core.learning.job', held.id).state, 'paused');
     const paused = getRecord('core.learning.job', pending.id);
     await owner('learning.control', { id: pending.id, action: 'resume', expectedRevision: paused.revision });
     await until(() => getRecord('core.learning.job', pending.id)?.state === 'completed');
-    assert.equal(turns(), 3); assert.equal(getRecord('core.learning.job', held.id).state, 'paused');
+    assert.equal(turns(), 4); assert.equal(getRecord('core.learning.job', held.id).state, 'paused');
   } finally {
     if (learningBackend && identityAlive(learningBackend)) signalProcess(learningBackend, 'SIGKILL', { group: learningBackend.pgid === learningBackend.pid });
     if (blockerIdentity && identityAlive(blockerIdentity)) signalProcess(blockerIdentity, 'SIGKILL', { group: true });

@@ -21,8 +21,10 @@ import { recordBackendDiagnostics } from '../session-diagnostics.js';
 import { nativeContextBudget, prepareNativeReadiness, acknowledgeNativeReadiness, recordNativeCompaction,
   pendingNativeRefresh, consumeNativeRefresh, updateNativeRefresh } from '../native-context.js';
 import { nativeInputEstimate, assertNativeInputFits, observeContextPressure, nativeGoalTokenBudget } from '../native-context.js';
+import { toolSchemaManifest } from '../native-context.js';
 import { digest, getRecord, listRecords } from '../database.js';
 import { delegationUsage } from '../delegation-usage.js';
+import { recordWorkObservation } from '../episode.js';
 
 export { codexHome } from '../auth.js';
 
@@ -35,6 +37,33 @@ function rotateNativeThread(session) {
   }
   session.engineThreadId = null;
   session.conversationHandoff = { pending: true, throughSeq: conversationCursor(session.id) };
+}
+
+export function codexDynamicTools(session, options = {}) {
+  if (!options.toolHost || options.learningReview) return [];
+  return taskTools(session, { goalMode: session.mode === 'delegate' ? true : options.goalMode })
+    .filter(tool => !['get_goal', 'update_goal'].includes(tool.name)).map(tool => ({ type: 'function', name: tool.name,
+      description: tool.name === 'delegate' ? tool.description + ' Available only during an explicit /goal; ordinary chat cannot launch assignments.' : tool.description,
+      inputSchema: tool.inputSchema }));
+}
+
+// Native tools are fixed when a thread is created. The protocol version alone
+// cannot detect chat -> goal routing or a changed role/skill availability.
+export function synchronizeCodexTools(session, options = {}) {
+  const tools = codexDynamicTools(session, options), expected = toolSchemaManifest(tools), prior = session.nativeBackendReadiness;
+  if (!options.toolHost) return { tools, rotated: false };
+  const inherited = prior?.backend === 'codex' && prior.threadRef === digest(session.engineThreadId || '') && prior.tools?.sha256 === expected.sha256;
+  const changed = session.coreSkillsProtocol !== 7 || !inherited;
+  const rotated = Boolean(session.engineThreadId && changed);
+  if (rotated) {
+    const previous = prior?.tools?.names || [];
+    recordBackendDiagnostics(session, { method: 'native-tool-schema', outcome: 'rotation-required',
+      reason: session.coreSkillsProtocol !== 7 ? 'protocol-changed' : prior?.tools?.sha256 ? 'tool-schema-changed' : 'inherited-schema-unknown',
+      toolsSource: 'fresh-thread-required', tools: tools, reportedTools: previous });
+    rotateNativeThread(session);
+  }
+  session.coreSkillsProtocol = 7;
+  return { tools, rotated };
 }
 
 export function codexSandboxMode(options = {}) {
@@ -165,19 +194,19 @@ export class CodexEngine {
   }
 
   async open() {
-    if (this.rpc && !this.rpc.closed) return;
+    if (this.rpc && !this.rpc.closed) {
+      const expected = toolSchemaManifest(codexDynamicTools(this.session, this.options));
+      if (!this.options.toolHost || this.session.nativeBackendReadiness?.tools?.sha256 === expected.sha256) return;
+      if (this.operation || this.activeTurns.size) throw Object.assign(new Error('Native tool schemas changed during active work. Pause and resume at an authorized runner boundary.'), { code: 'NATIVE_TOOL_SCHEMA_CHANGED' });
+      await this.close(); this.rpc = null;
+    }
     let startupStage = 'configuration';
     try {
       this.closing = null;
       if (this.session.nativeContext?.refresh?.state === 'dispatching') {
         updateNativeRefresh(this.session, { state: 'uncertain', reason: 'native-refresh-recovery-requires-safe-prompt' });
       }
-      if (this.options.toolHost && this.session.coreSkillsProtocol !== 6) {
-        if (this.session.engineThreadId) {
-          rotateNativeThread(this.session);
-        }
-        this.session.coreSkillsProtocol = 6;
-      }
+      const nativeTools = synchronizeCodexTools(this.session, this.options).tools;
       startupStage = 'version';
       const installed = version('codex');
       assertCodexVersion(installed);
@@ -241,7 +270,7 @@ export class CodexEngine {
         // Native threads retain their initial tool schemas on resume. Reserve the
         // delegation tools even when the first turn is chat; ToolHost still denies
         // using them until an explicit goal execution authorizes them.
-        if (this.options.toolHost) params.dynamicTools = taskTools(this.session, { goalMode: this.session.mode === 'delegate' ? true : this.options.goalMode }).filter(t => !['get_goal', 'update_goal'].includes(t.name)).map(t => ({ type: 'function', name: t.name, description: t.name === 'delegate' ? t.description + ' Available only during an explicit /goal; ordinary chat cannot launch assignments.' : t.description, inputSchema: t.inputSchema }));
+        if (this.options.toolHost) params.dynamicTools = nativeTools;
         this.nativeToolSchemaBytes = Buffer.byteLength(JSON.stringify(params.dynamicTools || [])); this.nativeToolsKnown = true;
         startupStage = 'thread_start';
         const setupId = recordBackendDiagnostics(this.session, { method: 'thread/start', outcome: 'prepared', transport: 'codex-app-server',
@@ -367,6 +396,15 @@ export class CodexEngine {
       }
       if (item?.type === 'webSearch' && ['openPage', 'open_page'].includes(item.action?.type) && item.action.url) this.traffic.record(item.id, item.action.url, 'Codex web', phase);
       else if (item?.type === 'mcpToolCall') this.traffic.tool(item.id, item.tool, item.arguments, phase, Boolean(item.error));
+      if (phase === 'completed' && ['commandExecution', 'fileChange'].includes(item?.type)) {
+        try {
+          recordWorkObservation(this.session, { ...identity, itemId: item.id,
+            kind: item.type === 'commandExecution' ? 'command' : 'file_change', name: item.type,
+            command: item.command, output: item.aggregatedOutput, exitCode: item.exitCode,
+            status: item.status, durationMs: item.durationMs,
+            ...(item.status === 'failed' ? { failed: true } : {}), changes: item.changes });
+        } catch { /* Derived learning observations cannot fail model execution. */ }
+      }
     }
     if (['item/started', 'item/completed', 'item/commandExecution/outputDelta', 'turn/started', 'turn/completed', 'thread/compacted'].includes(method) && params.item?.type !== 'reasoning') this.ui.event('backend', { method, params });
     if (method === 'thread/tokenUsage/updated') {

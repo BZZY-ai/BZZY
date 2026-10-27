@@ -98,8 +98,12 @@ Implemented:
   scopes survive without bindings or execution; goal labels use objective text.
   Imports leave workflow selections and running goals unchanged. Existing ZIP
   APIs stay compatible.
-- Background learning publishes reusable project skills directly to Library,
-  enabled with source/history, conflict-safe names and Disable/Delete controls.
+- Automatic host capture preserves closed work outcomes and queues bounded,
+  source/model-pinned learning reviews. New procedures and exact-base corrections
+  stage by default; reviewed policy may allow automatic new project skills.
+  Typed problem resolutions, curated project facts and source expansion improve
+  recall with current scope/freshness checks. Feedback, outcomes and curation
+  retain provenance without rewriting usage receipts.
   Committed skill and agent creations queue concise iOS alerts for the full
   paired own-phone grant using the existing notification delivery controls.
 

@@ -18,7 +18,8 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   if (request.method === 'turn/start') {
     result = { turn: { id: turn } };
     setTimeout(() => {
-      fs.writeFileSync(path.join(process.env.CODEX_HOME, 'offline-needs-context-pid.json'), JSON.stringify({ pid: process.pid }));
+      const pidFile = path.join(process.env.CODEX_HOME, 'offline-needs-context-pid.json');
+      fs.writeFileSync(pidFile + '.tmp', JSON.stringify({ pid: process.pid })); fs.renameSync(pidFile + '.tmp', pidFile);
       notify('turn/started', { turn: { id: turn } });
       send({ id: 901, method: 'item/tool/call', params: { threadId: thread, turnId: turn, callId: 'context-request', tool: 'finish_assignment',
         arguments: { status: 'needs_context', requestId: 'native-missing-baseline', summary: 'The offline fixture lacks a named authorized baseline.', evidence: [],

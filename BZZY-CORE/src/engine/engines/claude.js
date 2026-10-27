@@ -20,6 +20,7 @@ import { recordBackendDiagnostics } from '../session-diagnostics.js';
 import { nativeContextBudget, prepareNativeReadiness, acknowledgeNativeReadiness, recordNativeCompaction,
   pendingNativeRefresh, consumeNativeRefresh, nativeInputEstimate } from '../native-context.js';
 import { digest } from '../database.js';
+import { recordWorkObservation } from '../episode.js';
 
 export function claudeEnvironment(backendHomes) {
   return subscriptionEnvironment('claude', { backendHomes });
@@ -134,6 +135,7 @@ export class ClaudeEngine {
       child.once('error', reject);
       child.once('close', code => resolve(code));
     });
+    const observedTools = new Map();
     lines.on('line', line => {
       try {
         const event = JSON.parse(line);
@@ -167,6 +169,10 @@ export class ClaudeEngine {
           if (event.message?.model && event.message.model !== '<synthetic>') this.session.resolvedModel = event.message.model;
           for (const block of event.message?.content || []) {
             if (block.type === 'tool_use') {
+              if (!block.name.startsWith('mcp__bzzy_goal__')) {
+                if (observedTools.size >= 128) observedTools.delete(observedTools.keys().next().value);
+                observedTools.set(block.id, { name: block.name, input: block.input, startedAt: Date.now() });
+              }
               this.progress.tool(block.id, block.name, block.input);
               this.traffic.tool(block.id, block.name, block.input);
               this.ui.event('backend', { method: 'tool.started', params: { id: block.id, name: block.name, input: block.input } });
@@ -194,6 +200,20 @@ export class ClaudeEngine {
         } else if (event.type === 'user') {
           for (const block of event.message?.content || []) if (block.type === 'tool_result') {
             this.traffic.complete(block.tool_use_id, Boolean(block.is_error));
+            const startedTool = observedTools.get(block.tool_use_id);
+            observedTools.delete(block.tool_use_id);
+            if (startedTool) try {
+              // Pass the complete text to the privacy boundary before it is excerpted.
+              const output = typeof block.content === 'string' ? block.content : Array.isArray(block.content)
+                ? block.content.filter(part => part.type === 'text').map(part => part.text || '').join('\n') : '';
+              const input = startedTool.input || {};
+              recordWorkObservation(this.session, { runId: this.options.toolHost?.context?.runId,
+                threadRef: digest(this.session.engineThreadId || userMessage.session_id), turnId: nonce, itemId: block.tool_use_id,
+                name: startedTool.name, kind: input.command ? 'command' : /^(?:Edit|Write|MultiEdit)$/.test(startedTool.name) ? 'file_change' : 'tool',
+                command: input.command || (input.file_path ? `${startedTool.name} ${input.file_path}` : ''), output,
+                failed: Boolean(block.is_error), durationMs: Date.now() - startedTool.startedAt,
+                changes: input.file_path && /^(?:Edit|Write|MultiEdit)$/.test(startedTool.name) ? [{ path: input.file_path }] : [] });
+            } catch { /* Optional observations cannot change the tool's outcome. */ }
             this.ui.event('backend', { method: 'tool.completed', params: { id: block.tool_use_id, failed: Boolean(block.is_error) } });
           }
         } else if (event.type === 'system' && event.subtype === 'init') {

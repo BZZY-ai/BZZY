@@ -22,7 +22,12 @@ const recordFields = ['id', 'sessionId', 'parentSessionId', 'goalId', 'workerSes
   'checks', 'requirements', 'passed', 'level', 'label', 'sha256', 'bytes', 'source', 'path', 'revision', 'importedUntrusted', 'importProvenance',
   'schemaVersion', 'sourceVersion', 'contextGeneration', 'routing', 'subagentRouting', 'workUnitId', 'classId', 'hypothesis', 'specialist', 'reportSkills',
   'workflowVersion', 'bindingId', 'allowedDispositions', 'admittedRunId', 'closedRunId', 'closedAt', 'supersedes', 'supersededBy',
-  'source', 'pendingMessages', 'sealedThroughSeq', 'indexedThroughSeq', 'scanSeq', 'scheduleReason', 'reasonPaused', 'generation', 'sourceHash'];
+  'source', 'pendingMessages', 'sealedThroughSeq', 'indexedThroughSeq', 'scanSeq', 'scheduleReason', 'reasonPaused', 'generation', 'sourceHash',
+  'packetId', 'sourceRefs', 'recordPins', 'coverage', 'budget', 'selectionSource', 'modelSettingsRevision', 'counts', 'observedThroughSeq',
+  'candidateId', 'baseVersion', 'baseRevision', 'skillId', 'skillVersion', 'usageId', 'runId', 'authority', 'attribution', 'claim',
+  'error', 'exitCode', 'durationMs', 'signature', 'symptom', 'rootCause', 'fixSteps', 'sourceIds', 'memoryId', 'proposedText',
+  'changedFiles', 'omittedPrivate', 'omittedOversize', 'newSkills', 'updates', 'migration', 'modelRoute', 'enabled',
+  'omissions', 'omissionPolicy', 'workspaceOmissions', 'workspaceChanges', 'inspectionError', 'inspectionAuthority', 'snapshotId'];
 const eventFields = [...recordFields, 'text', 'message', 'error', 'code', 'name', 'input', 'detail', 'action', 'outcome', 'round',
   'runId', 'version', 'callId', 'durationMs', 'skills', 'agents', 'tools', 'model', 'provider', 'effort', 'resource', 'discovery', 'definition',
   'skillId', 'skillVersion', 'rootSessionId', 'rootGoalId', 'attribution', 'file', 'offset', 'usageId', 'goalMode', 'nextOffset',
@@ -37,7 +42,7 @@ const knownEvents = new Set(['message.user', 'text', 'tool', 'coordination.tool'
   'question.expired', 'input.required', 'activity', 'checkpoint', 'issue', 'memory', 'assessment', 'acceptance', 'artifact',
   'network.backend', 'network.request', 'network.response', 'usage.updated', 'delegation.usage', 'model.resolved', 'model.changed', 'provider.changed',
   'control.observed', 'control.failed', 'debate.result', 'diagnostic.run', 'diagnostic.run.finished', 'diagnostic.catalog', 'diagnostic.tool', 'diagnostic.backend', 'diagnostic.prompt']);
-const extraEvent = /^(?:assignment|peer|debate|workflow|session\.memory|conversation|execution|diagnostic)\.|^message\.finalized$/;
+const extraEvent = /^(?:assignment|peer|debate|workflow|session\.memory|conversation|execution|diagnostic|learning|skill|snapshot)\.|^(?:message\.finalized|work\.observed)$/;
 const fail = message => { throw Object.assign(new Error(message), { code: 'SESSION_DEBUG' }); };
 const parse = value => { if (typeof value !== 'string') return value; try { return JSON.parse(value); } catch { return value; } };
 
@@ -156,11 +161,12 @@ export function exportSessionDebug(sessionId, { cwd, output, at = new Date() } =
         const definition = data.subagentDefinition;
         addAgent(definition, 'pinned-to-assignment');
       }
-      for (const kind of ['goal-history', 'checkpoint', 'issue', 'memory', 'assessment', 'acceptance', 'artifact', 'worker-report']) {
+      for (const kind of ['goal-history', 'checkpoint', 'issue', 'memory', 'assessment', 'acceptance', 'artifact', 'worker-report', 'snapshot', 'recovery']) {
         for (const row of db.prepare('SELECT data FROM records WHERE kind=? AND json_extract(data,\'$.sessionId\') IN (SELECT value FROM json_each(?)) ORDER BY updated_at,id').iterate(kind, ids)) entry(kind, { data: pick(JSON.parse(row.data), recordFields) });
       }
       for (const row of db.prepare(`SELECT kind,data FROM records WHERE kind IN
-        ('core.workflow.work-unit','core.workflow.consultation','core.checkpoint.scope','core.history.maintenance','core.conversation.source','core.task-state.read','native-compaction')
+        ('core.workflow.work-unit','core.workflow.consultation','core.checkpoint.scope','core.history.maintenance','core.conversation.source','core.task-state.read','native-compaction',
+         'core.learning.job','core.episode.progress','core.skill.feedback','core.skill.outcome','core.skill.update','core.resolution')
         AND json_extract(data,'$.sessionId') IN (SELECT value FROM json_each(?)) ORDER BY updated_at,id`).iterate(ids)) {
         entry(row.kind, { data: pick(JSON.parse(row.data), recordFields) });
       }

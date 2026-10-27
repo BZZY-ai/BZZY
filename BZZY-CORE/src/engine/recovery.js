@@ -50,7 +50,8 @@ export function reconcileSession(id) {
   const snapshot = session.startSnapshotId && getRecord('snapshot', session.startSnapshotId);
   let changes = [], inspectionError;
   if (snapshot) { try { changes = inspectWorkspace(snapshot, session.cwd); } catch (error) { inspectionError = error.message; } }
-  const record = { sessionId: id, live: false, state: 'reconciled', orphanCleanup, uncertainOperations: uncertain.map(o => o.id), expiredQuestions: questions.map(q => q.id), workspaceChanges: changes, inspectionError, createdAt: now(), automaticallyReplayed: false };
+  const record = { sessionId: id, live: false, state: 'reconciled', orphanCleanup, uncertainOperations: uncertain.map(o => o.id), expiredQuestions: questions.map(q => q.id),
+    workspaceChanges: changes, workspaceOmissions: changes.omissions || [], inspectionError, createdAt: now(), automaticallyReplayed: false };
   if (run && ['starting', 'running', 'waiting_for_input'].includes(run.state)) {
     putRecord('run', id, { ...run, state: 'interrupted', finishedAt: now() });
     session.executionState = 'interrupted';
@@ -152,7 +153,8 @@ export function compactTaskState(session, input = {}, context = {}) {
     historicalCheckpoint: state.historical,
     recovery: recovery ? { state: recovery.state, createdAt: recovery.createdAt, automaticallyReplayed: recovery.automaticallyReplayed,
       workspaceChangeCount: recovery.workspaceChanges?.length || 0, uncertainOperationCount: recovery.uncertainOperations?.length || 0,
-      expiredQuestionCount: recovery.expiredQuestions?.length || 0, inspectionError: short(recovery.inspectionError, 240), detail: 'recovery' } : null,
+      expiredQuestionCount: recovery.expiredQuestions?.length || 0, workspaceOmissionCount: recovery.workspaceOmissions?.length || 0,
+      inspectionError: short(recovery.inspectionError, 240), inspectionAuthority: 'Observation at createdAt; not a fresh workspace check on each state read.', detail: 'recovery' } : null,
     assignments: { total: assignments.total, open: assignments.open, items: assignments.items.map(item => ({ id: item.id, closure: item.closure, state: item.state,
       currentRound: item.currentRound, summary: short(item.summary, 200), reportArtifactId: item.reportArtifactId })), detail: 'assignments',
       lookup: 'Use assignment_status with an ID; list_assignments pages the full history.' },

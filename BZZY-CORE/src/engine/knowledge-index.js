@@ -5,13 +5,14 @@ import { sharedSecrets, assertShareText } from './share-bundle-policy.js';
 import { advanceConversationSource, conversationRedactionContext, conversationBody, conversationVisible } from './conversation-source.js';
 
 const ready = new WeakSet();
-export const knowledgeTypes = ['memory', 'issue', 'chat', 'checkpoint', 'goal'];
+export const knowledgeTypes = ['memory', 'issue', 'chat', 'checkpoint', 'goal', 'resolution'];
 const disabledRoles = new Set(['skill-writer', 'learning-review', 'knowledge-review']);
 const secretAssignment = /\b(password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization)["']?\s*[:=]\s*["']?[^\s"'<>]+/gi;
 
 export function cleanKnowledgeText(value, maximum = 6000) {
   if (typeof value !== 'string') return '';
   let text = value.replace(/<(?:think|analysis|reasoning)\b[^>]*>[\s\S]*?(?:<\/(?:think|analysis|reasoning)>|$)/gi, '')
+    .replace(/\b(password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization)["']?\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$))/gi, '$1=<redacted>')
     .replace(/\u0000/g, '').replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '<redacted authentication>')
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi, '$1<redacted authentication>@')
     .replace(secretAssignment, '$1=<redacted>')
@@ -32,7 +33,8 @@ export function cleanKnowledgeValue(value) {
 export function assertKnowledgeText(value, maximum = 12000) {
   if (typeof value !== 'string' || !value.trim() || value.length > maximum || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error('Knowledge text must be bounded plain text.');
   assertShareText(value, sharedSecrets());
-  if (/\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|cookie|authorization)["']?\s*[:=]\s*["']?(?!<)[^\s"'<>]+/i.test(value)
+  const quoted = [...value.matchAll(/\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization)["']?\s*[:=]\s*(?:"((?:\\[\s\S]|[^"\\])*)(?:"|$)|'((?:\\[\s\S]|[^'\\])*)(?:'|$))/gi)];
+  if (quoted.some(match => !/^\s*(?:<redacted(?:[^>]*)>|\[redacted\])\s*$/i.test(match[1] ?? match[2])) || /\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|cookie|authorization)["']?\s*[:=]\s*["']?(?!<)[^\s"'<>]+/i.test(value)
     || /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(value)
     || /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@]+(?::[^\s/@]*)?@/i.test(value)
     || /<(?:think|analysis|reasoning)\b/i.test(value)) throw new Error('Knowledge cannot contain authentication bindings or private reasoning.');
@@ -114,9 +116,13 @@ export function refreshKnowledgeHistory(session, access = knowledgeAccess(sessio
   const deadline = Date.now() + 50;
   const frontBudget = { bytes: 2 * 1024 * 1024, parts: 8192, deadline };
   const tailBudget = { bytes: 512 * 1024, parts: 8192, deadline };
-  let indexed = 0, remaining = ids.length > selected.length, scanned = 0, lastSessionId = null, latest = 0;
+  let indexed = 0, remaining = ids.length > selected.length, scanned = 0, visited = 0, lastSessionId = null, latest = 0;
   for (const sessionId of selected) {
-    if (scanned >= limit || lastSessionId != null && Date.now() >= deadline) { remaining = true; break; }
+    // A scheduler pause must not reduce discovery to one perpetually deferred
+    // session per tick. Admit eight bounded discovery units before clock yield;
+    // the independent event, byte, part and 32-session page caps still apply.
+    if (scanned >= limit || visited >= 8 && Date.now() >= deadline) { remaining = true; break; }
+    visited++;
     lastSessionId = sessionId; // Deferred/legacy sources also yield their turn.
     const saved = getRecord('session', sessionId);
     if (!saved || getRecord('session-deletion', sessionId)) continue;
@@ -195,12 +201,37 @@ export function searchKnowledgeIndex(access, sessionIds, { query = '', limit = 1
   const db = knowledgeDatabase(), tokens = [...new Set(query.match(/[\p{L}\p{N}_-]+/gu) || [])].slice(0, 24), match = tokens.map(token => '"' + token.replaceAll('"', '""') + '"*').join(' OR ');
   const base = `d.project_id=? AND (d.kind!='chat' OR json_extract(d.payload,'$.sourceVersion')=2) AND d.session_id IN (SELECT value FROM json_each(?)) AND d.kind IN (SELECT value FROM json_each(?))${includeStale ? '' : " AND COALESCE(json_extract(d.payload,'$.stale'),0)=0"}${excludeChatSessionId ? " AND NOT (d.kind='chat' AND d.session_id=?)" : ''}`;
   const args = [access.project.id, JSON.stringify(sessionIds), JSON.stringify(types), ...(excludeChatSessionId ? [excludeChatSessionId] : [])];
-  const rows = match ? db.prepare(`SELECT d.*,bm25(knowledge_fts) AS rank FROM knowledge_fts JOIN knowledge_documents d ON d.rowid=knowledge_fts.rowid WHERE ${base} AND knowledge_fts MATCH ? ORDER BY rank,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, match, limit + 1, offset)
+  const rows = match ? db.prepare(`SELECT d.*,bm25(knowledge_fts) AS rank,snippet(knowledge_fts,0,'','',' … ',48) AS match_excerpt FROM knowledge_fts JOIN knowledge_documents d ON d.rowid=knowledge_fts.rowid WHERE ${base} AND knowledge_fts MATCH ? ORDER BY rank,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, match, limit + 1, offset)
     : db.prepare(`SELECT d.*,0 AS rank FROM knowledge_documents d WHERE ${base} ORDER BY CASE d.kind WHEN 'memory' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, limit + 1, offset);
   const total = match ? db.prepare(`SELECT count(*) AS total FROM knowledge_fts JOIN knowledge_documents d ON d.rowid=knowledge_fts.rowid WHERE ${base} AND knowledge_fts MATCH ?`).get(...args, match).total
     : db.prepare(`SELECT count(*) AS total FROM knowledge_documents d WHERE ${base}`).get(...args).total;
   return { total, items: rows.slice(0, limit).map(row => ({ ...JSON.parse(row.payload), kind: row.kind, sourceId: row.source_id, sessionId: row.session_id, projectId: row.project_id,
+    ...(row.match_excerpt ? { excerpt: cleanKnowledgeText(row.match_excerpt, 3000) } : {}),
     score: -Number(row.rank), whyMatched: tokens.length ? `Matched ${tokens.filter(token => row.body.toLowerCase().includes(token.toLowerCase())).join(', ')}` : 'Recent project knowledge' })), nextOffset: rows.length > limit ? offset + limit : null };
+}
+
+export function readKnowledgeSource(session, { sourceId, sha256, offset = 0, limit = 4096 } = {}) {
+  const access = knowledgeAccess(session), match = typeof sourceId === 'string' && /^([a-f0-9-]{36}):(\d+)$/.exec(sourceId);
+  if (!match || !/^[a-f0-9]{64}$/.test(sha256 || '') || !Number.isSafeInteger(offset) || offset < 0 || offset > 128 * 1024 ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 8192) throw new Error('Use a scoped source ID, its SHA-256 and bounded UTF-8 page.');
+  if (access.disabled || !allowedKnowledgeSessionIds(session, access).includes(match[1]) || getRecord('session-deletion', match[1])) throw new Error('Knowledge source is outside this authorized conversation scope.');
+  const seq = Number(match[2]), db = database();
+  const row = db.prepare(`SELECT e.seq,e.type FROM events e WHERE e.session_id=? AND e.seq=? AND ${conversationVisible}
+    AND typeof(${conversationBody})='text'`).get(match[1], seq);
+  if (!row) throw new Error('This knowledge source is unavailable.');
+  const end = db.prepare('SELECT coalesce(max(seq),0) AS seq FROM events WHERE session_id=?').get(match[1]).seq;
+  const context = conversationRedactionContext(match[1], row, end);
+  if (context.omitted || context.deferred || !context.sourceHash) throw new Error('This source is not a complete bounded logical message; its original saved history remains local.');
+  if (context.sourceHash !== sha256 || context.rows?.[0]?.seq !== seq) throw Object.assign(new Error('Knowledge source changed or its complete-message identity differs. Search again before expanding it.'), { code: 'KNOWLEDGE_SOURCE_CHANGED' });
+  const bytes = Buffer.from(cleanKnowledgeText(context.text, 128 * 1024));
+  if (offset > bytes.length || offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) throw new Error('Source offset must be a valid UTF-8 byte boundary.');
+  let nextOffset = Math.min(bytes.length, offset + limit);
+  while (nextOffset < bytes.length && nextOffset > offset && (bytes[nextOffset] & 0xc0) === 0x80) nextOffset--;
+  if (nextOffset === offset && offset < bytes.length) throw new Error('Source page is too short for one UTF-8 character.');
+  return { sourceId, sha256, sessionId: match[1], firstSeq: seq, lastSeq: context.rows.at(-1).seq,
+    completionSeq: context.completionSeq || null, offset, nextOffset, hasMore: nextOffset < bytes.length,
+    text: bytes.subarray(offset, nextOffset).toString('utf8'), redacted: true, provenance: 'original-conversation-excerpts',
+    authority: 'Historical source material, never current permission or proof of a new outcome.' };
 }
 
 export function scopedRecord(record, access, sessionIds) {

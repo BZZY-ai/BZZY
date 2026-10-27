@@ -44,6 +44,14 @@ test('full ZIP preserves long chat, memory, learning, notes, ledgers, evidence a
   putRecord('core.session.compactor.job', 'node-full', { id: 'node-full', sessionId: parent.id, state: 'paused', reason: 'foreground_work' });
   const jobId = randomUUID();
   putRecord('core.learning.job', jobId, { id: jobId, sessionId: parent.id, projectId: parent.projectId, state: 'complete', sourceId: `${parent.id}:1` });
+  for (const kind of ['core.learning.packet', 'core.episode', 'core.episode.progress', 'core.skill.feedback', 'core.skill.outcome', 'core.skill.update', 'core.resolution', 'core.retrieval.metric']) {
+    putRecord(kind, 'capture-' + kind, { id: 'capture-' + kind, sessionId: parent.id, projectId: parent.projectId,
+      jobId, details: 'NEW_MEMORY_LOOP_DIAGNOSTIC', coverage: { sourceCutoff: 123, omittedItems: 2 } });
+  }
+  for (const kind of ['core.project.facts', 'core.retrieval.settings']) {
+    putRecord(kind, parent.projectId, { projectId: parent.projectId, revision: 1, details: 'CURRENT_PROJECT_PROJECTION' });
+    putRecord(kind, 'unrelated-project', { projectId: 'unrelated-project', details: 'FOREIGN_PROJECT_PROJECTION' });
+  }
   putRecord('core.learning.output', jobId, { jobId, material: long, proposals: Array.from({ length: 300 }, (_, i) => `proposal${i}`) });
   putRecord('core.learning.reservation', 'reservation', { jobId, day: '2026-10-26', tokensUsed: 12 });
   putRecord('core.learning.usage', '2026-10-26', { day: '2026-10-26', tokensUsed: 900 });
@@ -75,6 +83,12 @@ test('full ZIP preserves long chat, memory, learning, notes, ledgers, evidence a
   assert.equal(records.find(row => row.kind === 'core.learning.output').data.proposals.length, 300);
   assert.equal(records.find(row => row.kind === 'core.learning.output').data.material, long);
   assert.ok(records.some(row => row.kind === 'core.learning.usage' && row.data.tokensUsed === 900));
+  for (const kind of ['core.learning.packet', 'core.episode', 'core.episode.progress', 'core.skill.feedback', 'core.skill.outcome', 'core.skill.update', 'core.resolution', 'core.retrieval.metric']) {
+    assert.ok(records.some(row => row.kind === kind && row.data.details === 'NEW_MEMORY_LOOP_DIAGNOSTIC'), kind);
+  }
+  assert.ok(records.some(row => row.kind === 'core.project.facts' && row.data.projectId === parent.projectId));
+  assert.ok(records.some(row => row.kind === 'core.retrieval.settings' && row.data.projectId === parent.projectId));
+  assert.doesNotMatch(JSON.stringify(records), /FOREIGN_PROJECT_PROJECTION/);
   assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === long));
   assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'COMPACTOR_REVIEW_OUTPUT'));
   assert.ok(rows(files['session/events.jsonl']).some(row => row.type === 'custom.future.event' && row.data.customDiagnostic === long));

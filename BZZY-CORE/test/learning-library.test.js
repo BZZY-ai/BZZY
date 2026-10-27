@@ -11,6 +11,7 @@ import { appendEvent, events, getRecord, listRecords, putRecord, transaction } f
 import { queueLearningReview, runLearningJob, recoverLearningJobs, controlLearningJob, inspectLearningJob, learningUsage } from '../src/engine/learning.js';
 import { createSkill, deleteSkill, inspectSkill, listSkills, publishLearnedSkill, readSkill, setSkillEnabled, skillHistory } from '../src/engine/skills.js';
 import { taskTools } from '../src/engine/tools.js';
+import { configureSkillEvolution } from '../src/engine/skill-evolution-policy.js';
 
 let directory, previousHome, source;
 test.beforeEach(() => {
@@ -20,6 +21,9 @@ test.beforeEach(() => {
   const project = path.join(directory, 'project'); fs.mkdirSync(project);
   source = createSession(getProvider('codex'), project, 'offline-learning-model'); source.projectRoot = project;
   projectIdentityForSession(source, { create: true }); saveSession(source);
+  // These compatibility cases explicitly exercise the retained automatic mode.
+  // The staged default and its dedup lifecycle have separate evolution tests.
+  configureSkillEvolution({ newSkills: 'auto' }, { expectedRevision: 0, reviewed: true });
 });
 test.afterEach(() => {
   if (previousHome === undefined) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previousHome;
@@ -45,7 +49,7 @@ async function resumeCached(completed) {
   return runLearningJob(current.id, { runReview: async () => assert.fail('A cached learning result must not call the model again.') });
 }
 
-test('automatic learning publishes an enabled project Library method with security policy and no candidate approval', async () => {
+test('explicit automatic opt-in publishes an enabled project Library method with security policy', async () => {
   const completed = await review();
   assert.equal(completed.state, 'completed'); assert.equal(completed.result.skillIds.length, 1);
   assert.deepEqual(completed.result.candidateIds, []); assert.equal(listRecords('core.skill.candidate').length, 0);

@@ -61,12 +61,26 @@ replace another owner's decision. Model tools cannot administer this library.
 It includes a private project-scope marker and does not automatically install or activate that output. Import its folder
 through Skills after reviewing the workflow and its private evidence references.
 Version history and rollback are available in the same panel; restored versions
-start disabled. Automatic learning publishes new project skills directly in
-Library, enabled for relevant model use, with source/job provenance and history.
+start disabled. Automatic learning stages new project procedures and corrections
+by default, with source/job provenance and immutable history. Learn exposes
+reviewed `newSkills: auto|stage|off` and `updates: stage|off` controls; existing
+skills retain their enabled state during migration. Explicit automatic creation
+still preserves owner OFF/delete decisions and exact-content deduplication.
 Disable or Delete is available in the skill preview; deletion preserves audit
-history and prevents an old learning job from recreating the entry. Manually
-staged candidates compare owner-approved offline fixtures and require explicit
-version-pinned acceptance.
+history and prevents an old learning job from recreating the entry. Staged
+candidates compare owner-approved offline fixtures and require explicit
+version-pinned acceptance. Existing-version updates also wait until open workflow
+work units release their base-version pins. Exact-version feedback requires a
+full live skill read, and never edits a resource directly.
+
+Security fixture contracts use `real|false_positive|inconclusive`; generic
+`procedure-review-v1` fixtures use `supported|unsafe|inconclusive` with independent
+`sourceGroup` values. Learning-update groups must be separate from their authoring
+run/goal/episode. Both are semantic instruction checks: scripts are not executed
+and passing does not establish arbitrary program correctness. Advisory curation
+can suggest similar learned procedures, while reviewed archive/restore use
+current revisions and leave restored methods disabled. Usage counts and run
+associations do not measure skill quality.
 Global promotion creates a separate generic text-only candidate, never a copy of
 the original evidence/resources. See [reviewed learning](KNOWLEDGE.md).
 

@@ -8,8 +8,20 @@ runners. Updating source does not hot-patch an already-running runner.
 
 Pause at a safe boundary, update CLI and Core, then explicitly resume the saved
 goal. Resume preserves its identity, original workflow, evidence and accumulated
-usage. Tool-schema protocol 6 may create a fresh native thread while retaining the
-BZZY conversation and goal. It never authorizes replay of uncertain actions.
+usage. Tool-schema protocol 7 and exact dynamic-schema fingerprints create a
+fresh native thread when its inherited tools differ from the current execution,
+including chat-to-structured-goal transitions. The BZZY conversation, goal and
+remaining budget survive. A host catalog listing a tool does not prove that an
+old native thread received it. Metrics reports known missing routing tools.
+Rotation never authorizes replay of uncertain actions.
+
+Generated diagnostic files can remain in the project directory. Content-validated
+BZZY regular reports and full-debug ZIPs are excluded from execution snapshots,
+worker copies and workspace comparisons with explicit omission metadata. This
+prevents an older large export from blocking future snapshot size checks.
+Ordinary archives and files with suggestive names retain normal inclusion and
+limits. Recovery inspection errors describe their recorded time; opening task
+state does not perform a fresh full workspace scan.
 
 An older text-only workflow remains advisory on resume. For the structured
 bug-bounty consultation gate, create/update the Library definition from

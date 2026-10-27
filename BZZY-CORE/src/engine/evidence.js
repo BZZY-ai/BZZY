@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { home, privateDir, writeJson, readJson } from './files.js';
 import { digest, getRecord, putRecord, listRecords, appendEvent, now } from './database.js';
 import { privateWorkspacePath, assertPublicWorkspacePath } from './private-paths.js';
+import { recognizedDebugArtifact } from './debug-artifact.js';
 
 export function inside(root, relative, { exists = true } = {}) {
   const base = fs.realpathSync(root);
@@ -70,7 +71,7 @@ function snapshotInfo(file) {
     return { size, sha256: hash.digest('hex') };
   } finally { fs.closeSync(fd); }
 }
-export function workspaceManifest(root, limits = snapshotLimits()) {
+export function workspaceManifest(root, limits = snapshotLimits(), { omissions = [] } = {}) {
   const resolved = fs.realpathSync(root), privateRoot = fs.existsSync(home()) ? fs.realpathSync(home()) : home(), privateIsInsideWorkspace = privateRoot.startsWith(resolved + path.sep);
   if (resolved === privateRoot) throw new Error('The private bzzy state directory cannot be used as a project workspace.');
   let names;
@@ -94,6 +95,8 @@ export function workspaceManifest(root, limits = snapshotLimits()) {
     if (name.split(path.sep).some(p => excluded.has(p)) || privateWorkspacePath(name)) continue;
     const file = inside(root, name, { exists: false });
     if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue;
+    const diagnostic = recognizedDebugArtifact(file);
+    if (diagnostic) { omissions.push({ path: name, ...diagnostic }); continue; }
     if (fs.statSync(file).size > limits.maxFileMiB * 1024 * 1024) throw new Error(`Cannot snapshot ${JSON.stringify(name)}: file exceeds ${limits.maxFileMiB} MiB. Configure snapshotLimits, move it outside the task workspace or exclude it with .gitignore in a Git project.`);
     const info = snapshotInfo(file); total += info.size;
     if (info.size > limits.maxFileMiB * 1024 * 1024 || total > limits.maxTotalMiB * 1024 * 1024 || count++ >= limits.maxFiles) throw new Error(`Workspace snapshot exceeds ${limits.maxTotalMiB} MiB or ${limits.maxFiles.toLocaleString('en-US')} files. Configure snapshotLimits or select a smaller workspace.`);
@@ -102,7 +105,7 @@ export function workspaceManifest(root, limits = snapshotLimits()) {
   return result;
 }
 export function snapshotWorkspace(session, label = 'snapshot') {
-  const limits = snapshotLimits(), manifest = workspaceManifest(session.cwd, limits), id = randomUUID();
+  const limits = snapshotLimits(), omissions = [], manifest = workspaceManifest(session.cwd, limits, { omissions }), id = randomUUID();
   const directory = path.join(home(), 'snapshots', id); privateDir(directory);
   try {
     for (const relative of Object.keys(manifest)) {
@@ -116,15 +119,40 @@ export function snapshotWorkspace(session, label = 'snapshot') {
     fs.rmSync(directory, { recursive: true, force: true });
     throw error;
   }
-  const record = { id, sessionId: session.id, label, source: session.cwd, directory, manifest, limits, manifestHash: digest(manifest), createdAt: now() };
+  const record = { id, sessionId: session.id, label, source: session.cwd, directory, manifest, limits, omissions,
+    omissionPolicy: 'content-validated-bzzy-debug-v1', manifestHash: digest(manifest), createdAt: now() };
   writeJson(path.join(home(), 'snapshots', `${id}.json`), record); putRecord('snapshot', id, record);
-  appendEvent(session.id, 'snapshot', { id, label, manifestHash: record.manifestHash }); return record;
+  appendEvent(session.id, 'snapshot', { id, label, manifestHash: record.manifestHash, omissions, omissionPolicy: record.omissionPolicy }); return record;
+}
+export function copyWorkspaceSnapshot(snapshot, directory, { sessionId = snapshot.sessionId } = {}) {
+  const source = fs.realpathSync(snapshot.directory), omissions = (snapshot.omissions || []).map(item => ({ ...item, phase: 'snapshot' }));
+  fs.cpSync(source, directory, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE,
+    filter(file) {
+      if (!fs.lstatSync(file).isFile()) return true;
+      const diagnostic = recognizedDebugArtifact(file);
+      if (!diagnostic) return true;
+      omissions.push({ path: path.relative(source, file), ...diagnostic, phase: 'copy-source' }); return false;
+    } });
+  const result = { snapshotId: snapshot.id, directory, omissions, omissionPolicy: 'content-validated-bzzy-debug-v1' };
+  if (sessionId) appendEvent(sessionId, 'snapshot.copy', result);
+  return result;
 }
 export function inspectWorkspace(snapshot, cwd) {
-  const current = workspaceManifest(cwd, snapshot.limits), changes = [];
-  for (const file of new Set([...Object.keys(snapshot.manifest), ...Object.keys(current)])) {
-    if (snapshot.manifest[file]?.sha256 !== current[file]?.sha256) changes.push({ path: file, before: snapshot.manifest[file] || null, after: current[file] || null });
+  const omissions = [], current = workspaceManifest(cwd, snapshot.limits, { omissions }), changes = [], before = { ...snapshot.manifest };
+  const baseline = (snapshot.omissions || []).map(item => ({ ...item, phase: 'baseline' }));
+  // Older snapshots may already contain diagnostic exports. Validate that saved
+  // copy too: a worker never owes deletion/integration of diagnostic data. If
+  // that path now holds ordinary source, it remains an observable new change.
+  for (const file of Object.keys(before)) {
+    try {
+      const diagnostic = snapshot.directory && recognizedDebugArtifact(inside(snapshot.directory, file));
+      if (diagnostic) { delete before[file]; baseline.push({ path: file, ...diagnostic, phase: 'baseline' }); }
+    } catch { /* An unavailable saved file is not an exclusion authority. */ }
   }
+  for (const file of new Set([...Object.keys(before), ...Object.keys(current)])) {
+    if (before[file]?.sha256 !== current[file]?.sha256) changes.push({ path: file, before: before[file] || null, after: current[file] || null });
+  }
+  Object.defineProperty(changes, 'omissions', { value: [...baseline, ...omissions.map(item => ({ ...item, phase: 'current' }))], enumerable: false });
   return changes;
 }
 export const artifactsFor = sessionId => listRecords('artifact').filter(a => a.sessionId === sessionId);

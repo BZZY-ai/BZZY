@@ -28,7 +28,7 @@ There are four separate kinds of knowledge:
 | Kind | Scope and use |
 | --- | --- |
 | Investigation records | Engagement observations, hypotheses, failed approaches, findings, checkpoints, evidence and public chat history. |
-| Project methods | Learned project skills publish automatically, enabled in Library. Manually staged candidates retain their separate review workflow. |
+| Project methods | Learned procedures and corrections stage as candidates by default. Explicit owner policy may allow automatic creation of new project skills; existing updates remain staged. |
 | General methods | Explicitly enabled global skills. Global promotion creates a new generic text-only candidate, separate from the original case bundle. |
 | Profiles | Explicit owner-approved user preferences and expiring host facts. These stay in private Core storage and are excluded from project exports. |
 
@@ -40,13 +40,19 @@ or runtime environment changes. User preferences retain their separate scope.
 `search_knowledge` searches bounded pages of this engagement's indexed memory,
 issues, checkpoints, goals and visible user/assistant messages. It excludes raw
 tool payloads, backend events and hidden reasoning. Results include source IDs,
-session attribution, truth, freshness and match information. Index backfill is
+session attribution, truth, freshness and match information. Conversation results
+use match-centered excerpts; `read_knowledge_source` opens the exact complete,
+redacted source using its source ID, SHA-256 and bounded UTF-8 byte pages. A
+changed hash requires a fresh search. Index backfill is
 incremental and reports when more history remains; search totals describe index
 candidates, including records later filtered as stale. Deleted chats are not
 reintroduced by old index entries.
 
 Core supplies a bounded relevant brief before ordinary turns, with up to 12 KiB
-of knowledge and approved profiles. It omits the current chat's messages from
+of knowledge and approved profiles. The current request, active objective and
+host-observed typed error context inform recall. Source-linked proposed
+resolutions and a small curated project-fact projection share that budget.
+It omits the current chat's messages from
 that brief because the existing conversation handoff already handles them.
 Historical text never grants permission, resumes old work or proves a present
 finding. Large histories remain discoverable through explicit paginated search.
@@ -71,9 +77,12 @@ it is a deliberate project transfer, not the sanitized global-skill promotion.
 
 ## Automatic reviews and controls
 
-Significant saved finding outcomes, recorded lessons, explicit user corrections
-and Core-verified goal completion can queue a review. Ordinary turns do not
-force a new skill. Repeated triggers coalesce with durable request receipts.
+Significant saved finding outcomes, recorded lessons, explicit user corrections,
+Core-verified goal completion, reviewed worker evidence, valid skill feedback,
+and host-observed complex or possibly solved work can queue a review. Ordinary
+turns do not force a new lesson or skill. Repeated triggers coalesce with durable
+request receipts before dispatch. New triggers after dispatch obtain a separate
+job; they cannot change a packet already sent to a reviewer.
 Opening a chat, memory view or Skills panel does not queue inference. Explicit
 `/learn review` queues a bounded review of the selected saved conversation.
 
@@ -83,7 +92,23 @@ inference and charges conservatively when usage cannot be recovered. Review
 usage counts toward its own bounded ledger. Compatible backend usage reporting
 is required; unsupported isolation or missing usage fails closed.
 
-Foreground work has priority. Conversation/goal pause or cancel stops associated
+Each queued job pins its event cutoff, source scope, goal/run identity, mutable
+record revisions, complete redacted messages, loaded skill bases, and reviewer
+provider/model/effort. Changing the conversation or learning settings cannot
+retarget an old review. Legacy queued jobs without such a snapshot stop with
+`snapshot_required`; request a fresh review rather than guessing their old input.
+Packets default to 16,000 bytes of prioritized material, with explicit omissions.
+No entire transcript or raw backend reasoning is sent to the reviewer.
+
+Foreground work has priority within the source conversation. Starting new work
+defers an undispatched queued review; it does not turn that deferral into an
+owner pause. Another busy conversation no longer prevents all learning. Host
+capacity defaults to four foreground executions and a source must be idle unless
+`duringForeground` is explicitly enabled. Foreground reviews retain a durable
+cooldown. Model routing can use the pinned source model, the configured Core
+background model, or an explicit installed provider/model/effort. Missing
+background configuration visibly defers work; there is no hidden fallback.
+Conversation/goal pause or cancel stops associated
 reviews, host stop stops all reviews, and daemon recovery leaves interrupted
 jobs paused. Starting Core or opening a chat does not resume those old jobs.
 Explicit resume checks the current source and revision. A cached validated result
@@ -102,36 +127,110 @@ adapter contract, in addition to the prompt. It never runs assessment commands,
 contacts targets, or starts a goal. Existing ordinary terminal permissions are
 unchanged.
 
-The review may return attributed local hypotheses/failed approaches, reusable
-project skills and pending profile changes. It may also return no change.
-Core validates the bounded output and automatically saves returned skills in its
-persistent Library, enabled for relevant models within the project scope. No
-candidate approval or evaluation is required for this automatic publication.
+The review may return attributed local hypotheses/failed approaches, proposed
+resolutions, reusable project procedures, exact-base skill corrections and
+pending profile changes. It may also return no change. Core validates the
+bounded output. New skills and corrections stage by default; the owner can
+choose `newSkills: auto|stage|off` and `updates: stage|off`. Existing enabled
+skills retain their state during migration. Automatic creation requires an
+explicit reviewed opt-in and does not claim measured improvement. Profiles
+always remain pending owner review.
 Credentials and recognizable private bindings are rejected or redacted before
 reusable material is stored; generic skill text excludes the private case bundle.
 The model cannot administer profiles, mark conclusions verified or broaden scope.
 
 Each published skill retains its learning job and source-session provenance,
-immutable version and history. Job/index receipts make recovery idempotent;
-conflicting existing project or global names are kept and the new skill receives
-a distinct name. Library marks learned entries and offers Disable and Delete.
+immutable version and history. Job/index receipts make recovery idempotent.
+Exact duplicate procedures and pending candidates are reused; similarity alone
+never authorizes a merge. Conflicting existing project or global names are kept.
+Library marks learned entries and offers Disable and Delete.
 Deletion retains history and a tombstone, so replaying an old learning result
 cannot recreate or re-enable it. Learning results link directly to the saved
 Library entry, including its live deleted state. These records have no monthly
 expiration; they remain in Core's private storage across terminal restarts.
-Automatic publication is not a measured improvement claim or a verification of
+Publication is not a measured improvement claim or a verification of
 the source goal. Model tools still enforce their normal permissions.
+
+## Automatic capture and resolution reuse
+
+Core records completed native command/file-change results and supported Core
+tool outcomes without waiting for `remember`, `issue` or `checkpoint`. Codex
+command observations include exit status, a bounded output excerpt and reported
+file changes. Claude observations include completed text results and tool error
+status; an exit code is absent when the protocol did not supply one. A successful
+tool call is not necessarily successful task verification.
+
+Complete outputs are scrubbed before excerpts. Known private operations,
+oversize complete outputs and hidden reasoning are omitted. Each episode scans
+at most 512 recent eligible events, keeps bounded material and discloses its
+coverage; old raw tool payloads are not reconstructed or silently treated as
+complete observations. Reviewed worker metadata requires the authorized parent,
+goal and run; a worker's unrelated history never enters its supervisor's packet.
+
+Host snapshots run during eligible terminal work at most once per 30 seconds
+when meaningful observations change, and at run completion. They preserve
+observed progress separately from model-authored checkpoints. The source model
+still needs to record decisions, constraints, unresolved questions and evidence.
+Twelve completed meaningful attempts make an episode eligible for a complex-work
+review by default. A failed command followed by the same command succeeding is
+only a temporal candidate for a fix. Trigger cooldown defaults to five minutes;
+compaction and routine state polls alone do not create a review storm.
+
+A resolution adds typed error context and proposed steps to an existing uncertain
+project memory. It retains sources, recorded inputs, evidence and validity checks.
+Unknown input/version coverage is explicit; a proposed procedure without known
+input fingerprints is not declared validated for the current project. Error
+normalization masks private values and transient paths/timestamps while retaining
+meaningful codes and versions: HTTP 401 and 403, SQLSTATE and ABI distinctions
+are not collapsed. Exact repeated host error signatures can recall the procedure
+automatically; `lookup_resolutions` also allows explicit lookup. The explanation
+of a cause remains a hypothesis. Changed inputs, stale evidence, contradictions
+and deleted source sessions suppress automatic reuse.
+
+The project fact view is a projection of existing attributed memories, not a
+second writable truth store. Owner-selected records and current owner-confirmed
+facts fit a default 2,500-byte budget (maximum 4,096 bytes). Freshness and
+contradictions are checked again on every view. Workers and restricted Agents
+receive no owner fact projection. Facts never change runtime scope or permissions.
+
+## Skill feedback, correction and curation
+
+`skill_feedback` requires the exact immutable usage receipt from the live run,
+a complete `SKILL.md` read and, when relevant, a complete supporting-file read.
+It records wrong/missing steps, outdated guidance, pitfalls, preferences or
+helpfulness with bounded rationale and authorized evidence. It cannot edit or
+enable a skill. Its validated content becomes source material for a review.
+
+Corrections use a captured version plus registry revision and narrow text
+operations. Existing scripts/assets are preserved and cannot be edited by the
+learning reviewer. Changed, disabled, deleted or archived bases reject delayed
+updates. New versions remain candidates. Activation also refuses an open v2
+workflow task pinning the base version, so an update cannot strand consultation.
+Owner OFF/delete and current policy win over stale proposals.
+
+Outcome associations are separate records keyed to immutable usage IDs; Metrics
+receipts are never rewritten to inflate invocations or efficacy. The Learn
+timeline shows feedback, run associations, staged changes and curation receipts.
+Success after a skill read does not prove the skill caused it.
+
+Curation produces bounded near-duplicate suggestions only. Reviewed archive and
+restore operate on learned project methods with current revisions and no open
+pins; restore stays disabled. Rare use is not evidence of poor quality. There is
+no archive quota, automatic merging, or cross-project lesson publication. Generic
+promotion continues through the existing reviewed text-only global candidate.
 
 ## Candidate evaluation and activation
 
-Owner-approved offline fixtures contain held-out observations and expected
-`real`, `false_positive` or `inconclusive` verdicts. All three outcomes are
-required. The evaluator sees observations and candidate instructions; the host
+Owner-approved offline fixtures declare a domain contract. Security decisions
+use `real`, `false_positive`, `inconclusive`; general procedural guidance uses
+`supported`, `unsafe`, `inconclusive`. Each contract needs all its outcome classes.
+The evaluator sees observations and candidate instructions; the host
 withholds expected labels and compares the returned verdicts itself. Corpus
 revision, content hash, candidate digest and evaluation ID are pinned. Revoked or
 modified fixtures invalidate activation. A global candidate requires an approved
 generic global corpus.
-The owner must review that the corpus is independent of the skill-writing
+Skill updates require held-out source groups distinct from their authoring
+episode. The owner must review that the corpus is independent of the skill-writing
 material. Host comparison enforces the labels and revisions; it cannot establish
 that an arbitrary supplied corpus is representative or independently held out.
 
@@ -142,7 +241,7 @@ supports semantic guidance on the reviewed offline cases: scripts were not run,
 targets were not contacted, and it is not proof of a vulnerability or universal
 workflow correctness.
 
-For manually staged candidates and generic global promotion, activation remains
+For staged candidates and generic global promotion, activation remains
 a separate explicit owner operation pinned to candidate,
 skill and evaluation revisions. Rejected candidates stay auditable. Version
 history and rollback remain available; restored versions start disabled for
@@ -162,9 +261,10 @@ Use the existing **Skills** panel; the four-entry Settings menu is unchanged.
 /learn cancel JOB_ID   Cancel a review
 ```
 
-The panel provides scope selection, review budgets, memory decisions, profile
+The panel provides scope selection, model routing, review budgets, memory decisions, profile
 proposal approval, fixture preview/registration and optional candidate evaluation
-and activation. Automatically learned skills open directly in Library. Skill
+and activation, pinned review packets, observed episodes, project fact pins,
+resolution lookup and skill feedback/curation timelines. Published skills open directly in Library. Skill
 library history/rollback and sanitized global promotion also
 live there. Changes use displayed revisions and require a fresh review after a
 concurrent update.
@@ -182,12 +282,35 @@ bzzy knowledge request OPERATION reviewed-input.json
 `@bzzy/core/knowledge` exports `CoreKnowledge.request(operation,input)` for trusted
 local host code. Its strict operations cover scoped search/status, learning jobs
 and settings, memory/profile review/history/rollback, fixture registration/revoke,
-candidate evaluation/read/accept/reject and project relinking. Review operations
+candidate evaluation/read/accept/reject and project relinking. Additional owner
+operations include `episode.status/read`, `learning.packet`, `source.read`,
+`resolutions.search`, `resolution.inspect`, `facts.read/configure`,
+`skill.evolution`, `skill.evolution.settings`, `skill.curation.suggest`,
+`skill.curation`, and `retrieval.status/configure/refresh/benchmark`. Review operations
 require explicit review fields and current revisions. The daemon exposes the
 same dispatcher only as owner-authenticated `POST /v1/knowledge/OPERATION`.
 Session grants, paired-phone tokens and models cannot administer it. Existing
 iOS chats receive the same Core recall and skills during inference; this change
 does not add a native iOS learning-administration screen or a Relay protocol.
+
+## Retrieval measurement and optional local embeddings
+
+Full-text search remains the default. A pure offline held-out retrieval harness
+measures source precision/recall, reciprocal rank, latency, delivered prompt bytes,
+stale hits and scope leaks. It does not establish independence or model efficacy
+by counting a few successful sessions. Use separate source groups and inspect
+whether the delivered excerpt and exact expansion contain the needed answer.
+
+An optional hybrid path requires a trusted host to register an actual local
+embedding capability, then an explicit reviewed project opt-in. No embedding
+model is bundled or downloaded and no model-supplied remote endpoint is accepted.
+Model/version/dimension and project-generation pins invalidate incompatible
+vectors. Maintenance uses batches of at most 16, a recent 2,000-document window,
+bounded text and time per call. The scope filter runs before similarity; deleted,
+changed or stale sources are checked again. Missing or failed local capability
+falls back to scoped full-text search. Prompt recall remains synchronous full-text
+search; explicit model search can use the opted-in hybrid path. Measurements and
+configuration appear in Learn and the full debug export.
 
 Example reviewed project corpus definition:
 

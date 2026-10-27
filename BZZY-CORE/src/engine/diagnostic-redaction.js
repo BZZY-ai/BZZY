@@ -16,7 +16,10 @@ export function diagnosticRedactor({ roots = [], secrets = sharedSecrets(), maxS
   replacements.push([os.homedir(), '[home]']);
   const scrub = (value, depth = 0) => {
     if (typeof value === 'string') {
-      let text = sanitizeMissionValue(value, { secrets });
+      // Handle quoted multiline bindings before line-oriented sanitizers. The
+      // complete logical value must be masked before excerpts are constructed.
+      const multiline = /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)["']?\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*[\r\n](?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*[\r\n](?:\\[\s\S]|[^'\\])*(?:'|$))/gi;
+      let text = sanitizeMissionValue(value.replace(multiline, '[redacted-binding]'), { secrets });
       text = text.replace(/<(?:think|analysis|reasoning)\b[^>]*>[\s\S]*?(?:<\/(?:think|analysis|reasoning)>|$)/gi, '[omitted: private-reasoning]');
       text = text.replace(/\bBZZY-(?:LIBRARY|TERMINAL|AGENT|PAIR)-[A-Za-z0-9_.-]+/g, '[redacted-code]')
         .replace(/\b(?:set-cookie|cookie|authorization)["']?[ \t]*:[^\r\n]*/gi, '[redacted-header]')

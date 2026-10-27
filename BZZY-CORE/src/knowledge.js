@@ -12,6 +12,14 @@ import { listSkillCandidates, inspectSkillCandidate, readSkillCandidate, acceptS
 import { registerLearningFixtures, listLearningFixtures, inspectLearningFixtures, revokeLearningFixtures, queueLearningEvaluation, inspectLearningEvaluation } from './engine/learning-evaluation.js';
 import { readSessionMemory, expandSessionMemory, resetSessionMemory } from './engine/session-memory.js';
 import { sessionCompactionStatus, queueSessionCompaction, controlSessionCompaction, configureSessionCompaction } from './engine/session-compactor.js';
+import { episodeMaterial, episodeStatus } from './engine/episode.js';
+import { readKnowledgeSource } from './engine/knowledge-index.js';
+import { lookupResolutions, resolutionView } from './engine/resolutions.js';
+import { projectFactsView, configureProjectFacts } from './engine/project-facts.js';
+import { inspectSkillEvolution, suggestSkillCuration, curateSkill } from './engine/skill-curation.js';
+import { readLearningPacket } from './engine/learning-packet.js';
+import { skillEvolutionSettings, configureSkillEvolution } from './engine/skill-evolution-policy.js';
+import { configureRetrieval, refreshLocalEmbeddings, retrievalQualityStatus, benchmarkRetrieval } from './engine/retrieval-quality.js';
 
 const fail = message => { throw new Error(message); };
 const shape = (input, fields) => {
@@ -63,8 +71,37 @@ export class CoreKnowledge {
       case 'status': {
         const session = scoped([]), project = projectIdentityForSession(session);
         return { project: { id: project.id, root: project.root }, brief: knowledgeContextFor(session),
-          settings: learningSettings(), usage: learningUsage(), jobs: input.sessionId ? listLearningJobs(session) : [] };
+          settings: learningSettings(), evolution: skillEvolutionSettings(), usage: learningUsage(), facts: projectFactsView(session),
+          episode: input.sessionId ? episodeStatus(session) : null, jobs: input.sessionId ? listLearningJobs(session) : [] };
       }
+      case 'episode.status': return episodeStatus(historyScoped([]));
+      case 'episode.read': return episodeMaterial(historyScoped(['throughSeq', 'goalId', 'runId', 'maxBytes']), input);
+      case 'source.read': return readKnowledgeSource(scoped(['sourceId', 'sha256', 'offset', 'limit']), input);
+      case 'resolutions.search': return lookupResolutions(scoped(['query', 'signature', 'limit', 'includeStale']), input);
+      case 'resolution.inspect': return resolutionView(scoped(['id']), input.id);
+      case 'retrieval.status': return retrievalQualityStatus(scoped([]));
+      case 'retrieval.configure': return configureRetrieval(scoped(['settings', 'expectedRevision', 'reviewed']), input.settings,
+        { expectedRevision: input.expectedRevision, reviewed: input.reviewed });
+      case 'retrieval.refresh': return refreshLocalEmbeddings(scoped(['limit']), { limit: input.limit });
+      case 'retrieval.benchmark': {
+        const session = scoped(['cases', 'k', 'latencyBudgetMs', 'minRecall', 'minPrecision', 'expandSources']);
+        if (input.expandSources !== undefined && typeof input.expandSources !== 'boolean') fail('Choose whether to inspect expanded held-out sources.');
+        return benchmarkRetrieval({ cases: input.cases, k: input.k, latencyBudgetMs: input.latencyBudgetMs,
+          minRecall: input.minRecall, minPrecision: input.minPrecision,
+          search: query => searchProjectKnowledge(session, query),
+          ...(input.expandSources ? { expand: hit => hit.kind === 'chat' && hit.sha256 ? readKnowledgeSource(session,
+            { sourceId: hit.sourceId, sha256: hit.sha256, limit: 8192 }) : { text: hit.statement || '' } } : {}) });
+      }
+      case 'facts.read': return projectFactsView(scoped(['maxBytes', 'limit']), input);
+      case 'facts.configure': return configureProjectFacts(scoped(['settings', 'expectedRevision', 'reviewed']), input.settings,
+        { expectedRevision: input.expectedRevision, reviewed: input.reviewed });
+      case 'skill.evolution': return inspectSkillEvolution(input.id, { session: scoped(['id']) });
+      case 'skill.evolution.settings': {
+        shape(input, ['settings', 'expectedRevision', 'reviewed']);
+        return configureSkillEvolution(input.settings, { expectedRevision: input.expectedRevision, reviewed: input.reviewed });
+      }
+      case 'skill.curation.suggest': return suggestSkillCuration({ session: scoped(['limit']), limit: input.limit });
+      case 'skill.curation': return curateSkill(input.id, { ...input, session: scoped(['id', 'action', 'expectedRevision', 'requestId', 'reviewed']) });
       case 'search': {
         const session = scoped(['query', 'limit', 'offset', 'types', 'includeStale']);
         const { sessionId, cwd, ...query } = input;
@@ -98,6 +135,10 @@ export class CoreKnowledge {
         return relinkProjectIdentity(input.cwd, { ...input, explicit: input.reviewed === true });
       case 'learning.list': return listLearningJobs(scoped(['limit']), { limit: input.limit });
       case 'learning.inspect': return inspectLearningJob(input.id, { session: scoped(['id']) });
+      case 'learning.packet': {
+        const session = scoped(['id']), job = inspectLearningJob(input.id, { session });
+        return readLearningPacket(job);
+      }
       case 'learning.queue': return queueLearningReview(scoped(['requestId']), { reason: 'explicit', sourceId: 'owner-review', requestId: input.requestId });
       case 'learning.control': return controlLearningJob(input.id, input.action, { session: scoped(['id', 'action', 'expectedRevision']), expectedRevision: input.expectedRevision });
       case 'learning.settings':
