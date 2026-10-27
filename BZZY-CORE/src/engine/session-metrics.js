@@ -79,6 +79,17 @@ function family(root) {
   if (frontier.length) bounded = true;
   return { sessions, bounded };
 }
+
+// The diagnostic exporter uses the same explicit worker/review ancestry as
+// usage. Sharing a cwd alone never admits another conversation.
+export function sessionMetricsFamily(value) {
+  return readOnly(() => {
+    const root = sessionRecord(typeof value === 'string' ? value : value?.id);
+    if (!root) return { sessionIds: [], bounded: false };
+    const result = family(root);
+    return { sessionIds: [...result.sessions.keys()], bounded: result.bounded };
+  });
+}
 function blank() { return { skillInvocations: 0, subagentInvocations: 0, workerAssignments: 0, subagentFollowups: 0, workerFollowups: 0,
   skillRows: new Map(), agentRows: new Map(), workerRows: new Map(), rowsOmitted: false }; }
 function increment(bucket, type, key, metadata, count = 1) {

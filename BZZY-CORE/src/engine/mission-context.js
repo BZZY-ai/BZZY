@@ -63,7 +63,7 @@ function sanitized(value, secrets) {
     .map(([key, item]) => [key, /^(?:api[_-]?keys?|access[_-]?tokens?|refresh[_-]?tokens?|passwords?|passwd|secrets?|cookies?|authorization|.*_(?:API_KEY|TOKEN|SECRET|PASSWORD))$/i.test(key) ? '[redacted]' : sanitized(item, secrets)]));
   return value;
 }
-export const sanitizeMissionValue = value => sanitized(value, sharedSecrets());
+export const sanitizeMissionValue = (value, { secrets = sharedSecrets() } = {}) => sanitized(value, secrets);
 
 function fileHash(file, budget) {
   const descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);

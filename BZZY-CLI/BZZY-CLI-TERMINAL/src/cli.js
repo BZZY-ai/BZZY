@@ -97,6 +97,7 @@ Usage:
   bzzy service grant SESSION RECIPIENT PERMISSIONS [SECONDS]
                                        Grant explicit session actions to a client
   bzzy sessions                         Open named terminal chats; ↑/↓ select, Enter open
+  bzzy debug export SESSION [FILE.md]   Export session + skills/agents here without stopping work
   bzzy export [FILE.zip]                Export this directory and all saved project context
   bzzy --import FILE.zip|CODE          Restore a project ZIP or Relay terminal copy here
   bzzy setup                            Choose a backend and authenticate
@@ -556,9 +557,9 @@ export async function main(argv) {
   try { if (!fs.statSync(options.cwd).isDirectory()) throw new Error('not a directory'); }
   catch { throw new Error(`--cwd must name an existing directory: ${options.cwd}`); }
   options.cwd = fs.realpathSync(options.cwd);
-  await retireTelegram();
+  if (args[0] !== 'debug') await retireTelegram();
   const launchCommand = args[0];
-  const staticCommands = new Set(['integration', 'export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'subagents', 'workflows', 'library']);
+  const staticCommands = new Set(['integration', 'export', 'debug', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'subagents', 'workflows', 'library']);
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
@@ -570,6 +571,13 @@ export async function main(argv) {
   ui.ensureWorkflowSession = () => ensureCurrentTerminalSession(ui);
   const launch = async () => {
     const [command, ...rest] = args;
+    if (command === 'debug') {
+      if (rest[0] !== 'export' || !rest[1] || rest.length > 3) throw new Error('Use bzzy debug export SESSION [FILE.md].');
+      const { exportSessionDebug } = await import('@bzzy/core/engine/session-debug.js');
+      const result = exportSessionDebug(findSession(rest[1]).id, { cwd: options.cwd, output: rest[2] });
+      ui.event('debug.exported', { ...result, message: `Debug exported: ${result.outputPath}\nIncludes session history and skill/agent definitions. Review this private task content before sharing.` });
+      return 0;
+    }
     if (command === 'knowledge') return knowledgeCLI(rest, options, ui);
     if (command === 'session-memory') return sessionMemoryCLI(rest, options, ui);
     if (command === 'subagents') return subagentsCLI(rest, options, ui);

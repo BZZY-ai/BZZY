@@ -27,7 +27,7 @@ import { recordInvocationEvent, reconcileInvocationEntries } from './invocation-
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, minimal = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, updateHandoff, yolo, readOnly = false } = {}) {
+  constructor({ json = false, pet = true, minimal = false, input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, sessionDebugExporter, updateHandoff, yolo, readOnly = false } = {}) {
     this.json = json;
     this.pet = pet;
     this.minimal = minimal;
@@ -39,6 +39,7 @@ export class UI {
     this.hostMetricsEnabled = hostMetrics && this.interactive && !minimal;
     this.metricsLoader = metricsLoader;
     this.sessionMetricsLoader = sessionMetricsLoader;
+    this.sessionDebugExporter = sessionDebugExporter;
     this.connectionStatusEnabled = hostMetrics && this.interactive;
     this.lineOpen = false;
     this.reader = null;
@@ -165,6 +166,10 @@ export class UI {
     }
     if (input.trim() === '/yolo') { await this.toggleYolo(); return true; }
     if (input.trim() === '/metrics') { this.openTerminal(); this.tui?.setPanel('metrics'); return true; }
+    if (input.trim() === '/debug') {
+      this.openTerminal(); this.tui?.setPanel('metrics');
+      await this.sessionMetrics?.activate('export'); return true;
+    }
     if (/^\/session-action(?:\s|$)/.test(input)) {
       const match = /^\/session-action (share|delete) ([a-f0-9-]{36})$/.exec(input.trim());
       try {

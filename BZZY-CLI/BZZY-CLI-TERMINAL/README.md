@@ -254,6 +254,29 @@ same-named skill scopes and versions remain distinguishable. Counts survive
 reopening and replay. Missing historical attribution is marked partial instead
 of guessed. Back or Esc returns to chat with its unsent draft intact. See
 [counting rules](../../BZZY-CORE/docs/METRICS.md).
+
+Choose **Metrics → Export debug**, press **E** there, or type `/debug` to save
+`session-name_debug_ddmmyyyy.md` in this terminal session's original project
+folder. It contains the saved conversation/worker timeline, goal/workflow
+context, full skill text resources and specialist definitions. New runs also
+record BZZY's prepared instructions/catalogs, provider tool exposure, transport
+acknowledgments, discovery and invocation failures. This helps debug BZZY's
+delivery and orchestration across providers. Current definitions and missing
+historical context are labeled explicitly; low invocation counts alone are not
+a failure verdict.
+
+For a session already running, use a second terminal after updating:
+
+```sh
+bzzy debug export "session-name"
+```
+
+This saves into the calling terminal's **current folder** without stopping,
+replaying or attaching to the session. Existing files get a numbered suffix.
+Pass a new `.md`/`.txt` path as the last argument to choose another name.
+The file contains private task content with automatic redaction; review it
+before sharing. See [debug contents and limits](../../BZZY-CORE/docs/SESSION-DEBUG.md).
+
 When the active terminal model uses the DeepSeek API key, the top bar also shows
 the current USD balance; click it for freshness/source details. Subscription
 providers do not show an account balance control.

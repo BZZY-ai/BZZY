@@ -1,0 +1,135 @@
+# Session debug exports
+
+Use an export to inspect **BZZY's integration and orchestration**: how a skill
+reaches provider context, which specialist tools are exposed, what discovery
+returns, whether invocation admission succeeds, and what happens to a worker.
+This is diagnostic evidence, not a model benchmark or a vulnerability verdict.
+Three skill loads and zero agents alone establish neither a defect nor success.
+
+## Export an existing session
+
+From the terminal's **Metrics → Export debug**, press **E**, or use `/debug`.
+The complete chat exports regardless of the selected Metrics goal/scope. The
+file goes into that terminal session's original project directory:
+
+```text
+session-name_debug_ddmmyyyy.md
+```
+
+The date uses the exporting computer's local calendar. Filename-unsafe
+characters in the alias become hyphens; an unnamed session uses its short ID.
+Existing files are preserved with `_2`, `_3`, etc. before `.md`.
+
+An existing long-running session can also be exported from a second terminal
+after updating Core/CLI:
+
+```sh
+bzzy debug export "session-name"
+bzzy debug export "session-name" investigation_debug.txt
+```
+
+The command accepts the normal saved-session alias, exact ID or unambiguous ID
+prefix. It writes into the **calling terminal's current directory**, or `--cwd`
+if supplied. An explicit new `.md`/`.txt` path is also accepted; existing files
+and symlinks are never replaced. This owner-local export does not activate Core,
+claim input, pause/replay work, invoke a model or change Library availability.
+It works while the service is stopped. It does not add a remote endpoint, model
+tool, project import format, sharing code or permission grant.
+
+## What travels in the file
+
+The Markdown report has a short review guide and sections of JSON lines. Each
+JSON line is one typed record, allowing a reviewer or script to inspect a large
+run without loading a ZIP, raw database or native provider transcript.
+
+- Session/model/mode and current goal/contract snapshots, including complete
+  recorded workflow context, previous goal objectives and saved acceptance state.
+- The visible conversation, recorded tool inputs/results where available,
+  activity, lifecycle, context-compaction and model-change events, usage receipts,
+  evidence metadata, handoffs, worker reports and review records.
+- Explicitly linked assignment workers, Parallel/Besties peers and validation
+  conversations using the same ancestry rules as Metrics. Unrelated chats in the
+  same project and background learning/document sessions are excluded.
+- Current project/global skill and specialist definitions, including OFF
+  entries and the effective discoverable catalog after project overrides. Current
+  state is labeled **export time**, never substituted for earlier availability.
+- Immutable skill versions referenced by recorded loads, run catalogs or
+  discovery. Every readable text resource, including scripts and references,
+  is included without running it. Resources retain source hashes; redacted text
+  offsets are explicitly distinct from original file byte offsets.
+- Full specialist instructions/selections/limits from the current Library and
+  available historical versions, including definitions pinned to assignments.
+
+For **new work started with this version**, Core additionally records:
+
+| Pipeline stage | Recorded evidence | What it establishes |
+| --- | --- | --- |
+| Run availability | `diagnostic.run` | Enabled scoped catalogs and Core tool names available at run start; role/policy/limits remain separate. |
+| Skill prompt preparation | `diagnostic.catalog` | The exact bounded skill catalog selected for a newly prepared BZZY prompt, including pagination limits. |
+| Backend setup | `diagnostic.backend` | BZZY-generated instructions, submitted dynamic/MCP schemas, safe transport policy and backend acknowledgments. |
+| Prompt delivery | `diagnostic.prompt` | Prepared BZZY prompt text, inline/file-reference delivery and transport outcome. |
+| Tool attempt/outcome | `diagnostic.tool` | Correlated started/returned/failed calls, duration, discovery versions and safe failure details. |
+| Worker execution | Existing assignment/round/worker/review records | Accepted assignment, actual worker state, missing context, follow-ups and evidence review. |
+
+Codex API routes such as DeepSeek use the existing Codex app-server adapter.
+New native threads record submitted schemas and a separate accepted response.
+Resumed threads inherit their original native tool schemas; BZZY records that
+they were **not re-enumerated**, with an opaque thread reference for correlation.
+It does not relabel the current host catalog as the inherited native catalog.
+Long native goals may receive an objective-file reference; the prepared content
+and this indirection are recorded separately. A goal resume may reuse its saved
+native objective without preparing a fresh skill catalog.
+
+Claude records its configured MCP allowlist and BZZY system instructions, control
+initialization and the message written to stdio. Backend-reported tool names
+are recorded when supplied. A successful write/control response does not claim
+Claude accepted every schema or attended to particular instructions.
+
+The export's final `bzzyPipeline` summary counts observed stages and tool outcomes.
+It deliberately does not turn an unattempted specialist path into a pass/failure
+or assert that an unused skill should have run.
+
+## Existing-session compatibility and limits
+
+Exports read a consistent SQLite snapshot with a source-sequence cutoff. Core
+runners can keep appending in WAL mode; later events require another export.
+Older running processes retain their loaded code after an update. Their saved
+conversation, receipts, native tool events and current definitions still export,
+but new diagnostic records start only with work running the updated code.
+Unknown historical availability and missing tool outcomes are explicit gaps.
+An export cannot retroactively reconstruct an unrecorded prompt or definition.
+
+Event entries keep the original session ID, sequence and timestamp. Adjacent
+assistant text deltas are joined per session/reply, with `seq`/`throughSeq` source
+ranges; interleaved worker records can appear before a joined message is emitted.
+Unknown events and omitted native envelopes are counted by type. Imported history
+retains its provenance and does not acquire present execution or verification
+authority. Metrics retains its own exact-use and historical coverage rules.
+
+Large histories stream from their earliest saved event; they are not replaced by
+only the most recent messages. The family has Metrics' existing 2,048-session /
+32-level bounds. Fields have explicit 64 Ki-character, 2,048-item and nesting
+bounds, with omission markers and counts. Assistant accumulation is bounded to
+4 Mi-characters per reply. Skill text is scrubbed as a complete resource before
+being split into smaller records, preserving the full readable resource rather
+than clipping it to a tool page. Binary, changed, unsafe or unavailable resources
+and unavailable historical versions are reported. Exports exceeding 512 MiB or
+encountering a write failure are removed; a completed file ends with a `summary`
+record followed by its closing code fence.
+
+Provider credentials/logins, private account bindings, auth stores, environment
+dumps, input leases, executable authority, raw runtime databases and private
+provider reasoning are excluded by projection. Known credentials and recognizable
+secret/account formats are scrubbed from selected text; paths into private
+stores suppress the corresponding native tool result. Project source trees and
+evidence binaries are not copied. Full skill resources and task history remain
+**private execution data**: automatic redaction cannot prove arbitrary text free
+of private detail. Review the report before sending it to another person or AI.
+Source hashes describe original records/files, not the redacted export bytes.
+
+Use the report to locate a suspected BZZY defect and design a controlled test.
+No recorded spawn attempt cannot prove whether the complete provider/worker
+execution path works. A prepared catalog is not proof of model attention; worker
+agreement is not verification. Diagnostic instrumentation is best effort and
+cannot change tool results, cause mutation retries, grant permissions or count
+as additional skill/agent use.

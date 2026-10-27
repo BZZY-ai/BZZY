@@ -28,7 +28,8 @@ function markerAt(root) {
 
 // Paths locate an engagement; a private directory binding distinguishes a move
 // from a copied marker. No Git origin, target name or model can merge projects.
-export function resolveProjectIdentity(directory, { create = false, boundary } = {}) {
+export function resolveProjectIdentity(directory, { create = false, boundary, readOnly = false } = {}) {
+  if (readOnly && create) throw new Error('A read-only project lookup cannot initialize an identity.');
   if (typeof directory !== 'string' || !path.isAbsolute(directory)) throw new Error('Project directory must be absolute.');
   const cwd = fs.realpathSync(directory);
   if (!fs.statSync(cwd).isDirectory()) throw new Error('Project directory is unavailable.');
@@ -54,7 +55,7 @@ export function resolveProjectIdentity(directory, { create = false, boundary } =
       return markerAt(root);
     });
   }
-  return atomic(db => {
+  const resolve = db => {
     const originalId = marker.data.id, previous = getRecord(kind, originalId);
     const copied = previous && previous.fingerprint !== identity;
     const id = copied ? stableId(['copied-project', originalId, identity]) : originalId;
@@ -62,10 +63,11 @@ export function resolveProjectIdentity(directory, { create = false, boundary } =
     if (current && current.fingerprint !== identity) throw new Error('Project identity collision. Choose a fresh engagement identity.');
     const aliases = [...new Set([...(current?.aliases || (!copied ? previous?.aliases : []) || []), current?.root, !copied && previous?.root, root].filter(Boolean))].slice(-32);
     const record = { id, root, fingerprint: identity, aliases, createdAt: current?.createdAt || (!copied && previous?.createdAt) || now(), updatedAt: now() };
-    putRecord(kind, id, record, db);
+    if (!readOnly) putRecord(kind, id, record, db);
     if (copied && create) writeJson(marker.file, { ...marker.data, id, copiedFrom: undefined, forkedAt: now() });
     return { ...record, markerRoot: root, initialized: true, forked: Boolean(copied) };
-  });
+  };
+  return readOnly ? resolve(database()) : atomic(resolve);
 }
 
 export function projectIdentityForSession(session, options = {}) {

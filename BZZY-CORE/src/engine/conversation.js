@@ -4,6 +4,7 @@ import { saveSession } from './store.js';
 import { knowledgeContextFor } from './knowledge.js';
 import { sessionMemoryEligible, readSessionMemory } from './session-memory.js';
 import { getProvider, providerModelCapabilities } from './providers.js';
+import { recordPromptSkillCatalog } from './session-diagnostics.js';
 
 export function conversationCursor(sessionId, db = database()) {
   return db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM events WHERE session_id=?').get(sessionId).seq;
@@ -67,7 +68,9 @@ export function conversationPrompt(session, prompt) {
   }
   if (session.bzzySkillsSeen || listSkills({ enabledOnly: true, limit: 1, session }).total) {
     session.bzzySkillsSeen = true;
-    prompt = `${skillCatalogInstructions({ session })}\n\nCURRENT REQUEST:\n${prompt}`;
+    prompt = `${skillCatalogInstructions({ session, onCatalog: catalog => {
+      try { recordPromptSkillCatalog(session, catalog); } catch { /* Diagnostic persistence cannot block the prepared prompt. */ }
+    } })}\n\nCURRENT REQUEST:\n${prompt}`;
   }
   if (!session.conversationHandoff?.pending) return prompt;
   const messages = conversationMessages(session.id, session.conversationHandoff.throughSeq, { maxMessages: 30, maxBytes: 96 * 1024 });

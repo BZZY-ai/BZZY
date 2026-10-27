@@ -8,6 +8,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { home, privateDir } from './files.js';
 import { loadSession } from './store.js';
 import { getRecord, putRecord, listRecords, appendEvent, now, digest } from './database.js';
+import { recordRunDiagnostics, recordDiagnosticTool } from './session-diagnostics.js';
 import { checkpoint, remember, recall } from './memory.js';
 import { issue } from './project.js';
 import { captureEvidence, readArtifact, artifact, projectArtifact } from './evidence.js';
@@ -177,7 +178,10 @@ export class ToolHost {
     });
     try { await new Promise((resolve, reject) => { this.server.once('error', reject); this.server.listen(this.socket, resolve); }); }
     catch (error) { await this.close(); throw error; }
-    fs.chmodSync(this.socket, 0o600); return this;
+    fs.chmodSync(this.socket, 0o600);
+    try { recordRunDiagnostics(this.session, this.context, taskTools(this.session, this.context).map(tool => tool.name)); }
+    catch { /* Optional diagnostics must not change execution admission. */ }
+    return this;
   }
   async close() {
     this.projectReader?.close(); this.projectReader = null;
@@ -187,6 +191,22 @@ export class ToolHost {
     if (this.socketDirectory) fs.rmSync(this.socketDirectory, { recursive: true, force: true });
   }
   async call(name, input) {
+    const callId = randomUUID(), started = Date.now();
+    try { recordDiagnosticTool(this.session, this.context, { name, callId, started, phase: 'started', input }); }
+    catch { /* Optional diagnostics cannot block tool admission. */ }
+    let result;
+    try {
+      result = await this.executeTool(name, input, callId);
+    } catch (error) {
+      try { recordDiagnosticTool(this.session, this.context, { name, callId, started, error }); }
+      catch { /* Never replace the tool's actual outcome with a telemetry error. */ }
+      throw error;
+    }
+    try { recordDiagnosticTool(this.session, this.context, { name, callId, started, result }); }
+    catch { /* A successful mutation must never look failed or be retried for diagnostics. */ }
+    return result;
+  }
+  async executeTool(name, input, callId) {
     const agentScope = agentExecutionScope(this.session);
     if (agentScope) {
       assertAgentScope(this.session, agentScope);
@@ -203,7 +223,7 @@ export class ToolHost {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !fields.includes(key))) throw new Error('Invalid session memory fields.');
       return name === 'read_session_memory' ? readSessionMemory(session, input) : expandSessionMemory(session, input);
     }
-    appendEvent(session.id, 'coordination.tool', { name, input: name === 'http_request' ? { ...input, url: redactedUrl(input.url), headers: redactedHeaders(input.headers || {}), body: input.body ? '[body omitted]' : undefined } : name.includes('subagent') ? sanitizeMissionValue(input) : input });
+    appendEvent(session.id, 'coordination.tool', { name, callId, runId: this.context.runId, input: name === 'http_request' ? { ...input, url: redactedUrl(input.url), headers: redactedHeaders(input.headers || {}), body: input.body ? '[body omitted]' : undefined } : name.includes('subagent') ? sanitizeMissionValue(input) : input });
     if (name === 'list_subagents') return discoverSubagents(session, input);
     if (name === 'read_subagent') return getSubagentDefinition(input.name, { cwd: session.projectRoot || session.cwd, enabledOnly: true });
     if (name === 'list_subagent_runs') return listSubagentRuns(session, input);

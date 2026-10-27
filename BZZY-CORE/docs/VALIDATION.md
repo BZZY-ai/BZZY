@@ -1,3 +1,33 @@
+# Session debug export and BZZY pipeline diagnostics (2026-10-26)
+
+Node.js 24/macOS full suites: **794 Core tests passed, 2 skipped** (796 total)
+and **754 CLI tests passed, 21 skipped** (775 total), zero failures. Core and CLI
+syntax checks and repository whitespace checks pass. Core used canonical
+`TMPDIR=/private/tmp`, as the CLI fixture runner does; the default macOS `/var`
+alias initially tripped an existing canvas path-equality assertion.
+
+Ten Core regressions exercise an already-running legacy conversation, exact
+database-state preservation, linked-worker scope, full skill resources and
+immutable removed versions, credential redaction across text/resource chunks,
+private native output suppression, unsupported-event coverage, protected output
+paths, a 5,000-event history, failed disabled-agent admission, and actual Codex
+and Claude adapter setup/message transport. Native fixtures verify BZZY-generated
+instructions, dynamic/MCP schemas and the separate acknowledgment stages;
+resumed native tools remain explicitly inherited/unobserved. Export does not add
+skill loads or specialist assignments.
+
+Actual CLI subprocesses export a saved running DeepSeek session into a different
+calling directory while preserving the operator stop intent and all saved
+records/events. TUI keyboard controls cover export progress, duplicate activation,
+draft preservation, local `/debug`, visible output paths and stale-chat results.
+
+All model/backend work used offline fixtures in temporary private homes. These
+checks validate BZZY's record/export boundaries and adapter handoffs, not live
+DeepSeek behavior, model attention or vulnerability accuracy. No user-session
+mutation, running-installation update, service restart or Relay deployment was
+performed. Existing sessions can export saved records; diagnostic context absent
+from older runners remains unavailable rather than reconstructed as fact.
+
 # Clean cancellation during goal replacement (2026-10-26)
 
 Node.js 24/macOS full suites: **784 Core tests passed, 2 skipped** (786 total)

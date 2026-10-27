@@ -16,6 +16,7 @@ import { ActivityReporter } from '../live-activity.js';
 import { agentPermissionProfile, isolatedAgentCodexHome, tomlValue } from '../agent-execution.js';
 import { learningPermissionProfile, learningDisabledFeatures, learningCodexHome } from '../learning-backend.js';
 import { markBackendStartupFailure } from '../backend-startup.js';
+import { recordBackendDiagnostics } from '../session-diagnostics.js';
 
 export { codexHome } from '../auth.js';
 
@@ -196,7 +197,12 @@ export class CodexEngine {
         if (snapshot.goal?.status === 'active') {
           await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'automatic' });
         }
+        const setupId = recordBackendDiagnostics(this.session, { method: 'thread/resume', outcome: 'prepared', transport: 'codex-app-server',
+          toolsSource: 'inherited-native-thread; not re-enumerated by BZZY', instructions: params.developerInstructions, threadId: this.threadId,
+          model: params.model, policy });
         const result = await this.rpc.request('thread/resume', { threadId: this.threadId, ...params });
+        recordBackendDiagnostics(this.session, { setupId, method: 'thread/resume', outcome: 'accepted', transport: 'codex-app-server',
+          toolsSource: 'inherited-native-thread; not re-enumerated by BZZY', threadId: this.threadId, model: result.model || params.model });
         startupStage = 'permission_activation';
         this.assertAgentPermissions(result);
         this.session.resolvedModel = result.model || this.session.model;
@@ -208,7 +214,11 @@ export class CodexEngine {
         // using them until an explicit goal execution authorizes them.
         if (this.options.toolHost) params.dynamicTools = taskTools(this.session, { goalMode: this.session.mode === 'delegate' ? true : this.options.goalMode }).filter(t => !['get_goal', 'update_goal'].includes(t.name)).map(t => ({ type: 'function', name: t.name, description: t.name === 'delegate' ? t.description + ' Available only during an explicit /goal; ordinary chat cannot launch assignments.' : t.description, inputSchema: t.inputSchema }));
         startupStage = 'thread_start';
+        const setupId = recordBackendDiagnostics(this.session, { method: 'thread/start', outcome: 'prepared', transport: 'codex-app-server',
+          toolsSource: 'submitted-dynamic-tools', tools: params.dynamicTools || [], instructions: params.developerInstructions, model: params.model, policy });
         const result = await this.rpc.request('thread/start', params);
+        recordBackendDiagnostics(this.session, { setupId, method: 'thread/start', outcome: 'accepted', transport: 'codex-app-server',
+          toolsSource: 'submitted-dynamic-tools', threadId: result.thread.id, model: result.model || params.model });
         startupStage = 'permission_activation';
         this.assertAgentPermissions(result);
         this.threadId = result.thread.id;
@@ -240,10 +250,13 @@ export class CodexEngine {
         if (!resumeGoal) await this.rpc.request('thread/goal/clear', { threadId: this.threadId, origin: 'user' });
         if (this.interrupted) return;
         const params = { threadId: this.threadId, status: 'active', origin: 'user' };
+        let promptSetupId;
         const nativeBudget = this.session.goal.tokenBudget == null ? undefined : Math.max(0, this.session.goal.tokenBudget - (this.session.goal.nativeTokenOffset || 0));
         if (resumeGoal && this.options.tokenBudget) params.tokenBudget = nativeBudget;
         if (!resumeGoal || this.session.conversationHandoff?.pending) {
           let objective = conversationPrompt(this.session, this.session.goal.objective);
+          promptSetupId = recordBackendDiagnostics(this.session, { method: 'thread/goal/set', outcome: 'prepared',
+            delivery: objective.length > 500 && !this.options.agentScope ? 'objective-file-reference' : 'inline-objective', prompt: objective }, 'diagnostic.prompt');
           if (objective.length > 500 && !this.options.agentScope) {
             const objectivePath = path.join(home(), 'runtime', `${this.session.id}-objective.md`);
             privateDir(path.dirname(objectivePath));
@@ -256,10 +269,15 @@ export class CodexEngine {
         const version = this.goalUpdates;
         this.goalArmed = true;
         const result = await this.rpc.request('thread/goal/set', params);
+        recordBackendDiagnostics(this.session, { setupId: promptSetupId, method: 'thread/goal/set', outcome: 'accepted',
+          delivery: params.objective ? 'prepared-objective' : 'resume-existing-native-objective', threadId: this.threadId }, 'diagnostic.prompt');
         if (this.goalUpdates === version) this.updateGoal(result.goal);
       } else {
         const effort = reasoningEffort(this.session, this.options);
-        await this.rpc.request('turn/start', { threadId: this.threadId, input: [{ type: 'text', text: conversationPrompt(this.session, prompt), text_elements: [] }], ...(effort ? { effort } : {}) });
+        const text = conversationPrompt(this.session, prompt);
+        const setupId = recordBackendDiagnostics(this.session, { method: 'turn/start', outcome: 'prepared', delivery: 'inline-message', prompt: text }, 'diagnostic.prompt');
+        await this.rpc.request('turn/start', { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }], ...(effort ? { effort } : {}) });
+        recordBackendDiagnostics(this.session, { setupId, method: 'turn/start', outcome: 'accepted', delivery: 'inline-message', threadId: this.threadId }, 'diagnostic.prompt');
       }
       this.operation.pendingStart = false;
       this.settle();

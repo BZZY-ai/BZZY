@@ -16,6 +16,7 @@ import { conversationPrompt, completeConversationHandoff } from '../conversation
 import { recordClaudeQuota } from '../account-status.js';
 import { ActivityReporter } from '../live-activity.js';
 import { assertLearningWorkingDirectory } from '../learning-backend.js';
+import { recordBackendDiagnostics } from '../session-diagnostics.js';
 
 export function claudeEnvironment(backendHomes) {
   return subscriptionEnvironment('claude', { backendHomes });
@@ -71,6 +72,9 @@ export class ClaudeEngine {
     const messageUsage = new Map();
     const args = claudeArgs(this.session, this.options, configFile);
     const promptIndex = args.indexOf('--append-system-prompt');
+    const setupId = recordBackendDiagnostics(this.session, { method: 'claude-launch', outcome: 'prepared', transport: 'claude-stdio',
+      toolsSource: configFile ? 'configured-mcp-allowlist' : 'no-core-mcp', tools: configFile ? taskTools(this.session, { goalMode: goal }) : [],
+      instructions: args[promptIndex + 1], model: this.session.model, delivery: Buffer.byteLength(args[promptIndex + 1]) > 32768 ? 'system-prompt-file' : 'system-prompt-argument' });
     let promptFile;
     const cleanup = () => { for (const file of [configFile, promptFile]) if (file) fs.rmSync(file, { force: true }); };
     try {
@@ -96,6 +100,7 @@ export class ClaudeEngine {
       clearTimeout(forceTimer); forceTimer = setTimeout(() => stopProcess(child, 'SIGKILL'), 1000);
     };
     const userMessage = { type: 'user', message: { role: 'user', content: conversationPrompt(this.session, goal ? continuationPrompt(this.session.goal) : prompt) }, parent_tool_use_id: null, session_id: this.session.engineThreadId || this.session.engineSessionId || this.session.id };
+    const promptSetupId = recordBackendDiagnostics(this.session, { method: 'claude-message', outcome: 'prepared', delivery: 'stdio-message', prompt: userMessage.message.content }, 'diagnostic.prompt');
     const initializeId = `bzzy-init-${nonce}`;
     const initializeTimeout = setTimeout(() => {
       terminate(new Error('Claude control initialization timed out.'));
@@ -111,7 +116,11 @@ export class ClaudeEngine {
         const event = JSON.parse(line);
         if (event.type === 'control_response' && event.response?.request_id === initializeId) {
           clearTimeout(initializeTimeout);
-          if (event.response.subtype === 'success') send(userMessage);
+          if (event.response.subtype === 'success') {
+            send(userMessage);
+            recordBackendDiagnostics(this.session, { setupId, method: 'claude-launch', outcome: 'control-initialized', transport: 'claude-stdio' });
+            recordBackendDiagnostics(this.session, { setupId: promptSetupId, method: 'claude-message', outcome: 'written-to-stdio', delivery: 'stdio-message' }, 'diagnostic.prompt');
+          }
           else terminate(new Error(event.response.error || 'Claude control initialization failed.'));
         } else if (event.type === 'rate_limit_event') {
           recordClaudeQuota(this.session, event, this.ui);
@@ -158,6 +167,7 @@ export class ClaudeEngine {
             this.ui.event('backend', { method: 'tool.completed', params: { id: block.tool_use_id, failed: Boolean(block.is_error) } });
           }
         } else if (event.type === 'system' && event.subtype === 'init') {
+          recordBackendDiagnostics(this.session, { setupId, method: 'claude-init', outcome: 'backend-reported', reportedTools: Array.isArray(event.tools) ? event.tools.filter(tool => typeof tool === 'string') : [], model: event.model, threadId: event.session_id });
           this.session.engineThreadId = event.session_id;
           if (event.model) this.session.resolvedModel = event.model;
           saveSession(this.session);

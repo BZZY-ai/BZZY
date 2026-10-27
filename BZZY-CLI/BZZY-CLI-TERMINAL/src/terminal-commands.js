@@ -32,6 +32,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /create-agent <description> Ask for a name, then create a global Core specialist with the current model.
 /workflow          Choose one workflow or None for future goals; manage them from the Workflows tab.
 /metrics           Inspect recorded skill, specialist and worker usage for this goal or chat.
+/debug             Export this chat with skill/agent definitions to NAME_debug_ddmmyyyy.md here.
 /memory [query]    Search this engagement's findings, memory and past conversations.
 /learn             Review learning jobs, candidate skills and private user/host preferences.
 --import FILE.zip|CODE Restore a project ZIP or Relay terminal copy here; keeps work paused.
@@ -56,6 +57,7 @@ export const chatCommands = [
   { command: '/create-agent', description: 'Create a global specialist with the current model', argument: true },
   { command: '/workflow', description: 'Choose a workflow or None for future goals' },
   { command: '/metrics', description: 'Inspect recorded goal and chat skill, specialist and worker usage' },
+  { command: '/debug', description: 'Export session history and skill/agent definitions to a debug file' },
   { command: '/goal', description: 'Choose a saved goal, or add an objective to start a new one' },
   { command: '/yolo', description: 'Toggle native permission bypass for the next run' },
   { command: '/validate', description: 'Check the original goal and evidence; add a focus to review a reply' },

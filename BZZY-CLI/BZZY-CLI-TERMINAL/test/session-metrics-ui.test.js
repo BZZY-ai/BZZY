@@ -103,6 +103,38 @@ test('Metrics ignores stale session reads, refreshes only while open, and reads 
   } finally { ui.close(); assert.equal(ui.sessionMetrics.data, null); }
 });
 
+test('Metrics debug export uses the selected saved chat, preserves the draft and shows the file path with real keyboard controls', async () => {
+  const { ui, input, frame } = terminal();
+  const exported = []; let complete;
+  ui.sessionDebugExporter = id => { exported.push(id); return new Promise(resolve => { complete = resolve; }); };
+  try {
+    const pending = ui.ask('bzzy › '); await settle(); ui.tui.value = 'Unsent draft stays here'; ui.tui.cursor = 4;
+    await ui.settingsCommand('/metrics'); await settle();
+    input.write('e'); await settle(); ui.tui.render();
+    assert.equal(ui.sessionMetrics.exporting, true); assert.match(frame(), /Exporting/);
+    input.write('e'); await settle(); assert.deepEqual(exported, [firstId]);
+    complete({ outputPath: '/project/Security-review_debug_26102026.md' }); await ui.tui.metricsTask; await settle(); ui.tui.render();
+    assert.match(frame(), /Debug exported/); assert.match(frame(), /Security-review_debug_26102026.md/);
+    assert.equal(ui.tui.value, 'Unsent draft stays here'); assert.equal(ui.tui.cursor, 4);
+    assert.equal(ui.tui.entries.length, 0); assert.equal(ui.permissionConnection, undefined);
+    assert.equal(commandSuggestions('/deb')[0].command, '/debug');
+    ui.tui.finish(null); await pending;
+  } finally { ui.close(); }
+});
+
+test('/debug stays local and stale exports cannot appear in another chat', async () => {
+  const { ui } = terminal();
+  let complete; ui.sessionDebugExporter = () => new Promise(resolve => { complete = resolve; });
+  try {
+    const exporting = ui.settingsCommand('/debug'); await settle();
+    assert.equal(ui.tui.panel, 'metrics');
+    ui.activeTab = secondId; ui.tui.render(); await settle();
+    complete({ outputPath: '/project/old-chat_debug_26102026.md' }); await exporting;
+    assert.equal(ui.sessionMetrics.sessionId, secondId); assert.equal(ui.sessionMetrics.exportResult, null);
+    assert.equal(ui.tui.entries.length, 0);
+  } finally { ui.close(); }
+});
+
 test('the production Metrics loader refreshes real durable Core receipts without restarting stopped Core or adding model work', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-metrics-read-')), before = process.env.BZZY_HOME;
   process.env.BZZY_HOME = directory;

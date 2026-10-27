@@ -160,6 +160,14 @@ See [setup and operation](RELAY.md).
 
 ## Specialist subagents
 
+`engine/session-debug.js` supplies an owner-local read-only snapshot/export of
+the saved terminal family and its skill/specialist definitions. Client controls
+stay in CLI. `session-diagnostics.js` records BZZY's prepared catalogs,
+instructions, provider tool exposure/transport outcomes and correlated Core
+tool attempts. Diagnostics neither add model work nor grant authority or count
+as invocations. Historical gaps and inherited native schemas are explicit; see
+[session debugging](SESSION-DEBUG.md).
+
 `src/engine/subagent-definitions.js` owns revision-checked project/global
 specialist definitions and immutable content versions. `subagents.js` resolves a
 definition and model selection against the current execution and starts the

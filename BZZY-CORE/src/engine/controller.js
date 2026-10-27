@@ -202,6 +202,9 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
         (a.goalId ? a.goalId === session.goal.id : !session.goal.createdAt || a.createdAt >= session.goal.createdAt)).map(a => a.id)])];
       delete session.deferTerminalNotification;
       saveSession(session); putRecord('run', session.id, { ...getRecord('run', session.id), state: session.executionState, finishedAt: now() });
+      try { recorded.event('diagnostic.run.finished', { version: 1, runId: run.id, goalId: run.goalId, state: session.executionState,
+        reason: session.stopReason, elapsedSeconds: elapsed, usage: session.summary.usage }); }
+      catch { /* Optional diagnostics do not change a completed run's outcome. */ }
       closeOpenActivities(session);
       writeProjectRecord(session, 'goals', session.goal?.id || session.id, { sessionId: session.id, goal: session.goal, summary: session.summary, acceptance: session.acceptance || null });
       learningForTurn(session, prompt, { goal, stopped: Boolean(stopping || failedThisTurn) });

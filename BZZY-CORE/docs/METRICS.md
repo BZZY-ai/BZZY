@@ -118,3 +118,11 @@ and session and advances through indexed, scoped events without reading chat,
 skill bodies, private bindings or tool arguments. Rebuilding the cache does not
 invoke tools or change counts. Metrics are descriptive, never acceptance evidence
 or a permission grant.
+
+**Metrics → Export debug**, **E**, `/debug` and `bzzy debug export SESSION`
+create a separate owner-local report. Unlike the compact Metrics projection,
+this report intentionally includes selected session text, full skill text
+resources and specialist instructions, with credential exclusion/redaction and
+explicit historical gaps. It adds no use counts and requires no running Core.
+It inspects BZZY's context delivery, discovery and orchestration; it does not
+infer correct behavior from invocation totals. See [session debug](SESSION-DEBUG.md).

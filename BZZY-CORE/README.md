@@ -61,6 +61,12 @@ Implemented:
   coverage limits for older history. Actual worker skill receipts also reach
   the root conversation; bounded read-only invocation snapshots let clients
   restore current agent status. See [metrics](docs/METRICS.md).
+- Owner-local [session debug exports](docs/SESSION-DEBUG.md) combine existing
+  chat/worker history with full skill text resources, specialist definitions and
+  explicit coverage gaps. New runs record BZZY-generated instructions, catalog
+  preparation, provider tool exposure, transport acknowledgments and correlated
+  tool attempts/outcomes, without starting diagnostic inference or changing use
+  counts. Existing running sessions can export their already saved records.
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).

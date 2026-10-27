@@ -68,6 +68,14 @@ goal, earlier goals and the whole chat, including its workers and linked reviews
 Counts persist in Core; reopening a chat does not count as another invocation.
 See [usage metrics](BZZY-CORE/docs/METRICS.md).
 
+Use **Metrics → Export debug**, `/debug`, or `bzzy debug export SESSION` for a
+single `session-name_debug_ddmmyyyy.md` file in the current terminal folder.
+It combines saved session/worker activity with full skill text resources and
+specialist definitions to inspect BZZY's prompt delivery, discovery and worker
+orchestration. Existing running sessions export their saved history; newer
+pipeline diagnostics start with updated runners. See
+[session debugging](BZZY-CORE/docs/SESSION-DEBUG.md).
+
 Transfer the [BZZY Library](BZZY-CORE/docs/LIBRARY-SHARING.md) between Mac and
 Linux with `bzzy library share` and `bzzy library import`. Expiring Relay codes
 carry skills, specialist agents, workflows and saved goal text; the receiver
