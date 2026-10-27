@@ -128,6 +128,7 @@ export class UI {
     this.renderFooter();
   }
   clearHistory() { this.tui?.clear(); this.invocationEntries = []; this.lineOpen = false; }
+  beginHistoryRestore() { return this.tui?.beginHistoryRestore(); }
   executionConnection(connected) { this.tui?.executionFeedback.connection(connected); this.tui?.schedule(); }
   redrawPrompt() { if (this.tui) this.tui.schedule(); else if (this.reader && !this.lineOpen) this.reader.prompt(true); }
   updateSession(snapshot) {

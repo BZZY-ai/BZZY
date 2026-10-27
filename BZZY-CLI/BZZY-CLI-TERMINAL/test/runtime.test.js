@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { PassThrough } from 'node:stream';
+import { UI } from '../src/ui.js';
 import { randomUUID } from 'node:crypto';
 import { ensureRuntime, runtimeRequest, runtimeInfo, claimInput, requireOwner } from '../src/runtime.js';
 import { createSession, saveSession, loadSession } from '../src/store.js';
@@ -43,6 +45,29 @@ test.afterEach(async () => {
 function makeSession(options = {}) {
   const session = createSession(BUILTINS.codex, dir); prepareTask(session, options, 'Assess supplied evidence'); session.goal = newGoal(session.contract.objective, options.tokenBudget); saveSession(session); return session;
 }
+test('restoring a paged saved chat paints its latest screen once instead of scrolling through historical pages', async () => {
+  const session = createSession(BUILTINS.codex, dir);
+  for (let index = 1; index <= 450; index++) appendEvent(session.id, 'text', { text: `SAVED_REPLY_${String(index).padStart(3, '0')}`, itemId: `saved-${index}` });
+  const input = new PassThrough(), output = new PassThrough();
+  Object.assign(input, { isTTY: true, setRawMode() {} });
+  Object.assign(output, { isTTY: true, columns: 100, rows: 25 }); output.resume();
+  const ui = new UI({ input, output, error: output }); ui.setSession(session.id);
+  const painted = [], event = ui.event.bind(ui);
+  ui.tui.writeFrame = frame => painted.push(frame);
+  ui.event = (type, data) => { event(type, data); ui.tui.render(); };
+  try {
+    await restoreConversation(session, ui);
+    const historyFrames = painted.filter(frame => frame.includes('SAVED_REPLY_'));
+    assert.equal(historyFrames.length, 1);
+    assert.match(historyFrames[0], /SAVED_REPLY_450/);
+    assert.doesNotMatch(historyFrames[0], /SAVED_REPLY_001/);
+    assert.equal(ui.tui.entries.filter(entry => entry.kind === 'assistant').length, 450);
+    assert.equal(ui.cursors.get(session.id), events(session.id, 0, 1000).at(-1).seq);
+    assert.equal(ui.tui.scroll, 0);
+    assert.equal(ui.tui.historyRestoreDepth, 0);
+    assert.equal(listRecords('execution').length, 0, 'Opening history never dispatches work.');
+  } finally { ui.close(); }
+});
 async function start(session, options = {}) {
   const info = await ensureRuntime(), owner = randomUUID();
   await runtimeRequest(info, 'POST', `/sessions/${session.id}/claim`, { owner, takeover: true });

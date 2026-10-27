@@ -1255,7 +1255,20 @@ export class TerminalChat {
     if (view.meta) lines.push(color(clip('    ' + view.meta, width), view.warning ? palette.warning : palette.muted));
     return lines;
   }
-  schedule() { if (!this.renderTimer && !this.closed && !this.copyMode && !this.outputBlocked) this.renderTimer = setTimeout(() => { this.renderTimer = null; this.render(); }, animationInterval); }
+  beginHistoryRestore() {
+    this.historyRestoreDepth = (this.historyRestoreDepth || 0) + 1;
+    clearTimeout(this.renderTimer); this.renderTimer = null;
+    let finished = false;
+    return () => {
+      if (finished) return;
+      finished = true;
+      if (--this.historyRestoreDepth === 0) {
+        this.scroll = 0; this.bodyCache = null;
+        this.render();
+      }
+    };
+  }
+  schedule() { if (!this.historyRestoreDepth && !this.renderTimer && !this.closed && !this.copyMode && !this.outputBlocked) this.renderTimer = setTimeout(() => { this.renderTimer = null; this.render(); }, animationInterval); }
   tokenLabel() {
     const partial = ['besties', 'parallel'].includes(this.mode) && this.groupUsage && !this.groupUsage.complete;
     return this.tokens != null ? (partial ? '≥' : '') + this.tokens.toLocaleString() + ' tokens' : 'tokens —';
@@ -1778,7 +1791,7 @@ export class TerminalChat {
     this.writeFrame(frame);
   }
   render({ force = false } = {}) {
-    if (this.closed || this.outputBlocked || this.copyMode && !force) return;
+    if (this.historyRestoreDepth || this.closed || this.outputBlocked || this.copyMode && !force) return;
     if (this.textSelection && !this.selection) { this.renderTextSelection(); return; }
     if (this.panel === 'metrics') {
       this.ui.sessionMetrics ||= new SessionMetricsPanel(this.ui, { load: this.ui.sessionMetricsLoader });

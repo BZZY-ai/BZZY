@@ -25,6 +25,12 @@ stalled alerts use Core's existing durable outbox and authenticated APNs route.
 `bzzy notifications status` now identifies an expired pairing separately from
 missing Apple setup. Simulator checks cannot prove delivery to a physical phone.
 
+At the user's request, signed development build **0.1.0 (23)** was installed
+in place on the connected iPhone and launched with no preview/test arguments.
+CoreDevice independently reports build 23. The build retains the prior signed
+application/Keychain identity; no uninstall or app-data reset was performed.
+This verifies installation and launch, not background notification display.
+
 Build **Debug 0.1.0 (22)** puts host CPU/RAM in the home connection footer,
 between Core status and the compact Refresh icon. Agents shows the list and
 New Agent; voice chat remains available in **Settings → Voice**. Agents and

@@ -41,29 +41,35 @@ function client(info, sessionId, owner) {
 }
 async function replay(api, sessionId, ui, selected = () => true) {
   let cursor = ui.cursors?.get(sessionId) || 0;
-  while (true) {
-    const batch = await api('GET', `events?after=${cursor}&limit=200`);
-    if (!selected()) return;
-    for (const event of batch.events) {
-      ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt, eventSessionId: event.sessionId || sessionId });
-      cursor = event.seq;
+  const finish = cursor === 0 ? ui.beginHistoryRestore?.() : null;
+  try {
+    while (true) {
+      const batch = await api('GET', `events?after=${cursor}&limit=200`);
+      if (!selected()) return;
+      for (const event of batch.events) {
+        ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt, eventSessionId: event.sessionId || sessionId });
+        cursor = event.seq;
+      }
+      ui.cursors?.set(sessionId, cursor);
+      if (!batch.hasMore) { if (batch.events.length) ui.redrawPrompt?.(); return; }
     }
-    ui.cursors?.set(sessionId, cursor);
-    if (!batch.hasMore) { if (batch.events.length) ui.redrawPrompt?.(); return; }
-  }
+  } finally { finish?.(); }
 }
 async function replayRoom(api, roomSessionId, ui, selected = () => true) {
   const key = `${roomSessionId}:shared-room`; let cursor = ui.cursors?.get(key) || 0;
-  while (true) {
-    const batch = await api('GET', `events?after=${cursor}&limit=200`);
-    if (!selected()) return;
-    for (const event of batch.events) {
-      if (['peer.message', 'peer.review'].includes(event.type)) ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt });
-      cursor = event.seq;
+  const finish = cursor === 0 ? ui.beginHistoryRestore?.() : null;
+  try {
+    while (true) {
+      const batch = await api('GET', `events?after=${cursor}&limit=200`);
+      if (!selected()) return;
+      for (const event of batch.events) {
+        if (['peer.message', 'peer.review'].includes(event.type)) ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt });
+        cursor = event.seq;
+      }
+      ui.cursors?.set(key, cursor);
+      if (!batch.hasMore) { if (batch.events.length) ui.redrawPrompt?.(); return; }
     }
-    ui.cursors?.set(key, cursor);
-    if (!batch.hasMore) { if (batch.events.length) ui.redrawPrompt?.(); return; }
-  }
+  } finally { finish?.(); }
 }
 async function editConversation(sessionId, ui, connection, choose, apply, { assert = assertModelIdle, message } = {}) {
   const info = connection?.info || await ensureRuntime(), owner = connection?.owner || randomUUID(), api = client(info, sessionId, owner);

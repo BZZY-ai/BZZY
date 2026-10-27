@@ -1,3 +1,25 @@
+# Direct-to-latest terminal restore and requested iPhone install (2026-10-27)
+
+The full CLI suite passed **762 tests, 21 skipped** (783 total), with no failures.
+CLI syntax and repository whitespace checks passed.
+
+The terminal defers painting during initial historical replay, then paints the
+latest screen once. This covers saved-chat reopen, attachment and initial tab
+replay without changing original events, read cursors, drafts, permissions or
+model dispatch. Live forward updates retain normal rendering. A real Core/UI
+regression restores 450 separately identified replies across multiple HTTP
+pages, forces repaint attempts after every event, and observes one historical
+frame containing the latest reply, all retained entries, the correct final
+cursor, no scrolling offset and no new execution.
+
+The user explicitly requested installation on the connected physical iPhone.
+Signed development **0.1.0 (23)** passed signature, APNs environment, privacy,
+provisioning/device and prior application/Keychain identity checks. It installed
+in place without uninstall/reset; CoreDevice independently confirms build 23 and
+successful launch with empty arguments. No Core/CLI installation was updated.
+Expired pairing still requires host/phone approval; physical APNs display was
+not tested by this installation.
+
 # Chat readability, iPhone history and pairing diagnostics (2026-10-27)
 
 Node 24/macOS: **975 Core tests passed, 2 skipped** and **761 CLI tests passed,

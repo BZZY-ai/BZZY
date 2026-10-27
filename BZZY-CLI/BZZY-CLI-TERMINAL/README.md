@@ -5,6 +5,9 @@ rail, without filled user/assistant message backgrounds. User turns and changes
 of specialist start a fresh heading. Original reply boundaries, copy targets and
 saved history stay intact. Pair iPhone now explicitly requests 30-day access;
 updates retain private host state but cannot renew an already expired pairing.
+Reopening or switching to a saved chat assembles its initial history before
+painting the latest screen, without visibly scrolling through old event pages.
+Live updates then render normally; opening history starts no model work.
 
 Metrics includes current-session BZZY health: workflow consultation coverage and
 blockers, native tool delivery/context planning, compaction/refresh state, memory
