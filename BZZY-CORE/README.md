@@ -127,7 +127,9 @@ Implemented:
   expiring Relay codes, exact version pins and missing-entry imports. Resources and
   scopes survive without bindings or execution; goal labels use objective text.
   Imports leave workflow selections and running goals unchanged. Existing ZIP
-  APIs stay compatible.
+  APIs stay compatible. Root receivers accept relative filenames such as
+  `00-scope/roots.txt`; receiver policy failures carry safe entry/resource
+  diagnostics without matched private values.
 - Automatic host capture preserves closed work outcomes and queues bounded,
   source/model-pinned learning reviews. New procedures and exact-base corrections
   stage by default; reviewed policy may allow automatic new project skills.

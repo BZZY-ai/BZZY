@@ -141,7 +141,7 @@ export class ClientSettings {
       put('Import Library', 'accent', 'library-import');
       rows.slice(-2).forEach(row => { row.inline = 'library-transfer'; });
       put('All skills, specialist agents, workflows and saved goals · current project + Core', 'muted');
-      if (this.libraryResult) for (const text of this.libraryResult.split('\n')) put(text, 'accent');
+      if (this.libraryResult) for (const text of this.libraryResult.split('\n')) put(text, this.libraryResultWarning ? 'warning' : 'accent');
       rows.push({ text: 'Update BZZY CLI + Core', action: 'update-bzzy', icon: '↻', card: true, tone: 'accent',
         detail: 'Check the official release and update both products · this terminal reloads' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
@@ -329,7 +329,7 @@ export class ClientSettings {
         if (this.ui.coreLifecycleInterrupted) throw Object.assign(new Error(), { code: 'CORE_STOPPED' });
         const session = this.ui.sessionId && loadSession(this.ui.sessionId);
         if (this.ui.sessionId && !session) throw Object.assign(new Error(), { code: 'CONFLICT' });
-        this.libraryResult = ''; this.changed();
+        this.libraryResult = ''; this.libraryResultWarning = false; this.changed();
         await this.libraryTransfer(action === 'library-export' ? 'export' : 'import', session?.cwd || this.ui.launchCwd || this.ui.tui.cwd || process.cwd(), this.ui, {
           onComplete: (_result, message) => { if (!this.closed) { this.libraryResult = message; this.changed(); } },
         });
@@ -388,6 +388,10 @@ export class ClientSettings {
     } catch (error) {
       this.message = error.code === 'ADAPTER_UNAVAILABLE' ? 'Core pairing adapter unavailable. Install Core and its Relay dependencies alongside the CLI.' : messages[error.code] || (action.startsWith('library-') ? libraryTransferErrorMessage(error) : this.page === 'core' ? 'Core service action failed. Check bzzy-core status and try again.' : 'Settings action failed. Check Core/Relay status and try again.');
       this.warning = true;
+      if (action === 'library-import' && error.importDiagnostic) {
+        this.libraryResult = this.message; this.libraryResultWarning = true;
+        this.message = 'Library import blocked. See the details above.';
+      }
     } finally { this.busy = false; this.changed(); }
   }
   close() {

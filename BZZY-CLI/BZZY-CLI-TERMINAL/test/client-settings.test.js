@@ -280,6 +280,25 @@ test('Library failures stay safe in Settings and a stopped or switched host cann
   assert.equal(calls, 1); assert.equal(listRecords('execution').length, 0);
 });
 
+test('receiver policy details remain fully available in scrollable Settings rows without leaking raw errors', async () => {
+  const { ui, output } = terminal();
+  const file = 'references/' + 'long-resource-name-'.repeat(6) + 'methodology.md';
+  ui.settings = new ClientSettings(ui, { hostLoader: async () => ({ coreHostStatus: async () => ({ running: true }) }),
+    libraryTransfer: async () => { throw Object.assign(new Error('private-value-that-must-not-be-shown'), {
+      code: 'DEFINITION_BUNDLE', importDiagnostic: { kind: 'skill', name: 'recon-checks', scope: 'global',
+        reasonCode: 'PRIVATE_HOST_PATH', file, line: 46 },
+    }); } });
+  ui.openSettings(); await ui.settings.run('core'); await ui.settings.run('library-import');
+  assert.equal(ui.settings.warning, true); assert.equal(ui.settings.libraryResultWarning, true);
+  const detail = ui.settings.rows().filter(row => row.tone === 'warning').map(row => row.text).join('\n');
+  assert.match(detail, /Skill · recon-checks · global/); assert.ok(detail.includes(file + ':46'));
+  assert.match(detail, /absolute private host path/); assert.match(detail, /Nothing was installed/);
+  assert.doesNotMatch(detail + ui.settings.message, /private-value-that/);
+  Object.assign(output, { columns: 50, rows: 20 }); ui.tui.render();
+  assert.ok(ui.tui.lastFrame.length <= 20); assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < 50));
+  assert.equal(listRecords('execution').length, 0);
+});
+
 test('Default models has independent clickable provider/model/effort fields and preserves unsaved edits through Back', async () => {
   const { ui, output } = terminal(); ui.openSettings();
   await ui.settingsCommand('/settings modes'); assert.equal(ui.settings.page, 'default-models');

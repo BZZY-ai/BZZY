@@ -169,6 +169,10 @@ Existing names and ON/OFF states survive; new skills/agents install enabled.
 Account keys, private bindings and chat history do not travel with this Library.
 Settings export uses the same blocked-entry diagnostics and explicit omission
 controls. Omitting every selected entry shows a result without creating a code.
+Import policy failures show the validated entry, safe reason and resource
+file/line when available; long details stay in scrollable Settings rows.
+Matched private values are excluded. After a failed transfer, create a new export
+code before retrying.
 
 Combined transfers also remain available through `/library`. It includes skills, specialist agents,
 workflows and saved goal text. `bzzy library share` generates an expiring

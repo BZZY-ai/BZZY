@@ -227,6 +227,27 @@ function blockedDefinition(pin, error, fallback = 'PACKAGE_INVALID', file) {
     ...(Number.isSafeInteger(error?.line) && error.line > 0 ? { line: error.line } : {}) };
 }
 
+// Import diagnostics carry only validated package identity and fixed policy
+// reasons. Never expose matched resource text, account values or host paths.
+function importPortable(data, context, entry, file) {
+  try { portable(data, context); }
+  catch (error) {
+    if (['CREDENTIAL', 'CREDENTIAL_LITERAL', 'PRIVATE_ACCOUNT', 'PRIVATE_HOST_PATH'].includes(error?.reasonCode)
+      && ['skill', 'agent', 'workflow', 'goal'].includes(entry?.kind) && name(entry.name) && scope(entry.scope)) {
+      try {
+        portable(Buffer.from(entry.name), context);
+        const diagnostic = { kind: entry.kind, name: entry.name, scope: entry.scope, reasonCode: error.reasonCode };
+        if (safePath(file) && /^[a-zA-Z0-9_./-]+$/.test(file)) {
+          try { portable(Buffer.from(file), context); diagnostic.file = file; } catch {}
+        }
+        if (diagnostic.file && Number.isSafeInteger(error.line) && error.line > 0 && error.line <= 1000000) diagnostic.line = error.line;
+        error.importDiagnostic = diagnostic;
+      } catch {}
+    }
+    throw error;
+  }
+}
+
 function collect(context, { allowEmpty = false, inheritSelection = false, maximum = DEFINITION_BUNDLE_LIMITS.definitions,
   kinds = ['skill', 'agent'], selection } = {}) {
   const skills = [], agents = [], files = [], pins = [];
@@ -345,11 +366,11 @@ function validateManifest(manifest, extracted, directory, context, { allowEmpty 
   if (manifest.format !== 'bzzy-definitions' || manifest.version !== 1 || typeof manifest.createdAt !== 'string' || manifest.createdAt.length > 40 || !Number.isFinite(Date.parse(manifest.createdAt)) ||
       !Array.isArray(manifest.skills) || !Array.isArray(manifest.agents) || !allowEmpty && !manifest.skills.length && !manifest.agents.length || manifest.skills.length + manifest.agents.length > maximum) fail('Unsupported reusable-definitions manifest.');
   const paths = new Map([['manifest.json', null]]), names = new Set(), entries = [];
-  const add = file => {
+  const add = (file, entry, resourcePath) => {
     object(file, ['path', 'bytes', 'sha256']);
     if (!safePath(file.path, 360) || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > DEFINITION_BUNDLE_LIMITS.fileBytes || !hash(file.sha256) || paths.has(file.path.toLowerCase())) fail('Invalid or duplicate definition resource.');
-    portable(Buffer.from(file.path), context);
-    const data = regular(path.join(directory, file.path)); portable(data, { ...context, resourcePath: file.path });
+    importPortable(Buffer.from(file.path), context, entry, resourcePath);
+    const data = regular(path.join(directory, file.path)); importPortable(data, { ...context, resourcePath: file.path }, entry, resourcePath);
     if (data.length !== file.bytes || digest(data) !== file.sha256) fail('A definition resource failed its exact manifest hash check.');
     paths.set(file.path.toLowerCase(), file); return data;
   };
@@ -359,7 +380,7 @@ function validateManifest(manifest, extracted, directory, context, { allowEmpty 
     names.add(`skill:${item.scope}:${item.name}`);
     for (const file of item.files) {
       if (!safePath(file.path) || privateResource(file.path)) fail(`Skill “${item.name}” contains a private or unsafe resource.`);
-      add({ ...file, path: `skills/${item.scope}/${item.name}/${file.path}` });
+      add({ ...file, path: `skills/${item.scope}/${item.name}/${file.path}` }, { kind: 'skill', ...item }, file.path);
     }
     if (digest(item.files) !== item.version) fail('A skill version does not match its complete resource inventory.');
     const checked = importSkill(path.join(directory, 'skills', item.scope, item.name), { scope: item.scope, projectId: context.projectId, preview: true, expectedVersion: item.version });
@@ -370,7 +391,8 @@ function validateManifest(manifest, extracted, directory, context, { allowEmpty 
     object(item, ['name', 'description', 'scope', 'version', 'file', 'bytes', 'sha256']);
     if (!name(item.name) || !scope(item.scope) || !hash(item.version) || item.file !== `agents/${item.scope}/${item.name}.json` || names.has(`agent:${item.scope}:${item.name}`)) fail('Invalid or duplicate specialist definition.');
     names.add(`agent:${item.scope}:${item.name}`);
-    let definition; try { definition = JSON.parse(add({ path: item.file, bytes: item.bytes, sha256: item.sha256 }).toString('utf8')); } catch { fail('Invalid specialist definition JSON.'); }
+    const data = add({ path: item.file, bytes: item.bytes, sha256: item.sha256 }, { kind: 'agent', ...item }, 'definition.json');
+    let definition; try { definition = JSON.parse(data.toString('utf8')); } catch { fail('Invalid specialist definition JSON.'); }
     const normalized = normalizeSubagentDefinition(definition);
     if (digest(normalized) !== item.version || normalized.name !== item.name || normalized.description !== item.description || digest(normalized) !== digest(definition)) fail('Specialist metadata does not match its reviewed definition.');
     entries.push(contentEntry('agent', { ...item, files: [{ path: 'definition.json', bytes: item.bytes, sha256: item.sha256 }] }, normalized));
@@ -616,7 +638,7 @@ function validateLibraryManifest(manifest, extracted, directory, context) {
         item.file !== expectedFile || !safePath(item.file) || !Number.isSafeInteger(item.bytes) || item.bytes < 1 || item.bytes > LIBRARY_BUNDLE_LIMITS.fileBytes ||
         paths.has(item.file.toLowerCase()) || names.has(`${kind}:${item.scope}:${item.name}`)) fail('Invalid or duplicate Library text entry.');
     paths.add(item.file.toLowerCase()); names.add(`${kind}:${item.scope}:${item.name}`);
-    const data = regular(path.join(directory, item.file)); portable(data, context); total += data.length;
+    const data = regular(path.join(directory, item.file)); importPortable(data, { ...context, resourcePath: item.file }, { kind, ...item }, 'definition.json'); total += data.length;
     if (data.length !== item.bytes || digest(data) !== item.sha256) fail('A Library text entry failed its exact hash check.');
     let definition;
     try { definition = JSON.parse(data.toString('utf8')); } catch { fail('A Library text entry is not valid JSON.'); }

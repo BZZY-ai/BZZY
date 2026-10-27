@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { assertPortableDefinitionText as check } from '../src/engine/definition-portability.js';
 import { importSkill } from '../src/engine/skills.js';
 import { previewDefinitionExport, exportDefinitionBundle, previewDefinitionImport, importDefinitionBundle, discardDefinitionBundleReview } from '../src/engine/definition-bundle.js';
+import { previewLibraryExport, buildLibraryArchive, previewLibraryImport, importLibraryBundle } from '../src/engine/definition-bundle.js';
+import { saveSubagentDefinition } from '../src/engine/subagent-definitions.js';
+import { saveWorkflow } from '../src/engine/workflows.js';
+import { saveGoalTemplate } from '../src/engine/goal-templates.js';
+import { listRecords } from '../src/engine/database.js';
 
 let directory, previous;
 test.beforeEach(() => {
@@ -46,6 +52,46 @@ test('account values, private host paths and recognizable keys still block even 
     assert.throws(() => check(value, { resourcePath: 'scripts/example.py' }));
   }
   check('password: <private-binding>\nAPI_KEY=${API_KEY}\n');
+});
+
+test('a root receiver distinguishes absolute private paths from relative filenames, longer names and URL paths', t => {
+  t.mock.method(os, 'homedir', () => '/root');
+  const context = { cwd: '/fixture/project', hostHome: '/fixture/core', privateRoots: ['/fixture/private'] };
+  for (const text of ['Read 00-scope/roots.txt.', 'Read 00-scope/root/hosts.txt.', '/roots.txt', '/rooted/data.txt',
+    'https://target.invalid/root/login', 'http://[::1]/root/login', 'https://target.invalid/fixture/project/inputs',
+    'relative/fixture/project/inputs', '/fixture/project-copy/results', '/fixture/core-other/state', '/fixture/private-notes']) {
+    assert.doesNotThrow(() => check(text, context), text);
+  }
+  for (const text of ['/root', '/root/private/data', 'Read /root.', 'value=/root/private', '"/root/private"',
+    'file:///root/private', 'file://localhost/root/private', 'https://target.invalid/?file=/root/private', '`/fixture/project/input.txt`',
+    'Read /fixture/core/state.', 'Read /fixture/private/case.txt.']) {
+    assert.throws(() => check(text, context), error => error.code === 'DEFINITION_BUNDLE' && error.reasonCode === 'PRIVATE_HOST_PATH', text);
+  }
+});
+
+test('a Mac-produced four-kind Library imports under a root home with relative root filenames unchanged', t => {
+  let receiverHome = '/Users/fixture-sender'; t.mock.method(os, 'homedir', () => receiverHome);
+  const source = path.join(directory, 'package'), project = path.join(directory, 'project');
+  fs.mkdirSync(path.join(source, 'references'), { recursive: true }); fs.mkdirSync(project);
+  const text = 'Use 00-scope/roots.txt and 00-scope/root/hosts.txt as supplied relative inputs.\n';
+  fs.writeFileSync(path.join(source, 'SKILL.md'), '---\nname: relative-inputs\ndescription: Review supplied inputs.\n---\n' + text);
+  fs.writeFileSync(path.join(source, 'references', 'methodology.md'), text);
+  const original = importSkill(source, { scope: 'global' });
+  saveSubagentDefinition({ name: 'relative-reviewer', description: 'Review supplied controls.', instructions: text }, { scope: 'global', cwd: project });
+  saveWorkflow({ name: 'relative-flow', description: 'Review supplied inputs.', instructions: text }, { scope: 'global', cwd: project });
+  saveGoalTemplate({ objective: text });
+  const exported = previewLibraryExport({ cwd: project }), share = path.join(process.env.BZZY_HOME, 'relay', 'shares', randomUUID());
+  fs.mkdirSync(share, { recursive: true, mode: 0o700 }); let imported;
+  try {
+    const file = path.join(share, 'project.zip'); buildLibraryArchive(file, { cwd: project, expectedDigest: exported.sourceDigest });
+    receiverHome = '/root'; process.env.BZZY_HOME = path.join(directory, 'root-recipient-core');
+    imported = previewLibraryImport(file, { cwd: project });
+    const result = importLibraryBundle(imported, { cwd: project, enable: true });
+    assert.deepEqual(['skills', 'agents', 'workflows', 'goals'].map(kind => result[kind].length), [1, 1, 1, 1]);
+    assert.equal(result.skills[0].version, original.version);
+    assert.equal(fs.readFileSync(path.join(process.env.BZZY_HOME, 'skills', original.name, original.version, 'references/methodology.md'), 'utf8'), text);
+    assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('session').length, 0);
+  } finally { discardDefinitionBundleReview(exported); if (imported) discardDefinitionBundleReview(imported); }
 });
 test('portable Python resources round trip unchanged through sender and recipient checks without executing their code', () => {
   const source = path.join(directory, 'package'), project = path.join(directory, 'project');

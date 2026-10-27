@@ -34,6 +34,30 @@ const safeImportErrors = {
   DEFINITION_BUNDLE: 'The Library failed its package or integrity checks. Nothing was installed.',
   UNCERTAIN: 'Library transfer status is uncertain. Inspect the destination Library before retrying.',
 };
+const importReasons = {
+  CREDENTIAL: 'A configured credential or recognizable secret pattern was detected.',
+  CREDENTIAL_LITERAL: 'A literal credential or account binding is embedded.',
+  PRIVATE_ACCOUNT: 'An account address is embedded.',
+  PRIVATE_HOST_PATH: 'An absolute private host path is embedded.',
+};
+function importDiagnostic(error) {
+  const value = error?.importDiagnostic;
+  if (!['DEFINITION_BUNDLE', 'SHARE_SECRET_DETECTED', 'SECRET_DETECTED'].includes(error?.code)
+    || !value || typeof value !== 'object' || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+    || Object.keys(value).some(key => !['kind', 'name', 'scope', 'reasonCode', 'file', 'line'].includes(key))
+    || !Object.hasOwn(names, value.kind) || !['global', 'project'].includes(value.scope)
+    || typeof value.name !== 'string' || value.name.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name)
+    || !Object.hasOwn(importReasons, value.reasonCode)) return null;
+  if (value.file !== undefined && (typeof value.file !== 'string' || value.file.length > 240 || !/^[a-zA-Z0-9_./-]+$/.test(value.file)
+    || value.file.startsWith('/') || value.file.split('/').some(part => !part || part.startsWith('.') || part === '..'))) return null;
+  if (value.line !== undefined && (!value.file || !Number.isSafeInteger(value.line) || value.line < 1 || value.line > 1000000)) return null;
+  return Object.fromEntries(['kind', 'name', 'scope', 'reasonCode', 'file', 'line'].filter(key => value[key] !== undefined).map(key => [key, value[key]]));
+}
+function importDiagnosticMessage(error) {
+  const value = importDiagnostic(error);
+  return value ? `Library import blocked: ${names[value.kind]} · ${value.name} · ${value.scope}${value.file ? ` · ${value.file}${value.line ? ':' + value.line : ''}` : ''}. ${importReasons[value.reasonCode]} Nothing was installed.` : null;
+}
 const localErrors = new Set(['The host or terminal changed. Reopen Library transfer.', 'The terminal project changed. Reopen Library transfer.',
   'Update BZZY Core and CLI together to select Library entries.',
   'Use a BZZY-LIBRARY code from the sender’s Library share screen.', 'Compare and enter the complete sender fingerprint before importing.']);
@@ -97,6 +121,7 @@ export function transferLibrary(operation, cwd, ui, options = {}) {
 }
 
 export function libraryTransferErrorMessage(error) {
+  const diagnostic = importDiagnosticMessage(error); if (diagnostic) return diagnostic;
   if (safeImportErrors[error?.code]) return safeImportErrors[error.code];
   if (localErrors.has(error?.message) || Object.values(safeImportErrors).includes(error?.message)) return error.message;
   if (['LIBRARY_BLOCKED_ENTRIES', 'LIBRARY_BLOCKED_GOALS'].includes(error?.code)) return 'Some selected entries contain private or nonportable data. Review them with /library share, or uncheck them before exporting.';
@@ -357,6 +382,8 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
     if (error?.name === 'AbortError' || error?.code === 'CANCELLED') { ui.tui?.notice('Library import cancelled.'); return null; }
     if (error?.code === 'RELAY_UPGRADE_REQUIRED') throw new Error('Update BZZY Relay to support Library codes, then create a new code.');
     if (localErrors.has(error?.message)) throw error;
+    const diagnostic = importDiagnostic(error);
+    if (diagnostic) throw Object.assign(new Error(importDiagnosticMessage(error)), { code: 'DEFINITION_BUNDLE', importDiagnostic: diagnostic });
     throw new Error(safeImportErrors[error?.code] || 'Library transfer failed. Check Core/Relay, fingerprints and the reviewed package.');
   } finally { code = ''; view.lines = []; view.qr = []; view.progress = null; view.onCancel = null; if (ui.privateView === view) ui.privateView = previous; ui.tui?.schedule(); }
 }

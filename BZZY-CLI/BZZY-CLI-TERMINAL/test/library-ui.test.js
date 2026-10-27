@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { UI } from '../src/ui.js';
-import { shareLibrary, importLibrary, importRelayShare, libraryCommand, transferLibraryTab, transferLibrary } from '../src/library-ui.js';
+import { shareLibrary, importLibrary, importRelayShare, libraryCommand, transferLibraryTab, transferLibrary, libraryTransferErrorMessage } from '../src/library-ui.js';
 import { forgetPrivateImportInput } from '../src/share-ui.js';
 import { privateChatCommand } from '../src/terminal-commands.js';
 import { createSession } from '@bzzy/core/engine/store.js';
@@ -607,6 +607,41 @@ test('closing a code view keeps its Core offer alive, explicit revoke stops it a
     throw Object.assign(new Error('Cancelled by owner'), { code: 'CANCELLED' });
   } }) }), null);
   assert.equal(incoming.privateView, undefined); assert.equal(incoming.events.length, 0); assert.equal(listRecords('execution').length, 0);
+});
+
+test('import errors show only validated package diagnostics and Settings reconstructs the same safe message', async () => {
+  const diagnostic = { kind: 'skill', name: 'recon-checks', scope: 'global', reasonCode: 'PRIVATE_HOST_PATH', file: 'references/methodology.md', line: 46 };
+  const ui = mockUI({ secret: automaticCode });
+  await assert.rejects(importLibrary('', cwd, ui, { loadBundle: async () => libraryBackend,
+    relayLoader: async () => ({ importLibraryShare: async () => { throw Object.assign(new Error('private-fixture@example.invalid ' + automaticCode), { code: 'DEFINITION_BUNDLE', importDiagnostic: diagnostic }); } }),
+  }), error => {
+    assert.match(error.message, /Skill · recon-checks · global · references\/methodology\.md:46/);
+    assert.match(error.message, /absolute private host path/); assert.match(error.message, /Nothing was installed/);
+    assert.doesNotMatch(error.message, /private-fixture|example\.invalid|BZZY-LIBRARY/);
+    assert.equal(libraryTransferErrorMessage(error), error.message);
+    assert.equal(libraryTransferErrorMessage({ ...error, message: 'raw-private-detail' }), error.message);
+    return true;
+  });
+  assert.equal(ui.privateView, undefined); assert.equal(ui.tui.value, 'Unsent draft');
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('malformed import diagnostics and ordinary archive errors use a fixed safe fallback', async () => {
+  const valid = { kind: 'skill', name: 'recon-checks', scope: 'global', reasonCode: 'PRIVATE_HOST_PATH', file: 'references/methodology.md', line: 46 };
+  for (const diagnostic of [undefined, null, [], { ...valid, name: 'private@example.invalid' }, { ...valid, kind: 'unknown' },
+    { ...valid, scope: 'outside' }, { ...valid, reasonCode: 'PRIVATE_HOST_PATH\nraw-private-detail' },
+    { ...valid, file: '/Users/private-owner/file.md' }, { ...valid, file: '../private.txt' }, { ...valid, file: 'references/private@example.invalid.md' },
+    { ...valid, line: 0 }, { ...valid, line: 1000001 }, { ...valid, matchedValue: 'private-fixture-value' }]) {
+    await assert.rejects(importLibrary('', cwd, mockUI({ secret: automaticCode }), { loadBundle: async () => libraryBackend,
+      relayLoader: async () => ({ importLibraryShare: async () => { throw Object.assign(new Error('raw-private-detail ' + automaticCode), { code: 'DEFINITION_BUNDLE', importDiagnostic: diagnostic }); } }),
+    }), error => {
+      assert.equal(error.message, 'The Library failed its package or integrity checks. Nothing was installed.');
+      assert.equal(libraryTransferErrorMessage(error), error.message);
+      return true;
+    });
+    assert.equal(libraryTransferErrorMessage({ code: 'DEFINITION_BUNDLE', message: 'raw-private-detail', importDiagnostic: diagnostic }), 'The Library failed its package or integrity checks. Nothing was installed.');
+  }
+  assert.equal(listRecords('execution').length, 0);
 });
 
 test('generic /import routes Library codes and Library QR through the matching importer while retaining Terminal purpose', async () => {

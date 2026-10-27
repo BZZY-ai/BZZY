@@ -47,6 +47,11 @@ recipient, **Settings → BZZY Core → Import Library** uses the same paste-onc
 flow as the individual tabs and shows newly installed names on return to Settings.
 Existing definitions and ON/OFF choices survive; new skills/agents install enabled.
 Other projects, chat history and private account settings are excluded.
+Receiver policy failures identify the validated entry, fixed reason and safe
+resource file/line when available. Settings retains long details in its scrollable
+content. Matched values and unsafe resource names are excluded from diagnostics;
+archive/hash failures retain a generic integrity error. Failed transfers require
+a fresh export code.
 
 Combined transfers also use `/library`, `/library share` and `/library import`, or:
 
@@ -114,6 +119,11 @@ credentials, private host paths and private resource packages still block both
 export and import. Scanner results supplement review; they do not prove arbitrary
 code or text contains no private information.
 Use the full-session flow for the selected project's private history.
+
+Private host-root checks match complete absolute path tokens. Relative inputs
+such as `00-scope/roots.txt` and `00-scope/root/hosts.txt` remain portable when
+the recipient runs as Linux root; they do not reference the private `/root`
+directory. Actual absolute private paths still block import.
 
 ## Integrity, retry and limits
 

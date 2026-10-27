@@ -8,6 +8,21 @@ const portabilityFailure = (message, reasonCode, line) => {
 const placeholder = value => !value || /^(?:\$[A-Z_][A-Z0-9_]*|\$\{[^}]+\}|<[^>]+>|\[redacted\])$/i.test(value);
 const credentialField = /^(?:api[_-]?key|(?:access|refresh|auth|oauth)[_-]?token|token|password|passwd|secret|cookie|authorization|account[_-]?id|email)$/i;
 const lineAt = (text, offset) => text.slice(0, offset).split('\n').length;
+function privateRootOffset(text, root) {
+  root = root.replace(/[/\\]+$/u, '');
+  if (!root) return -1;
+  for (let offset = text.indexOf(root); offset >= 0; offset = text.indexOf(root, offset + 1)) {
+    const before = text[offset - 1], after = text[offset + root.length];
+    // A host path starts a path token. The same characters inside a relative
+    // filename (00-scope/roots.txt) or a public URL are not that host's home.
+    const start = before === undefined || /[\s"'`<>(\[{},;:=|*!?]/u.test(before)
+      || /(?:^|[\s"'`<(:=])file:\/\/(?:localhost)?$/iu.test(text.slice(Math.max(0, offset - 18), offset));
+    const end = after === undefined || /[/\\\s"'`<>()\[\]{},;:!?|*#]/u.test(after)
+      || after === '.' && (offset + root.length + 1 === text.length || /[\s"'`<>()\[\]{},;:!?|*]/u.test(text[offset + root.length + 1]));
+    if (start && end) return offset;
+  }
+  return -1;
+}
 function pythonReference(value, remainder) {
   // A variable or runtime lookup is not a literal credential. Restrict this
   // interpretation to Python resources; unquoted YAML/INI values stay literals.
@@ -33,7 +48,7 @@ export function assertPortableDefinitionText(data, context = {}) {
   if (account) portabilityFailure('Reusable definitions contain private account or host-path data. Parameterize it before exporting.', 'PRIVATE_ACCOUNT', lineAt(text, account.index));
   const hostPath = /(?:\/Users\/|\/home\/|\/Volumes\/|\/~?\.bzzy\/|~\/(?:\.codex|\.claude|\.ssh)\/)/i.exec(text);
   const privateOffsets = [context.cwd, context.hostHome, os.homedir(), ...(context.privateRoots || [])]
-    .filter(root => typeof root === 'string' && root.length > 3).map(root => text.indexOf(root)).filter(offset => offset >= 0);
+    .filter(root => typeof root === 'string' && root.length > 3).map(root => privateRootOffset(text, root)).filter(offset => offset >= 0);
   if (hostPath) privateOffsets.push(hostPath.index);
   if (privateOffsets.length) portabilityFailure('Reusable definitions contain private account or host-path data. Parameterize it before exporting.', 'PRIVATE_HOST_PATH', lineAt(text, Math.min(...privateOffsets)));
   let json = false;

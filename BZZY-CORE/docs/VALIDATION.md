@@ -1,3 +1,31 @@
+# Root receiver path boundaries and safe import diagnostics (2026-10-27)
+
+Reproduced the reported Mac-to-root import rejection: the receiver matched its
+home `/root` inside the valid relative filename `00-scope/roots.txt`. The full
+43-entry local Library failed in an isolated receiver process with that home.
+Two regressions reproduced the failure before the fix. Private-root matching
+now requires path-token and component boundaries, preserving relative inputs,
+longer names and public URL paths while rejecting actual absolute private paths,
+including file URLs and private path values in query parameters.
+
+Receiver portability failures now preserve only validated package identity,
+fixed policy reason and a safe resource file/line. CLI reconstructs the message
+from validated fields; Settings keeps complete details in scrollable rows.
+Malformed diagnostics and ordinary archive/hash failures remain generic. Raw
+matched values, unsafe resource names and arbitrary backend errors are excluded.
+
+Node 24/macOS: **101 focused Core tests passed, 1 skipped** (the filesystem
+already prevents distinct case-colliding filenames); **122 CLI tests passed**.
+Both product syntax checks and whitespace checks passed. Coverage includes
+absolute-path rejection, four-kind archive round trips, authoring, specialist
+definitions, safe diagnostics, no partial installation and the encrypted
+paste-once code flow into an independent recipient process with home `/root`.
+The actual 43-entry local Library also exported and imported successfully in a
+fresh receiver process under that root-home setting, with no sessions or model
+executions created. Root-home behavior was simulated on macOS; a native Linux
+host or deployed Relay was not exercised. Existing installations were not updated
+automatically. Generate a fresh code after applying the Core/CLI update.
+
 # Actionable blocked-entry diagnostics in Settings exports (2026-10-27)
 
 Name-checkbox exports now reuse Library's safe per-entry diagnostics and explicit

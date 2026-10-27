@@ -242,6 +242,58 @@ test('Library archives reject extra authority, model settings, modified inventor
   assert.throws(() => normalizeGoalTemplate({ objective: 'sk-' + 'a'.repeat(32) }), /credential/);
 });
 
+test('receiver policy failures identify validated entries and resources without exposing matched private values', () => {
+  skill(); agent(); workflow(); goal(); const { file } = bundle(), target = recipient(), before = snapshot();
+  const privateValue = 'private-receiver-fixture@example.invalid';
+  for (const kind of ['skill', 'agent', 'workflow', 'goal']) {
+    let expected;
+    const changed = rewrite(file, files => {
+      const manifest = JSON.parse(files['manifest.json']), item = manifest[kind + 's'][0];
+      expected = { kind, name: item.name, scope: item.scope, reasonCode: 'PRIVATE_ACCOUNT', file: kind === 'skill' ? 'references/checks.txt' : 'definition.json' };
+      if (kind === 'skill') {
+        const resource = item.files.find(resource => resource.path === expected.file), location = `skills/${item.scope}/${item.name}/${resource.path}`;
+        files[location] = `Safe first line.\nUse the fixed account ${privateValue}.\n`;
+        Object.assign(resource, { bytes: Buffer.byteLength(files[location]), sha256: digest(Buffer.from(files[location])) });
+        item.version = digest(item.files);
+      } else {
+        const definition = JSON.parse(files[item.file]);
+        definition[kind === 'goal' ? 'objective' : 'instructions'] += `\nUse the fixed account ${privateValue}.`;
+        files[item.file] = JSON.stringify(definition, null, 2);
+        Object.assign(item, { bytes: Buffer.byteLength(files[item.file]), sha256: digest(Buffer.from(files[item.file])), version: digest(definition) });
+      }
+      files['manifest.json'] = JSON.stringify(manifest);
+    });
+    assert.throws(() => previewLibraryImport(changed, { cwd: target }), error => {
+      assert.equal(error.code, 'DEFINITION_BUNDLE'); assert.equal(error.reasonCode, 'PRIVATE_ACCOUNT');
+      assert.deepEqual(error.importDiagnostic, { ...expected, line: error.line });
+      assert.ok(Number.isSafeInteger(error.line) && error.line > 0);
+      assert.doesNotMatch(JSON.stringify(error), /private-receiver-fixture|example\.invalid/);
+      assert.ok(!error.message.includes(privateValue)); return true;
+    });
+    assert.deepEqual(snapshot(), before);
+  }
+});
+
+test('receiver diagnostics omit unsafe resource names and leave ordinary integrity failures generic', () => {
+  skill(); const { file } = bundle(), target = recipient();
+  const unsafeName = 'references/private-owner@example.invalid.md';
+  const changed = rewrite(file, files => {
+    const manifest = JSON.parse(files['manifest.json']), item = manifest.skills[0], resource = item.files.find(resource => resource.path === 'references/checks.txt');
+    const old = `skills/${item.scope}/${item.name}/${resource.path}`;
+    resource.path = unsafeName; files[`skills/${item.scope}/${item.name}/${resource.path}`] = files[old]; delete files[old];
+    item.version = digest(item.files); files['manifest.json'] = JSON.stringify(manifest);
+  });
+  assert.throws(() => previewLibraryImport(changed, { cwd: target }), error => {
+    assert.deepEqual(error.importDiagnostic, { kind: 'skill', name: 'shared-checks', scope: 'global', reasonCode: 'PRIVATE_ACCOUNT' });
+    assert.doesNotMatch(JSON.stringify(error), /private-owner|example\.invalid/); return true;
+  });
+  const corrupt = rewrite(file, files => { files['skills/global/shared-checks/references/checks.txt'] = 'Changed bytes without updating its hash.\n'; });
+  assert.throws(() => previewLibraryImport(corrupt, { cwd: target }), error => {
+    assert.equal(error.code, 'DEFINITION_BUNDLE'); assert.equal(error.importDiagnostic, undefined); return true;
+  });
+  assert.equal(listRecords('core.library.import').length, 0); assert.equal(listRecords('execution').length, 0);
+});
+
 test('private saved goals require explicit pinned exclusion and never appear in archives or diagnostic details', () => {
   skill(); const safe = goal('A safe reusable objective'), privateGoal = goal('Use /Users/private-owner/private-task to inspect the records');
   let blocked;

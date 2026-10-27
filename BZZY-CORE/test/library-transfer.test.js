@@ -340,7 +340,8 @@ test('a mismatched inner transfer kind is rejected before any Library importer r
   await until(() => f.service.status(share.shareId).state === 'revoked');
 });
 
-for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-kind Library uses an independent recipient Core home (review ${enable})`, { timeout: 30000 }, async t => {
+for (const enable of [false, true, 'subset', 'automatic', 'automatic-root', 'cancel']) test(`four-kind Library uses an independent recipient Core home (review ${enable})`, { timeout: 30000 }, async t => {
+  const automatic = ['automatic', 'automatic-root'].includes(enable);
   const f = await fixture(t);
   await f.client.close();
   const { RelayGateway } = await import('../src/relay/gateway.js');
@@ -357,6 +358,10 @@ for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-
   const packagePath = path.join(f.directory, 'skill-package'); fs.mkdirSync(packagePath);
   fs.writeFileSync(path.join(packagePath, 'SKILL.md'), '---\nname: response-review\ndescription: Review synthetic response structure\n---\nInspect supplied synthetic responses.\n');
   fs.writeFileSync(path.join(packagePath, 'sample.txt'), randomBytes(40000).toString('base64'));
+  if (enable === 'automatic-root') {
+    fs.mkdirSync(path.join(packagePath, 'references'));
+    fs.writeFileSync(path.join(packagePath, 'references', 'methodology.md'), 'Read supplied relative inputs 00-scope/roots.txt and 00-scope/root/hosts.txt.\n');
+  }
   importSkill(packagePath, { scope: 'global' });
   saveSubagentDefinition({ name: 'response-auditor', description: 'Inspect synthetic responses', instructions: 'Review supplied response structure.',
     provider: 'codex', model: 'source-only-model', effort: 'high' }, { cwd: f.source, scope: 'project' });
@@ -376,13 +381,14 @@ for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-
     for (let i = 0; i < 100 && info && identityAlive(info.identity); i++) await delay(20);
   });
   await gateway.start();
-  const share = await gateway.createLibraryShare({ cwd: f.source, expectedDigest: review.sourceDigest, ...(enable === 'automatic' ? { approval: 'code' } : {}) });
+  const share = await gateway.createLibraryShare({ cwd: f.source, expectedDigest: review.sourceDigest, ...(automatic ? { approval: 'code' } : {}) });
   const childFile = path.join(f.directory, 'receive.mjs');
   const transportURL = new URL('../src/relay/project-transfer.js', import.meta.url).href;
   const databaseURL = new URL('../src/engine/database.js', import.meta.url).href;
   const savedURL = new URL('../src/engine/saved-goals.js', import.meta.url).href;
   const skillsURL = new URL('../src/engine/skills.js', import.meta.url).href;
   fs.writeFileSync(childFile, `
+    import os from 'node:os';
     import { importLibraryShare } from ${JSON.stringify(transportURL)};
     import { listRecords } from ${JSON.stringify(databaseURL)};
     import { listSavedGoals } from ${JSON.stringify(savedURL)};
@@ -390,6 +396,7 @@ for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-
     process.once('message', async input => {
       const abort = new AbortController();
       try {
+        if (input.enable === 'automatic-root') os.homedir = () => '/root';
         if (input.enable === 'automatic') createSkill({ name: 'response-review', description: 'Keep local controls.', instructions: 'Keep this recipient behavior.' }, { scope: 'global' });
         const result = await importLibraryShare({ ...input, signal: abort.signal,
           onIdentity: value => process.send({ type: 'identity', ...value }),
@@ -397,7 +404,7 @@ for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-
             process.send({ type: 'review', totals: review.totals });
             if (input.enable === 'cancel') { setTimeout(() => abort.abort(), 5); return new Promise(() => {}); }
             if (input.enable === 'subset') return { approved: true, enable: true, entryIndexes: [review.entries.findIndex(row => row.kind === 'skill')] };
-            if (input.enable === 'automatic') return { approved: true, enable: true };
+            if (['automatic', 'automatic-root'].includes(input.enable)) return { approved: true, enable: true };
             return { approved: true, enable: input.enable };
           }
         });
@@ -420,9 +427,9 @@ for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-
   child.on('message', value => { messages.push(value); if (['result', 'cancelled'].includes(value.type)) received.resolve(value); if (value.type === 'error') received.reject(new Error(JSON.stringify(value))); });
   child.on('error', received.reject);
   child.on('exit', code => { if (code !== 0) received.reject(new Error(`Recipient exited ${code}: ${stderr}`)); });
-  child.send({ code: share.code, cwd: f.recipient, ...(enable === 'automatic' ? {} : { expectedSenderFingerprint: f.identity.certificate.id }),
+  child.send({ code: share.code, cwd: f.recipient, ...(automatic ? {} : { expectedSenderFingerprint: f.identity.certificate.id }),
     url: f.relay.audience, allowInsecureLocal: true, enable });
-  if (enable !== 'automatic') {
+  if (!automatic) {
     const pending = await until(() => gateway.projectShareStatus(share.shareId).pending[0]);
     assert.equal(pending.fingerprint, messages.find(value => value.type === 'identity')?.recipientFingerprint);
     await gateway.approveProjectShare({ shareId: share.shareId, claimId: pending.claimId, confirmedFingerprint: pending.fingerprint });
@@ -447,6 +454,13 @@ for (const enable of [false, true, 'subset', 'automatic', 'cancel']) test(`four-
     assert.equal(imported.workflows.length, 1); assert.equal(imported.goals.length, 1);
     assert.equal(imported.executions, 0); assert.equal(imported.sessions, 0);
     assert.equal(imported.result.alreadyImported, false); assert.equal(gateway.projectShareStatus(share.shareId).state, 'complete'); return;
+  }
+  if (enable === 'automatic-root') {
+    assert.deepEqual(['skills', 'agents', 'workflows', 'goals'].map(kind => imported.result[kind].length), [1, 1, 1, 1]);
+    assert.equal(imported.skills[0].enabled, true); assert.equal(imported.agents[0].enabled, true);
+    assert.ok(imported.skills[0].files.some(file => file.path === 'references/methodology.md'));
+    assert.equal(imported.executions, 0); assert.equal(imported.sessions, 0);
+    assert.equal(gateway.projectShareStatus(share.shareId).state, 'complete'); return;
   }
   assert.equal(imported.skills.length, 1); assert.equal(imported.agents.length, 1);
   assert.equal(imported.skills[0].enabled, enable); assert.equal(imported.agents[0].enabled, enable);
