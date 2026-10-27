@@ -8,6 +8,7 @@ const object = input => {
 };
 function describe(name, input, item = {}) {
   input = object(input);
+  if (/(?:^|\/|__)gmail_read$/.test(name || '')) return ['Read email', input.operation === 'list' ? 'List messages' : input.operation === 'read' ? 'Read selected message' : 'Mailbox request'];
   const rawCommand = input.command || input.cmd || item.command;
   const command = Array.isArray(rawCommand) && rawCommand.every(part => typeof part === 'string') ? rawCommand.join(' ') : rawCommand;
   const file = input.file_path || input.path || input.file || input.filename;

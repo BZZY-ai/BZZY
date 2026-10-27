@@ -128,7 +128,7 @@ bzzy
 ```
 
 The installer prepares Node 24+ if needed and requires Python 3.9+ for project
-ZIP sharing. Core runs as a user service. Use `bzzy-core start|status|stop|restart`
+ZIP sharing and native read-only Gmail. Core runs as a user service. Use `bzzy-core start|status|stop|restart`
 or **CLI Settings → BZZY Core**. Stop pauses work durably; Start/Restart do not
 automatically replay paused goals.
 
@@ -178,4 +178,7 @@ Read [AGENTS.md](AGENTS.md) and [SECURITY.md](SECURITY.md) before changing the
 workspace. The canonical assistant presentation contract is
 [message_format.txt](BZZY-IOS/message_format.txt), used by CLI and iOS. Formatting
 does not grant permissions or prove completion. Optional scheduling and production
-account connectors remain future work; see the product implementation guides.
+account connectors for persistent Agents remain future work. Owner terminal chats
+and goals support native read-only Gmail through **Settings → BZZY Core → Gmail /
+email access**, with private mailbox credentials and separate login/signup aliases;
+see the product implementation guides.

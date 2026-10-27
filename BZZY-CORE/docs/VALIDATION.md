@@ -1997,3 +1997,32 @@ fixtures pass for managed-launcher discovery and explicit custom paths from an
 unrelated cwd, with whitespace/apostrophes in installation paths. They verify
 exact revision selection and preservation of the original source. No real
 installation is updated by these tests.
+
+## Native owner-terminal Gmail and editable form aliases (2026-10-27)
+
+Offline fixtures exercise Gmail Settings, the authenticated model tool bridge and
+the Python IMAP transport. The tests cover separate mailbox login and form
+aliases, masked and cancellable credential entry, stale-save rejection, exact
+alias editing, private export boundaries, UID/UIDVALIDITY matching, read-only
+EXAMINE/BODY.PEEK, bounded MIME and network responses, HTML verification links,
+attachment metadata, fixed safe errors, cancellation and account revocation.
+ToolHost checks live saved owner identity, current run state and disabled-network
+policy before and after mailbox reads. Worker, reviewer and persistent Agent
+contexts cannot inherit this account authorization. Email searches, headers,
+bodies and verification links are omitted from activity and diagnostic records;
+the selected content is returned only to the authorized provider tool call.
+
+The focused Core suite passes 87 tests, with one filesystem-specific skip, and
+the CLI Settings/updater suite passes 108 tests. Core and CLI syntax checks pass.
+Shared credential writers also use one process lock, preventing a simultaneous
+provider-key change or legacy cleanup from restoring a disconnected mailbox.
+Updater fixtures distinguish timeouts, cancellation, missing executables,
+permission failures and nonzero exits without disclosing raw command diagnostics;
+network discovery has its own bounded deadline. A read-only update check of the
+installed macOS release succeeded; the user's reported VPS failure was not
+reproduced on that server.
+
+No live Gmail mailbox, app password, real registration, Linux installation or
+running user installation was used or changed in this validation. Transport and
+UI checks use isolated fixtures; platform checks do not prove live Gmail delivery
+or externally configured alias forwarding.

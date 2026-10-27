@@ -44,13 +44,15 @@ export function recordDiagnosticTool(session, context, { name, callId, started, 
   if (!live(session, context)) return;
   const data = { version: 1, runId: context.runId, goalId: context.goalMode ? session.goal?.id : null,
     callId, name, outcome: phase === 'started' ? 'started' : error ? 'failed' : 'returned', durationMs: Math.max(0, Date.now() - started) };
-  if (phase === 'started') data.input = pick(input, ['name', 'query', 'version', 'file', 'offset', 'limit', 'id', 'requestId', 'waitSeconds', 'timeoutSeconds', 'round', 'limits', 'policy', 'maxBytes', 'types', 'includeStale']);
+  if (phase === 'started') data.input = name === 'gmail_read' ? { operation: ['list', 'read'].includes(input?.operation) ? input.operation : 'invalid' }
+    : pick(input, ['name', 'query', 'version', 'file', 'offset', 'limit', 'id', 'requestId', 'waitSeconds', 'timeoutSeconds', 'round', 'limits', 'policy', 'maxBytes', 'types', 'includeStale']);
   else if (error) { data.code = typeof error.code === 'string' ? error.code : 'TOOL_ERROR'; data.message = String(error.message || 'Tool failed.'); }
   else if (name === 'list_skills' || name === 'list_subagents') {
     const field = name === 'list_skills' ? 'skills' : 'subagents';
     data.discovery = { items: result[field].map(diagnosticDefinition), total: result.total, nextOffset: result.nextOffset };
   } else if (name === 'read_subagent') data.definition = { ...diagnosticDefinition(result), instructions: result.instructions };
   else if (name === 'read_skill') data.resource = pick(result, ['id', 'name', 'version', 'file', 'sha256', 'nextOffset']);
+  else if (name === 'gmail_read') data.mailbox = { readOnly: true, ...(Array.isArray(result.messages) ? { count: result.messages.length } : {}) };
   else if (['read_session_memory', 'expand_session_memory', 'search_knowledge', 'recall', 'get_task_state'].includes(name)) {
     data.contextResult = result; data.resultSourceSha256 = digest(result); data.resultBytes = Buffer.byteLength(JSON.stringify(result));
     if (name === 'get_task_state') {

@@ -214,28 +214,50 @@ export function addProvider(id, options) {
 export function saveKey(id, key) {
   if (typeof id !== 'string' || !/^[a-z][a-z0-9_-]{0,39}$/.test(id)) throw new Error('Invalid provider ID.');
   if (typeof key !== 'string' || !key.trim() || key.trim().length > 8192 || /\s|[\x00-\x1f\x7f-\x9f]/u.test(key.trim())) throw new Error('API keys must not contain whitespace or control characters and must be at most 8192 characters.');
-  const file = path.join(home(), 'credentials.json');
-  const value = readJson(file, {});
-  value[id] = key.trim();
-  writeJson(file, value);
+  editCredentials(value => { value[id] = key.trim(); });
+}
+
+const credentialsUnavailable = () => Object.assign(new Error('Private credentials are unavailable. Check Core configuration.'), { code: 'CREDENTIALS_UNAVAILABLE' });
+function readCredentials() {
+  try {
+    const value = readJson(path.join(home(), 'credentials.json'), {});
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw credentialsUnavailable();
+    return value;
+  } catch { throw credentialsUnavailable(); }
+}
+function providerCredential(provider) {
+  const value = readCredentials()[provider.id];
+  if (value !== undefined && typeof value !== 'string') throw credentialsUnavailable();
+  return value;
+}
+function editCredentials(change) {
+  const file = path.join(home(), 'credentials.json'); let unlock;
+  try { unlock = lockFile(`${file}.lock`); }
+  catch (error) {
+    if (error.code === 'BZZY_LOCKED') throw Object.assign(new Error('Private credentials are being updated. Retry in a moment.'), { code: 'CONFLICT' });
+    throw credentialsUnavailable();
+  }
+  try {
+    const value = readCredentials();
+    change(value); writeJson(file, value);
+  } catch { throw credentialsUnavailable(); }
+  finally { try { unlock(); } catch { throw credentialsUnavailable(); } }
 }
 
 // Trusted host settings operations. Return availability, never credential values.
 export function credentialStatus(id) {
   const provider = getProvider(id);
   return { environment: Boolean(provider.envKey && process.env[provider.envKey]?.trim()),
-    saved: Boolean(readJson(path.join(home(), 'credentials.json'), {})[provider.id]) };
+    saved: Boolean(providerCredential(provider)) };
 }
 
 export function removeKey(id) {
-  const provider = getProvider(id), file = path.join(home(), 'credentials.json');
-  const value = readJson(file, {});
-  delete value[provider.id];
-  writeJson(file, value);
+  const provider = getProvider(id);
+  editCredentials(value => { delete value[provider.id]; });
 }
 
 export function apiKey(provider) {
-  const key = process.env[provider.envKey] || readJson(path.join(home(), 'credentials.json'), {})[provider.id];
+  const key = process.env[provider.envKey] || providerCredential(provider);
   if (!key?.trim()) throw new Error(`No API key for ${provider.id}. Set ${provider.envKey} or run bzzy auth ${provider.id}.`);
   return key;
 }

@@ -25,6 +25,8 @@ import { transferLibrary } from '../src/library-ui.js';
 import { libraryImportEntryIndexes } from '@bzzy/core/engine/definition-bundle.js';
 import * as libraryBackend from '@bzzy/core/engine/definition-bundle.js';
 import { createSkill } from '@bzzy/core/engine/skills.js';
+import { getSkillSignupAliases, setSkillSignupAliases } from '@bzzy/core/engine/skill-account-policy.js';
+import { writeUpdateHandoff } from '../src/update-handoff.js';
 
 let directory, previous;
 const providerKeys = ['DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY', 'EXPLABS_API_KEY'];
@@ -60,6 +62,33 @@ function terminal(cwd) {
 async function waitFor(check) {
   for (let index = 0; index < 200; index++) { if (check()) return; await delay(10); }
   assert.fail('Expected settings state was not reached.');
+}
+function gmailSettingsFixture(initial = {}) {
+  let state = { configured: false, revision: 0, ...initial };
+  const calls = [];
+  return { calls, module: {
+    getGmailSettings() { return { ...state }; },
+    setGmailSettings(value, { expectedRevision }) {
+      if (expectedRevision !== state.revision) throw Object.assign(new Error('private fixture detail'), { code: 'GMAIL_SETTINGS_STALE' });
+      calls.push({ operation: 'set', ...value });
+      state = { configured: true, address: value.address, revision: state.revision + 1 }; return { ...state };
+    },
+    clearGmailSettings({ expectedRevision }) {
+      if (expectedRevision !== state.revision) throw Object.assign(new Error('private fixture detail'), { code: 'GMAIL_SETTINGS_STALE' });
+      calls.push({ operation: 'clear' }); state = { configured: false, revision: state.revision + 1 }; return { ...state };
+    },
+  } };
+}
+async function beginAliasSettings(ui) {
+  ui.settings.gmailSettingsLoader = async () => gmailSettingsFixture().module;
+  const task = ui.settings.run('email-access');
+  await waitFor(() => ui.privateView?.title === 'Gmail / email access' && ui.privateView.actionMode && ui.tui.resolveInput);
+  ui.tui.privateAction('aliases');
+  return { task };
+}
+async function finishAliasSettings(ui, task) {
+  await waitFor(() => ui.privateView?.title === 'Gmail / email access' && ui.privateView.actionMode && ui.tui.resolveInput);
+  ui.tui.privateAction('/cancel'); await task;
 }
 const fullPermissions = ['observe', 'claim', 'takeover', 'execute', 'answer', 'pause', 'cancel', 'steer'];
 const fixturePNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
@@ -148,6 +177,236 @@ test('BZZY Core Settings exposes one action that updates both CLI and Core', asy
   await ui.settings.run('update-bzzy');
   assert.equal(updatedWith, ui);
   assert.equal(ui.settings.busy, false);
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('Gmail settings save distinct mailbox credentials privately without reading mail or changing the chat draft', async () => {
+  const { ui, output } = terminal(), fixture = gmailSettingsFixture();
+  ui.tui.value = 'An unfinished goal'; ui.tui.cursor = 3;
+  ui.settings = new ClientSettings(ui, { gmailSettingsLoader: async () => fixture.module });
+  ui.openSettings(); ui.settings.page = 'core'; ui.coreLifecycleInterrupted = true;
+  const frames = []; ui.tui.writeFrame = frame => frames.push(clean(frame));
+  const task = ui.settings.run('email-access');
+  const password = 'fixture-app-pass';
+  try {
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    assert.match(ui.privateView.lines.join('\n'), /Gmail mailbox login/);
+    assert.match(ui.privateView.lines.join('\n'), /approved aliases for website login \/ registration/);
+    assert.match(ui.privateView.lines.join('\n'), /forwarding outside BZZY/);
+    assert.ok(ui.privateView.actions.some(action => action.label === 'Login / signup aliases'));
+    ui.tui.privateAction('configure'); await waitFor(() => ui.tui.question.startsWith('Main Gmail') && ui.tui.resolveInput);
+    ui.tui.finish('mailbox@example.invalid');
+    await waitFor(() => ui.tui.hidden && ui.tui.resolveInput);
+    ui.tui.key(password, {}); ui.tui.render();
+    assert.doesNotMatch(frames.at(-1), new RegExp(password)); assert.match(frames.at(-1), /•/);
+    assert.throws(() => writeUpdateHandoff(ui), /private input/);
+    ui.tui.key('', { name: 'return' });
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    assert.deepEqual(fixture.calls, [{ operation: 'set', address: 'mailbox@example.invalid', appPassword: password }]);
+    for (const [columns, rows] of [[100, 32], [50, 20]]) {
+      Object.assign(output, { columns, rows }); ui.tui.render();
+      assert.match(frames.at(-1), /mailbox@example.invalid/); assert.doesNotMatch(frames.at(-1), new RegExp(password));
+      assert.deepEqual(ui.tui.lastFrame, []); assert.equal(ui.tui.textRegion, null);
+    }
+    assert.match(ui.privateView.lines.join('\n'), /App password · •+/);
+    ui.tui.privateAction('/cancel'); await task;
+    assert.equal(ui.privateView, undefined); assert.equal(ui.settings.page, 'core');
+    assert.doesNotMatch(JSON.stringify(ui.tui.history) + JSON.stringify(ui.tui.entries) + JSON.stringify(ui.invocationEntries) + JSON.stringify(ui.settings.rows()), /mailbox@example|fixture-app/);
+    assert.equal(listRecords('execution').length, 0);
+    ui.tui.setPanel('chat'); assert.equal(ui.tui.value, 'An unfinished goal'); assert.equal(ui.tui.cursor, 3);
+  } finally { await ui.settings.close(); await task; }
+});
+
+test('Gmail replacement is cancellable and disconnect requires confirmation without clearing signup aliases', async () => {
+  const { ui } = terminal(), fixture = gmailSettingsFixture({ configured: true, address: 'mailbox@example.invalid', revision: 7 });
+  const skill = createSkill({ name: 'read-emails', description: 'Read authorized mail', instructions: 'Read only owner-authorized mail.' }, { scope: 'global' });
+  setSkillSignupAliases(skill.id, ['signup+1@example.invalid', 'signup+2@example.invalid']);
+  ui.settings = new ClientSettings(ui, { gmailSettingsLoader: async () => fixture.module }); ui.openSettings(); ui.settings.page = 'core';
+  const task = ui.settings.run('email-access');
+  try {
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    ui.tui.privateAction('configure'); await waitFor(() => ui.tui.question.startsWith('Main Gmail') && ui.tui.resolveInput);
+    assert.equal(ui.tui.value, 'mailbox@example.invalid'); ui.tui.finish('replacement@example.invalid');
+    await waitFor(() => ui.tui.hidden && ui.tui.resolveInput); ui.tui.finish(null);
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput); assert.deepEqual(fixture.calls, []);
+    ui.tui.privateAction('aliases');
+    await waitFor(() => ui.privateView?.title.includes('read-emails') && ui.privateView.actionMode && ui.tui.resolveInput);
+    assert.ok(ui.privateView.lines.includes('signup+1@example.invalid'));
+    ui.tui.privateAction('/cancel');
+    await waitFor(() => ui.privateView?.title === 'Gmail / email access' && ui.privateView.actionMode && ui.tui.resolveInput);
+    ui.tui.privateAction('disconnect'); await waitFor(() => ui.tui.question.startsWith('Choose Disconnect') && ui.tui.resolveInput);
+    assert.equal(ui.privateView.actions[ui.privateView.actionFocus].value, 'keep'); ui.tui.key('', { name: 'return' });
+    await waitFor(() => ui.tui.question.startsWith('Arrows choose') && ui.tui.resolveInput); assert.deepEqual(fixture.calls, []);
+    ui.tui.privateAction('disconnect'); await waitFor(() => ui.tui.question.startsWith('Choose Disconnect') && ui.tui.resolveInput);
+    ui.tui.privateAction('disconnect'); await waitFor(() => ui.tui.question.startsWith('Arrows choose') && ui.tui.resolveInput);
+    assert.deepEqual(fixture.calls, [{ operation: 'clear' }]);
+    assert.deepEqual(getSkillSignupAliases(skill.id).approvedSignupAliases, ['signup+1@example.invalid', 'signup+2@example.invalid']);
+    ui.tui.privateAction('/cancel'); await task; assert.equal(listRecords('execution').length, 0);
+  } finally { await ui.settings.close(); await task; }
+});
+
+test('Gmail settings reject stale saves and scrub credentials when the selected terminal changes', async () => {
+  const { ui } = terminal(), fixture = gmailSettingsFixture({ configured: true, address: 'initial@example.invalid', revision: 1 });
+  ui.settings = new ClientSettings(ui, { gmailSettingsLoader: async () => fixture.module }); ui.openSettings(); ui.settings.page = 'core';
+  let task = ui.settings.run('email-access');
+  try {
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    ui.tui.privateAction('configure'); await waitFor(() => ui.tui.question.startsWith('Main Gmail') && ui.tui.resolveInput);
+    ui.tui.finish('replacement@example.invalid'); await waitFor(() => ui.tui.hidden && ui.tui.resolveInput);
+    fixture.module.setGmailSettings({ address: 'concurrent@example.invalid', appPassword: 'concurrent-fixture' }, { expectedRevision: 1 });
+    ui.tui.finish('replacement-fixture'); await task;
+    assert.equal(ui.privateView, undefined); assert.match(ui.settings.message, /Gmail account changed/);
+    assert.equal(fixture.module.getGmailSettings().address, 'concurrent@example.invalid');
+    task = ui.settings.run('email-access'); await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    ui.tui.privateAction('configure'); await waitFor(() => ui.tui.question.startsWith('Main Gmail') && ui.tui.resolveInput);
+    ui.tui.finish('switched@example.invalid'); await waitFor(() => ui.tui.hidden && ui.tui.resolveInput);
+    ui.activeTab = 'other-terminal'; ui.tui.finish('switched-fixture'); await task;
+    assert.equal(ui.privateView, undefined); assert.match(ui.settings.message, /terminal or project changed/);
+    assert.equal(fixture.calls.length, 1); assert.doesNotMatch(ui.settings.message, /private fixture detail|@/);
+  } finally { await ui.settings.close(); await task; }
+});
+
+test('Core Settings privately displays and edits exact skill signup aliases without changing the chat draft', async () => {
+  const project = path.join(directory, 'workspace'), { ui, output } = terminal();
+  const global = createSkill({ name: 'mail-reader', description: 'Read authorized mail', instructions: 'Read only mail explicitly authorized by the owner.' }, { scope: 'global' });
+  const local = createSkill({ name: 'mail-reader', description: 'Project mail', instructions: 'Read only authorized project mail.' }, { projectRoot: project, scope: 'project' });
+  const aliases = [1, 2, 3, 4].map(index => `signup+${index}@example.invalid`);
+  setSkillSignupAliases(global.id, aliases, { scope: 'global' });
+  const skillsBefore = listRecords('core.skill'), sessionBefore = listRecords('session');
+  ui.tui.value = 'Keep my goal draft'; ui.tui.cursor = 5;
+  ui.settings = new ClientSettings(ui, { hostLoader: async () => ({ coreHostStatus: async () => ({ running: false }) }) });
+  ui.openSettings(); await ui.settings.run('core');
+  ui.coreLifecycleInterrupted = true;
+  let offered;
+  ui.chooseOne = async (_title, choices) => { offered = choices; return choices.find(choice => choice.label === 'mail-reader · Core').value; };
+  const frames = []; ui.tui.writeFrame = frame => frames.push(clean(frame));
+  const { task } = await beginAliasSettings(ui);
+  try {
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    assert.ok(offered.some(choice => choice.label === 'mail-reader · project'));
+    assert.ok(offered.some(choice => choice.label === 'mail-reader · Core'));
+    for (const [columns, rows] of [[100, 32], [50, 20]]) {
+      Object.assign(output, { columns, rows }); ui.tui.render();
+      for (const alias of aliases) assert.ok(frames.at(-1).includes(alias), `Owner can see ${alias}`);
+      assert.deepEqual(ui.tui.lastFrame, []); assert.equal(ui.tui.textRegion, null);
+    }
+    assert.throws(() => writeUpdateHandoff(ui), /private input/);
+    ui.tui.privateAction('edit');
+    await waitFor(() => ui.tui.question.startsWith('Email addresses') && ui.tui.resolveInput);
+    assert.equal(ui.tui.value, aliases.join(';'));
+    const changed = ['new+1@example.invalid', 'new+2@example.invalid'];
+    ui.tui.value = changed.join('\n'); ui.tui.cursor = ui.tui.value.length;
+    ui.tui.key('', { name: 'return' });
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    assert.deepEqual(getSkillSignupAliases(global.id, { scope: 'global' }).approvedSignupAliases, changed);
+    assert.equal(getSkillSignupAliases(local.id, { projectRoot: project, scope: 'project' }), null);
+    ui.tui.privateAction('/cancel'); await finishAliasSettings(ui, task);
+    assert.equal(ui.settings.page, 'core'); assert.equal(ui.privateView, undefined);
+    assert.deepEqual(listRecords('core.skill'), skillsBefore); assert.deepEqual(listRecords('session'), sessionBefore);
+    assert.equal(listRecords('execution').length, 0);
+    assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
+    assert.doesNotMatch(JSON.stringify(ui.tui.history) + JSON.stringify(ui.invocationEntries) + JSON.stringify(ui.settings.rows()), /signup\+|new\+/);
+    ui.tui.setPanel('chat'); assert.equal(ui.tui.value, 'Keep my goal draft'); assert.equal(ui.tui.cursor, 5);
+  } finally { await ui.settings.close(); await task; }
+});
+
+test('signup alias clear requires the explicit private confirmation and leaves the skill installed', async () => {
+  const { ui } = terminal(), skill = createSkill({ name: 'read-inbox', description: 'Read an inbox', instructions: 'Read only owner-authorized mail.' }, { scope: 'global' });
+  setSkillSignupAliases(skill.id, ['signup@example.invalid'], { scope: 'global' });
+  ui.openSettings(); ui.settings.page = 'core'; ui.chooseOne = async (_title, choices) => choices.find(choice => choice.label === 'read-inbox · Core').value;
+  const { task } = await beginAliasSettings(ui);
+  try {
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    ui.tui.privateAction('clear'); await waitFor(() => ui.tui.question.startsWith('Choose Clear') && ui.tui.resolveInput);
+    assert.equal(ui.privateView.actions[ui.privateView.actionFocus].value, 'keep');
+    ui.tui.key('', { name: 'return' }); await waitFor(() => ui.tui.question.startsWith('Private to') && ui.tui.resolveInput);
+    assert.deepEqual(getSkillSignupAliases(skill.id).approvedSignupAliases, ['signup@example.invalid']);
+    ui.tui.privateAction('clear'); await waitFor(() => ui.tui.question.startsWith('Choose Clear') && ui.tui.resolveInput);
+    ui.tui.privateAction('clear'); await waitFor(() => ui.tui.question.startsWith('Private to') && ui.tui.resolveInput);
+    assert.deepEqual(getSkillSignupAliases(skill.id).approvedSignupAliases, []);
+    assert.ok(ui.privateView.lines.includes('No approved login / signup aliases configured.'));
+    ui.tui.privateAction('/cancel'); await finishAliasSettings(ui, task);
+    assert.equal(listRecords('core.skill').length, 1); assert.equal(listRecords('execution').length, 0);
+  } finally { await ui.settings.close(); await task; }
+});
+
+test('private signup alias pages keep every address reachable in compact terminals', async () => {
+  const { ui, output } = terminal(), skill = createSkill({ name: 'large-mail-list', description: 'Owner-approved inbox list', instructions: 'Use only owner-approved addresses.' }, { scope: 'global' });
+  const aliases = Array.from({ length: 32 }, (_, index) => `signup+${index}@example.invalid`);
+  setSkillSignupAliases(skill.id, aliases);
+  Object.assign(output, { columns: 50, rows: 20 }); ui.openSettings(); ui.settings.page = 'core';
+  ui.chooseOne = async (_title, choices) => choices.find(choice => choice.label === 'large-mail-list · Core').value;
+  const { task } = await beginAliasSettings(ui);
+  try {
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    const seen = new Set();
+    while (true) {
+      for (const line of ui.privateView.lines) if (aliases.includes(line)) seen.add(line);
+      if (!ui.privateView.actions.some(action => action.value === 'next')) break;
+      ui.tui.privateAction('next'); await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    }
+    assert.deepEqual([...seen], aliases);
+    assert.ok(ui.privateView.actions.some(action => action.value === 'previous'));
+    ui.tui.privateAction('/cancel'); await finishAliasSettings(ui, task);
+  } finally { await ui.settings.close(); await task; }
+});
+
+test('signup alias edits reject stale revisions and unsafe input without exposing raw error details', async () => {
+  const { ui } = terminal(), skill = createSkill({ name: 'inbox-check', description: 'Check an inbox', instructions: 'Check authorized inbox messages.' }, { scope: 'global' });
+  setSkillSignupAliases(skill.id, ['first@example.invalid']);
+  ui.openSettings(); ui.settings.page = 'core'; ui.chooseOne = async (_title, choices) => choices.find(choice => choice.label === 'inbox-check · Core').value;
+  const { task } = await beginAliasSettings(ui);
+  try {
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    ui.tui.privateAction('edit'); await waitFor(() => ui.tui.question.startsWith('Email addresses') && ui.tui.resolveInput);
+    ui.tui.finish('Private Person <bad@example.invalid>');
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    assert.match(ui.privateView.notice, /distinct plain email addresses/);
+    assert.deepEqual(getSkillSignupAliases(skill.id).approvedSignupAliases, ['first@example.invalid']);
+    ui.tui.privateAction('edit'); await waitFor(() => ui.tui.question.startsWith('Email addresses') && ui.tui.resolveInput);
+    setSkillSignupAliases(skill.id, ['concurrent@example.invalid']);
+    ui.tui.finish('replacement@example.invalid'); await task;
+    assert.deepEqual(getSkillSignupAliases(skill.id).approvedSignupAliases, ['concurrent@example.invalid']);
+    assert.equal(ui.settings.warning, true); assert.match(ui.settings.message, /changed/);
+    assert.doesNotMatch(ui.settings.message, /@|Private Person/); assert.equal(ui.privateView, undefined);
+  } finally { await ui.settings.close(); await task; }
+});
+
+test('signup alias settings bind to the saved project and scrub private addresses on a host or session switch', async () => {
+  const project = path.join(directory, 'workspace'), { ui } = terminal();
+  const skill = createSkill({ name: 'project-mail', description: 'Project inbox', instructions: 'Read authorized project messages.' }, { projectRoot: project, scope: 'project' });
+  setSkillSignupAliases(skill.id, ['project@example.invalid'], { projectRoot: project, scope: 'project' });
+  ui.openSettings(); ui.settings.page = 'core'; ui.tui.cwd = '/unrelated-view';
+  ui.chooseOne = async (_title, choices) => choices.find(choice => choice.label === 'project-mail · project').value;
+  let { task } = await beginAliasSettings(ui);
+  try {
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    assert.ok(ui.privateView.lines.includes('project@example.invalid'));
+    ui.tui.privateAction('edit'); await waitFor(() => ui.tui.question.startsWith('Email addresses') && ui.tui.resolveInput);
+    ui.activeTab = 'different-session'; ui.tui.finish('replacement@example.invalid'); await task;
+    assert.equal(ui.privateView, undefined); assert.match(ui.settings.message, /terminal or project changed/);
+    assert.deepEqual(getSkillSignupAliases(skill.id, { projectRoot: project, scope: 'project' }).approvedSignupAliases, ['project@example.invalid']);
+    ui.activeTab = null; ({ task } = await beginAliasSettings(ui));
+    await waitFor(() => ui.privateView?.actionMode && ui.tui.resolveInput);
+    process.env.BZZY_HOME = path.join(directory, 'changed-host'); await task;
+    assert.equal(ui.privateView, undefined); assert.equal(ui.settings.warning, true);
+    assert.doesNotMatch(JSON.stringify(ui.settings.rows()) + JSON.stringify(ui.tui.lastFrame), /project@example/);
+    assert.equal(listRecords('execution').length, 0);
+  } finally { process.env.BZZY_HOME = path.join(directory, 'private'); await ui.settings.close(); await task; }
+});
+
+test('signup email settings handle an empty catalog and standalone launch directories locally', async () => {
+  const project = path.join(directory, 'workspace'), { ui } = terminal(project);
+  delete ui.sessionId; delete ui.activeTab; ui.openSettings(); ui.settings.page = 'core';
+  let { task } = await beginAliasSettings(ui);
+  await waitFor(() => ui.privateView?.notice?.includes('No skills are installed'));
+  await finishAliasSettings(ui, task);
+  createSkill({ name: 'launch-mail', description: 'Mail for this launch folder', instructions: 'Check only owner-approved mail.' }, { projectRoot: project, scope: 'project' });
+  ui.tui.cwd = '/unrelated-view'; let offered;
+  ui.chooseOne = async (_title, choices) => { offered = choices; return 'back'; };
+  ({ task } = await beginAliasSettings(ui));
+  await waitFor(() => offered); await finishAliasSettings(ui, task);
+  assert.ok(offered.some(choice => choice.label === 'launch-mail · project'));
   assert.equal(listRecords('execution').length, 0);
 });
 
@@ -369,7 +628,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'update-bzzy', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'email-access', 'update-bzzy', 'back']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');

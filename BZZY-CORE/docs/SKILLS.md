@@ -189,7 +189,9 @@ prompt. Large libraries are discoverable through paginated search.
 
 ## Explicit local signup aliases
 
-The local owner can give one skill a concrete approved email-alias list:
+The local owner can give one skill a concrete approved email-alias list in
+**CLI Settings → BZZY Core → Gmail / email access → Login / signup aliases**,
+or through the command forms:
 
 ```sh
 bzzy skills aliases set mail-reader 'tester+1@example.invalid;tester+2@example.invalid'
@@ -214,7 +216,14 @@ a safe configuration error without printing private JSON fragments.
 Model tools cannot administer this list. Children, reviewers and persistent
 Agents do not inherit the owner's aliases. The list supplies no credentials,
 mailbox connection, testing scope or extra tool permissions. Account access
-still requires an existing authorized adapter. Private metadata is excluded from
+still requires a separately authorized connection. Core's native `gmail_read`
+uses the main mailbox login configured on the email Settings screen; approved
+aliases are the identities used on website login and registration forms and
+must already forward to that inbox. BZZY does not configure forwarding. Ordinary
+inbox reading does not require signup aliases. The native tool works without
+an external Python script or credential-file discovery; reusable email skills
+should use its current list/read schema, including returned UID and UIDVALIDITY.
+Private metadata is excluded from
 skill-read audit/diagnostic events and structured portable project state; native
 provider history can contain data already delivered to that owner's model.
 

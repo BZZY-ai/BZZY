@@ -48,6 +48,21 @@ function beginRun() {
   return { runId: run.id, goalMode: false, prompt: 'Inspect the local fixture.', launch() {} };
 }
 
+test('native Gmail tool diagnostics retain invocation outcomes while omitting searches and private message results', () => {
+  const input = { operation: 'list', search: 'PRIVATE_GMAIL_QUERY', folder: 'PRIVATE_MAIL_FOLDER' };
+  appendEvent(parent.id, 'backend', { method: 'item/completed', params: { item: { id: 'mail-codex', type: 'mcpToolCall', server: 'bzzy_goal', tool: 'gmail_read',
+    arguments: JSON.stringify(input), result: { body: 'PRIVATE_EMAIL_BODY', subject: 'PRIVATE_EMAIL_SUBJECT', links: ['https://example.invalid/PRIVATE_EMAIL_LINK'] } } } });
+  appendEvent(parent.id, 'backend', { method: 'tool.started', params: { id: 'mail-claude', name: 'mcp__bzzy_goal__gmail_read', input } });
+  appendEvent(parent.id, 'coordination.tool', { name: 'gmail_read', input });
+  appendEvent(parent.id, 'diagnostic.tool', { name: 'gmail_read', outcome: 'returned', mailbox: { readOnly: true, count: 1 } });
+  const before = snapshot(), result = exportSessionDebug(parent.id), text = fs.readFileSync(result.outputPath, 'utf8');
+  for (const value of ['PRIVATE_GMAIL_QUERY', 'PRIVATE_MAIL_FOLDER', 'PRIVATE_EMAIL_BODY', 'PRIVATE_EMAIL_SUBJECT', 'PRIVATE_EMAIL_LINK']) assert.ok(!text.includes(value), value);
+  const rows = parseReport(result.outputPath);
+  assert.ok(rows.some(row => row.data?.name === 'gmail_read' && row.data?.output === '[omitted: private email]'));
+  assert.ok(rows.some(row => row.data?.mailbox?.count === 1));
+  assert.deepEqual(snapshot(), before, 'Export does not erase original private execution history');
+});
+
 test('exports an already-running legacy session, full definitions and only its linked workers without changing saved state', () => {
   const method = skill(); specialist();
   const disabled = skill('disabled-method'); setSkillEnabled(disabled.name, false, disabled.revision, { scope: 'global' });

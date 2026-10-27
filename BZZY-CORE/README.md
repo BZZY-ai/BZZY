@@ -132,9 +132,16 @@ Implemented:
   diagnostics without matched private values.
 - Owner terminals can receive an explicit local signup-alias list alongside
   `read_skill` as `privateContext.approvedSignupAliases`. Configure it with
+  CLI **Settings → BZZY Core → Gmail / email access → Login / signup aliases** or
   `bzzy skills aliases set NAME EMAILS`; it stays in private Core configuration,
   outside portable skill bytes and Library exports. Workers and persistent Agents
   do not inherit it. This supplies account-selection data, never mailbox access.
+- Native read-only Gmail access for ordinary owner-terminal chats and goals,
+  authorized separately through the same private Settings screen. Core's
+  `gmail_read` ToolHost tool lists and reads bounded messages through its bundled
+  Python standard-library IMAP helper. Credentials remain in the private host
+  store, and persistent Agents, workers and reviewers do not inherit access.
+  See [native Gmail access](#native-gmail-access) for scope and limits.
 - Automatic host capture preserves closed work outcomes and queues bounded,
   source/model-pinned learning reviews. New procedures and exact-base corrections
   stage by default; reviewed policy may allow automatic new project skills.
@@ -286,7 +293,7 @@ integrations. They are not a second runtime or database.
 Live home-host use automatically registers its public certificate with the updated Relay.
 Native iOS integration, on-demand Agent CRUD, typed Agent/Terminal sharing,
 Agent receive jobs and APNs registration/provider delivery code are implemented
-and tested locally. Scheduled triggers, production email/account connectors,
+and tested locally. Scheduled triggers, persistent Agent account connectors,
 TestFlight distribution and physical Apple
 push/device verification remain separate work. The existing execution dispatcher
 is reused. Persistent Agents use a restricted native provider/tool path plus the
@@ -471,6 +478,46 @@ types retain their envelope and may be ignored by the handler. This method
 processes one page; call again while `hasMore`, then wait or use the existing SSE
 client to observe new work. No model call is made by replay.
 
+## Native Gmail access
+
+CLI **Settings → BZZY Core → Gmail / email access** configures a private Gmail
+mailbox login and a masked app password. Save authorizes read-only mailbox access
+for ordinary owner-terminal chats and goals on this host, without contacting Gmail.
+Core enforces that authorization in ToolHost; persistent Agents, workers and
+reviewers do not inherit it. Importing a skill or workflow grants no account
+access. Recipients configure their own mailbox on each host.
+
+The reserved `__gmail__` entry in private `$BZZY_HOME/credentials.json` stores
+the mailbox login and app password. The owner-local `engine/gmail-account.js`
+APIs expose sanitized configuration metadata and revision-checked set/clear
+operations; they never return the saved password. They are not model tools or
+remote account-administration APIs. Credentials are excluded from model input,
+logs, portable definitions, Library archives and project transfers.
+
+Signup aliases are separate, exact per-skill account-selection data stored in
+private `config.json`. **Login / signup aliases** displays and edits that list;
+it opens the registered `read-emails` skill when present and otherwise offers the current
+project/Core skill catalog. The main inbox is available for general email
+requests. Approved aliases supply website login/registration identities; the
+Gmail mailbox login is not the default form identity when those aliases exist.
+Aliases must already forward to the connected mailbox through forwarding
+configured outside BZZY. Saving the list creates no forwarding and does not
+automatically restrict all inbox requests to those aliases. Disconnect removes
+the local Gmail connection and preserves the separate alias lists.
+
+`gmail_read` provides list/read operations. A read uses both the message UID and
+the folder UIDVALIDITY returned by listing, and rejects a changed folder
+generation. The bundled IMAP helper selects folders read-only and fetches
+without marking messages read. It accepts at most 1 MiB of raw MIME per message,
+returns bounded text and attachment metadata, and supplies no sending, mailbox
+mutation or attachment-download capability. It uses the already-required
+Python 3.9+ standard library; no pip package or external user script is needed.
+
+The active model provider receives selected mail content as tool-result data,
+which can remain in private execution/provider history. Headers, bodies and
+links are untrusted content, not instructions or authorization. Tests use local
+fixtures; they do not claim a successful connection to a live Gmail mailbox.
+
 ## Scoped tool broker
 
 The host owns `admin`. A model-facing transport receives only the result of
@@ -519,7 +566,9 @@ host credential provider. The broker never requests raw credentials or exposes a
 credential lookup method. Bindings persist only private scope metadata. Adapters
 are deliberately not serialized: after restart the host must securely reconnect
 with `admin.attachBinding(id, adapter)`. No OAuth login, token vault, refresh
-worker or production email integration is claimed by this implementation.
+worker or production email integration is supplied by this generic broker.
+The separate native Gmail ToolHost path described above has its own explicit
+owner-terminal authorization and private credential handling.
 
 Tool calls revalidate grants and bindings before execution and before releasing
 results. A caller abort or 30-second deadline stops waiting for an adapter; trusted

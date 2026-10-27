@@ -89,7 +89,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
     putRecord('run', session.id, run); saveSession(session);
     options.activityReporter = new ActivityReporter(session, recorded, goal ? session.goal.objective : prompt);
-    host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, runId: run.id, prompt, tokenBudget: options.tokenBudget, onNeedsContext: () => stop('needs_context') }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
+    host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, runId: run.id, signal: abort.signal, prompt, tokenBudget: options.tokenBudget, onNeedsContext: () => stop('needs_context') }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
     if (options.captureNetwork) { traffic = await new TrafficRecorder(session, provider, recorded).open(); options.networkEnv = traffic.env; }
     if (options.yolo) recorded.event('info', { message: provider.backend === 'codex' ? 'YOLO · approvals off · Codex sandbox disabled' : 'YOLO · Claude permission checks bypassed' });
     const limit = options.runtimeSeconds || session.contract?.limits.runtimeSeconds;

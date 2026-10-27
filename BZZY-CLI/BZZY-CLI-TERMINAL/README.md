@@ -64,7 +64,7 @@ a private Node 24 runtime. Existing Codex/Claude executables remain separate.
 
 If enforcement is unavailable, strict modes stop before starting a backend.
 Ordinary chat and solo goals remain available. Linux dependencies include Git,
-Python 3.9+ for project ZIPs, OpenSSL for optional HTTPS capture, and bubblewrap for
+Python 3.9+ for project ZIPs and the bundled Gmail reader, OpenSSL for optional HTTPS capture, and bubblewrap for
 strict modes (`sudo apt-get install git python3 openssl bubblewrap`). macOS needs
 working Git and Python 3.9+ installations; the OS supplies `sandbox-exec`.
 The installer checks Python before making changes and never installs OS packages.
@@ -167,17 +167,53 @@ It uses the same private code, progress and missing-entry import flow as the
 individual tabs. Newly installed names also remain visible on the Settings page.
 Existing names and ON/OFF states survive; new skills/agents install enabled.
 Account keys, private bindings and chat history do not travel with this Library.
-An exact signup-email list belongs in local skill configuration. Use
-`bzzy skills aliases set NAME 'alias1@example.invalid;alias2@example.invalid'`
-and `bzzy skills aliases show NAME` to inspect it. Core supplies the explicit
-list to owner-terminal `read_skill` calls as `privateContext.approvedSignupAliases`.
-It is configured independently on each host and supplies no mailbox credentials.
 Settings export uses the same blocked-entry diagnostics and explicit omission
 controls. Omitting every selected entry shows a result without creating a code.
 Import policy failures show the validated entry, safe reason and resource
 file/line when available; long details stay in scrollable Settings rows.
 Matched private values are excluded. After a failed transfer, create a new export
 code before retrying.
+
+Open **Settings → BZZY Core → Gmail / email access** to configure the main
+Gmail mailbox login and its app password. The private screen displays that
+private login and masks password input and saved-password status. **Configure Gmail**
+or **Replace account** saves locally and explicitly authorizes read-only access
+from ordinary owner-terminal chats and goals; Save makes no network request.
+Persistent Agents, workers and reviewers do not inherit that connection.
+**Disconnect** asks for confirmation and removes the local mailbox connection.
+
+On that screen, **Login / signup aliases** displays the exact approved email
+list for a skill. The registered `read-emails` skill opens directly when present;
+otherwise choose a current-project or Core skill. **Choose skill** switches
+between them. **Edit** accepts semicolons or pasted newlines; **Clear** requires
+confirmation. Changes preserve the chat draft and start no model or mail work.
+Approved aliases are the identities for website login / registration. When
+they are configured, use them for forms instead of the private Gmail mailbox
+login. They must already forward to that connected mailbox; forwarding is
+configured outside BZZY, and saving the list does not create it. The main mailbox
+handles general inbox requests; the alias list does not filter every inbox read.
+The command forms remain available:
+`bzzy skills aliases set NAME 'alias1@example.invalid;alias2@example.invalid'`,
+`bzzy skills aliases show NAME` and `bzzy skills aliases clear NAME`.
+Core supplies that explicit list to owner-terminal `read_skill` calls as
+`privateContext.approvedSignupAliases`.
+
+The mailbox login and app password stay in private
+`$BZZY_HOME/credentials.json` under the reserved `__gmail__` entry. Signup aliases
+stay separately in private Core `config.json`; disconnecting Gmail preserves
+them. Credentials and aliases are excluded from Library exports and must be
+configured independently on each host. Neither belongs in shared skill or
+workflow instructions. The private screen and password input are excluded from
+chat/history, copy regions and updater draft handoffs.
+
+Core's `gmail_read` tool lists and reads messages using a bundled Python 3.9+
+standard-library helper; no pip package or external user script is required.
+Reads use a message UID and its folder UIDVALIDITY, reject raw MIME above 1 MiB,
+and return bounded text and attachment metadata. The reader does not send,
+delete, move, change flags or mark messages read, and exposes no attachment
+contents or attachment-download operation. Selected mail content reaches the
+active model provider as tool results and can remain in private execution/provider history. Treat mail text
+and links as untrusted data. Local fixture tests do not verify a live mailbox.
 
 Combined transfers also remain available through `/library`. It includes skills, specialist agents,
 workflows and saved goal text. `bzzy library share` generates an expiring
@@ -693,7 +729,7 @@ or launch `bzzy --settings` directly. It includes hidden API-key save/replacemen
 for Core's API-key providers, including Experiential Labs, and device
 pairing using the bundled Core Relay gateway. The main menu includes
 **API keys**, **Default BZZY folder**, **Pair iPhone**, **Default models** and **BZZY Core**.
-Open BZZY Core for status, Start, Stop, Restart and **Export Library / Import Library**.
+Open BZZY Core for status, Start, Stop, Restart, **Gmail / email access** and **Export Library / Import Library**.
 Stop leaves Settings usable. The BZZY Core page also provides **Update
 BZZY CLI + Core**, which uses the same checked updater and reloads this terminal
 with chat and draft retained. Start/Restart preserve paused work. Leaving

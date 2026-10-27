@@ -2,6 +2,7 @@ import { notificationDeliveryStatus } from '@bzzy/core/engine/push-status.js';
 import { DefaultModels, chooseDefaultModel } from './default-models.js';
 import { settingsActions } from './settings-layout.js';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import { terminalSession } from '@bzzy/core';
 import { sessionPermissions } from '@bzzy/core/engine/session-access.js';
 import { CoreWorkspaces } from '@bzzy/core/workspaces';
@@ -12,6 +13,9 @@ import { PairingQRImage } from './pairing-qr-image.js';
 import { home } from './files.js';
 import { updateCommand } from './update-checker.js';
 import { transferLibrary, libraryTransferErrorMessage } from './library-ui.js';
+import { listSkills } from '@bzzy/core/engine/skills.js';
+import { getSkillSignupAliases, setSkillSignupAliases, clearSkillSignupAliases } from '@bzzy/core/engine/skill-account-policy.js';
+import { wrap } from './terminal-format.js';
 
 const loadRelay = () => {
   let location;
@@ -20,6 +24,7 @@ const loadRelay = () => {
   return import(location);
 };
 const loadHost = () => import('@bzzy/core/engine/host-service.js');
+const loadGmailSettings = () => import('@bzzy/core/engine/gmail-account.js');
 const messages = {
   MODE_INCOMPLETE: 'Choose a model for every agent before saving.',
   MODE_MODEL_REQUIRED: 'Choose this agent’s model first.',
@@ -47,6 +52,19 @@ const messages = {
   OPERATOR_STOP_FAILED: 'Core could not confirm that all work stopped. Check its status before trying again.',
   STOP_INCOMPLETE: 'Core could not verify that all work stopped. Check its status before trying again.',
   HOST_CONTROL_UNAVAILABLE: 'Core service controls are unavailable. Check the BZZY installation.',
+  SIGNUP_ALIASES_CONTEXT: 'The host, terminal or project changed. Reopen Signup email aliases.',
+  SKILL_ACCOUNT_POLICY_STALE: 'The skill or its signup aliases changed. Reopen Signup email aliases before replacing them.',
+  SKILL_ACCOUNT_POLICY_INVALID: 'Use 1–32 distinct plain email addresses separated by semicolons or newlines. Check private Core configuration if the list cannot be opened.',
+  GMAIL_SETTINGS_STALE: 'The Gmail account changed. Reopen Gmail / email access before replacing it.',
+  GMAIL_SETTINGS_INVALID: 'Use a plain Gmail mailbox address and its app password. Check private Core configuration if the account cannot be opened.',
+};
+const aliasesContextChanged = () => { throw Object.assign(new Error(), { code: 'SIGNUP_ALIASES_CONTEXT' }); };
+const directoryPin = location => {
+  try {
+    const root = fs.realpathSync(location), stat = fs.statSync(root);
+    if (!stat.isDirectory()) aliasesContextChanged();
+    return { root, device: stat.dev, inode: stat.ino };
+  } catch { aliasesContextChanged(); }
 };
 
 // Host-only UI controller. Never route secrets, QR payloads or codes through
@@ -56,22 +74,26 @@ export class ClientSettings {
   #qr = [];
   #expiry;
   #approvalRequest;
+  #aliasDraft;
+  #emailView;
   constructor(ui, { relayLoader = loadRelay, hostLoader = loadHost, workspaces = new CoreWorkspaces(),
-    qrImage = new PairingQRImage(), modelPicker = chooseDefaultModel, updater = updateCommand, libraryTransfer = transferLibrary } = {}) {
+    qrImage = new PairingQRImage(), modelPicker = chooseDefaultModel, updater = updateCommand, libraryTransfer = transferLibrary,
+    gmailSettingsLoader = loadGmailSettings } = {}) {
     this.ui = ui; this.relayLoader = relayLoader; this.workspaces = workspaces;
     this.hostLoader = hostLoader; this.hostHome = home();
     this.qrImage = qrImage; this.modelPicker = modelPicker; this.updater = updater;
     this.libraryTransfer = libraryTransfer;
+    this.gmailSettingsLoader = gmailSettingsLoader;
     this.defaults = new DefaultModels(ui, { modelPicker, isCurrent: () => !this.closed && this.page === 'default-models'
       && (!this.ui.tui?.panel || this.ui.tui.panel === 'settings') });
     this.message = ''; this.warning = false; this.focus = 0; this.page = 'main';
   }
   changed() { if (this.closed) return; if (this.ui.tui) this.ui.tui.settingsEnsureFocus = true; this.ui.tui?.schedule(); }
   get pageTitle() {
-    return { main: 'Settings', core: 'BZZY Core', keys: 'API keys', 'default-models': 'Default models', pair: 'Pair iPhone', approve: 'Confirm iPhone' }[this.page] || 'Settings';
+    return { main: 'Settings', core: 'BZZY Core', keys: 'API keys', 'default-models': 'Default models', pair: 'Pair iPhone', approve: 'Confirm iPhone', 'signup-aliases': 'Signup email aliases', 'email-access': 'Gmail / email access' }[this.page] || 'Settings';
   }
   get pageSubtitle() {
-    return { main: 'Your workspace, connections and defaults', core: 'Background service, Library, updates and status',
+    return { main: 'Your workspace, connections and defaults', core: 'Service, email, Library, updates and status',
       'default-models': 'Provider, model and effort for every role · Save each group when ready',
       pair: 'Your iPhone · full access through Core', approve: 'Compare the complete fingerprint with your iPhone' }[this.page] || '';
   }
@@ -115,7 +137,7 @@ export class ClientSettings {
       rows.push({ text: 'Pair iPhone', action: 'pair', icon: '⌁', card: true, tone: 'accent',
         detail: this.pending().length ? 'iPhone waiting for approval' : this.grants().length ? 'iPhone paired' : 'Full access · QR or code' });
       rows.push({ text: 'Default models', action: 'default-models', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Core · Validate · Delegate · Consensus & Compactor' });
-      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, Library transfers, updates and status', value: this.hostStatus ? this.hostLabel() : undefined });
+      rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, email, Library transfers and updates', value: this.hostStatus ? this.hostLabel() : undefined });
       return rows;
     }
     if (this.page === 'keys') {
@@ -142,6 +164,8 @@ export class ClientSettings {
       rows.slice(-2).forEach(row => { row.inline = 'library-transfer'; });
       put('All skills, specialist agents, workflows and saved goals · current project + Core', 'muted');
       if (this.libraryResult) for (const text of this.libraryResult.split('\n')) put(text, this.libraryResultWarning ? 'warning' : 'accent');
+      rows.push({ text: 'Gmail / email access', action: 'email-access', icon: '@', card: true, tone: 'accent',
+        detail: 'Read-only Gmail account and approved signup aliases · private to this host' });
       rows.push({ text: 'Update BZZY CLI + Core', action: 'update-bzzy', icon: '↻', card: true, tone: 'accent',
         detail: 'Check the official release and update both products · this terminal reloads' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
@@ -149,6 +173,10 @@ export class ClientSettings {
       put(); put(!push.configured ? 'iPhone push alerts · Apple setup needed' : push.message, 'muted');
       if (!push.configured) put('Core model and voice chat still work.', 'muted');
       put(); put('← Back', 'muted', 'back');
+      return rows;
+    }
+    if (['signup-aliases', 'email-access'].includes(this.page)) {
+      put('Private email settings are open in this terminal.', 'muted');
       return rows;
     }
     if (this.page === 'approve') {
@@ -277,6 +305,203 @@ export class ClientSettings {
     const saved = this.workspaces.configure({ path: location.trim(), create: true }, { expectedRevision: shown.revision, requestId: randomUUID() });
     this.message = `BZZY root saved: ${saved.root.path}. Existing terminal directories are preserved.`;
   }
+  aliasContext() {
+    const ui = this.ui, session = ui.sessionId && loadSession(ui.sessionId);
+    if (ui.sessionId && !session) aliasesContextChanged();
+    const cwd = session?.cwd || ui.launchCwd || ui.tui.cwd || process.cwd();
+    const projectRoot = session?.projectRoot || cwd;
+    return { home: home(), session: ui.sessionId, tab: ui.activeTab, next: ui.nextSession?.id,
+      cwd, projectRoot, cwdPin: directoryPin(cwd), projectPin: directoryPin(projectRoot) };
+  }
+  checkAliasContext(before) {
+    if (this.closed || this.ui.closed || !this.ui.interactive || this.ui.json || !this.ui.tui
+      || this.ui.settings !== this || this.ui.tui.panel !== 'settings' || home() !== this.hostHome) aliasesContextChanged();
+    const current = this.aliasContext();
+    for (const key of ['home', 'session', 'tab', 'next', 'cwd', 'projectRoot']) if (current[key] !== before[key]) aliasesContextChanged();
+    for (const key of ['cwdPin', 'projectPin']) for (const field of ['root', 'device', 'inode']) {
+      if (current[key][field] !== before[key][field]) aliasesContextChanged();
+    }
+  }
+  async emailAccess() {
+    if (this.ui.json || this.ui.input?.isTTY === false || this.ui.output?.isTTY === false) aliasesContextChanged();
+    const ui = this.ui, before = this.aliasContext(); this.checkAliasContext(before);
+    const backend = await this.gmailSettingsLoader(); this.checkAliasContext(before);
+    let state = backend.getGmailSettings(), nested = false, contextError;
+    const previous = ui.privateView, view = { title: 'Gmail / email access', lines: [], qr: [], actions: [], onCancel: () => ui.reader?.close() };
+    this.#emailView = view; this.page = 'email-access'; ui.privateView = view;
+    ui.tui.textSelection = null; if (ui.tui.copyMode) ui.tui.setCopyMode(false);
+    const check = () => { this.checkAliasContext(before); if (this.#emailView !== view || !nested && ui.privateView !== view) aliasesContextChanged(); };
+    const monitor = setInterval(() => {
+      try { check(); }
+      catch (error) { contextError = error; view.lines = []; view.actions = []; ui.reader?.close(); ui.tui?.schedule(); }
+    }, 100); monitor.unref();
+    const ask = async (question, options) => {
+      check(); const value = await ui.ask(question, options);
+      if (contextError) throw contextError;
+      check(); return value;
+    };
+    try {
+      while (!this.closed) {
+        view.lines = [`Gmail mailbox login · ${state.address || 'Not configured'}`,
+          `App password · ${state.configured ? '•••••••• · saved' : 'Not configured'}`,
+          'Use approved aliases for website login / registration, rather than the Gmail mailbox login.',
+          'Aliases must already forward to this mailbox; configure forwarding outside BZZY.',
+          'General email requests read the connected main inbox.',
+          'Account credentials and aliases stay on this host and are excluded from Library exports.'];
+        view.actions = [{ value: 'configure', label: state.configured ? 'Replace account' : 'Configure Gmail' },
+          { value: 'aliases', label: 'Login / signup aliases' }, ...(state.configured ? [{ value: 'disconnect', label: 'Disconnect' }] : []),
+          { value: '/cancel', label: 'Back' }];
+        view.actionMode = true; view.actionFocus = 0; ui.tui.schedule();
+        const action = await ask('Arrows choose · Enter opens · Esc back');
+        view.actionMode = false;
+        if (action == null || action === '/cancel') return;
+        view.notice = ''; view.actions = [];
+        if (action === 'aliases') {
+          view.lines = []; nested = true; ui.privateView = previous;
+          try { await this.signupAliases(); }
+          finally { nested = false; if (!this.closed) { this.page = 'email-access'; ui.privateView = view; } }
+          check();
+          if (this.message) { view.notice = this.message; this.message = ''; }
+        } else if (action === 'configure') {
+          view.lines = ['Save authorizes read-only access to this Gmail mailbox from owner terminal chats and goals.',
+            'Persistent Agents and workers do not inherit this account access.',
+            'Use a Gmail app password. It is stored privately and is never given to a model.'];
+          const address = (await ask('Main Gmail mailbox login · Enter continues · Esc cancels', { initialValue: state.address || '' }))?.trim();
+          if (!address) continue;
+          let appPassword = await ask('Gmail app password · hidden · Enter saves read-only access · Esc cancels', { hidden: true });
+          if (!appPassword?.trim()) continue;
+          try {
+            state = backend.setGmailSettings({ address, appPassword }, { expectedRevision: state.revision || 0 });
+            view.notice = 'Gmail account saved on this host. Read-only access is authorized.'; view.noticeTone = 'success';
+          } catch (error) {
+            if (error.code !== 'GMAIL_SETTINGS_INVALID') throw error;
+            view.notice = messages.GMAIL_SETTINGS_INVALID; view.noticeTone = 'warning';
+          } finally { appPassword = undefined; }
+        } else if (action === 'disconnect') {
+          view.lines = ['Remove this host’s Gmail mailbox credentials and authorization? Signup aliases remain configured separately.'];
+          view.actions = [{ value: 'keep', label: 'Keep account' }, { value: 'disconnect', label: 'Disconnect Gmail' }];
+          view.actionMode = true; view.actionFocus = 0;
+          const confirmed = await ask('Choose Disconnect Gmail to remove local mailbox access · Esc cancels');
+          view.actionMode = false;
+          if (confirmed !== 'disconnect') continue;
+          state = backend.clearGmailSettings({ expectedRevision: state.revision || 0 });
+          view.notice = 'Gmail disconnected on this host. Signup aliases were preserved.'; view.noticeTone = 'success';
+        }
+      }
+    } finally {
+      clearInterval(monitor); view.lines = []; view.actions = []; view.notice = ''; view.actionMode = false; view.onCancel = null;
+      this.#emailView = undefined;
+      if (ui.privateView === view) ui.privateView = previous;
+      this.page = 'core'; this.focusAction('email-access');
+      ui.tui.lastFrame = []; ui.tui.paintedFrame = null; this.changed();
+    }
+  }
+  async signupAliases() {
+    if (this.ui.json || this.ui.input?.isTTY === false || this.ui.output?.isTTY === false) aliasesContextChanged();
+    const before = this.aliasContext(); this.checkAliasContext(before);
+    const entries = [];
+    for (const scope of ['project', 'global']) {
+      let offset = 0;
+      do {
+        const page = listSkills({ projectRoot: before.projectPin.root, scope, offset, limit: 100 });
+        entries.push(...page.skills); offset = page.nextOffset;
+      } while (offset !== null);
+    }
+    if (!entries.length) { this.message = 'No skills are installed for this project or Core. Install a skill first.'; return; }
+    const choices = [{ value: 'back', label: '← Back', selected: true }, ...entries.map((entry, index) => ({ value: String(index),
+      label: `${entry.name} · ${entry.scope === 'global' ? 'Core' : 'project'}`,
+      description: entry.enabled ? 'Enabled skill' : 'Disabled skill · addresses do not enable it' }))];
+    let preferred = entries.findIndex(entry => entry.name === 'read-emails');
+    while (!this.closed) {
+      const selected = preferred >= 0 ? String(preferred) : await this.ui.chooseOne('Signup email aliases · choose a skill', choices);
+      preferred = -1;
+      this.checkAliasContext(before);
+      if (selected == null || selected === 'back') return;
+      const entry = entries.find((_entry, index) => String(index) === selected);
+      if (!entry) aliasesContextChanged();
+      const options = { projectRoot: before.projectPin.root, scope: entry.scope,
+        expectedSkillId: entry.id, expectedSkillVersion: entry.version };
+      this.#aliasDraft = { before, entry, options, policy: getSkillSignupAliases(entry.id, options) };
+      const another = await this.editSignupAliases();
+      if (!another) return;
+    }
+  }
+  async editSignupAliases() {
+    const draft = this.#aliasDraft, ui = this.ui, previous = ui.privateView;
+    const view = { title: `Login / signup aliases · ${draft.entry.name} (${draft.entry.scope === 'global' ? 'Core' : 'project'}${draft.entry.enabled ? '' : ' · disabled'})`,
+      lines: [], qr: [], actions: [], onCancel: () => ui.reader?.close() };
+    const check = () => { this.checkAliasContext(draft.before); if (this.#aliasDraft !== draft || ui.privateView !== view) aliasesContextChanged(); };
+    this.page = 'signup-aliases';
+    ui.tui.textSelection = null; if (ui.tui.copyMode) ui.tui.setCopyMode(false);
+    ui.privateView = view; this.changed();
+    // A session/host switch must scrub the private screen even without input.
+    let contextError;
+    const monitor = setInterval(() => {
+      try { check(); }
+      catch (error) { contextError = error; view.lines = []; view.actions = []; ui.reader?.close(); ui.tui?.schedule(); }
+    }, 100); monitor.unref();
+    const ask = async (question, options) => {
+      check(); const answer = await ui.ask(question, options);
+      if (contextError) throw contextError;
+      check(); return answer;
+    };
+    let aliasOffset = 0, previousOffsets = [];
+    try {
+      while (!this.closed) {
+        const aliases = draft.policy?.approvedSignupAliases || [];
+        const width = Math.max(1, (ui.output.columns || 80) - 5), available = Math.max(1, (ui.output.rows || 24) - 15);
+        let end = aliasOffset, used = 0;
+        while (end < aliases.length) {
+          const lines = wrap(aliases[end], width).length;
+          if (end > aliasOffset && used + lines > available) break;
+          used += lines; end++;
+        }
+        view.lines = aliases.length ? [...aliases.slice(aliasOffset, end), ...(aliasOffset || end < aliases.length ? [`Addresses ${aliasOffset + 1}–${end} of ${aliases.length}`] : [])]
+          : ['No approved login / signup aliases configured.'];
+        view.actions = [{ value: 'edit', label: 'Edit' }, ...(aliases.length ? [{ value: 'clear', label: 'Clear' }] : []),
+          ...(aliasOffset ? [{ value: 'previous', label: 'Previous' }] : []), ...(end < aliases.length ? [{ value: 'next', label: 'Next' }] : []),
+          { value: 'skill', label: 'Choose skill' }, { value: '/cancel', label: 'Back' }];
+        view.actionMode = true; view.actionFocus = 0; ui.tui.schedule();
+        const action = await ask('Private to this host · arrows choose · Enter opens · Esc back');
+        view.actionMode = false;
+        if (action == null || action === '/cancel') return false;
+        if (action === 'skill') return true;
+        if (action === 'next') { previousOffsets.push(aliasOffset); aliasOffset = end; continue; }
+        if (action === 'previous') { aliasOffset = previousOffsets.pop() || 0; continue; }
+        view.notice = ''; view.actions = [];
+        const options = { ...draft.options, expectedRevision: draft.policy?.revision || 0 };
+        if (action === 'edit') {
+          const value = await ask('Email addresses for login / registration · semicolons or pasted newlines · Enter saves · Esc cancels', { initialValue: aliases.join(';') });
+          if (!value?.trim()) continue;
+          try {
+            draft.policy = setSkillSignupAliases(draft.entry.id, value.trim().split(/[;\r\n]+/).map(alias => alias.trim()).filter(Boolean), options);
+            aliasOffset = 0; previousOffsets = [];
+            view.notice = 'Signup email aliases saved on this host.'; view.noticeTone = 'success';
+          } catch (error) {
+            if (error.code !== 'SKILL_ACCOUNT_POLICY_INVALID') throw error;
+            view.notice = messages.SKILL_ACCOUNT_POLICY_INVALID; view.noticeTone = 'warning';
+          }
+        } else if (action === 'clear') {
+          view.lines = ['Clear this skill’s approved signup email aliases on this host? The skill remains installed.'];
+          view.actions = [{ value: 'keep', label: 'Keep aliases' }, { value: 'clear', label: 'Clear aliases' }];
+          view.actionMode = true; view.actionFocus = 0;
+          const confirmed = await ask('Choose Clear aliases to remove the approved address list · Esc cancels');
+          view.actionMode = false;
+          if (confirmed !== 'clear') continue;
+          const result = clearSkillSignupAliases(draft.entry.id, options);
+          draft.policy = { skillId: result.skillId, approvedSignupAliases: [], revision: result.revision };
+          aliasOffset = 0; previousOffsets = [];
+          view.notice = 'Signup email aliases cleared on this host.'; view.noticeTone = 'success';
+        }
+      }
+    } finally {
+      clearInterval(monitor); view.lines = []; view.actions = []; view.notice = ''; view.actionMode = false; view.onCancel = null;
+      this.#aliasDraft = undefined;
+      if (ui.privateView === view) ui.privateView = previous;
+      if (this.page === 'signup-aliases') { this.page = 'core'; this.focusAction('email-access'); }
+      ui.tui.lastFrame = []; ui.tui.paintedFrame = null; this.changed();
+    }
+  }
   hostLabel() {
     if (!this.hostStatus) return 'Unavailable';
     return this.hostStatus.operatorStopped ? this.hostStatus.running ? 'Stopping' : 'Stopped'
@@ -324,6 +549,7 @@ export class ClientSettings {
       else if (action === 'core') { this.page = 'core'; this.focus = 0; await this.refreshHost(); }
       else if (action === 'core-status') await this.refreshHost();
       else if (['core-start', 'core-stop', 'core-restart'].includes(action)) await this.controlHost(action);
+      else if (action === 'email-access') await this.emailAccess();
       else if (['library-export', 'library-import'].includes(action)) {
         if (home() !== this.hostHome) throw Object.assign(new Error(), { code: 'HOST_CONTEXT_CHANGED' });
         if (this.ui.coreLifecycleInterrupted) throw Object.assign(new Error(), { code: 'CORE_STOPPED' });
@@ -386,7 +612,7 @@ export class ClientSettings {
         }
       }
     } catch (error) {
-      this.message = error.code === 'ADAPTER_UNAVAILABLE' ? 'Core pairing adapter unavailable. Install Core and its Relay dependencies alongside the CLI.' : messages[error.code] || (action.startsWith('library-') ? libraryTransferErrorMessage(error) : this.page === 'core' ? 'Core service action failed. Check bzzy-core status and try again.' : 'Settings action failed. Check Core/Relay status and try again.');
+      this.message = error.code === 'ADAPTER_UNAVAILABLE' ? 'Core pairing adapter unavailable. Install Core and its Relay dependencies alongside the CLI.' : messages[error.code] || (action.startsWith('library-') ? libraryTransferErrorMessage(error) : action === 'email-access' ? 'Gmail / email access is unavailable. Check private Core configuration and try again.' : this.page === 'core' ? 'Core service action failed. Check bzzy-core status and try again.' : 'Settings action failed. Check Core/Relay status and try again.');
       this.warning = true;
       if (action === 'library-import' && error.importDiagnostic) {
         this.libraryResult = this.message; this.libraryResultWarning = true;
@@ -397,6 +623,7 @@ export class ClientSettings {
   close() {
     if (this.closeTask) return this.closeTask;
     this.closed = true; this.defaults.leave(); this.clearInvitation();
+    if (this.#aliasDraft || this.#emailView) { this.#aliasDraft = undefined; this.#emailView = undefined; this.ui.reader?.close(); }
     return this.closeTask = Promise.resolve(this.gateway?.close()).catch(() => {});
   }
 }

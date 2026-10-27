@@ -36,7 +36,7 @@ const eventFields = [...recordFields, 'text', 'message', 'error', 'code', 'name'
   'executionId', 'requestId', 'agent', 'agentNamespace', 'childSessionId', 'turnId', 'itemId', 'previousProvider', 'previousModel', 'appliesTo',
   'contextResult', 'resultSourceSha256', 'resultBytes', 'contextEfficiency', 'refresh', 'metrics', 'epoch', 'phase', 'legacy', 'receiptRef', 'metricMeaning',
   'contextBudget', 'readiness', 'inputEstimate', 'budgetState', 'catalog', 'catalogReadiness', 'complete', 'omitted', 'total', 'revision',
-  'method', 'url', 'backendState', 'localRequestObserved', 'tool', 'sourceSessionId', 'sourceGoalRevision', 'sourceRevision', 'acceptance', 'usage'];
+  'method', 'url', 'backendState', 'localRequestObserved', 'tool', 'sourceSessionId', 'sourceGoalRevision', 'sourceRevision', 'acceptance', 'usage', 'mailbox'];
 const knownEvents = new Set(['message.user', 'text', 'tool', 'coordination.tool', 'core.usage', 'skill.loaded', 'lifecycle', 'goal',
   'goal.completed', 'goal.paused', 'goal.cancelled', 'goal.stalled', 'summary', 'error', 'info', 'question', 'question.answered',
   'question.expired', 'input.required', 'activity', 'checkpoint', 'issue', 'memory', 'assessment', 'acceptance', 'artifact',
@@ -45,6 +45,8 @@ const knownEvents = new Set(['message.user', 'text', 'tool', 'coordination.tool'
 const extraEvent = /^(?:assignment|peer|debate|workflow|session\.memory|conversation|execution|diagnostic|learning|skill|snapshot)\.|^(?:message\.finalized|work\.observed)$/;
 const fail = message => { throw Object.assign(new Error(message), { code: 'SESSION_DEBUG' }); };
 const parse = value => { if (typeof value !== 'string') return value; try { return JSON.parse(value); } catch { return value; } };
+const gmailTool = name => /(?:^|\/|__)gmail_read$/.test(name || '');
+const mailInput = input => ({ operation: ['list', 'read'].includes(input?.operation) ? input.operation : 'invalid' });
 
 function sensitiveOperation(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value || {});
@@ -58,7 +60,7 @@ function backendEvent(data) {
   const params = data.params || {}, item = params.item;
   if (data.method === 'tool.started' || data.method === 'tool.completed') {
     const input = parse(params.input);
-    return { type: data.method, data: { ...pick(params, ['id', 'name', 'failed']), ...(input !== undefined ? { input: sensitiveOperation(input) ? '[omitted: private operation]' : input } : {}) } };
+    return { type: data.method, data: { ...pick(params, ['id', 'name', 'failed']), ...(input !== undefined ? { input: gmailTool(params.name) ? mailInput(input) : sensitiveOperation(input) ? '[omitted: private operation]' : input } : {}) } };
   }
   if (data.method === 'turn/started' || data.method === 'turn/completed') return { type: data.method,
     data: pick(params.turn, ['id', 'status', 'error']) };
@@ -72,7 +74,10 @@ function backendEvent(data) {
     if (phase === 'completed') value.output = sensitiveOperation(item.command) ? '[omitted: private operation]' : item.aggregatedOutput;
   } else if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall') {
     value.name = item.tool || item.name; value.server = item.server; value.input = parse(item.arguments);
-    if (phase === 'completed') Object.assign(value, sensitiveOperation(value.input) ? { output: '[omitted: private operation]' }
+    if (gmailTool(value.name)) {
+      value.input = mailInput(value.input);
+      if (phase === 'completed') value.output = '[omitted: private email]';
+    } else if (phase === 'completed') Object.assign(value, sensitiveOperation(value.input) ? { output: '[omitted: private operation]' }
       : pick(item, ['result', 'error', 'contentItems', 'success']));
   } else if (item.type === 'fileChange') {
     value.name = 'edit'; value.changes = (item.changes || []).map(change => sensitiveOperation(change.path)
@@ -273,7 +278,8 @@ export function exportSessionDebug(sessionId, { cwd, output, at = new Date() } =
         else if (knownEvents.has(row.type) || extraEvent.test(row.type)) projected = { type: row.type, data: pick(data, eventFields) };
         if (!projected) { skipped[row.type === 'backend' ? `backend:${data.method || 'unknown'}:${data.params?.item?.type || ''}` : row.type] = (skipped[row.type === 'backend' ? `backend:${data.method || 'unknown'}:${data.params?.item?.type || ''}` : row.type] || 0) + 1; continue; }
         if (row.type === 'message.user' || row.type === 'message.finalized' || row.type === 'tool' || row.type === 'coordination.tool' || projected.type.startsWith('tool.') || row.type === 'lifecycle') flush(row.sessionId);
-        if (row.type === 'coordination.tool' && sensitiveOperation(data.input)) projected.data.input = '[omitted: private operation]';
+        if (row.type === 'coordination.tool' && gmailTool(data.name)) projected.data.input = mailInput(data.input);
+        else if (row.type === 'coordination.tool' && sensitiveOperation(data.input)) projected.data.input = '[omitted: private operation]';
         if (row.type === 'tool' && sensitiveOperation(data.detail)) projected.data.detail = '[omitted: private operation]';
         emitEvent({ ...source, ...projected });
       }

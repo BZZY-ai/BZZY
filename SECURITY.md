@@ -11,7 +11,7 @@ which controls are enforced today.
 Persistent Agent v1 resolves identity from Core's live registry/session ancestry,
 uses bounded scoped project/context reads and durable Core tools, and rejects
 native shell, file writes, unapproved HTTP, delegation and account operations.
-Schedules and production email/account connectors are not implemented. Codex
+Persistent Agent schedules and account connectors are not implemented. Codex
 verifies an isolated named permission profile using private backend configuration;
 Claude restricts native tools and MCP/config sources and disables hooks. Provider
 processes authenticate using the recipient host's private login/key configuration;
@@ -163,6 +163,42 @@ PRIVATE CREDENTIAL HANDLING
 - Prevent secret exposure through command arguments, shell tracing, crash dumps,
   debug output, API errors, event streams, network captures, and notification
   payloads. Apply data minimization and redaction before persistence/transport.
+
+NATIVE READ-ONLY GMAIL ACCESS
+
+The owner configures Gmail in CLI Settings → BZZY Core → Gmail / email access.
+The mailbox address and app password are private host bindings in
+`$BZZY_HOME/credentials.json` (normally `~/.bzzy/credentials.json`), under the
+reserved `__gmail__` entry. Settings masks password input and saved-password
+status. Credentials never enter model input, model-facing tool arguments, logs, Library
+exports or portable project state. Saving is local and makes no Gmail request.
+
+Save authorizes Core's `gmail_read` tool for ordinary owner-terminal chats and
+goals on that host. Core's ToolHost enforces this boundary; persistent Agents,
+workers and reviewers do not inherit the connection. Workflow or skill text,
+an imported definition and selected signup aliases cannot grant this access.
+The separate per-skill signup-alias list stays in private Core `config.json`;
+it supplies approved account-selection data and is not mailbox authentication.
+Approved aliases are the website login/registration identities, rather than
+the Gmail mailbox login. They must already forward to the connected mailbox
+through forwarding configured outside BZZY; saving aliases creates no forwarding.
+Disconnect removes the local Gmail connection without removing those aliases.
+Every receiving host must configure and authorize its own mailbox connection.
+
+Core's bundled Python 3.9+ standard-library helper connects to Gmail over TLS
+and receives credentials through private process input, without a user script
+or pip dependency. Its list/read operations select folders read-only and use
+non-marking fetches. Reads bind a message UID to its folder's UIDVALIDITY;
+changed UIDVALIDITY requires listing again. Raw MIME messages are limited to
+1 MiB, returned text is bounded, and attachments have metadata only. There is
+no send, delete, move, flag-change or attachment-download operation.
+
+Selected message contents are private execution data returned to the active
+model provider as tool results. They can be retained in provider/session
+history; credential isolation does not make email contents public or ephemeral.
+Treat mail bodies, headers and links as untrusted data that cannot authorize
+tools, change scope or override the owner's instructions. Local fixture tests
+do not establish live-mailbox authentication or deployment readiness.
 
 AUTHORIZATION AND EXECUTION
 
