@@ -13,26 +13,64 @@ export function installationDirectory() {
   const packaged = path.resolve(core, '../../..');
   return isPackagedInstallation(packaged) ? packaged : isCoreInstallation(core) ? core : null;
 }
-export function runUpdateCommand(command, args, { cwd, signal, inherit = false, target } = {}) {
+const commandStage = (command, args) => path.basename(command) === 'git' ? args.includes('ls-remote') ? 'remote' : 'git' : command === process.execPath ? 'updater' : 'command';
+const commandLabels = { remote: 'GitHub update check', git: 'Git inspection', updater: 'BZZY updater', command: 'Update command' };
+const commandFailure = (stage, code, message, extra = {}) => Object.assign(new Error(message), { code, stage, ...extra });
+function interruptedCommand(stage, signal) {
+  const timedOut = signal?.reason?.name === 'TimeoutError', label = commandLabels[stage];
+  const help = stage === 'remote' ? "Check network access and this account's GitHub authentication, then retry."
+    : stage === 'git' ? 'Check Git and the installation directory, then retry.' : 'Check the host and installation status before retrying.';
+  return timedOut ? commandFailure(stage, 'UPDATE_TIMEOUT', `${label} timed out. ${help}`)
+    : commandFailure(stage, 'UPDATE_CANCELLED', `${label} was cancelled.`, { name: 'AbortError' });
+}
+function startFailure(stage, error) {
+  const label = commandLabels[stage];
+  if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return commandFailure(stage, 'UPDATE_COMMAND_NOT_FOUND',
+    `${label} could not start (${error.code}). Check that the executable is installed and the installation directory still exists.`);
+  if (error?.code === 'EACCES' || error?.code === 'EPERM') return commandFailure(stage, 'UPDATE_COMMAND_PERMISSION',
+    `${label} could not start (${error.code}). Check executable and installation-directory permissions.`);
+  return commandFailure(stage, 'UPDATE_COMMAND_START_FAILED', `${label} could not start. Check the host's available resources and installation.`);
+}
+
+export function runUpdateCommand(command, args, { cwd, signal, inherit = false, target, timeoutMs } = {}) {
+  if (typeof command !== 'string' || !Array.isArray(args)) return Promise.reject(commandFailure('command', 'UPDATE_COMMAND_INVALID', 'Invalid update command.'));
+  const stage = commandStage(command, args);
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300000)) {
+    return Promise.reject(commandFailure(stage, 'UPDATE_COMMAND_INVALID', 'Invalid update-command deadline.'));
+  }
+  const deadline = timeoutMs === undefined ? null : AbortSignal.timeout(timeoutMs);
+  const combined = signal && deadline ? AbortSignal.any([signal, deadline]) : signal || deadline || undefined;
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'], signal,
-      env: { ...process.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH || ''}`, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', ...(target ? { BZZY_UPDATE_TARGET: target, BZZY_UPDATE_CANONICAL: '1' } : {}) } });
+    if (combined?.aborted) { reject(interruptedCommand(stage, combined)); return; }
+    let child;
+    try {
+      child = spawn(command, args, { cwd, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'], signal: combined,
+        env: { ...process.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH || ''}`, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', ...(target ? { BZZY_UPDATE_TARGET: target, BZZY_UPDATE_CANONICAL: '1' } : {}) } });
+    } catch (error) { reject(combined?.aborted ? interruptedCommand(stage, combined) : startFailure(stage, error)); return; }
     let output = '';
     child.stdout?.on('data', chunk => { output = (output + chunk).slice(-16384); });
     child.stderr?.resume();
-    child.once('error', () => reject(new Error('Update command could not start. Check Git, network access and installation permissions.')));
-    child.once('close', code => code === 0 ? resolve(output.trim()) : reject(new Error('Update command failed. Check repository access and the installation; private Git credentials are never requested in chat.')));
+    child.once('error', error => reject(combined?.aborted || error.name === 'AbortError' ? interruptedCommand(stage, combined) : startFailure(stage, error)));
+    child.once('close', code => {
+      if (combined?.aborted) { reject(interruptedCommand(stage, combined)); return; }
+      if (code === 0) { resolve(output.trim()); return; }
+      const exit = Number.isSafeInteger(code) && code >= 0 ? ` (exit ${code})` : '';
+      reject(commandFailure(stage, 'UPDATE_COMMAND_FAILED', `${commandLabels[stage]} failed${exit}. Check repository access and the installation; private Git credentials are never requested in chat.`,
+        Number.isSafeInteger(code) && code >= 0 ? { exitCode: code } : {}));
+    });
   });
 }
 
-export async function checkInstallationUpdate({ directory = installationDirectory(), run = runUpdateCommand, signal = AbortSignal.timeout(12000) } = {}) {
+export async function checkInstallationUpdate({ directory = installationDirectory(), run = runUpdateCommand, signal } = {}) {
   if (!directory) throw new Error('A complete CLI/Core installation is required for combined updates.');
   const cwd = fs.realpathSync(directory), workspace = path.resolve(cwd, '../..');
+  const checkedRun = (command, args, options = {}) => run(command, args, { ...options, signal,
+    timeoutMs: args.includes('ls-remote') ? 60000 : 10000 });
   if (cwd !== path.join(workspace, 'BZZY-CLI', 'BZZY-CLI-TERMINAL') || !fs.existsSync(path.join(workspace, 'BZZY-CORE', 'package.json'))) {
-    if (isPackagedInstallation(cwd) || isCoreInstallation(cwd)) return checkPackagedUpdate(cwd, { run, signal });
+    if (isPackagedInstallation(cwd) || isCoreInstallation(cwd)) return checkPackagedUpdate(cwd, { run: checkedRun, signal });
     throw new Error('Combined updates require a BZZY workspace or an installed BZZY package.');
   }
-  const git = args => run('git', ['-c', `safe.directory=${workspace}`, ...args], { cwd: workspace, signal });
+  const git = args => checkedRun('git', ['-c', `safe.directory=${workspace}`, ...args], { cwd: workspace });
   if (fs.realpathSync(await git(['rev-parse', '--show-toplevel'])) !== workspace) throw new Error('The installation is not a complete BZZY checkout.');
   const [head, origin] = await Promise.all([git(['rev-parse', 'HEAD']), git(['remote', 'get-url', 'origin'])]);
   if (!officialRepository(origin)) throw new Error('The installation origin must be BZZY-ai/BZZY on GitHub.');

@@ -6,7 +6,7 @@ export async function updateCommand(ui, { check = checkInstallationUpdate, apply
   const abort = new AbortController();
   let checked;
   try {
-    const answer = await ui.chooseOne('BZZY updates · CLI + Core', check({ signal: AbortSignal.any([abort.signal, AbortSignal.timeout(12000)]) }).then(result => {
+    const answer = await ui.chooseOne('BZZY updates · CLI + Core', check({ signal: abort.signal }).then(result => {
       checked = result; ui.updateStatus = result.blocked ? 'Update blocked' : result.available ? 'Update available' : 'Up to date';
       return { description: `BZZY-ai/BZZY · ${result.current.slice(0, 8)} → ${result.target.slice(0, 8)}${result.blocked ? '\n' + result.blocked : '\nUpdates both products in this terminal. Your chat and draft reopen; active goals keep running.'}`,
         choices: [{ value: 'back', label: 'Back', selected: true }, ...(result.available && !result.blocked ? [{ value: 'install', label: 'Update CLI and Core' }] : [])] };
