@@ -33,6 +33,7 @@ public final class CoreEventProjectionStore {
     public private(set) var historyWindowShifted = false
     private let maximumBytes = 64 * 1024 * 1024 // One 16 MiB wire event may expand during JSON escaping, beside the bounded outbox.
     public var events: [CoreEvent] { displayed }
+    public var isBrowsingHistory: Bool { browsingHistory }
     public var firstCursor: Int64 { displayed.first?.seq ?? 0 }
     public var hasOlderHistory: Bool { olderAvailable }
     public var hasNewerHistory: Bool { (displayed.last?.seq ?? 0) < saved.cursor }
@@ -103,6 +104,10 @@ public final class CoreEventProjectionStore {
             // sequence is already durably processed; do not insert it anew.
         }
         guard batch.events.last?.seq == batch.nextCursor else { throw CoreApplicationError("INVALID_CURSOR") }
+        // A lost acknowledgment can deliver an exact batch again. Its cursor
+        // and retained envelopes are already durable; rewriting the entire
+        // recent cache on the main actor adds no durability to that replay.
+        guard next.cursor != saved.cursor || !historyInitialized else { return }
         next.historyInitialized = true
         pruneDelivered(&next)
         boundRecent(&next)
@@ -140,7 +145,9 @@ public final class CoreEventProjectionStore {
     }
 
     /// Historical reads never change the forward subscription cursor or ACK.
-    public func prepend(_ page: CoreEventHistoryPage) throws {
+    /// Automatic tail filling leaves the live display following new events;
+    /// only intentional backward navigation starts a held reading window.
+    public func prepend(_ page: CoreEventHistoryPage, preservingHistoryPosition: Bool = true) throws {
         guard page.sessionID == saved.sessionID, page.bootstrapToken == nil,
               page.events.allSatisfy({ $0.seq < firstCursor || displayed.contains($0) }) else { throw CoreApplicationError("INVALID_CURSOR") }
         let merged = try merge(page.events, displayed)
@@ -149,7 +156,10 @@ public final class CoreEventProjectionStore {
         next.hasOlder = page.hasOlder
         boundRecent(&next)
         try persist(next); saved = next; displayed = merged; olderAvailable = page.hasOlder
-        browsingHistory = true; boundVisible(keepingOldest: true)
+        // An automatic read may finish after the user starts reading history.
+        // It must not release that newer intent when its response arrives.
+        browsingHistory = preservingHistoryPosition || browsingHistory
+        boundVisible(keepingOldest: browsingHistory)
     }
 
     public func markSubscribed() throws {
@@ -162,7 +172,12 @@ public final class CoreEventProjectionStore {
         browsingHistory = false; displayed = saved.events; olderAvailable = saved.hasOlder ?? false
         historyWindowShifted = false
     }
-    public func holdHistoryWindow() { browsingHistory = true }
+    public func holdHistoryWindow() {
+        // An empty/loading view has no reading position to preserve. Holding it
+        // would hide the first live reply until an explicit Latest action.
+        guard !displayed.isEmpty else { return }
+        browsingHistory = true
+    }
 
     public func clearHistoryWindowShifted() { historyWindowShifted = false }
 

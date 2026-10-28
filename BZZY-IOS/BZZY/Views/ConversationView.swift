@@ -52,9 +52,10 @@ struct ConversationCanvas: View {
     @State private var composerCaretRequest = 0
     @State private var historyWindow = ConversationHistoryWindow()
     @State private var pagingHistory = false
-    @State private var followingLatest = true
-    @State private var initialPositioned = false
+    @State private var historyPagingRevision = 0
+    @State private var scrollState = ConversationScrollState()
     @State private var scrollViewportHeight: CGFloat = 0
+    @State private var bottomPosition: CGFloat?
     #if canImport(UIKit)
     @State private var composerFocused = false
     #else
@@ -174,12 +175,22 @@ struct ConversationCanvas: View {
                                 .disabled(pagingHistory || relay.coreHistoryLoading || (!historyWindow.hasEarlier(in: messages) && !relay.isCoreSessionReady(conversationID)))
                                 .accessibilityIdentifier("load-earlier-messages")
                                 .id("earlier-\(visibleMessages.first?.id.uuidString ?? "empty")")
-                                .onAppear {
-                                    if initialPositioned && !followingLatest { Task { await loadEarlierHistory(reader) } }
-                                }
+                        }
+                        if isLive && store.liveSession?.id == conversationID && store.cachedPresentationOmittedMessageCount > 0 {
+                            Text("Some large entries are available from Core when connected.")
+                                .bzzyFont(10).foregroundStyle(BZZYTheme.muted)
+                                .accessibilityIdentifier("chat-cache-omitted")
                         }
                         if messages.isEmpty {
-                            if BZZYTheme.showsMascot {
+                            if isLive {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(relay.isCoreSessionReady(conversationID) ? "No messages yet" : "No saved messages on this iPhone yet")
+                                        .bzzyFont(12, weight: .medium)
+                                    Text(relay.isCoreSessionReady(conversationID) ? "Write a message or set a goal." : "Core will load this conversation when connected.")
+                                        .bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
+                                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 28)
+                                    .accessibilityElement(children: .combine).accessibilityIdentifier("chat-empty-state")
+                            } else if BZZYTheme.showsMascot {
                                 FlyEyes(interactive: false).frame(width: 160)
                                     .frame(maxWidth: .infinity).padding(.vertical, 70)
                             } else {
@@ -225,47 +236,64 @@ struct ConversationCanvas: View {
                         Color.clear.onAppear { scrollViewportHeight = geometry.size.height }
                             .onChange(of: geometry.size.height) { _, height in scrollViewportHeight = height }
                     })
+                    .modifier(ConversationScrollInteraction { scrollState.setUserScrolling($0) })
                     .onPreferenceChange(ConversationBottomPreference.self) { bottom in
-                        guard initialPositioned, !pagingHistory, let bottom, scrollViewportHeight > 0 else { return }
-                        let atLatest = bottom >= 0 && bottom <= scrollViewportHeight + 72 && historyWindow.includesLatest(in: messages)
-                            && !(isLive && relay.coreHistoryHasNewer)
-                        if atLatest && !followingLatest {
-                            historyWindow.showLatest(); followingLatest = true
+                        bottomPosition = bottom
+                        guard !messages.isEmpty, !pagingHistory, let bottom, scrollViewportHeight > 0 else { return }
+                        let atLatest = bottom >= 0 && bottom <= scrollViewportHeight + 72
+                        let includesLatest = historyWindow.includesLatest(in: messages) && !(isLive && relay.coreHistoryHasNewer)
+                        switch scrollState.observeViewport(atLatest: atLatest, includesLatest: includesLatest) {
+                        case .followLatest:
+                            historyWindow.showLatest()
                             if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
-                            scrollToLatest(reader, force: true)
-                        }
-                        else {
-                            if !atLatest && followingLatest {
-                                historyWindow.freeze(in: messages)
-                                if isLive { relay.holdCoreHistory(sessionID: conversationID) }
-                            }
-                            followingLatest = atLatest
+                            scrollToLatest(reader)
+                        case .holdEarlier:
+                            historyWindow.freeze(in: messages)
+                            if isLive { relay.holdCoreHistory(sessionID: conversationID) }
+                        case .none: break
                         }
                     }
-                    .defaultScrollAnchor(.bottom)
+                    .modifier(ConversationInitialScrollAnchor())
                     .task(id: conversationID) {
-                        historyWindow.showLatest(); followingLatest = true; initialPositioned = false
+                        historyWindow.showLatest(); scrollState.showLatest()
+                        if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
                         await Task.yield()
                         scrollToLatest(reader)
-                        initialPositioned = true
+                    }
+                    .task(id: messages.last) {
+                        // Cached rows, late bootstrap and streamed text all get a
+                        // layout pass before positioning. A reader in history stays put.
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        scrollToLatest(reader)
+                    }
+                    .task(id: scrollViewportHeight) {
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        scrollToLatest(reader)
+                    }
+                    .task(id: bottomPosition) {
+                        // Interleaved tool/worker rows can grow before the last
+                        // message. Follow their resulting layout as well.
+                        guard let bottomPosition, bottomPosition > scrollViewportHeight + 1 else { return }
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        scrollToLatest(reader)
                     }
                     .onChange(of: relay.coreOutgoingMessages.map(\.id)) { previous, current in
-                        if current.contains(where: { !previous.contains($0) }) {
+                        if isLive, relay.coreSessionID == conversationID, current.contains(where: { !previous.contains($0) }) {
                             prepareForSubmission()
                             scrollToLatest(reader, force: true)
                         }
                     }
-                    .onChange(of: messages.last?.text) { scrollToLatest(reader) }
-                    .onChange(of: messages.last?.id) { scrollToLatest(reader) }
                     .onChange(of: composerFocused) {
-                        if composerFocused { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { reader.scrollTo("bottom", anchor: .bottom) } }
+                        if composerFocused && scrollState.followingLatest { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { reader.scrollTo("bottom", anchor: .bottom) } }
                     }
                     .overlay(alignment: .bottomTrailing) {
-                        if !followingLatest || isLive && relay.coreHistoryHasNewer {
+                        if !scrollState.followingLatest {
                             Button {
                                 Task {
-                                    if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
-                                    historyWindow.showLatest(); followingLatest = true
+                                    prepareForSubmission()
                                     await Task.yield()
                                     scrollToLatest(reader, force: true)
                                 }
@@ -329,20 +357,6 @@ struct ConversationCanvas: View {
                 draftHostID = hostID
                 draft = store.composerDraft(hostID: hostID, conversationID: conversationID)
             } else if !isLive { draft = store.localComposerDrafts[conversationID] ?? "" }
-        }
-        .task(id: "\(relay.isCoreSessionReady(conversationID)):\(relay.coreHistoryHasOlder)") {
-            // Fifty wire events may contain only part of one streamed reply.
-            // Fill toward fifty projected messages, with bounded read-only pages.
-            for _ in 0..<100 {
-                guard isLive, relay.isCoreSessionReady(conversationID), followingLatest, !pagingHistory,
-                      messages.filter({ $0.invocation == nil }).count < ConversationHistoryWindow.pageSize,
-                      relay.coreHistoryHasOlder, !relay.coreHistoryLoading, !Task.isCancelled else { return }
-                let first = relay.coreHistoryOldestCursor
-                await relay.loadOlderCoreHistory(sessionID: conversationID)
-                guard followingLatest, !Task.isCancelled else { return }
-                relay.showLatestCoreHistory(sessionID: conversationID)
-                if relay.coreHistoryOldestCursor >= first { return }
-            }
         }
         .onChange(of: draft) { _, text in
             if let hostID = draftHostID, relay.hosts.contains(where: { $0.id == hostID && $0.isPaired }) { store.saveComposerDraft(text, hostID: hostID, conversationID: conversationID) }
@@ -522,21 +536,24 @@ struct ConversationCanvas: View {
     }
 
     private func prepareForSubmission() {
+        historyPagingRevision &+= 1; pagingHistory = false
         if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
-        historyWindow.showLatest(); followingLatest = true
+        historyWindow.showLatest(); scrollState.showLatest()
     }
 
     private func scrollToLatest(_ reader: ScrollViewProxy, force: Bool = false) {
-        guard !pagingHistory, followingLatest || force else { return }
-        if force { followingLatest = true }
+        guard (!pagingHistory || force), (!scrollState.userScrolling || force), scrollState.followingLatest || force else { return }
+        if force { scrollState.showLatest() }
         var transaction = Transaction(); transaction.disablesAnimations = true
         withTransaction(transaction) { reader.scrollTo("bottom", anchor: .bottom) }
     }
 
     private func loadEarlierHistory(_ reader: ScrollViewProxy) async {
         guard !pagingHistory, !relay.coreHistoryLoading, hasEarlierMessages else { return }
-        pagingHistory = true; followingLatest = false
-        defer { pagingHistory = false }
+        historyPagingRevision &+= 1
+        let revision = historyPagingRevision
+        pagingHistory = true; scrollState.showEarlier()
+        defer { if historyPagingRevision == revision { pagingHistory = false } }
         historyWindow.freeze(in: messages)
         if isLive { relay.holdCoreHistory(sessionID: conversationID) }
         let anchor = visibleMessages.first?.id
@@ -545,11 +562,20 @@ struct ConversationCanvas: View {
             for _ in 0..<3 {
                 guard relay.isCoreSessionReady(conversationID), relay.coreHistoryHasOlder else { break }
                 await relay.loadOlderCoreHistory(sessionID: conversationID)
+                if historyPagingRevision != revision {
+                    if scrollState.followingLatest && relay.activeHostID == host {
+                        relay.showLatestCoreHistory(sessionID: conversationID)
+                        await Task.yield()
+                        scrollToLatest(reader, force: true)
+                    }
+                    return
+                }
                 guard !Task.isCancelled, relay.activeHostID == host else { return }
                 if historyWindow.revealEarlier(in: messages) { break }
             }
         }
         await Task.yield()
+        guard historyPagingRevision == revision else { return }
         if let anchor {
             var transaction = Transaction(); transaction.disablesAnimations = true
             withTransaction(transaction) { reader.scrollTo(anchor, anchor: .top) }
@@ -594,6 +620,46 @@ struct ConversationCanvas: View {
         if let voiceDraft { draft = voiceDraft.text(with: voice.transcript) }
         recordingTask?.cancel(); recordingTask = nil
         voice.cancel(); voiceDraft = nil
+    }
+}
+
+struct ConversationInitialScrollAnchor: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            content.defaultScrollAnchor(.bottom, for: .initialOffset)
+        } else {
+            content.defaultScrollAnchor(.bottom)
+        }
+    }
+}
+
+struct ConversationScrollInteraction: ViewModifier {
+    let changed: (Bool) -> Void
+    @State private var settlingTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            content.onScrollPhaseChange { _, phase in
+                changed(phase == .interacting || phase == .decelerating)
+            }
+        } else {
+            content.simultaneousGesture(DragGesture(minimumDistance: 8)
+                .onChanged { value in
+                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                    settlingTask?.cancel(); changed(true)
+                }
+                .onEnded { _ in
+                    // iOS 17 has no scroll-phase callback. Let the final layout
+                    // from a flick arrive before closing this user interaction.
+                    settlingTask?.cancel()
+                    settlingTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        guard !Task.isCancelled else { return }
+                        changed(false)
+                    }
+                })
+                .onDisappear { settlingTask?.cancel(); changed(false) }
+        }
     }
 }
 

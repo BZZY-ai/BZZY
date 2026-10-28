@@ -35,7 +35,7 @@ struct TerminalView: View {
                             } label: {
                                 sessionRow(name: terminal.title, symbol: "terminal", activity: terminal.activity)
                             }.buttonStyle(.plain)
-                                .disabled(!relay.coreActionsAvailable || !relay.coreCatalogReady || relay.coreBusy)
+                                .disabled(!relay.corePairAuthorized || relay.coreBusy)
                                 .accessibilityIdentifier("terminal-host-\(terminal.id)")
                             Rectangle().fill(BZZYTheme.line.opacity(0.6)).frame(height: 0.5)
                         }
@@ -48,7 +48,7 @@ struct TerminalView: View {
                                 subtitle: "\(session.model) · \(store.liveAvailable ? session.execution : "Disconnected")", assistantName: session.model, remoteSession: true).id(session.id)
                         } label: {
                             sessionRow(name: session.title, symbol: "terminal", activity: .init(goal: session.goalStatus, reason: nil, execution: session.execution))
-                        }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable).accessibilityIdentifier("terminal-live")
+                        }.buttonStyle(.plain).disabled(!relay.corePairAuthorized).accessibilityIdentifier("terminal-live")
                     }
                 }
                 if !store.terminalDrafts.isEmpty {

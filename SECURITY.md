@@ -222,6 +222,18 @@ do not establish live-mailbox authentication or deployment readiness.
 
 AUTHORIZATION AND EXECUTION
 
+iPhone Core Chat is an assessment surface, separate from voice/task execution.
+The fully approved own-phone base grant can submit bounded questions, but Core
+supplies only an allowlisted saved terminal/goal inventory to its restricted
+document model profile. It exposes no model tools, native file/network access,
+input leases or session controls. Instructions supplement that runtime boundary;
+user questions, aliases, goals and previous answers cannot authorize actions.
+Chat answers are assessments at a recorded observation time, not verified
+outcomes. Scoped/derived grants cannot invoke this host-wide inventory surface.
+Phone presentation caches contain display data only, are scoped to the host and
+grant, and never restore permissions or actionable approvals. Revocation and
+unpairing remove the associated cached display and pending Chat receipts.
+
 - The AI may propose capabilities; a deterministic policy broker authorizes
   them against explicit user choices. Agents cannot modify their own permissions
   or inherit another agent's privileges. Remote clients cannot bypass this broker.

@@ -31,7 +31,7 @@ async function waitFor(check) {
   while (Date.now() < deadline) { const value = await check(); if (value) return value; await delay(25); }
   assert.fail('Expected fixture state was not reached.');
 }
-async function fixture(t, { provisioned = true, subscriptionLeaseMs = 60000 } = {}) {
+async function fixture(t, { provisioned = true, subscriptionLeaseMs = 60000, assessmentRunModel } = {}) {
   const directory = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'bg-'));
   const keys = ['BZZY_HOME', 'BZZY_CODEX_BIN', 'BZZY_CODEX_HOME'], previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_HOME: path.join(directory, 'codex'), BZZY_CODEX_BIN: path.join(coreRoot, 'test/fixtures/codex.mjs') });
@@ -46,7 +46,7 @@ async function fixture(t, { provisioned = true, subscriptionLeaseMs = 60000 } = 
   const relay = await startRelay({ store, allowInsecureLocal: true, audit: event => relayAudit.push(event) });
   const clients = [], wire = [], context = { directory, workspace, store, relay, host, clients, wire, relayAudit, core: new BzzyCore() };
   context.makeGateway = () => new RelayGateway({ identity: host, url: relay.audience, allowInsecureLocal: true, autoReconnect: false,
-    pollIntervalMs: 100, subscriptionLeaseMs, requestTimeoutMs: 2000, clientFactory: options => {
+    pollIntervalMs: 100, subscriptionLeaseMs, requestTimeoutMs: 2000, assessmentRunModel, clientFactory: options => {
       const client = new RelayClient(options);
       context.hostClient = client;
       client.on('status', status => {
@@ -1056,4 +1056,45 @@ test('own-phone pause, model change and exact paused-goal resume retain the same
   snapshot = (await f.rpc(own, 'session.get')).result;
   assert.equal(snapshot.session.goal.id, session.goal.id); assert.equal(snapshot.session.model, 'fixture-new-model');
   assert.equal(listRecords('execution', { sessionId: session.id }).length, 1);
+});
+
+test('read-only Core Chat uses encrypted own-phone RPC without claiming or executing terminals', async t => {
+  let calls = 0, input, usedSource;
+  const raw = '<message version="1"><p>NASA is paused. This is a saved-state assessment.</p></message>';
+  const f = await fixture(t, { assessmentRunModel: async request => { calls++; input = JSON.parse(request.prompt); usedSource = request.source.id; return { text: raw }; } });
+  const session = f.createSession(); session.alias = 'NASA'; session.goal = newGoal('Inspect the saved state'); session.goal.status = 'paused';
+  putRecord('session', session.id, session);
+  new CoreAssistant().configure({ source: 'core', provider: 'codex', model: 'assessment-model', effort: 'default' },
+    { expectedRevision: 0, requestId: randomUUID() });
+  const own = await f.pair(session.id, controls, undefined, { sessionAccess: true, agentAccess: true, shareAccess: true });
+  assert.deepEqual((await f.rpc(own, 'chat.status')).result, { configured: true, readOnly: true });
+  const id = randomUUID();
+  assert.deepEqual((await f.rpc(own, 'chat.send', { text: 'How is NASA?' }, { id })).result, { state: 'accepted', requestId: id });
+  const finished = await waitFor(async () => {
+    const response = await f.rpc(own, 'chat.poll', { requestId: id, cursor: 0 });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    return response.result.state === 'finished' ? response.result : null;
+  });
+  assert.equal(finished.text, raw); assert.equal(finished.cursor, raw.length); assert.equal(finished.verification, 'not-assessed');
+  assert.equal(input.inventory.sessions[0].goal.status, 'paused');
+  assert.equal((await f.rpc(own, 'chat.send', { text: 'How is NASA?' }, { id })).result.requestId, id);
+  assert.equal(calls, 1); assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('input-intent').length, 0);
+  assert.equal(getRecord('session', session.id).goal.status, 'paused');
+  const scoped = await f.pair(session.id, ['observe']);
+  assert.equal((await f.rpc(scoped, 'chat.status')).error.code, 'FORBIDDEN');
+  assert.equal((await f.rpc(scoped, 'chat.poll', { requestId: id })).error.code, 'FORBIDDEN');
+  const derived = (await f.rpc(own, 'sessions.open', { sessionId: session.id })).result;
+  assert.equal((await f.rpc(own, 'chat.status', {}, { resource: derived.resource })).error.code, 'FORBIDDEN');
+
+  const other = f.createSession(); other.alias = 'Remaining'; putRecord('session', other.id, other);
+  const { deleteTerminalConversation } = await import('../src/engine/session-deletion.js');
+  deleteTerminalConversation(session.id, { requestId: randomUUID() });
+  assert.equal((await f.rpc(own, 'chat.status')).result.readOnly, true);
+  const fallbackId = randomUUID(), accepted = await f.rpc(own, 'chat.send', { text: 'Assess the remaining terminals.' }, { id: fallbackId });
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  await waitFor(async () => (await f.rpc(own, 'chat.poll', { requestId: fallbackId })).result?.state === 'finished');
+  assert.equal(usedSource, other.id); assert.deepEqual(input.inventory.sessions.map(value => value.id), [other.id]);
+  assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('input-intent').length, 0);
+  deleteTerminalConversation(other.id, { requestId: randomUUID() });
+  assert.equal((await f.rpc(own, 'chat.send', { text: 'No terminals remain.' })).error.code, 'CHAT_SOURCE_UNAVAILABLE');
 });

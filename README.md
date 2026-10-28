@@ -12,7 +12,7 @@ BZZY CLI ↔ BZZY Core ↔ BZZY Relay ↔ BZZY iOS
 | [Core](BZZY-CORE/README.md) | Sessions, providers/auth, tools, goals, persistent Agents, sharing and the host Relay gateway. |
 | [CLI](BZZY-CLI/BZZY-CLI-TERMINAL/README.md) | Terminal chat, model goals, aliased sessions, Settings, pairing and local Core controls. |
 | [Relay](BZZY-RELAY/README.md) | Authenticated encrypted transport and expiring QR/import codes; no model execution or provider credentials. |
-| [iOS](BZZY-IOS/README.md) | Pairing, Agent management, terminal chat/history, activity, on-device dictation and voice chat. |
+| [iOS](BZZY-IOS/README.md) | Pairing, Agent management, cached terminal history, read-only Core Chat, activity, on-device dictation and voice chat. |
 
 Keep this directory layout when cloning: the Node packages use sibling file
 dependencies. Agent and sharing implementations live in Core and their clients.
@@ -43,6 +43,13 @@ when history is replayed or compacted, including in minimal chat. Worker rows
 show Core's available token/runtime allowances, incomplete usage, saved or
 missing reports and the main session's recorded state. A partial report handoff
 does not establish goal completion.
+
+iPhone **Chat** asks Core about saved terminal and goal status using its own
+assistant model. It can only assess a bounded snapshot; it cannot control a
+session or change a goal. Replies show when Core checked the saved state.
+Recent terminal messages are cached on the phone for immediate reopening;
+offline history never grants execution permissions. Remote notification readiness
+is shown separately from iOS permission and on-device notification previews.
 
 Use **Settings → BZZY Core → Agent execution** for initial token/runtime
 allocations, adaptive or fixed mode, and optional hard ceilings. Adaptive

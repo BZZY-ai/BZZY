@@ -63,6 +63,9 @@ An authenticated transport receipt alone is never an application response.
 | `session.get` | `{}` | `observe`; projected session including actual `cwd`, latest execution, same-session questions, lease and actual steering capability |
 | `session.usage` | `{}` | `observe`; existing usage/summary, preserving missing/partial telemetry |
 | `host.metrics` | `{}` | `observe`; versioned cached host CPU/RAM and Core process CPU/RSS, without machine identity or process details; see [metrics](METRICS.md) |
+| `chat.status` | `{}` | Fully approved own-phone base grant; `{configured, readOnly: true}` without inference or session changes |
+| `chat.send` | `text` | Same full own-phone grant; durable request-ID-bound acceptance for a restricted, no-tools saved-state assessment; no execution, claim or control of terminals |
+| `chat.poll` | `requestId`, optional `cursor` | Same own-phone grant; raw bounded reply pages, saved `observedAt` and `verification: "not-assessed"`; see [Core Chat](SESSION-ASSESSMENT-CHAT.md) |
 | `voice.status` | `{}` | Fully approved own-phone base grant; Core assistant/folder readiness without inference |
 | `voice.send` | `text` | Full own-phone grant and `execute`; Core-selected private voice context, durable turn acceptance |
 | `voice.poll` | `requestId`, optional `cursor` | Same own-phone grant; bounded plain-speech pages from only that turn |

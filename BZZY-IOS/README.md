@@ -289,6 +289,35 @@ The composer also shows authoritative goal progress/completion/stall colors.
 
 Every agent and terminal opens the same native chat at its most recent message, without an animated trip through old history. Late Core history also lands at the bottom. Compact terminal transcript rows distinguish user, main assistant and worker replies with colored labels and rails, above the prompt composer. COOL, Signal, Subscriptions, Design review and Research contain fictional conversations. The examples demonstrate native tables, normal/bold/italic text, three text sizes, colored highlights, lists, quotes and literal code blocks. Sending in a Demo chat adds a predefined local reply. Created agent drafts remain separate and never receive these fake responses.
 
+Recent remote conversations also have a protected on-phone presentation cache:
+up to 100 complete semantic entries per host/resource/session/grant, bounded to
+1 MiB per conversation, 32 conversations and 16 MiB total. Oversized bodies are
+omitted with an explicit count rather than silently changing their original text.
+The cache paints before Core attachment and is replaced by durable event replay;
+it contains no live permissions, input ownership or actionable questions. Raw
+events and their durable acknowledgments remain a separate store. Revocation,
+unpairing and confirmed session deletion remove the associated cached display.
+Valid paired phones can read saved Terminal and Chat views offline; Core-dependent
+commands and Agent management still require a current authorized Core response.
+
+Terminal views render the latest 100 entries initially and expand a bounded
+200-entry reading window with **Earlier**. Layout changes, streaming messages
+and bootstrap pagination cannot switch the reader out of following the latest
+activity. Deliberately browsing older history preserves the reading position;
+**Latest** returns to the live tail. Opening history never resends model work.
+
+The bottom **Chat** tab is a separate read-only Core conversation for questions
+such as “Which sessions are running?” or “What is the goal status of this session?”
+It uses Core's independent assistant defaults and an enforced tool-free model
+profile, with a fresh bounded inventory of saved aliased terminal/goal states.
+It cannot execute, resume, pause, cancel, steer or edit another conversation.
+**Checking session status…** is request progress, not private model reasoning;
+replies show the snapshot's **Checked** time. Recorded achievement, historical
+acceptance and independent validation are distinguished; Chat does not reverify
+evidence or establish live process health. Its own recent replies and editable
+host-scoped draft persist on the phone. Reconnect reads pending receipts without
+resending questions. Unsupported older Core versions show an update notice.
+
 Hold the microphone beside Send to dictate using on-device Apple Speech. Partial results update the message field as available; release stops audio and briefly awaits final words. Existing typed text is preserved, and the result stays editable until the user presses Send. Unsupported languages/denied permissions keep typing available. Backgrounding, navigation and lost authorization cancel capture; releasing during a permission prompt cannot start a late recording.
 
 [message_format.txt](message_format.txt) is the versioned body-format contract to pass to BZZY-Core. Responses remain strings, with a small XML-compatible HTML-like vocabulary inside `<message version="1">`. The app translates it into SwiftUI views. Plain text and basic inline Markdown also work. No WebView, CSS or remote asset loading is involved. Malformed/unsupported rich content falls back to bounded plain text. Tables scroll horizontally and text respects Dynamic Type. Formatting is presentation, separate from runtime permissions and verified outcomes.
@@ -339,6 +368,14 @@ Settings → BZZY Updates shows the authoritative Core update status. The fully 
 ## Notifications and voice
 
 Settings → Notifications requests native alert/sound/badge permission only when **Enable notifications** is tapped. It shows current permission, an Activity alerts toggle, an iOS Settings shortcut and an explicit test notification. Native notification taps select an allowlisted screen and reconcile state; they never execute commands. Verified pairing approval/revocation can emit generic local alerts. Pairing codes and credentials never enter notifications; goal aliases and sanitized previews may appear on the lock screen.
+
+**Test on-device notification** tests only the local iPhone preview. It does not
+contact Core, Relay or APNs. **Remote activity delivery** separately shows
+permission, Apple registration, missing Relay/Core APNs setup for this build,
+or last confirmed provider configuration. Matching configuration is not an Apple
+acceptance or displayed-alert receipt. The installed app's push environment is
+shown to help match sandbox versus production. An unchanged device registration
+still refreshes Relay readiness after the administrator changes Apple setup.
 
 The phone registers its APNs token with authenticated Relay and sends its approved notification scope through the encrypted Core contract. Current Core/Relay versions use a durable Relay queue while the app is closed; older versions retain direct Core push. Registration is reasserted after foreground/reconnect, and a startup permission check cannot prematurely disable it. Goal alerts distinguish **achieved, stalled, paused, cancelled and input needed**, with the session alias with a sanitized final-reply preview limited to 180 Unicode characters, including `...` when truncated. Input alerts keep command details inside the app. Exact session or explicitly approved terminal/Agent scopes apply, with expiry/revocation, deduplication and bounded retries. Taps recheck authorization and navigate without executing. **Actual background delivery requires Apple provisioning, private Relay APNs configuration (or legacy direct Core setup) and a physical-device test.** Missing configuration is reported as pending, never as working delivery. See [host push setup](../BZZY-CORE/docs/PUSH.md).
 

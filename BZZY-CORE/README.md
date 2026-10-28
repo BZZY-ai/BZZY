@@ -12,6 +12,15 @@ the same engine and private state.
 
 Implemented:
 
+- [Read-only Core Chat](docs/SESSION-ASSESSMENT-CHAT.md) assesses a fresh bounded
+  inventory of saved aliased terminal/goal/execution states from the fully
+  approved own phone. It uses Core's independent assistant selection and the
+  restricted no-tools document runner in an empty private directory. Questions
+  cannot start, resume, pause, steer or change terminal sessions. Its private
+  turns have durable retry receipts and bounded raw reply pages; restarting
+  leaves interrupted inference uncertain instead of replaying it. Recorded
+  achievement and historical validation remain distinct from this assessment.
+
 - Explicit Linux root installation for owner-selected dedicated hosts, with a
   root-owned private context, systemd system supervision and direct cwd-preserving
   launchers. Ordinary user installs remain the default. Existing account state

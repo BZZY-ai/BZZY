@@ -122,7 +122,9 @@ struct WorkspaceView: View {
                 NavigationStack {
                     VStack(spacing: 0) {
                         workspaceHeader
-                        if store.selectedTab == .agents {
+                        if store.selectedTab == .chat {
+                            CoreChatView(store: store)
+                        } else if store.selectedTab == .agents {
                             AgentsView(store: store, showCreate: $showCreate)
                         } else {
                             TerminalView(store: store)
@@ -169,10 +171,20 @@ struct WorkspaceView: View {
                 relay.onCoreSessions = { store.applyLiveTerminalCatalog($0) }
                 relay.onCoreAgents = { store.applyHostAgents($0) }
                 relay.onCoreAgentStatus = { store.applyHostAgentStatus($0) }
+                relay.onCorePresentationRestore = { host, resource, session, grant in
+                    store.restoreCachedPresentation(scope: .init(hostID: host, resource: resource, sessionID: session, authorizationID: grant))
+                }
+                relay.onCorePresentationSave = { host, resource, session, grant in
+                    store.cacheLivePresentation(scope: .init(hostID: host, resource: resource, sessionID: session, authorizationID: grant))
+                }
+                relay.onCorePresentationPurge = { host, grant, session in
+                    store.removeCachedPresentation(hostID: host, authorizationID: grant, sessionID: session)
+                }
                 do {
                     try relay.restoreSavedHosts()
                     hostProfilesReady = true
                     store.retainHostDrafts(Set(relay.hosts.filter(\.isPaired).map(\.id)))
+                    store.retainCachedPresentationHosts(Set(relay.hosts.filter(\.isPaired).map(\.id)))
                     applyMultiHostFixture()
                     navigateFromNotification()
                 } catch { /* Relay surfaces private-storage failures during resume. */ }
@@ -186,7 +198,9 @@ struct WorkspaceView: View {
                 else if relay.hosts.isEmpty { notifications.hostAuthorizationRemoved() }
             }
             .onChange(of: relay.activeHostID) { _, _ in applyMultiHostFixture() }
-            .onChange(of: relay.hosts.filter(\.isPaired).map(\.id)) { _, ids in if hostProfilesReady { store.retainHostDrafts(Set(ids)) } }
+            .onChange(of: relay.hosts.filter(\.isPaired).map(\.id)) { _, ids in
+                if hostProfilesReady { store.retainHostDrafts(Set(ids)); store.retainCachedPresentationHosts(Set(ids)) }
+            }
             .onChange(of: relay.coreCatalogReady) { _, ready in if ready { Task { await synchronizePushRegistration() } } }
             .onChange(of: notifications.destination) { _, _ in navigateFromNotification() }
             .onChange(of: scenePhase) { _, phase in
@@ -205,9 +219,11 @@ struct WorkspaceView: View {
                         .accessibilityHidden(true)
                 }
                 Spacer()
+                if store.selectedTab != .chat {
                 RoundButton(symbol: "square.and.arrow.down", label: "Import \(store.selectedTab == .agents ? "agent" : "terminal")") {
                     importKind = store.selectedTab == .agents ? .agent : .terminal
                 }.accessibilityIdentifier("import-resource").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
+                }
                 if store.selectedTab == .agents {
                     RoundButton(symbol: "plus", label: "Create an agent") { showCreate = true }
                         .accessibilityIdentifier("create-agent").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
@@ -343,7 +359,8 @@ struct WorkspaceView: View {
                         .background(store.selectedTab == tab ? BZZYTheme.selection : .clear,
                                     in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
                 }.buttonStyle(.plain)
-                    .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
+                    .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
+                    .disabled(!allowsDemoNavigation && !relay.coreActionsAvailable && tab == .agents)
                     .accessibilityAddTraits(store.selectedTab == tab ? .isSelected : [])
             }
         }.padding(.horizontal, 8).padding(.vertical, 4)

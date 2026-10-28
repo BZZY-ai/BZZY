@@ -7,6 +7,7 @@ export const LIMITS = Object.freeze({ payloadBytes: 28 * 1024, promptBytes: 16 *
   requests: 16, requestsPerPeer: 4, requestsPerMinute: 60, metricsPerMinute: 30, acknowledgmentsPerMinute: 240, ackTimeoutMs: 30000, chunkAckTimeoutMs: 300000, eventBytes: 16 * 1024 * 1024, chunkBytes: 16 * 1024, chunksPerMinute: 2048 });
 
 const fields = Object.freeze({
+  'chat.status': [], 'chat.send': ['text'], 'chat.poll': ['requestId', 'cursor'],
   'voice.status': [], 'voice.send': ['text'], 'voice.poll': ['requestId', 'cursor'], 'voice.cancel': ['requestId'],
   'updates.status': [], 'updates.check': [], 'updates.configure': ['monitoringEnabled', 'notificationsEnabled', 'remoteUpdatesEnabled'], 'updates.install': ['target'],
   'settings.get': [], 'settings.providers': [], 'settings.models': ['provider', 'after', 'limit'],
@@ -34,7 +35,7 @@ const fields = Object.freeze({
   'permissions.set': ['owner', 'enabled', 'questionId', 'coordinateInput'],
   'control.request': ['owner', 'action', 'text', 'coordinateInput'], 'command.status': ['requestId'],
 });
-export const COMMANDS = new Set(['settings.configure', 'session.configure', 'session.mode', 'voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
+export const COMMANDS = new Set(['settings.configure', 'session.configure', 'session.mode', 'chat.send', 'voice.send', 'voice.cancel', 'updates.configure', 'updates.install', 'execution.execute', 'task.submit', 'question.answer', 'permissions.set', 'control.request', 'sessions.open', 'share.create', 'share.approve', 'share.revoke',
   'agents.create', 'agents.update', 'agents.archive', 'agents.open', 'agents.import', 'agents.import.cancel']);
 export const OPERATIONS = Object.freeze(Object.keys(fields));
 

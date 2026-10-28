@@ -19,7 +19,7 @@ export function notificationDeliveryStatus() {
   return { configured, registeredDevices: registrations.length, compatibleDevices: compatible.length,
     goalEvents: listRecords('outbox').filter(row => /^goal\./.test(row.event?.type || '')).length, deliveries: counts,
     message: !registrations.length && expiredPairing ? 'The saved iPhone pairing has expired. Pair again in Settings > Pair iPhone, then reopen the app to register goal alerts.'
-      : !configured ? registrations.some(row => row.relayPush) ? 'iPhone alerts are queued through Relay; configure Apple APNs on Relay. See Core docs/PUSH.md.' : 'iPhone alerts need private Apple APNs setup on this host. See Core docs/PUSH.md.'
+      : !configured ? registrations.some(row => row.relayPush) ? 'Remote iPhone delivery is not ready: the last Relay response reported APNs unavailable for this app environment. The alert is saved, not confirmed delivered. Configure Apple push on Relay; see Core docs/PUSH.md.' : 'iPhone alerts need private Apple APNs setup on this host. See Core docs/PUSH.md.'
       : !registrations.length ? 'Enable notifications in the paired iPhone app.'
       : !compatible.length ? 'The Apple environment differs from the installed iPhone build.' : 'iPhone goal alerts are configured. Apple acceptance is recorded per delivery.' };
 }

@@ -105,6 +105,7 @@ struct PendingCoreUpdate: Codable {
 }
 
 struct SavedRelayState: Codable {
+    var pendingChat: PendingVoiceTurn?
     var pendingVoice: PendingVoiceTurn?
     var pendingUpdate: PendingCoreUpdate?
     var host: HostBinding?
@@ -149,6 +150,14 @@ public enum RelayStatus: String, Sendable {
 
 @MainActor @Observable
 public final class RelayConnection {
+    public private(set) var chatMessages: [CoreChatMessage] = []
+    public private(set) var chatPhase = "idle"
+    public private(set) var chatErrorCode: String?
+    public private(set) var chatConfigured = false
+    public var chatWaiting: Bool { ["checking", "uncertain"].contains(chatPhase) && state.pendingChat != nil }
+    @ObservationIgnored private var chatPoll: Task<Void, Never>?
+    @ObservationIgnored private var chatHistory: CoreChatHistory?
+    @ObservationIgnored private var presentationSaveTask: Task<Void, Never>?
     public private(set) var hosts: [CoreHostSummary] = []
     public private(set) var activeHostID: String?
     public private(set) var defaultHostID: String?
@@ -181,6 +190,9 @@ public final class RelayConnection {
     @ObservationIgnored public var onCoreSessions: ((Data) -> Void)?
     @ObservationIgnored public var onCoreAgents: ((Data) -> Void)?
     @ObservationIgnored public var onCoreAgentStatus: ((Data) -> Void)?
+    @ObservationIgnored public var onCorePresentationRestore: ((String, String, String, String) -> Bool)?
+    @ObservationIgnored public var onCorePresentationSave: ((String, String, String, String) -> Void)?
+    @ObservationIgnored public var onCorePresentationPurge: ((String, String?, String?) -> Void)?
     public private(set) var coreUpdateSnapshot: CoreJSONValue?
     public private(set) var coreUpdateStatus = "Connect to Core to check updates."
     public private(set) var coreUpdateBusy = false
@@ -439,6 +451,7 @@ public final class RelayConnection {
 
     private func restoreHostPresentation() {
         confirmedCorePair = state.corePairValidated == true && (state.host?.expiresAt ?? 0) > RelayWire.now
+        restoreCoreChatHistory()
         hasHost = state.host != nil
         hostFingerprint = state.host?.certificate.id ?? ""
         hostStatus = hasHost ? "Host offline" : "Not paired"
@@ -478,6 +491,7 @@ public final class RelayConnection {
         coreUpdateSnapshot = nil; coreUpdateStatus = "Connect to Core to check updates."
         coreAgentImportSnapshot = nil; coreAgentImportRecoveredAgent = nil; agentImportRevision = UUID()
         voiceReply = ""; voicePhase = "idle"; voiceErrorCode = nil
+        chatHistory = nil; chatMessages = []; chatPhase = "idle"; chatErrorCode = nil
         recentCoreShares = [:]; pendingCoreShareRequests = [:]
         pushRegistrationStatus = "Host delivery not registered"
         confirmedCorePair = false; fatalAuthorizationLoss = false
@@ -548,6 +562,11 @@ public final class RelayConnection {
     }
 
     private func purgeProfileCache(_ value: SavedRelayState) {
+        if let host = value.host {
+            try? CoreChatHistory.purge(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory,
+                hostID: host.certificate.id, grantID: host.grantID)
+        }
+        if let host = value.host { onCorePresentationPurge?(host.certificate.id, host.grantID, nil) }
         var scopes = value.coreCacheScopes ?? []
         if let legacy = value.coreCacheScope { scopes.append(legacy) }
         for scope in scopes {
@@ -1135,19 +1154,19 @@ public final class RelayConnection {
                 guard self.coreClient === client, self.coreProjection === projection, self.historySyncEpoch == epoch, !self.coreSessionDeleted, !self.suspended, !Task.isCancelled else { return }
                 self.coreSubscriptionID = subscription["subscriptionId"].string
                 try projection.markSubscribed()
-                // Assistant discovery is optional for terminal attachments and
-                // must not block normal chat or a denied terminal capability.
-                do {
-                    _ = try await client.request("assistant.status")
-                    if self.coreClient === client { self.coreIsAssistant = true }
-                } catch {
-                    if self.coreClient === client { self.coreIsAssistant = false }
+                // Optional discovery must not delay text retrieval or the live subscription.
+                Task { [weak self, weak client] in
+                    guard let self, let client else { return }
+                    let available = (try? await client.request("assistant.status")) != nil
+                    if self.coreClient === client { self.coreIsAssistant = available }
                 }
                 for _ in 0..<3 {
                     guard self.coreClient === client, self.coreProjection === projection,
                           !projection.events.contains(where: { ["text", "message.user", "peer.text", "debate.message", "debate.result"].contains($0.type) }),
                           projection.hasOlderHistory else { return }
-                    await self.loadOlderCoreHistory(sessionID: sessionID)
+                    let previousOldest = projection.firstCursor
+                    await self.loadOlderCoreHistory(sessionID: sessionID, preservingHistoryPosition: false)
+                    if projection.firstCursor >= previousOldest { return }
                 }
             } catch {
                 guard self.coreClient === client, self.historySyncEpoch == epoch, !self.coreSessionDeleted, !self.suspended, !Task.isCancelled else { return }
@@ -1282,6 +1301,12 @@ public final class RelayConnection {
               let scope = (state.coreCacheScopes ?? state.coreCacheScope.map { [$0] } ?? [])
                 .first(where: { $0.hostID == hostID && $0.sessionID == sessionID }),
               cachedPresentationScope?.hostID != scope.hostID || cachedPresentationScope?.resource != scope.resource || cachedPresentationScope?.sessionID != scope.sessionID else { return }
+        if let grant = state.host?.grantID,
+           onCorePresentationRestore?(scope.hostID, scope.resource, scope.sessionID, grant) == true {
+            cachedPresentationScope = scope
+            refreshCachedCorePresentation(sessionID)
+            return
+        }
         do {
             let cached = try CoreEventProjectionStore(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory,
                 hostID: scope.hostID, resource: scope.resource, sessionID: scope.sessionID)
@@ -1292,11 +1317,26 @@ public final class RelayConnection {
             coreHistoryHasOlder = cached.hasOlderHistory
             coreHistoryHasNewer = cached.hasNewerHistory
             onCoreEvents?(cached.events.compactMap { try? JSONEncoder().encode($0) })
+            refreshCachedCorePresentation(sessionID)
         } catch { coreError = "Saved history is unavailable; reconnecting to Core." }
+    }
+
+    private func refreshCachedCorePresentation(_ sessionID: String) {
+        guard isCoreSessionReady(sessionID) else { return }
+        Task { [weak self] in
+            guard let self, self.isCoreSessionReady(sessionID), self.desiredCoreSessionID == sessionID,
+                  let client = self.coreClient else { return }
+            do {
+                let snapshot = try await client.request("session.get")
+                guard self.coreClient === client, self.desiredCoreSessionID == sessionID, !self.suspended else { return }
+                try await self.bindCoreSession(client, snapshot: snapshot)
+            } catch { /* Keep the cached display locked until a fresh read succeeds. */ }
+        }
     }
 
     public func showLatestCoreHistory(sessionID: String) {
         guard sessionID == coreSessionID, let projection = coreProjection else { return }
+        historyReadEpoch = UUID(); coreHistoryLoading = false
         projection.showLatestHistory()
         publishCoreEvents()
     }
@@ -1306,19 +1346,20 @@ public final class RelayConnection {
         coreProjection?.holdHistoryWindow()
     }
 
-    public func loadOlderCoreHistory(sessionID: String) async {
+    public func loadOlderCoreHistory(sessionID: String, preservingHistoryPosition: Bool = true) async {
         guard isCoreSessionReady(sessionID), !coreHistoryLoading, let client = coreClient,
               let projection = coreProjection, projection.hasOlderHistory, projection.firstCursor > 0 else { return }
         let epoch = UUID(); historyReadEpoch = epoch
         coreHistoryLoading = true; defer { if historyReadEpoch == epoch { coreHistoryLoading = false } }
         do {
             let page = try await client.request("events.list", params: ["before": .number(Double(projection.firstCursor)), "limit": .number(50)])
-            guard coreClient === client, coreProjection === projection, coreSessionID == sessionID,
+            guard historyReadEpoch == epoch, !Task.isCancelled, !suspended,
+                  coreClient === client, coreProjection === projection, coreSessionID == sessionID,
                   !coreSessionDeleted, !observedDeletedCoreSessions.contains(sessionID) else { return }
-            try projection.prepend(CoreEventHistoryPage(page, sessionID: sessionID))
+            try projection.prepend(CoreEventHistoryPage(page, sessionID: sessionID), preservingHistoryPosition: preservingHistoryPosition)
             publishCoreEvents()
         } catch {
-            guard coreClient === client else { return }
+            guard historyReadEpoch == epoch, coreClient === client else { return }
             coreError = "Older history could not be loaded. Pull again to retry."
         }
     }
@@ -1378,6 +1419,139 @@ public final class RelayConnection {
             coreError = "Terminal attachment is reconnecting (\(code)). No execution was started."
             return false
         }
+    }
+
+    private func restoreCoreChatHistory() {
+        guard let host = state.host, corePairAuthorized else {
+            chatHistory = nil; chatMessages = []; return
+        }
+        if chatHistory?.hostID == host.certificate.id, chatHistory?.grantID == host.grantID { return }
+        do {
+            let history = try CoreChatHistory.load(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory,
+                hostID: host.certificate.id, grantID: host.grantID)
+            chatHistory = history; chatMessages = history.messages
+        } catch { chatHistory = nil; chatMessages = []; chatErrorCode = "PROJECTION_UNAVAILABLE" }
+        chatPhase = state.pendingChat == nil ? "idle" : "uncertain"
+    }
+
+    private func saveCoreChatMessage(_ message: CoreChatMessage, client: CoreRelayClient) throws {
+        var history = chatHistory ?? CoreChatHistory(hostID: client.hostID, grantID: client.grantID, messages: [])
+        guard history.hostID == client.hostID, history.grantID == client.grantID else { throw CoreApplicationError("FORBIDDEN") }
+        if let existing = history.messages.first(where: { $0.id == message.id }) {
+            guard existing == message else { throw CoreApplicationError("INVALID_RESPONSE") }
+        } else { history.messages.append(message) }
+        try history.save(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory)
+        chatHistory = history; chatMessages = history.messages
+    }
+
+    /// This surface can only ask Core for a tool-free assessment. Its separate
+    /// protocol exposes no target session execute, input, goal or control fields.
+    public func prepareCoreChat() async {
+        restoreCoreChatHistory()
+        guard coreActionsAvailable, !suspended, let client = catalogClient else { chatErrorCode = "OFFLINE"; return }
+        do {
+            let result = try await client.request("chat.status")
+            guard coreActionsAvailable, !suspended, catalogClient === client else { return }
+            guard result["readOnly"].bool == true, let configured = result["configured"].bool else { throw CoreApplicationError("INVALID_RESPONSE") }
+            chatConfigured = configured
+            chatErrorCode = configured ? nil : "ASSISTANT_SETUP_REQUIRED"
+            if state.pendingChat != nil { startCoreChatPolling(client) }
+        } catch {
+            if catalogClient === client { chatConfigured = false; chatErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE" }
+        }
+    }
+
+    /// Dismiss only this phone's unresolved receipt. This neither resends the
+    /// question nor sends any cancellation/control to Core or a terminal.
+    public func dismissCoreChatQuestion() {
+        guard chatPhase == "uncertain", let pending = state.pendingChat else { return }
+        chatPoll?.cancel(); chatPoll = nil
+        state.pendingChat = nil
+        do { try save(); chatPhase = "idle"; chatErrorCode = "CHAT_DISMISSED" }
+        catch { state.pendingChat = pending; chatErrorCode = "PROJECTION_UNAVAILABLE" }
+    }
+
+    public func sendCoreChatText(_ text: String) async -> Bool {
+        guard coreActionsAvailable, !suspended, chatConfigured, !chatWaiting, let client = catalogClient else { chatErrorCode = "OFFLINE"; return false }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.utf8.count <= 16000 else { chatErrorCode = "INVALID_REQUEST"; return false }
+        let pending = PendingVoiceTurn(hostID: client.hostID, grantID: client.grantID, requestID: CoreRelayClient.commandID())
+        var dispatched = false
+        chatPhase = "checking"; chatErrorCode = nil
+        do {
+            try saveCoreChatMessage(.init(id: "user-" + pending.requestID, text: text, isUser: true,
+                createdAt: ISO8601DateFormatter().string(from: Date()), observedAt: nil), client: client)
+            state.pendingChat = pending; try save()
+            dispatched = true
+            let receipt = try await client.request("chat.send", params: ["text": .string(text)], id: pending.requestID)
+            guard receipt["requestId"].string == pending.requestID else { throw CoreApplicationError("INVALID_RESPONSE") }
+            guard catalogClient === client, state.pendingChat?.requestID == pending.requestID else { return false }
+            startCoreChatPolling(client); return true
+        } catch {
+            guard catalogClient === client else { return false }
+            let code = (error as? CoreApplicationError)?.code ?? "UNCERTAIN"
+            chatErrorCode = code
+            if !dispatched || ["FORBIDDEN", "GRANT_UNAVAILABLE", "INVALID_REQUEST", "CONFLICT", "CAPACITY", "CORE_STOPPED", "ASSISTANT_SETUP_REQUIRED", "OPERATION_DENIED"].contains(code) {
+                state.pendingChat = nil; try? save(); chatPhase = "failed"
+            } else { chatPhase = "uncertain"; startCoreChatPolling(client) }
+            return dispatched && state.pendingChat != nil // Known rejections retain the editable draft.
+        }
+    }
+
+    private func startCoreChatPolling(_ client: CoreRelayClient) {
+        guard let pending = state.pendingChat, pending.hostID == client.hostID, pending.grantID == client.grantID else { return }
+        chatPoll?.cancel()
+        chatPoll = Task { [weak self, weak client] in
+            guard let self, let client else { return }
+            var cursor: Int64 = 0, reply = ""
+            while !Task.isCancelled, self.coreActionsAvailable, !self.suspended, self.catalogClient === client,
+                  self.state.pendingChat?.requestID == pending.requestID {
+                do {
+                    let result = try await client.request("chat.poll", params: ["requestId": .string(pending.requestID), "cursor": .number(Double(cursor))])
+                    guard !Task.isCancelled, self.catalogClient === client, self.state.pendingChat?.requestID == pending.requestID else { return }
+                    guard let phase = result["state"].string,
+                          ["queued", "running", "finished", "failed", "uncertain", "unknown"].contains(phase),
+                          let next = result["cursor"].integer, next >= cursor,
+                          let text = result["text"].string, text.utf8.count <= 6000,
+                          next == cursor + Int64(text.utf16.count),
+                          reply.utf8.count + text.utf8.count <= 32768,
+                          let more = result["hasMore"].bool else { throw CoreApplicationError("INVALID_RESPONSE") }
+                    cursor = next; reply += text
+                    if more { guard !text.isEmpty else { throw CoreApplicationError("INVALID_RESPONSE") }; continue }
+                    if ["queued", "running"].contains(phase) {
+                        self.chatPhase = "checking"
+                        try await Task.sleep(for: .seconds(3)); continue
+                    }
+                    if phase == "uncertain" {
+                        self.chatPhase = "uncertain"; self.chatErrorCode = "UNCERTAIN"; return
+                    }
+                    if phase == "finished", !reply.isEmpty {
+                        guard result["verification"].string == "not-assessed", let observedAt = result["observedAt"].string,
+                              ISO8601DateFormatter().date(from: observedAt) != nil || Self.chatDate(observedAt) != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
+                        try self.saveCoreChatMessage(.init(id: "reply-" + pending.requestID, text: reply, isUser: false,
+                            createdAt: observedAt, observedAt: observedAt), client: client)
+                        self.chatPhase = "idle"; self.chatErrorCode = nil
+                    } else {
+                        self.chatPhase = "failed"; self.chatErrorCode = result["code"].string ?? (phase == "unknown" ? "CHAT_NOT_SENT" : "CHAT_FAILED")
+                    }
+                    self.state.pendingChat = nil
+                    do { try self.save() }
+                    catch { self.state.pendingChat = pending; throw error }
+                    return
+                } catch is CancellationError { return }
+                catch {
+                    if self.catalogClient === client, self.state.pendingChat?.requestID == pending.requestID {
+                        self.chatPhase = "uncertain"; self.chatErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE"
+                    }
+                    return
+                }
+            }
+        }
+    }
+
+    private static func chatDate(_ value: String) -> Date? {
+        let parser = ISO8601DateFormatter(); parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return parser.date(from: value)
     }
 
     /// Voice uses the approved base pairing and Core's independent default
@@ -1653,7 +1827,16 @@ public final class RelayConnection {
             let bytes = try JSONEncoder().encode([id, host.grantID, resource, plan.enabled ? "enabled" : "disabled",
                 plan.enabled ? plan.token ?? "" : "", plan.enabled ? plan.environment ?? "" : "", scope, hints ? "host-hints" : "legacy", useRelay ? "relay" : "direct"])
             let fingerprint = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-            if notificationFingerprints[id] == fingerprint { return }
+            if notificationFingerprints[id] == fingerprint {
+                // Provider setup is independent of the device/grant fingerprint.
+                // A fresh Relay response must replace a stale setup warning.
+                if plan.enabled && useRelay {
+                    notificationStatuses[id] = relayConfigured
+                        ? "Relay push configured · Apple delivery not yet confirmed"
+                        : "Relay APNs not configured · Remote alerts cannot be delivered"
+                }
+                return
+            }
             // Once a mutation is dispatched, an unknown/stale response cannot
             // justify skipping the next plan for this host.
             notificationFingerprints.removeValue(forKey: id)
@@ -1668,7 +1851,7 @@ public final class RelayConnection {
             guard notificationRequestIsCurrent(id: id, host: host, transport: transport, planID: plan.id, deadline: deadline, revoking: false) else { return }
             notificationFingerprints[id] = fingerprint
             notificationStatuses[id] = !plan.enabled ? "Host activity alerts disabled" : useRelay
-                ? (relayConfigured ? "Relay push configured · Background alerts enabled" : "Device registered · Configure Apple push on Relay")
+                ? (relayConfigured ? "Relay push configured · Apple delivery not yet confirmed" : "Relay APNs not configured · Remote alerts cannot be delivered")
                 : result["providerConfigured"].bool == true ? "Host push configured · Delivery requires Apple connectivity" : "Device registered · Configure APNs on the source Core"
         } catch {
             if notificationHostIsCurrent(id, host: host), notificationPreferencePlan?.id == plan.id {
@@ -2102,6 +2285,7 @@ public final class RelayConnection {
 
     private func notifyCoreConversationRemoval(_ sessionID: String) {
         guard UUID(uuidString: sessionID) != nil else { return }
+        if let host = state.host { onCorePresentationPurge?(host.certificate.id, host.grantID, sessionID) }
         if desiredCoreSessionID == sessionID { desiredCoreSessionID = nil; attachmentIntent = UUID() }
         if state.openingSession?.sessionID == sessionID { state.openingSession = nil }
         if state.selectedSession?.sessionID == sessionID { state.selectedSession = nil }
@@ -2164,6 +2348,9 @@ public final class RelayConnection {
             onCoreEvents?([])
             return
         }
+        // Preserve the already painted semantic tail until raw bootstrap has
+        // established history. An intermediate empty projection is not deletion.
+        guard projection.historyInitialized else { return }
         coreOutgoingMessages = projection.outgoing
         coreHistoryHasOlder = projection.hasOlderHistory
         coreHistoryHasNewer = projection.hasNewerHistory
@@ -2176,6 +2363,24 @@ public final class RelayConnection {
         }
         encodedCoreEvents = next
         onCoreEvents?(bytes)
+        schedulePresentationSave()
+    }
+
+    private func saveCurrentPresentation() {
+        guard let projection = coreProjection, projection.historyInitialized, !projection.isBrowsingHistory,
+              !coreSessionDeleted, let host = state.host,
+              desiredCoreSessionID == nil || desiredCoreSessionID == coreSessionID else { return }
+        onCorePresentationSave?(host.certificate.id, coreResource, coreSessionID, host.grantID)
+    }
+
+    private func schedulePresentationSave() {
+        guard presentationSaveTask == nil else { return }
+        presentationSaveTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(750)) } catch { return }
+            guard let self else { return }
+            self.presentationSaveTask = nil
+            self.saveCurrentPresentation()
+        }
     }
 
     private func retireCoreClient(_ client: CoreRelayClient, subscription: String?, owner: String?) {
@@ -2193,6 +2398,14 @@ public final class RelayConnection {
     }
 
     private func stopCore(purge: Bool, preserveCatalog: Bool = false, retainCurrentClient: Bool = false) {
+        if !purge { saveCurrentPresentation() }
+        presentationSaveTask?.cancel(); presentationSaveTask = nil
+        chatPoll?.cancel(); chatPoll = nil; chatConfigured = false
+        if state.pendingChat != nil { chatPhase = "uncertain" }
+        if purge {
+            if let host = state.host { try? CoreChatHistory.purge(directory: isolatedProjectionDirectory ?? Self.coreProjectionDirectory, hostID: host.certificate.id, grantID: host.grantID) }
+            state.pendingChat = nil; chatHistory = nil; chatMessages = []; chatPhase = "idle"; chatErrorCode = nil
+        }
         stopVoiceObservation(); voiceConfigured = false
         if purge { state.pendingVoice = nil; voiceReply = ""; voicePhase = "idle"; voiceErrorCode = nil }
         if purge { coreUpdateSnapshot = nil; state.pendingUpdate = nil }
@@ -2224,6 +2437,7 @@ public final class RelayConnection {
         coreYoloEnabled = false; coreYoloControl = false
         coreSelectionControl = false; coreModeControl = false; coreGoalSubmission = false; coreStalledGoalResume = false; coreInputSubmission = false; coreInputActor = nil; coreGoalID = nil; coreGoalStatus = nil; coreGoalReason = nil; coreExecutionState = nil
         if purge {
+            if let host = state.host { onCorePresentationPurge?(host.certificate.id, host.grantID, nil) }
             coreOutgoingMessages = []
             observedDeletedCoreSessions.removeAll(); observedCatalogRevision = nil; loadedCatalogRevision = nil
             confirmedCorePair = false; state.corePairValidated = false

@@ -1,6 +1,30 @@
 import XCTest
 
 final class BZZYUITests: XCTestCase {
+    func testCoreAssessmentChatKeepsAnOfflineDraftAndSuggestionsNeverSubmit() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-ui-testing", "--multi-host-testing"]
+        app.launch()
+        XCTAssertTrue(app.buttons["tab-chat"].waitForExistence(timeout: 10))
+        app.buttons["tab-chat"].tap()
+        XCTAssertTrue(app.staticTexts["Session assessment · read only"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label == %@", "Core offline · saved replies remain readable")).firstMatch.exists, app.debugDescription)
+        let draft = app.descendants(matching: .any)["core-chat-draft"], send = app.buttons["core-chat-send"]
+        XCTAssertTrue(draft.isEnabled)
+        draft.tap(); draft.typeText("Keep my assessment question")
+        XCTAssertFalse(send.isEnabled, "A local draft cannot enable a Core action while offline")
+        app.buttons["tab-terminal"].tap(); app.buttons["tab-chat"].tap()
+        XCTAssertEqual(draft.value as? String, "Keep my assessment question")
+        app.buttons["Which sessions need my attention?"].tap()
+        XCTAssertEqual(draft.value as? String, "Which sessions need my attention?")
+        XCTAssertFalse(send.isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["core-chat-checking"].exists)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "core-chat-suggestions").firstMatch.exists,
+                      "Choosing a suggestion must only fill the editable draft")
+        attach(app, name: "Offline assessment chat preserves drafts and suggestions require Send")
+    }
+
     func testCompactFooterAndRecordedInvocationMessages() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -91,8 +115,12 @@ final class BZZYUITests: XCTestCase {
         XCTAssertEqual(selector.value as? String, "Test Mac")
         XCTAssertTrue(app.buttons["terminal-live"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Test only dummy chat"].exists)
-        XCTAssertFalse(app.buttons["terminal-live"].isEnabled)
+        XCTAssertTrue(app.buttons["terminal-live"].isEnabled, "Paired cached terminals remain readable while Core is offline")
         XCTAssertTrue(selector.isEnabled)
+        app.buttons["terminal-live"].tap()
+        XCTAssertTrue(app.buttons["chat-settings"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["save-message"].isEnabled, "Reading a saved terminal cannot enable offline execution")
+        app.buttons["chat-back"].tap()
         XCUIDevice.shared.press(.home); app.activate()
         XCTAssertEqual(selector.value as? String, "Test Mac")
         let foregroundSelector = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in selector.isHittable }, object: nil)
@@ -155,10 +183,20 @@ final class BZZYUITests: XCTestCase {
         app.buttons["agent-COOL"].tap()
         XCTAssertTrue(app.staticTexts["History entry 225"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["History entry 225"].isHittable)
-        XCTAssertEqual(app.scrollViews["conversation-history"].value as? String, "50 messages")
-        let scroll = app.scrollViews.firstMatch
+        XCTAssertEqual(app.scrollViews["conversation-history"].value as? String, "100 messages")
+        XCTAssertFalse(app.buttons["chat-jump-to-latest"].exists, "Latest must not be needed to initialize a chat")
+        let scroll = app.scrollViews["conversation-history"]
         let earlier = app.buttons["load-earlier-messages"]
         let first = app.staticTexts["History entry 001"]
+        for _ in 0..<30 {
+            if earlier.exists && earlier.isHittable { break }
+            scroll.swipeDown(velocity: .fast)
+        }
+        XCTAssertTrue(earlier.isHittable)
+        XCTAssertEqual(scroll.value as? String, "100 messages", "Reaching the top cannot start an automatic paging chain")
+        XCTAssertTrue(app.buttons["chat-jump-to-latest"].exists)
+        earlier.tap()
+        XCTAssertEqual(scroll.value as? String, "200 messages")
         for _ in 0..<80 {
             if first.exists && first.isHittable { break }
             if earlier.exists && earlier.isHittable && earlier.isEnabled { earlier.tap() }
@@ -166,9 +204,19 @@ final class BZZYUITests: XCTestCase {
         }
         XCTAssertTrue(first.isHittable)
         XCTAssertFalse(app.staticTexts["History entry 225"].isHittable)
+        let draft = app.textViews["message-draft"]
+        draft.tap(); draft.typeText("Keep this older-history draft")
+        XCTAssertTrue(first.isHittable, "Opening the keyboard must preserve the older reading position")
         attach(app, name: "Earlier history remains in place")
         app.buttons["chat-jump-to-latest"].tap()
         XCTAssertTrue(app.staticTexts["History entry 225"].isHittable)
+        XCTAssertEqual(scroll.value as? String, "100 messages")
+        XCTAssertFalse(app.buttons["chat-jump-to-latest"].exists)
+        app.buttons["chat-back"].tap()
+        app.buttons["agent-COOL"].tap()
+        XCTAssertTrue(app.staticTexts["History entry 225"].isHittable, "Reopening cached history lands at the latest row")
+        XCTAssertFalse(app.buttons["chat-jump-to-latest"].exists)
+        XCTAssertEqual(draft.value as? String, "Keep this older-history draft")
     }
     func testGoalShortcutsPrepareTheEditorAndLeaveResumeDisabledWithoutAStalledGoal() {
         continueAfterFailure = false
@@ -239,9 +287,17 @@ final class BZZYUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Connecting to Core"].exists)
         XCTAssertTrue(app.buttons["tab-agents"].exists)
         XCTAssertTrue(app.buttons["tab-terminal"].exists)
-        for identifier in ["tab-agents", "tab-terminal", "create-agent", "import-resource", "open-voice-chat"] {
+        for identifier in ["tab-agents", "create-agent", "import-resource", "open-voice-chat"] {
             let action = app.buttons[identifier]
             if action.exists { XCTAssertFalse(action.isEnabled, "Core-dependent actions remain disabled while offline") }
+        }
+        XCTAssertTrue(app.buttons["tab-terminal"].isEnabled, "Saved terminal display remains available without authorizing execution")
+        XCTAssertTrue(app.buttons["tab-chat"].isEnabled)
+        app.buttons["tab-chat"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label == %@", "Core offline · saved replies remain readable")).firstMatch.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertFalse(app.buttons["core-chat-send"].isEnabled)
+        for identifier in ["pause-goal", "set-goal", "conversation-mode"] {
+            XCTAssertFalse(app.buttons[identifier].exists, "Assessment chat has no session mutation controls")
         }
         XCTAssertTrue(app.buttons["refresh-connection"].isEnabled)
         XCTAssertLessThanOrEqual(app.buttons["tab-agents"].frame.maxY, app.buttons["refresh-connection"].frame.minY)

@@ -3,7 +3,7 @@ import Foundation
 // Display windows are independent of Core's durable event cursor and private
 // replay cache. Anchoring IDs keeps incoming replies from moving older reading.
 struct ConversationHistoryWindow {
-    static let pageSize = 50
+    static let pageSize = 100
     static let maximumVisible = 200
     private var firstID: UUID?
     private(set) var count = pageSize
@@ -29,6 +29,30 @@ struct ConversationHistoryWindow {
         firstID = messages[start].id
         count = min(Self.maximumVisible, current.count + current.lowerBound - start)
         return true
+    }
+}
+
+// Layout and arriving content are not evidence that the reader scrolled away.
+// Only an actual scroll interaction can leave the live tail. This state is
+// presentation only and never advances Core's durable replay cursor.
+struct ConversationScrollState {
+    enum Transition { case none, holdEarlier, followLatest }
+    private(set) var followingLatest = true
+    private(set) var userScrolling = false
+
+    mutating func setUserScrolling(_ scrolling: Bool) { userScrolling = scrolling }
+    mutating func showEarlier() { followingLatest = false }
+    mutating func showLatest() { followingLatest = true; userScrolling = false }
+
+    mutating func observeViewport(atLatest: Bool, includesLatest: Bool) -> Transition {
+        if atLatest && includesLatest {
+            guard !followingLatest, userScrolling else { return .none }
+            followingLatest = true; userScrolling = false
+            return .followLatest
+        }
+        guard followingLatest, userScrolling else { return .none }
+        followingLatest = false
+        return .holdEarlier
     }
 }
 

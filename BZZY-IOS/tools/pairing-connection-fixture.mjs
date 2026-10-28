@@ -32,13 +32,14 @@ putRecord('core.update.preferences', 'default', { monitoringEnabled: false });
 const store = new RelayStore(), host = createIdentity();
 store.provisionHost(host.certificate);
 const relay = await startRelay({ store, allowInsecureLocal: true });
-let metricsFailure = false, metricsFailures = 0, inputClaimRequests = 0;
+let metricsFailure = false, metricsFailures = 0, inputClaimRequests = 0, chatSendRequests = 0;
 const gateway = new RelayGateway({ identity: host, url: relay.audience, allowInsecureLocal: true,
   clientFactory: options => {
     const client = new RelayClient(options), metricsRequests = new Set(), send = client.send.bind(client);
     client.on('message', data => {
       if (data.payload.op === 'host.metrics') metricsRequests.add(data.payload.id);
       if (data.payload.op === 'input.claim') inputClaimRequests++;
+      if (data.payload.op === 'chat.send') chatSendRequests++;
     });
     client.send = (grantId, payload) => {
       if (payload.type === 'response' && metricsRequests.delete(payload.id) && metricsFailure) {
@@ -93,7 +94,8 @@ async function handle(input) {
       return { pendingCount: gateway.pendingPairings().length, activeGrants: gateway.status().activeGrants,
         subscriptions: gateway.status().subscriptions, gateway: gateway.status().gateway,
         coordinatorConfigured: new CoreAssistant().settings().configured, executionCount: listRecords('execution').length,
-        metricsFailures, cliReady, cliFinished, cliMode, inputClaimRequests };
+        metricsFailures, cliReady, cliFinished, cliMode, inputClaimRequests, chatSendRequests,
+        assessmentTurnCount: listRecords('core.assessment.turn').length };
     case 'second-session': {
       const second = core.createConversation({ provider: 'codex', model: 'pair-fixture', alias: 'Second fixture terminal', cwd: path.join(directory, 'project') }, { requestId: randomUUID() });
       return { sessionId: second.id, catalogEligible: terminalSession(second), sessionCount: listRecords('session').length };
@@ -102,6 +104,18 @@ async function handle(input) {
       appendEvent(session.id, 'message.user', { text: 'DELETION_SYNTHETIC_QUESTION' });
       appendEvent(session.id, 'text', { text: 'DELETION_SYNTHETIC_ANSWER', itemId: 'deletion-reply' });
       return { seeded: true };
+    }
+    case 'cache-seed': {
+      const id = input.sessionId || session.id;
+      if (!getRecord('session', id) || typeof input.text !== 'string' || input.text.length > 1000) throw new Error('INVALID_CACHE_SEED');
+      appendEvent(id, 'text', { text: input.text, itemId: randomUUID() });
+      return { seeded: true };
+    }
+    case 'session-alias': {
+      const current = getRecord('session', input.sessionId || session.id);
+      if (!current || typeof input.alias !== 'string' || !input.alias.trim()) throw new Error('INVALID_ALIAS');
+      current.alias = input.alias; current.updatedAt = new Date().toISOString(); putRecord('session', current.id, current);
+      return { alias: current.alias };
     }
     case 'deletion-advisory': {
       appendEvent(session.id, 'session.deleted', { source: 'synthetic-history-marker' });
@@ -160,6 +174,12 @@ async function handle(input) {
     case 'voice-configure':
       new CoreWorkspaces().configure({ path: path.join(directory, 'project') }, { expectedRevision: 0, requestId: randomUUID() });
       new CoreAssistant().configure({ source: 'core', provider: 'codex', model: 'native-voice-fixture' }, { expectedRevision: 0, requestId: randomUUID() });
+      return { configured: true };
+    case 'chat-configure':
+      // This offline backend already verifies the actual no-tools document
+      // profile, declines attempted approval and returns a deterministic body.
+      process.env.BZZY_CODEX_BIN = fileURLToPath(new URL('../../BZZY-CORE/test/fixtures/learning-codex.mjs', import.meta.url));
+      new CoreAssistant().configure({ source: 'core', provider: 'codex', model: 'native-assessment-fixture' }, { expectedRevision: 0, requestId: randomUUID() });
       return { configured: true };
     case 'core-stop':
       await runtimeRequest(runtimeInfo(), 'POST', '/operator-stop', { shutdown: false });

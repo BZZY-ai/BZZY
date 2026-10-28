@@ -14,7 +14,14 @@ struct HostActionContext: Equatable {
 enum WorkspaceTab: String, CaseIterable {
     case agents = "Agents"
     case terminal = "Terminal"
-    var symbol: String { self == .agents ? "square.grid.2x2" : "terminal" }
+    case chat = "Chat"
+    var symbol: String {
+        switch self {
+        case .agents: return "square.grid.2x2"
+        case .terminal: return "terminal"
+        case .chat: return "text.bubble"
+        }
+    }
 }
 
 enum AgentMode: String, Codable, CaseIterable {
@@ -309,6 +316,10 @@ final class WorkspaceStore {
     private(set) var liveSession: LiveSessionState?
     private(set) var liveMessages: [LocalMessage] = []
     @ObservationIgnored private var liveProjection = LiveConversationProjection()
+    @ObservationIgnored private let presentationCache: TerminalPresentationCache?
+    private(set) var isPresentingCachedHistory = false
+    private(set) var cachedPresentationSavedAt: Date?
+    private(set) var cachedPresentationOmittedMessageCount = 0
     private(set) var liveActivity: [LiveActivity] = []
     private(set) var liveTerminals: [LiveTerminalRecord] = []
     private(set) var hostAgents: [HostAgentRecord] = []
@@ -333,8 +344,9 @@ final class WorkspaceStore {
         var hostComposerDrafts: [String: [String: String]]?
     }
 
-    init(persistenceURL: URL? = nil, includeSamples: Bool = true) {
+    init(persistenceURL: URL? = nil, includeSamples: Bool = true, presentationCacheDirectory: URL? = nil) {
         self.persistenceURL = persistenceURL
+        self.presentationCache = presentationCacheDirectory.map { TerminalPresentationCache(directory: $0) }
         self.showsDemoContent = includeSamples
         self.agents = includeSamples ? AgentProfile.samples : []
         self.messages = [:]
@@ -388,7 +400,8 @@ final class WorkspaceStore {
             return store
         }
         #endif
-        return WorkspaceStore(persistenceURL: folder.appendingPathComponent("preview-workspace.json"), includeSamples: false)
+        return WorkspaceStore(persistenceURL: folder.appendingPathComponent("preview-workspace.json"), includeSamples: false,
+            presentationCacheDirectory: folder.appendingPathComponent("terminal-presentations", isDirectory: true))
     }
 
     @discardableResult
@@ -516,9 +529,51 @@ final class WorkspaceStore {
     func applyLiveEvents(_ data: [Data]) {
         guard let session = liveSession else { return }
         liveProjection.apply(data, sessionID: session.id)
-        if liveMessages != liveProjection.projected { liveMessages = liveProjection.projected }
         if liveActivity != liveProjection.activity { liveActivity = liveProjection.activity }
+        // A tail page may consist entirely of tool/status events while older
+        // messages are still loading. It cannot establish an empty transcript.
+        if isPresentingCachedHistory && !data.isEmpty && liveProjection.projected.isEmpty { return }
+        if liveMessages != liveProjection.projected { liveMessages = liveProjection.projected }
+        isPresentingCachedHistory = false
+        cachedPresentationSavedAt = nil
+        cachedPresentationOmittedMessageCount = 0
     }
+
+    /// A synchronous, bounded first paint; neither this file nor its metadata is live authority.
+    @discardableResult
+    func restoreCachedPresentation(scope: TerminalPresentationScope) -> Bool {
+        guard let cached = presentationCache?.load(scope: scope) else { return false }
+        liveProjection = LiveConversationProjection()
+        let metadata = cached.metadata
+        liveSession = LiveSessionState(id: scope.sessionID, title: metadata.title, hasAlias: metadata.hasAlias,
+            provider: metadata.provider, model: metadata.model, directory: metadata.directory,
+            execution: "Unknown", goalStatus: nil, goalObjective: nil, goalTurns: nil,
+            goalTokensUsed: nil, goalTokenBudget: nil, acceptanceLevel: nil, permissions: [],
+            activeSteering: false, questions: [], inputOwner: nil)
+        liveMessages = cached.messages
+        liveActivity = []
+        liveAvailable = false
+        liveStatus = "Saved history · connecting to Core"
+        isPresentingCachedHistory = true
+        cachedPresentationSavedAt = cached.savedAt
+        cachedPresentationOmittedMessageCount = cached.omittedMessageCount
+        return true
+    }
+
+    /// Call only for the current tail, never while publishing an older browsing window.
+    /// Failure leaves the displayed conversation and durable event/ACK store untouched.
+    func cacheLivePresentation(scope: TerminalPresentationScope) {
+        guard !isPresentingCachedHistory, !liveMessages.isEmpty, let session = liveSession, session.id == scope.sessionID else { return }
+        let metadata = TerminalPresentationMetadata(title: session.title, hasAlias: session.hasAlias,
+            provider: session.provider, model: session.model, directory: session.directory)
+        _ = try? presentationCache?.save(scope: scope, metadata: metadata, messages: liveMessages)
+    }
+
+    func removeCachedPresentation(hostID: String, authorizationID: String? = nil, sessionID: String? = nil) {
+        presentationCache?.remove(hostID: hostID, authorizationID: authorizationID, sessionID: sessionID)
+    }
+
+    func retainCachedPresentationHosts(_ hostIDs: Set<String>) { presentationCache?.retainHosts(hostIDs) }
 
     func applyHostAgents(_ data: Data) {
         guard let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
@@ -561,8 +616,11 @@ final class WorkspaceStore {
     }
 
     func setLiveAvailability(_ available: Bool, status: String) { liveAvailable = available; liveStatus = status }
-    func clearLiveConversation() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveAvailable = false; liveStatus = "Conversation unavailable" }
-    func clearLiveSession() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveTerminals = []; hostAgents = []; hostAgentWorkspace = nil; hostAgentsConfigured = false; liveAvailable = false; liveStatus = "Not connected"; notificationAgentID = nil; notificationTerminalID = nil }
+    func clearLiveConversation() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveAvailable = false; liveStatus = "Conversation unavailable"; resetCachedPresentationStatus() }
+    func clearLiveSession() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveTerminals = []; hostAgents = []; hostAgentWorkspace = nil; hostAgentsConfigured = false; liveAvailable = false; liveStatus = "Not connected"; notificationAgentID = nil; notificationTerminalID = nil; resetCachedPresentationStatus() }
+    private func resetCachedPresentationStatus() {
+        isPresentingCachedHistory = false; cachedPresentationSavedAt = nil; cachedPresentationOmittedMessageCount = 0
+    }
     fileprivate static func eventDate(_ text: String) -> Date? {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)

@@ -15,7 +15,10 @@ struct NotificationsView: View {
                         Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
                         Text("Notifications")
                     }.bzzyFont(20, weight: .semibold)
-                    Text(notifications.permission).bzzyFont(14).foregroundStyle(BZZYTheme.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("iPhone permission").bzzyFont(11, weight: .medium).foregroundStyle(BZZYTheme.muted)
+                        Text(notifications.permission).bzzyFont(14).foregroundStyle(BZZYTheme.secondary)
+                    }
                     if notifications.authorized {
                         Toggle("Activity alerts", isOn: $settings.alertsEnabled).tint(BZZYTheme.accent).bzzyFont(15)
                     } else if notifications.permission == "Not enabled" {
@@ -28,11 +31,26 @@ struct NotificationsView: View {
                     }.bzzyFont(13)
                     #endif
                     if notifications.authorized && notifications.alertsEnabled {
-                        Button("Test notification") { Task { await notifications.sendTest() } }
+                        Button("Test on-device notification") { Task { await notifications.sendTest() } }
                             .bzzyFont(13).accessibilityIdentifier("test-notification")
+                        Text("This preview runs only on this iPhone. It does not test Core, Relay or Apple push delivery.")
+                            .bzzyFont(11).foregroundStyle(BZZYTheme.muted).accessibilityIdentifier("notification-local-test-explanation")
                     }
-                    Text("Private details stay in the app.").bzzyFont(12).foregroundStyle(BZZYTheme.muted)
-                    Text(notifications.pushStatus).bzzyFont(11).foregroundStyle(BZZYTheme.muted)
+                    Rectangle().fill(BZZYTheme.line).frame(height: 0.5)
+                    let readiness = NotificationDeliveryReadiness(status: notifications.pushStatus)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Remote activity delivery").bzzyFont(11, weight: .medium).foregroundStyle(BZZYTheme.muted)
+                        Text(readiness.title).bzzyFont(13, weight: .medium)
+                            .foregroundStyle(readiness == .relaySetupRequired || readiness == .coreSetupRequired ? BZZYTheme.amber : BZZYTheme.secondary)
+                            .accessibilityIdentifier("notification-delivery-readiness")
+                        Text(readiness.explanation).bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
+                        if let environment = notifications.pushEnvironment {
+                            Text("Installed app push environment: \(environment)").bzzyFont(10).foregroundStyle(BZZYTheme.muted)
+                        }
+                        Text(notifications.pushStatus).bzzyFont(10).foregroundStyle(BZZYTheme.muted)
+                            .accessibilityIdentifier("notification-registration-status")
+                    }
+                    Text("Lock-screen previews follow iOS notification settings.").bzzyFont(11).foregroundStyle(BZZYTheme.muted)
                     if let error = notifications.errorMessage { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.secondary) }
                 }.padding(16)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }

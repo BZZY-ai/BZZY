@@ -291,6 +291,20 @@ import CryptoKit
             guard result["state"].string == "accepted", result["sessionId"].string == sessionID,
                   result["provider"].string != nil, result["effort"].string != nil,
                   result["model"] == .null || result["model"].string != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
+        case "chat.status":
+            try result.record(["configured", "readOnly"])
+            guard result["configured"].bool != nil, result["readOnly"].bool == true else { throw CoreApplicationError("INVALID_RESPONSE") }
+        case "chat.send":
+            try result.record(["state", "requestId"])
+            guard result["state"].string == "accepted", let id = result["requestId"].string else { throw CoreApplicationError("INVALID_RESPONSE") }
+            try CoreApplicationProtocol.opaque(id)
+        case "chat.poll":
+            try result.record(["state", "text", "cursor", "hasMore", "observedAt", "verification", "code"], required: ["state", "text", "cursor", "hasMore", "observedAt", "verification"])
+            guard ["queued", "running", "finished", "failed", "uncertain", "unknown"].contains(result["state"].string ?? ""),
+                  let text = result["text"].string, text.utf8.count <= 6000,
+                  let cursor = result["cursor"].integer, cursor >= 0 && cursor <= 32768,
+                  result["observedAt"].string != nil, result["verification"].string == "not-assessed",
+                  result["hasMore"].bool != nil else { throw CoreApplicationError("INVALID_RESPONSE") }
         case "voice.status":
             try result.record(["configured", "assistantConfigured", "workspaceConfigured"])
             guard result["configured"].bool != nil, result["assistantConfigured"].bool != nil, result["workspaceConfigured"].bool != nil else { throw CoreApplicationError("INVALID_RESPONSE") }

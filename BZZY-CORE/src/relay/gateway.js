@@ -4,6 +4,7 @@ import { requireUpdateGrant } from '../engine/update-access.js';
 import { coreUpdates } from '../engine/updates.js';
 import { terminalCatalogRevision } from '../engine/session-deletion.js';
 import { CoreVoiceChat } from '../engine/voice-chat.js';
+import { CoreSessionAssessmentChat } from '../engine/session-assessment-chat.js';
 import { setTerminalYolo } from '../engine/terminal-permissions.js';
 import { enqueueGoalTurn } from '../engine/session-operations.js';
 import { rootExecutionAllowed } from '../engine/root-execution.js';
@@ -36,7 +37,7 @@ const publicGrant = row => ({ id: row.id, deviceId: row.peerId, resource: row.re
   agentAccess: row.agentAccess === true, expiresAt: row.expiresAt, revokedAt: row.revokedAt || null });
 const pick = (value, keys) => value && Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
 const commandAcceptance = record => record.op === 'task.submit' ? { taskId: record.id } : record.result;
-const safeCodes = new Set(['ASSISTANT_SETUP_REQUIRED', 'VOICE_UNAVAILABLE', 'FORBIDDEN', 'INVALID_REQUEST', 'CONFLICT', 'UNCERTAIN', 'OPERATION_DENIED', 'PROTOCOL_UNSUPPORTED',
+const safeCodes = new Set(['ASSISTANT_SETUP_REQUIRED', 'CHAT_SOURCE_UNAVAILABLE', 'VOICE_UNAVAILABLE', 'FORBIDDEN', 'INVALID_REQUEST', 'CONFLICT', 'UNCERTAIN', 'OPERATION_DENIED', 'PROTOCOL_UNSUPPORTED',
   'REQUEST_TOO_LARGE', 'RESULT_TOO_LARGE', 'RATE_LIMITED', 'CAPACITY', 'INVALID_CURSOR', 'GRANT_UNAVAILABLE', 'AUTHORIZATION_REQUIRED',
   'WORKSPACE_SETUP_REQUIRED', 'WORKSPACE_CHANGED', 'WORKSPACE_UNAVAILABLE', 'PROVIDER_UNAVAILABLE', 'CORE_STOPPED',
   'CONFIRMATION_REQUIRED', 'DEFAULT_REQUIRED', 'EXPORT_ACTIVE', 'SECRET_DETECTED', 'EXPORT_INVALID', 'SHARE_CONTEXT_INCOMPLETE',
@@ -72,13 +73,15 @@ export class RelayGateway extends EventEmitter {
   #agents;
   #agentImports;
   #voice;
+  #chat;
 
   constructor({ identity = loadRelayIdentity(), url = DEFAULT_RELAY_URL, allowInsecureLocal = false,
-    autoReconnect = true, requestTimeoutMs = 10000, pollIntervalMs = 500, subscriptionLeaseMs = 60000, clientFactory = options => new RelayClient(options) } = {}) {
+    autoReconnect = true, requestTimeoutMs = 10000, pollIntervalMs = 500, subscriptionLeaseMs = 60000, clientFactory = options => new RelayClient(options), assessmentRunModel } = {}) {
     super(); verifyCertificate(identity.certificate);
     this.#home = home(); this.#identity = structuredClone(identity); this.#core = new BzzyCore();
     this.#agents = new CoreAgents();
     this.#voice = new CoreVoiceChat({ client: context => this.#clientFor(context) });
+    this.#chat = new CoreSessionAssessmentChat({ runModel: assessmentRunModel });
     this.#agentImports = new CoreAgentImports({ agents: this.#agents, url, allowInsecureLocal });
     this.#pollIntervalMs = boundedInteger(pollIntervalMs, 100, 5000);
     this.#subscriptionLeaseMs = boundedInteger(subscriptionLeaseMs, 200, 120000);
@@ -677,6 +680,8 @@ export class RelayGateway extends EventEmitter {
       if (request.op === 'settings.providers') return { providers: this.#agents.providers() };
       return providerModels(request.params.provider, { after: request.params.after, limit: request.params.limit, cwd: loadSession(row.sessionId)?.cwd });
     }
+    if (request.op === 'chat.status') return this.#chat.status(row);
+    if (request.op === 'chat.poll') return this.#chat.poll(row, request.params.requestId, request.params.cursor);
     if (request.op === 'voice.status') return this.#voice.status(row);
     if (request.op === 'voice.poll') return this.#voice.poll(row, request.params.requestId, request.params.cursor);
     if (request.op === 'updates.status') return coreUpdates().status(row);
@@ -828,6 +833,7 @@ export class RelayGateway extends EventEmitter {
       if (!parent || parent.peerId !== row.peerId || !terminalSession(session) || ['parallel', 'besties', 'debate'].includes(session.mode)) fail('FORBIDDEN', 'Model changes require your fully approved phone and an individual terminal.', 403);
       if (request.params.coordinateInput !== true) fail('INVALID_REQUEST', 'Use coordinated input for model changes.');
     }
+    if (request.op === 'chat.send') return this.#chat.send(row, request.params.text, request.id);
     if (request.op === 'voice.send') return this.#voice.send(row, request.params.text, request.id);
     if (request.op === 'voice.cancel') return this.#voice.cancel(row, request.params.requestId, request.id);
     if (request.op === 'updates.configure') return coreUpdates().configure(row, request.params);
@@ -1184,6 +1190,7 @@ export class RelayGateway extends EventEmitter {
     this.#eventTransfers.clear();
     this.#relayHealth?.close();
     this.#check(); this.#started = false; clearInterval(this.#maintenanceTimer); this.#stopSubscriptions();
+    await this.#chat.close();
     await this.#agentImports.close();
     await this.#transfers.close();
     await this.#relay.close(); this.#unlock?.(); this.#unlock = null;

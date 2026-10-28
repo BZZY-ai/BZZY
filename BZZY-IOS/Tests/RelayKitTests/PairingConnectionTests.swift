@@ -2,6 +2,13 @@ import XCTest
 @testable import RelayKit
 
 final class PairingConnectionTests: XCTestCase {
+    @MainActor func testCoreChatRecoversDurableReadOnlyReplyAfterBackgroundWithoutResending() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, coreChat: true)
+    }
+
+    @MainActor func testSemanticCacheCallbacksFollowFastNavigationAndDeletionWithFreshReadySnapshot() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, semanticCache: true)
+    }
     @MainActor func testCLIDeletionSynchronizesCatalogAndCacheWithoutLosingPhonePairing() async throws {
         try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, deletionSync: true)
     }
@@ -48,12 +55,13 @@ final class PairingConnectionTests: XCTestCase {
     }
 
     @MainActor private func checkPairing(ignoreDecisionEvent: Bool, backgroundBeforeApproval: Bool,
-                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false, allowTakeover: Bool = true, resourceJournal: Bool = false, deletionSync: Bool = false) async throws {
+                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false, allowTakeover: Bool = true, resourceJournal: Bool = false, deletionSync: Bool = false, coreChat: Bool = false, semanticCache: Bool = false) async throws {
         let fixture = try PairingConnectionFixture()
         defer { fixture.shutdown() }
         let identity = try RelayIdentity.generate()
         var start: [String: WireValue] = ["op": .string("start"), "certificate": try RelayWire.object(identity.certificate), "allowTakeover": .bool(allowTakeover)]
         if deletionSync { start["alias"] = .string("Deleted fixture terminal") }
+        if coreChat || semanticCache { start["alias"] = .string("Cached fixture terminal") }
         let configuration = try fixture.request(start)
         XCTAssertEqual(configuration["coordinatorConfigured"].bool, false)
         let endpoint = try XCTUnwrap(URL(string: try XCTUnwrap(configuration["endpoint"].string)))
@@ -70,6 +78,31 @@ final class PairingConnectionTests: XCTestCase {
         connection.onCoreEvents = { [weak connection] data in
             streamed = data.compactMap { try? JSONDecoder().decode(CoreJSONValue.self, from: $0) }
             deliveryStates += connection?.coreOutgoingMessages.map(\.status) ?? []
+        }
+        var presentations: [[String]: String] = [:], presentationSaves: [[String]] = [], presentationRestores: [[String]] = []
+        var presentationPurges: [(String, String?, String?)] = [], paintedPresentation: String?, snapshotAliases: [String] = []
+        var cancelPreview: (() -> Void)?
+        if semanticCache {
+            connection.onCoreSnapshot = { data in
+                if let snapshot = try? JSONDecoder().decode(CoreJSONValue.self, from: data), let alias = snapshot["session"]["alias"].string { snapshotAliases.append(alias) }
+            }
+            connection.onCorePresentationSave = { host, resource, session, grant in
+                let scope = [host, resource, session, grant]
+                presentationSaves.append(scope)
+                presentations[scope] = streamed.compactMap { $0["data"]["text"].string }.last ?? "Empty saved transcript"
+            }
+            connection.onCorePresentationRestore = { host, resource, session, grant in
+                let scope = [host, resource, session, grant]
+                guard let cached = presentations[scope] else { return false }
+                presentationRestores.append(scope); paintedPresentation = cached; cancelPreview?()
+                return true
+            }
+            connection.onCorePresentationPurge = { host, grant, session in
+                presentationPurges.append((host, grant, session))
+                presentations = presentations.filter { scope, _ in
+                    !(scope[0] == host && (grant == nil || scope[3] == grant) && (session == nil || scope[2] == session))
+                }
+            }
         }
         var availabilityFailures: [String] = []
         connection.onCoreAvailability = { available, message in
@@ -110,6 +143,91 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertFalse(connection.coreIsAssistant, "A terminal pair must not depend on coordinator setup")
         XCTAssertEqual(connection.corePermissions, Set(["observe", "claim", "takeover", "execute", "answer", "pause", "cancel", "steer"].filter { allowTakeover || $0 != "takeover" }))
         XCTAssertTrue(availabilityFailures.isEmpty, "Approval must not cancel its own initial Core read: \(availabilityFailures)")
+        if coreChat {
+            await connection.prepareCoreChat()
+            XCTAssertFalse(connection.chatConfigured); XCTAssertEqual(connection.chatErrorCode, "ASSISTANT_SETUP_REQUIRED")
+            let seed = try fixture.request(["op": .string("goal-seed")])
+            _ = try fixture.request(["op": .string("chat-configure")])
+            await connection.prepareCoreChat(); XCTAssertTrue(connection.chatConfigured)
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["assessmentTurnCount"].integer, 0)
+            let originalSession = connection.coreSessionID
+            let accepted = await connection.sendCoreChatText("SYNTHETIC_READ_ONLY_ASSESSMENT")
+            XCTAssertTrue(accepted)
+            XCTAssertEqual(connection.chatMessages.filter(\.isUser).map(\.text), ["SYNTHETIC_READ_ONLY_ASSESSMENT"])
+            XCTAssertFalse(String(data: savedAuthorization ?? Data(), encoding: .utf8)?.contains("SYNTHETIC_READ_ONLY_ASSESSMENT") ?? true)
+            connection.pause(); await connection.resume()
+            try await eventually { connection.coreActionsAvailable }
+            await connection.prepareCoreChat()
+            try await eventually { connection.chatPhase == "idle" && connection.chatMessages.contains { !$0.isUser } }
+            let reply = try XCTUnwrap(connection.chatMessages.last { !$0.isUser })
+            XCTAssertEqual(reply.text, "{\"lessons\":[],\"skills\":[],\"profiles\":[]}")
+            XCTAssertNotNil(reply.observedAt)
+            XCTAssertEqual(connection.coreSessionID, originalSession); XCTAssertFalse(connection.coreIsAssistant)
+            let state = try fixture.request(["op": .string("state")])
+            XCTAssertEqual(state["chatSendRequests"].integer, 1); XCTAssertEqual(state["assessmentTurnCount"].integer, 1)
+            XCTAssertEqual(state["executionCount"].integer, 0); XCTAssertEqual(state["inputClaimRequests"].integer, 0)
+            let goal = try fixture.request(["op": .string("goal-state")])
+            XCTAssertEqual(goal["goalID"].string, seed["goalID"].string)
+            XCTAssertEqual(goal["status"].string, "active"); XCTAssertEqual(goal["objective"].string, "Previous unfinished goal")
+            connection.pause()
+            let restoredTransport = try RelayTransport(identity: identity, loopbackEndpoint: endpoint)
+            let restored = try RelayConnection(isolatedIdentity: identity, loopbackTransport: restoredTransport,
+                projectionDirectory: directory, loadAuthorization: { savedAuthorization }, saveAuthorization: { savedAuthorization = $0 })
+            defer { restored.pause() }
+            try restored.restoreSavedHosts()
+            XCTAssertEqual(restored.chatMessages, connection.chatMessages, "Reopening restores complete private Chat rows before networking")
+            XCTAssertFalse(restored.coreActionsAvailable, "Cached Chat is never proof of Core readiness")
+            await restored.connect(); try await eventually { restored.coreActionsAvailable }
+            await restored.prepareCoreChat()
+            XCTAssertEqual(restored.chatMessages.last { !$0.isUser }?.id, reply.id)
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["chatSendRequests"].integer, 1, "Background/reopen must poll or read, never resend")
+            return
+        }
+        if semanticCache {
+            let firstID = connection.coreSessionID
+            _ = try fixture.request(["op": .string("cache-seed"), "text": .string("SEMANTIC_A_REPLY")])
+            try await eventually { streamed.contains { $0["data"]["text"].string == "SEMANTIC_A_REPLY" } }
+            try await eventually { presentationSaves.contains { $0[2] == firstID } }
+            let second = try fixture.request(["op": .string("second-session")]), secondID = try XCTUnwrap(second["sessionId"].string)
+            _ = try fixture.request(["op": .string("cache-seed"), "sessionId": .string(secondID), "text": .string("SEMANTIC_B_REPLY")])
+            await connection.refreshCoreSessions()
+            let visitSecond = Task { await connection.observeCoreSession(secondID) }
+            try await eventually { connection.isCoreSessionReady(secondID) }
+            try await eventually { presentationSaves.contains { $0[2] == secondID } }
+            visitSecond.cancel(); await visitSecond.value
+            let visitFirst = Task { await connection.observeCoreSession(firstID) }
+            try await eventually { connection.isCoreSessionReady(firstID) }
+            visitFirst.cancel(); await visitFirst.value
+            XCTAssertTrue(connection.isCoreSessionReady(firstID))
+            // A rapid B preview is cancelled before attachment can replace the
+            // still-authorized A client. Returning to A must hydrate its cached
+            // tail and then refresh metadata from that exact ready client.
+            var preview: Task<Void, Never>?
+            cancelPreview = { preview?.cancel() }
+            let restoredBefore = presentationRestores.count
+            preview = Task { await connection.observeCoreSession(secondID) }
+            try await eventually { presentationRestores.count > restoredBefore }
+            await preview?.value; cancelPreview = nil
+            XCTAssertTrue(connection.isCoreSessionReady(firstID))
+            XCTAssertEqual(paintedPresentation, "SEMANTIC_B_REPLY")
+            _ = try fixture.request(["op": .string("session-alias"), "alias": .string("Fresh ready alias")])
+            let snapshotCount = snapshotAliases.count, restoreCount = presentationRestores.count
+            let returnFirst = Task { await connection.observeCoreSession(firstID) }
+            defer { returnFirst.cancel() }
+            try await eventually(seconds: 2) { presentationRestores.count > restoreCount && paintedPresentation == "SEMANTIC_A_REPLY" }
+            try await eventually(seconds: 2) { snapshotAliases.dropFirst(snapshotCount).contains("Fresh ready alias") }
+            XCTAssertTrue(connection.isCoreSessionReady(firstID))
+            XCTAssertTrue(presentationSaves.allSatisfy { $0[0] == configuration["host"]["id"].string && !$0[1].isEmpty && !$0[3].isEmpty })
+            _ = try fixture.request(["op": .string("session-delete")])
+            try await eventually { presentationPurges.contains { $0.2 == firstID } }
+            XCTAssertFalse(presentations.keys.contains { $0[2] == firstID })
+            XCTAssertTrue(connection.corePairAuthorized)
+            await connection.forgetHost()
+            XCTAssertTrue(presentationPurges.contains { $0.2 == nil })
+            XCTAssertTrue(presentations.isEmpty); XCTAssertFalse(connection.corePairAuthorized)
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["executionCount"].integer, 0)
+            return
+        }
         if deletionSync {
             let originalID = connection.coreSessionID
             let viewing = Task { await connection.observeCoreSession(originalID) }
@@ -420,8 +538,8 @@ final class PairingConnectionTests: XCTestCase {
         }
     }
 
-    @MainActor private func eventually(_ condition: () throws -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
+    @MainActor private func eventually(seconds: TimeInterval = 15, _ condition: () throws -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
             if try condition() { return }
             try await Task.sleep(for: .milliseconds(50))

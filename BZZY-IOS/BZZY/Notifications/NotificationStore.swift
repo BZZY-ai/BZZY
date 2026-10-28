@@ -8,6 +8,56 @@ import UIKit
 // A notification is only a navigation hint. It never authorizes or executes work.
 enum NotificationDestination: String { case agents, terminal, connection, updates }
 
+/// Registration/configuration is not a delivery receipt, and an on-device
+/// preview cannot establish the remote Core -> Relay -> Apple route.
+enum NotificationDeliveryReadiness: Equatable {
+    case relaySetupRequired, coreSetupRequired, relayConfigured, coreConfigured, waiting, disabled, permissionRequired, deviceRegistrationPending, authorizationRemoved
+
+    init(status: String) {
+        switch status {
+        case "Device registered · Configure Apple push on Relay", "Relay APNs not configured · Remote alerts cannot be delivered": self = .relaySetupRequired
+        case "Device registered · Configure APNs on the source Core": self = .coreSetupRequired
+        case "Relay push configured · Background alerts enabled", "Relay APNs configured · Delivery requires Apple connectivity", "Relay push configured · Apple delivery not yet confirmed": self = .relayConfigured
+        case "Host push configured · Delivery requires Apple connectivity": self = .coreConfigured
+        case "Host activity alerts disabled": self = .disabled
+        case "Notification permission unavailable": self = .permissionRequired
+        case "Waiting for device registration", "Waiting for Apple push registration", "Push registration unavailable": self = .deviceRegistrationPending
+        case "Host authorization removed": self = .authorizationRemoved
+        default: self = .waiting
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .relaySetupRequired: return "Relay APNs not configured for this build"
+        case .coreSetupRequired: return "Core APNs not configured for this build"
+        case .relayConfigured: return "Relay APNs configuration confirmed"
+        case .coreConfigured: return "Core APNs configuration confirmed"
+        case .disabled: return "Remote activity alerts disabled"
+        case .permissionRequired: return "iPhone notification permission required"
+        case .deviceRegistrationPending: return "iPhone Apple push registration pending"
+        case .authorizationRemoved: return "Computer authorization removed"
+        case .waiting: return "Remote delivery not confirmed"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .relaySetupRequired:
+            return "The Relay administrator must configure its Apple push key, app topic and matching sandbox or production environment. Pairing and iPhone permission alone do not enable background delivery. See Core docs/PUSH.md."
+        case .coreSetupRequired:
+            return "This connection uses direct Core delivery. The Core owner must configure Apple push for this app’s topic and environment. See Core docs/PUSH.md."
+        case .relayConfigured, .coreConfigured:
+            return "The service reported matching Apple push configuration. This is not confirmation that Apple accepted an alert or that the iPhone displayed it."
+        case .disabled: return "Enable Activity alerts and allow notifications in iOS Settings to register this iPhone."
+        case .permissionRequired: return "Allow BZZY notifications in iOS Settings, then reopen the app to register for remote activity alerts."
+        case .deviceRegistrationPending: return "Apple has not supplied a current push registration. Keep notifications enabled and reopen the app with internet access."
+        case .authorizationRemoved: return "Pair this iPhone with the computer again before enabling its remote alerts."
+        case .waiting: return "Keep this iPhone paired and reconnect to Core to confirm registration and remote push setup. Saved goals alone are not a delivered alert."
+        }
+    }
+}
+
 struct NotificationHint {
     let eventID: String
     let hostID: String?
@@ -135,7 +185,7 @@ final class NotificationStore {
         await deliver(kind == "paired" ? "Host pairing approved." : "Host access revoked.")
     }
 
-    func sendTest() async { await deliver("Notifications are working.") }
+    func sendTest() async { await deliver("This on-device preview works. Remote Core and Relay delivery is checked separately.") }
 
     private func deliver(_ body: String) async {
         guard enabled, alertsEnabled, authorized else { return }

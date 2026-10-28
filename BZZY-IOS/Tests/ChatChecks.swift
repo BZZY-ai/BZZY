@@ -4,6 +4,7 @@ import Foundation
 struct ChatChecks {
     @MainActor static func main() throws {
         checkHistoryWindow()
+        checkScrollIntent()
         try checkInvocationTranscript()
         for demo in DemoConversation.samples.values {
             require(demo.messages.contains(where: \.isUser) && demo.messages.contains(where: { !$0.isUser }), "Demos need both speakers")
@@ -158,21 +159,49 @@ struct ChatChecks {
     func message(_ number: Int) -> LocalMessage {
         .init(id: UUID(), text: "Message \(number)", kind: .assistant, createdAt: Date(timeIntervalSince1970: Double(number)))
     }
-    let initial = (1...225).map(message), incoming = (226...235).map(message)
+    let initial = (1...325).map(message), incoming = (326...335).map(message)
     var window = ConversationHistoryWindow()
-    require(window.visible(in: initial).map(\.text) == Array(initial.suffix(50)).map(\.text), "Opening history shows exactly the latest 50 cached messages")
+    require(window.visible(in: initial).map(\.text) == Array(initial.suffix(100)).map(\.text), "Opening history shows exactly the latest 100 cached messages")
     window.freeze(in: initial)
-    require(window.visible(in: initial + incoming) == Array(initial.suffix(50)), "Incoming messages cannot shift the older reading window")
-    require(window.revealEarlier(in: initial + incoming) && window.count == 100, "Earlier loads one 50-message page")
+    require(window.visible(in: initial + incoming) == Array(initial.suffix(100)), "Incoming messages cannot shift the older reading window")
+    require(window.revealEarlier(in: initial + incoming) && window.count == 200, "Earlier loads one 100-message page")
     require(window.visible(in: initial + incoming).first?.id == initial[125].id && window.visible(in: initial + incoming).last?.id == initial.last?.id, "Paging preserves the original tail boundary and stable IDs")
     let earlier = (-40 ... -1).map(message), backfilled = earlier + initial + incoming
-    require(window.revealEarlier(in: backfilled) && window.visible(in: backfilled).first?.id == initial[75].id, "Prepending Core events does not invalidate the visible anchor")
+    require(window.revealEarlier(in: backfilled) && window.visible(in: backfilled).first?.id == initial[25].id, "Prepending Core events does not invalidate the visible anchor")
     for _ in 0..<20 { window.revealEarlier(in: backfilled) }
     require(window.count <= 200 && window.visible(in: backfilled).first?.id == earlier.first?.id, "Backward browsing stays bounded while reaching the earliest message")
     require(!window.includesLatest(in: backfilled), "A bounded older window cannot claim to be at the latest reply")
     window.showLatest()
-    require(window.visible(in: backfilled) == Array(backfilled.suffix(50)), "Latest returns to the newest 50 messages")
-    print("PASS: 50-message windows, anchored live updates, older paging, bounded rendering and Latest")
+    require(window.visible(in: backfilled) == Array(backfilled.suffix(100)), "Latest returns to the newest 100 messages")
+    print("PASS: 100-message windows, anchored live updates, older paging, bounded rendering and Latest")
+}
+
+private func checkScrollIntent() {
+    func require(_ condition: @autoclosure () -> Bool, _ message: String) { precondition(condition(), message) }
+    var state = ConversationScrollState()
+    require(state.followingLatest, "A conversation starts at the tail without a Latest tap")
+    require(state.observeViewport(atLatest: false, includesLatest: true) == .none && state.followingLatest,
+            "Late history or streamed text can move geometry before layout without freezing the live tail")
+    state.setUserScrolling(true)
+    require(state.observeViewport(atLatest: false, includesLatest: true) == .holdEarlier && !state.followingLatest,
+            "An actual scroll away holds the older reading window")
+    state.setUserScrolling(false)
+    require(state.observeViewport(atLatest: false, includesLatest: true) == .none && !state.followingLatest,
+            "A reconnect or arriving reply cannot steal the older reading position")
+    require(state.observeViewport(atLatest: true, includesLatest: false) == .none && !state.followingLatest,
+            "The bottom of a historical page cannot claim to be the current tail")
+    require(state.observeViewport(atLatest: true, includesLatest: true) == .none && !state.followingLatest,
+            "Reconnect layout or a resized viewport cannot release an intentional reading hold")
+    state.setUserScrolling(true)
+    require(state.observeViewport(atLatest: true, includesLatest: true) == .followLatest && state.followingLatest,
+            "Scrolling back to the actual tail resumes following")
+    state.showEarlier()
+    require(!state.followingLatest, "Explicit earlier paging holds position without needing a drag")
+    state.showLatest()
+    require(state.followingLatest && !state.userScrolling, "Latest clears reading and stale interaction intent")
+    require(state.observeViewport(atLatest: false, includesLatest: true) == .none,
+            "The layout following Latest cannot immediately freeze the tail again")
+    print("PASS: explicit reader scroll intent, late layout, reconnect preservation and tail recovery")
 }
 
 @MainActor private func checkInvocationTranscript() throws {

@@ -13,6 +13,12 @@ swiftc -target "$native_target" -sdk "$native_sdk" -swift-version 5 -parse-as-li
 .build/model-checks .build
 swiftc -target "$native_target" -sdk "$native_sdk" -swift-version 5 -parse-as-library \
   BZZY/Model/*.swift Tests/ChatChecks.swift -o .build/chat-checks
+swiftc -target "$native_target" -sdk "$native_sdk" -swift-version 5 -parse-as-library \
+  BZZY/Model/*.swift Tests/TerminalPresentationCacheChecks.swift -o .build/presentation-cache-checks
+.build/presentation-cache-checks
+swiftc -target "$native_target" -sdk "$native_sdk" -swift-version 5 -parse-as-library \
+  BZZY/Model/*.swift BZZY/Notifications/NotificationStore.swift Tests/NotificationReadinessChecks.swift -o .build/notification-readiness-checks
+.build/notification-readiness-checks
 .build/chat-checks
 swift test --build-system native --disable-index-store --scratch-path .build/relay-package
 swift run --build-system native --disable-index-store --scratch-path .build/relay-package BZZYPreview previews

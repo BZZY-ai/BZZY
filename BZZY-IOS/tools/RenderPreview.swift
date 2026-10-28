@@ -26,6 +26,10 @@ struct RenderPreview {
         terminal.selectedTab = .terminal
         try render("agents", view: WorkspaceView(store: agents), folder: folder)
         try render("terminal", view: WorkspaceView(store: terminal), folder: folder)
+        let assessment = WorkspaceStore()
+        assessment.selectedTab = .chat
+        try render("core-assessment-chat", view: WorkspaceView(store: assessment), folder: folder)
+        try render("core-assessment-chat-large", view: WorkspaceView(store: assessment).environment(\.dynamicTypeSize, .accessibility2), folder: folder, width: 375)
         let goalTerminals = WorkspaceStore(includeSamples: false)
         goalTerminals.selectedTab = .terminal
         let statuses: [(String, String, String, String?)] = [("starbucks-japan", "complete", "idle", nil),
@@ -79,7 +83,7 @@ struct RenderPreview {
             if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
             try FileManager.default.copyItem(at: icon, to: destination)
         }
-        print("Rendered 16 native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
+        print("Rendered native layouts, 6 artwork previews, and the single-eye app icon into \(folder.path)")
     }
 
     @MainActor private static func render<V: View>(_ name: String, view: V, folder: URL, width: CGFloat = 393, height: CGFloat = 852) throws {
