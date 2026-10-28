@@ -20,6 +20,9 @@ Implemented:
   turns have durable retry receipts and bounded raw reply pages; restarting
   leaves interrupted inference uncertain instead of replaying it. Recorded
   achievement and historical validation remain distinct from this assessment.
+  An isolated initialize-only diagnostic is available as
+  `python3 scripts/core-chat-init-probe.py`; it uses temporary synthetic state,
+  starts no model turn and controls no session. It does not restart Core.
 
 - Explicit Linux root installation for owner-selected dedicated hosts, with a
   root-owned private context, systemd system supervision and direct cwd-preserving

@@ -7,7 +7,7 @@
   "engines": { "node": ">=24" },
   "exports": { ".": "./src/index.js", "./client": "./src/client.js", "./relay": "./src/relay/index.js", "./engine/*": "./src/engine/*", "./message-format": "./src/message-format.js", "./workspaces": "./src/workspaces.js", "./metrics": "./src/metrics.js", "./knowledge": "./src/knowledge.js", "./connections": "./src/connections.js", "./command": "./bin/bzzy-core.js" },
   "bin": { "bzzy-core": "./bin/bzzy-core.js" },
-  "files": ["bin", "src", "assets", "docs", "scripts/prepare-package.mjs", "scripts/repair-updater.py", "README.md", "NOTICE", "LICENSE"],
+  "files": ["bin", "src", "assets", "docs", "scripts/prepare-package.mjs", "scripts/repair-updater.py", "scripts/core-chat-init-probe.py", "README.md", "NOTICE", "LICENSE"],
   "bundledDependencies": ["@bzzy/relay"],
   "scripts": {
     "start": "node bin/bzzy-core.js serve",

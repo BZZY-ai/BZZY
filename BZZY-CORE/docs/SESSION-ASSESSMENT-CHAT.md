@@ -110,6 +110,40 @@ These failures start no unrestricted fallback. Unknown adapter failures remain
 saved, not that a live provider request was verified. The existing own-phone
 `chat.poll` route checks the saved turn without SSH or another inference.
 
+## Isolate an initialization failure without changing running work
+
+Run the standalone diagnostic from this Core package:
+
+```sh
+python3 scripts/core-chat-init-probe.py
+```
+
+It locates the existing Codex executable, checks its version, and sends only
+`initialize`/`initialized` to two fresh native processes: the restricted profile
+without subscription login and a synthetic loopback API configuration. It creates
+and removes its own private directories under `/tmp`; it does not attach to Core,
+open a session/thread, start a model turn, read project/user login stores, update
+software or restart a service. Inherited account environment variables are
+excluded. Fixed categories, bounded exit/signal/RPC codes and the existence of
+machine configuration files are printed; raw output, error text and credentials
+are not printed. A global work deadline, output bounds and cleanup of its own
+process groups limit the check. `--codex PATH` can explicitly select an existing
+backend executable.
+
+Codex still enforces mandatory `/etc/codex` configuration. A successful check
+establishes only fresh-process startup with synthetic state; it does not verify
+Core's daemon environment/cgroup, configured accounts, live provider access or
+permission-profile activation in an actual thread. It cannot establish a root
+cause for the recorded VPS failure on its own.
+
+Future trusted startup receipts additionally distinguish host RPC timeout from
+native process exit using `backendFailure.transportFailure`. These fields come
+from local transport events, never arbitrary error properties. Raw stderr and
+messages remain excluded, and transport metadata alone cannot establish zero
+model usage or completion authority.
+
+## Recovery
+
 Gateway restart marks an interrupted turn uncertain when inspected, without
 resubmitting it. A new explicit question needs a new ID. Operator stop, gateway
 close, source-scope changes and revocation interrupt the assessment; revoked or

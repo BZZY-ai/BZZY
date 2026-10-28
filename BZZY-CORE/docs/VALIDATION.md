@@ -1,3 +1,31 @@
+# Isolated Core Chat initialization diagnosis (2026-10-28)
+
+Trusted RPC transport receipts now distinguish a deadline from child exit,
+with bounded numeric exit codes/allowlisted signals and no raw stderr, messages,
+arguments or environment. Only transport-created WeakMap receipts can enrich
+an adapter's startup diagnostic; imported/error properties cannot forge them or
+independently claim pre-request zero usage.
+
+The standalone Python 3.9+ helper tests native initialization using fresh
+private `/tmp` homes, the restricted profile and synthetic provider metadata.
+It sends no thread, goal, model-list or turn requests and never connects to Core
+or reads a project/user login store. Tests cover the emitted restriction flags,
+account-environment exclusion, unchanged owner sentinel files, private-output
+suppression, instant exit, RPC rejection, failed version checks, output floods,
+deadlines and owned-process cleanup. Mandatory machine configuration remains
+enforced; the helper reports its presence rather than bypassing or exposing it.
+
+Node 24/macOS: **1,173 Core tests passed, 2 skipped**; **32 focused tests** and
+the actual release-packaging regression passed. Packaging includes both the
+standalone helper and trusted transport module in standalone Core and bundled
+CLI releases. Core syntax and whitespace checks passed. The actual helper
+initialized both cases with local official Codex **0.163.0**. An independent
+initialize-only check using official **0.162.0** also passed with production-shaped
+nested temporary paths. These are macOS startup checks, not Linux/account/model
+inference verification. No live Core, VPS session or investigation was accessed,
+updated, restarted or controlled. The reported immediate VPS failure still
+requires its host-side diagnostic result; no root cause is asserted here.
+
 # Preserve Core Chat failure identity across cleanup and refresh (2026-10-28)
 
 Two local regressions reproduced diagnostic loss. A restricted runner's cleanup

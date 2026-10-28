@@ -40,6 +40,8 @@ test('the release tarball runs CLI, Core and Relay SDK without sibling source di
   const [packed] = JSON.parse(npm(['pack', '--json', '--pack-destination', temporary], terminal));
   const contents = packed.files.map(file => file.path);
   assert.ok(contents.includes('node_modules/@bzzy/core/src/engine/runtime.js'));
+  assert.ok(contents.includes('node_modules/@bzzy/core/src/engine/rpc-failure.js'));
+  assert.ok(contents.includes('node_modules/@bzzy/core/scripts/core-chat-init-probe.py'));
   assert.ok(contents.some(file => file.endsWith('@bzzy/relay/src/client.js')));
   assert.ok(contents.every(file => !/(^|\/)(?:connect\.txt|\.env(?:\..*)?|credentials\.json|\.npmrc|\._[^/]*)(?:\/|$)/i.test(file)), 'release must exclude private notes, credentials and host metadata');
   assert.ok(contents.every(file => !file.split('/').includes('..')), 'release paths must remain within the package');
@@ -49,6 +51,7 @@ test('the release tarball runs CLI, Core and Relay SDK without sibling source di
   fs.writeFileSync(path.join(coreSource, 'connect.txt'), 'fixture private host notes');
   fs.writeFileSync(path.join(coreSource, 'credentials.json'), '{"fixture":"not-a-real-credential"}');
   const [packedCore] = JSON.parse(npm(['pack', '--json', '--pack-destination', temporary], coreSource));
+  assert.ok(packedCore.files.some(file => file.path === 'scripts/core-chat-init-probe.py'));
   assert.equal(fs.readFileSync(metadataFixture, 'utf8'), 'fixture dependency metadata', 'Core packaging must preserve original dependency metadata');
   assert.equal(fs.readFileSync(path.join(coreSource, 'connect.txt'), 'utf8'), 'fixture private host notes');
   assert.equal(fs.existsSync(path.join(coreSource, '.bzzy-package')), false, 'postpack must restore and remove its temporary stage');

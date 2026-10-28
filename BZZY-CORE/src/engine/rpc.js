@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import readline from 'node:readline';
 import { stopProcess } from './policy.js';
+import { markRpcFailure } from './rpc-failure.js';
 
 // Only local, deliberate transport cleanup creates this error. Backend crashes
 // and RPC error replies remain distinct, even if they use the same message.
@@ -28,7 +29,8 @@ export class Rpc extends EventEmitter {
     child.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk.toString()).slice(-12000); });
     child.stdin.on('error', error => this.fail(error));
     child.once('error', error => this.fail(error));
-    child.once('close', code => this.fail(new Error(`Backend exited (${code})${this.stderr ? `: ${this.stderr.trim()}` : ''}`)));
+    child.once('close', (code, signal) => this.fail(markRpcFailure(new Error(`Backend exited (${code})${this.stderr ? `: ${this.stderr.trim()}` : ''}`),
+      { kind: 'process_exit', exitCode: code, signal })));
   }
 
   send(message) {
@@ -39,7 +41,8 @@ export class Rpc extends EventEmitter {
   request(method, params = {}, timeoutMs = 60000) {
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => { this.pending.delete(id); reject(new Error(`Backend timed out handling ${method}.`)); }, timeoutMs);
+      const timeout = setTimeout(() => { this.pending.delete(id); reject(markRpcFailure(Object.assign(new Error(`Backend timed out handling ${method}.`),
+        { code: 'ETIMEDOUT' }), { kind: 'timeout' })); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timeout });
       try { this.send({ id, method, params }); }
       catch (error) { clearTimeout(timeout); this.pending.delete(id); reject(error); }
