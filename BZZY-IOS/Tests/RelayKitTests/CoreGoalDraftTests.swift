@@ -17,6 +17,8 @@ final class CoreGoalDraftTests: XCTestCase {
         XCTAssertFalse(CoreGoalDraft.canResumeStalled(status: nil))
         XCTAssertTrue(CoreGoalDraft.canResumeStalled(status: "paused", reason: "turn_limit"))
         XCTAssertTrue(CoreGoalDraft.canResumeStalled(status: "paused", reason: "recovery_required"))
+        XCTAssertTrue(CoreGoalDraft.canResumeStalled(status: "paused", reason: "context_no_progress", executionState: "paused"))
+        XCTAssertFalse(CoreGoalDraft.canResumeStalled(status: "paused", reason: "context_no_progress", executionState: "running"))
         XCTAssertFalse(CoreGoalDraft.canResumeStalled(status: "paused", reason: "user_pause"))
     }
     func testGoalPillKeepsCanonicalDraftAndEditableObjective() {

@@ -87,7 +87,12 @@ function backendEvent(data) {
 }
 
 function filename(alias, at) {
-  const name = String(alias || 'session').normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '-').replace(/\s+/g, '-').replace(/^[. -]+|[. -]+$/g, '').slice(0, 80) || 'session';
+  let name = String(alias || 'session').normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '-').replace(/\s+/g, '-').replace(/^[. -]+|[. -]+$/g, '');
+  const characters = [...name].slice(0, 80);
+  // Leave byte space for the full ZIP suffix and numbered collisions on
+  // filesystems with a 255-byte component limit, including non-ASCII aliases.
+  while (Buffer.byteLength(characters.join('')) > 160) characters.pop();
+  name = characters.join('') || 'session';
   const date = [at.getDate(), at.getMonth() + 1, at.getFullYear()].map((value, index) => String(value).padStart(index === 2 ? 4 : 2, '0')).join('');
   return `${name}_debug_${date}.md`;
 }

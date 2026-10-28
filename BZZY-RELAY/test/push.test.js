@@ -130,3 +130,155 @@ test('forgetting one computer removes its pending alerts without disabling anoth
   worker.enqueue(grant.hostId, { ...first, id: 'new', occurredAt: clock }); await worker.tick();
   assert.equal(sends.length, 2);
 });
+
+test('temporary outages retry beyond eight attempts across restart with stable IDs until recovery', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-outage-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const f = await fixture(t), host = await f.client({ host: true }), phone = await f.client();
+  const { grant } = await pair(host, phone, { kind: 'PAIR', resource: 'outage-fixture', grantTtlSeconds: 86400 });
+  let clock = Date.now(); const sends = [];
+  const open = () => {
+    const store = new RelayStore({ directory });
+    store.putDevice(f.store.device(grant.hostId)); store.putDevice(f.store.device(grant.recipientId));
+    store.db.prepare('INSERT OR IGNORE INTO grants VALUES (?,?)').run(grant.id, JSON.stringify(grant));
+    const worker = new RelayPushService({ store, clock: () => clock, configurationLoader: () => configuration,
+      clientFactory: () => ({ send: async value => {
+        sends.push(value);
+        if (sends.length <= 10) throw Object.assign(new Error('fixture pre-dispatch outage'), { code: 'APNS_UNAVAILABLE', uncertain: false });
+      }, close() {} }) });
+    return { store, worker };
+  };
+  let { store, worker } = open();
+  worker.register(grant.recipientId, { enabled: true, deviceToken: token, environment: 'sandbox', grantIds: [grant.id] });
+  const params = { grantId: grant.id, id: 'outage', occurredAt: clock, environment: 'sandbox', payload: payload(grant.hostId, grant.spec.resource) };
+  worker.enqueue(grant.hostId, params);
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    await worker.tick();
+    const row = JSON.parse(store.db.prepare('SELECT data FROM push_queue').get().data);
+    assert.equal(row.state, 'retry'); assert.equal(row.attempts, attempt);
+    assert.ok(row.nextAttemptAt > clock && row.nextAttemptAt <= clock + 300_000);
+    await worker.tick(); assert.equal(sends.length, attempt, 'Backoff prevents repeated dispatch in the same interval');
+    if (attempt === 5) {
+      await worker.close(); store.close();
+      ({ store, worker } = open());
+      await worker.tick(); assert.equal(sends.length, attempt, 'Restart preserves the durable backoff');
+    }
+    clock = row.nextAttemptAt;
+  }
+  await worker.tick();
+  assert.equal(sends.length, 11);
+  assert.equal(worker.enqueue(grant.hostId, params).state, 'sent');
+  assert.equal(new Set(sends.map(value => value.id)).size, 1);
+  assert.equal(new Set(sends.map(value => value.collapseID)).size, 1);
+  assert.equal(store.db.prepare('SELECT data FROM push_queue').get().data.includes('Verified result.'), false);
+  await worker.close(); store.close();
+});
+
+test('a temporary outage stops at the existing event expiry without dispatching stale alerts', async t => {
+  const f = await fixture(t), host = await f.client({ host: true }), phone = await f.client();
+  const { grant } = await pair(host, phone, { kind: 'PAIR', resource: 'expiry-fixture', grantTtlSeconds: 86400 });
+  let clock = Date.now(), calls = 0;
+  const worker = new RelayPushService({ store: f.store, clock: () => clock, configurationLoader: () => configuration,
+    clientFactory: () => ({ send: async () => { calls++; throw Object.assign(new Error(), { code: 'APNS_UNAVAILABLE' }); }, close() {} }) });
+  t.after(() => worker.close());
+  worker.register(grant.recipientId, { enabled: true, deviceToken: token, environment: 'sandbox', grantIds: [grant.id] });
+  worker.enqueue(grant.hostId, { grantId: grant.id, id: 'expires', occurredAt: clock, environment: 'sandbox', payload: payload(grant.hostId, grant.spec.resource) });
+  await worker.tick();
+  const row = JSON.parse(f.store.db.prepare('SELECT data FROM push_queue').get().data);
+  assert.equal(row.state, 'retry');
+  clock = row.expiresAt + 1;
+  await worker.tick();
+  assert.equal(calls, 1);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM push_queue').get().n, 0);
+});
+
+test('restart during connection setup safely retries but the public receipt remains queued', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-connecting-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const f = await fixture(t), host = await f.client({ host: true }), phone = await f.client();
+  const { grant } = await pair(host, phone);
+  let calls = 0;
+  const open = () => {
+    const store = new RelayStore({ directory });
+    store.putDevice(f.store.device(grant.hostId)); store.putDevice(f.store.device(grant.recipientId));
+    store.db.prepare('INSERT OR IGNORE INTO grants VALUES (?,?)').run(grant.id, JSON.stringify(grant));
+    const worker = new RelayPushService({ store, configurationLoader: () => configuration,
+      clientFactory: () => ({ send: async value => {
+        assert.equal(JSON.parse(store.db.prepare('SELECT data FROM push_queue').get().data).state, 'connecting');
+        value.beforeDispatch();
+        assert.equal(JSON.parse(store.db.prepare('SELECT data FROM push_queue').get().data).state, 'dispatching');
+        calls++;
+      }, close() {} }) });
+    return { store, worker };
+  };
+  let { store, worker } = open();
+  worker.register(grant.recipientId, { enabled: true, deviceToken: token, environment: 'sandbox', grantIds: [grant.id] });
+  const params = { grantId: grant.id, id: 'connecting-restart', occurredAt: Date.now(), environment: 'sandbox', payload: payload(grant.hostId, grant.spec.resource) };
+  worker.enqueue(grant.hostId, params);
+  const queued = JSON.parse(store.db.prepare('SELECT data FROM push_queue').get().data);
+  worker.put('push_queue', queued.id, { ...queued, state: 'connecting', attempts: 1 });
+  assert.equal(worker.enqueue(grant.hostId, params).state, 'queued', 'Internal connection progress cannot change the existing public protocol');
+  await worker.close(); store.close();
+  ({ store, worker } = open());
+  await worker.tick();
+  assert.equal(calls, 1); assert.equal(worker.enqueue(grant.hostId, params).state, 'sent');
+  await worker.close(); store.close();
+});
+
+test('revocation and token changes during connection setup stop POST at the durable fence', async t => {
+  for (const mutation of ['revoke', 'disable', 'rotate']) {
+    const f = await fixture(t), host = await f.client({ host: true }), phone = await f.client();
+    const { grant } = await pair(host, phone);
+    let posts = 0;
+    const worker = new RelayPushService({ store: f.store, configurationLoader: () => configuration,
+      clientFactory: () => ({ send: async value => {
+        await Promise.resolve();
+        if (mutation === 'revoke') f.store.revokeGrant(grant.hostId, grant.id);
+        else if (mutation === 'disable') worker.register(grant.recipientId, { enabled: false });
+        else worker.register(grant.recipientId, { enabled: true, deviceToken: 'cd'.repeat(32), environment: 'sandbox', grantIds: [grant.id] });
+        value.beforeDispatch(); posts++;
+      }, close() {} }) });
+    t.after(() => worker.close());
+    worker.register(grant.recipientId, { enabled: true, deviceToken: token, environment: 'sandbox', grantIds: [grant.id] });
+    const params = { grantId: grant.id, id: mutation, occurredAt: Date.now(), environment: 'sandbox', payload: payload(grant.hostId, grant.spec.resource) };
+    worker.enqueue(grant.hostId, params); await worker.tick();
+    const row = JSON.parse(f.store.db.prepare('SELECT data FROM push_queue').get().data);
+    assert.equal(posts, 0); assert.equal(row.state, 'failed'); assert.equal(row.code, 'FORBIDDEN');
+  }
+});
+
+for (const blockedBy of ['backoff', 'unconfigured environment']) {
+  test(`a ready alert is not hidden behind256 older alerts blocked by ${blockedBy}`, async t => {
+    const f = await fixture(t), oldHost = await f.client({ host: true }), readyHost = await f.client({ host: true });
+    const oldPhone = await f.client(), readyPhone = await f.client();
+    const { grant: oldGrant } = await pair(oldHost, oldPhone), { grant: readyGrant } = await pair(readyHost, readyPhone);
+    let clock = Date.now(); const sends = [];
+    const worker = new RelayPushService({ store: f.store, clock: () => clock, configurationLoader: () => configuration,
+      clientFactory: () => ({ send: async value => { value.beforeDispatch(); sends.push(value); }, close() {} }) });
+    t.after(() => worker.close());
+    const oldEnvironment = blockedBy === 'backoff' ? 'sandbox' : 'production';
+    worker.register(oldGrant.recipientId, { enabled: true, deviceToken: token, environment: oldEnvironment, grantIds: [oldGrant.id] });
+    worker.register(readyGrant.recipientId, { enabled: true, deviceToken: 'cd'.repeat(32), environment: 'sandbox', grantIds: [readyGrant.id] });
+    for (let index = 0; index < 256; index++) {
+      worker.enqueue(oldGrant.hostId, { grantId: oldGrant.id, id: `older-${index}`, occurredAt: clock,
+        environment: oldEnvironment, payload: payload(oldGrant.hostId, oldGrant.spec.resource) });
+    }
+    if (blockedBy === 'backoff') {
+      for (const item of f.store.db.prepare('SELECT data FROM push_queue').all()) {
+        const row = JSON.parse(item.data);
+        worker.put('push_queue', row.id, { ...row, state: 'retry', nextAttemptAt: clock + 300_000 });
+      }
+    }
+    clock++;
+    const ready = { grantId: readyGrant.id, id: 'new-ready', occurredAt: clock,
+      environment: 'sandbox', payload: payload(readyGrant.hostId, readyGrant.spec.resource) };
+    worker.enqueue(readyGrant.hostId, ready);
+    assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM push_queue').get().n, 257);
+    await worker.tick();
+    assert.equal(sends.length, 1, 'One ready alert must dispatch in the first bounded pass');
+    assert.equal(sends[0].payload.bzzy.hostId, readyGrant.hostId);
+    assert.equal(worker.enqueue(readyGrant.hostId, ready).state, 'sent');
+    assert.equal(f.store.db.prepare("SELECT COUNT(*) AS n FROM push_queue WHERE json_extract(data,'$.hostId')=? AND json_extract(data,'$.attempts')=0").get(oldGrant.hostId).n, 256,
+      'Backoff and missing-environment entries must not create native connection attempts');
+  });
+}

@@ -1,10 +1,37 @@
 # BZZY native iOS
 
-Native Swift/SwiftUI, iOS 17+, with **Agents** and **Terminal**. The current
+Native Swift/SwiftUI, iOS 17+, with **Agents**, **Terminal** and read-only **Chat**. The current
 appearance follows the CLI: dark flat surfaces, compact monospaced prompt rows,
 cyan controls, teal user messages and lavender assistant messages.
 
-Build **0.1.0 (23)** removes filled message backgrounds, groups consecutive
+Build **0.1.0 (25)** retains the latest **100 complete cached entries** per
+conversation for immediate reopening. Older pages and rendering stay bounded;
+Core owns full history. The protected display cache is separate from durable
+raw-event acknowledgments and never grants live permissions. Reading older
+messages preserves position; **Latest** explicitly returns to the live tail.
+
+The bottom **Chat** tab asks Core about recorded session and goal status, with
+visible checking feedback and a checked timestamp. Its Core model runs with no
+tools in an empty private directory, so this chat cannot execute or control the
+sessions it assesses. Questions, drafts and uncertain receipts survive reconnect
+without automatically resending model work. Fixed startup support codes identify
+backend/configuration failures without exposing private diagnostics; a definitive
+source-unavailable rejection preserves the editable draft.
+
+Notification settings distinguish local previews, phone permission, Relay
+configuration and actual delivery. Apple signing/network setup belongs to the
+Relay operator; ordinary clients install Core/CLI, pair the app and allow alerts.
+A configured service alone does not prove Apple acceptance or phone display.
+
+The signed development build **0.1.0 (25)** was installed in place and launched
+normally on the connected iPhone. CoreDevice independently confirmed build 25;
+the existing signed application/Keychain identity was retained without uninstall
+or data reset. Updated clients classify Core's `context_no_progress` pause as a
+stalled goal and allow explicit resume only after execution has stopped. Core
+must be updated separately for that runtime guard; updating the phone does not
+patch an active host runner.
+
+Earlier build **0.1.0 (23)** removes filled message backgrounds, groups consecutive
 replies under one speaker heading, and simplifies the Agents/Terminal list
 headers. The compact Pause icon asks for confirmation and rechecks the selected
 computer/conversation/goal before dispatch. Cached chats open the latest **50

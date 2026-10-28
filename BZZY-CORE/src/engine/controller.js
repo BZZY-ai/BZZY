@@ -31,6 +31,7 @@ import { captureEpisode } from './episode.js';
 import { captureSkillOutcomes } from './skill-feedback.js';
 import { beginRunUsage, endRunUsage } from './usage-ledger.js';
 import { backendStartupFailure } from './backend-startup.js';
+import { isStalledGoal } from './goal-state.js';
 
 export function classifyFailure(error) {
   const message = String(error.message || error);
@@ -48,7 +49,7 @@ export function printGoalSummary(session, ui) {
   if (!session.goal || ['active', 'verifying'].includes(session.goal.status)) return;
   const usage = session.summary?.usage || usageSummary(session);
   const seconds = session.goal.runtimeUsedSeconds || 0, elapsed = duration(seconds);
-  const result = session.goal.status === 'complete' ? 'GOAL ACHIEVED' : session.goal.status === 'cancelled' ? 'GOAL CANCELLED' : session.goal.status === 'paused' && session.goal.reason !== 'turn_limit' ? 'GOAL PAUSED' : 'GOAL STALLED';
+  const result = session.goal.status === 'complete' ? 'GOAL ACHIEVED' : session.goal.status === 'cancelled' ? 'GOAL CANCELLED' : session.goal.status === 'paused' && !isStalledGoal(session.goal) ? 'GOAL PAUSED' : 'GOAL STALLED';
   const delegated = session.mode === 'delegate';
   const breakdown = delegated ? '\n' + delegationTokenLines(session, usage).join('\n')
     : usage.agents.length ? '\n' + usage.agents.map(a => `  ${a.agent || a.provider}${a.model ? ':' + a.model : ''}: ${a.tokens == null ? 'usage unavailable' : a.tokens.toLocaleString() + ' tokens'}${a.elapsedSeconds != null ? ' · ' + duration(a.elapsedSeconds) : ''}`).join('\n') : '';
@@ -66,17 +67,24 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   } else options = { ...options, agentScope: null };
   const policy = effectivePolicy(session, options);
   const unlock = lockSession(session), started = Date.now(), indicator = ui.executionIndicator?.(options.pet !== false && !ui.persistsEvents) || { start() {}, stop() {} }, abort = new AbortController();
-  let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, historyMaintenance, controls, processing = false, failedThisTurn = false, preRequestUsageFailure = false, handoffRequested = false;
+  let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, historyMaintenance, controls, processing = false, failedThisTurn = false, preRequestUsageFailure = false, handoffRequested = false, forcedStopUsageUncertain = false;
   options = { ...options, goalMode: goal, policy, strictPolicy: Boolean(options.strictPolicy || options.readOnly || session.strictPolicy) }; session.policy = policy; session.captureNetwork = Boolean(options.captureNetwork);
   const run = { id: randomUUID(), sessionId: session.id, state: 'running', goalMode: goal, goalId: goal ? session.goal?.id || null : null,
     runner: processIdentity(), startedAt: now(), heartbeatAt: now(),
     ...(!goal && !session.parentSessionId && !session.role && !session.agentId ? { workerBudgetPolicy: getWorkerBudgetSettings() } : {}) };
+  const forceClose = () => {
+    // An intermediate cumulative counter cannot settle usage for a turn
+    // that must be killed without its terminal acknowledgment.
+    if (engine?.activeTurns?.size) { forcedStopUsageUncertain = true; engine.contextStallForcedClose = true; }
+    engine?.close().catch(() => {});
+  };
   const stop = (reason = 'interrupted') => {
-    if (stopping) { engine?.close().catch(() => {}); return; }
+    if (stopping) { forceClose(); return; }
     stopping = reason; abort.abort(); ui.cancelled = true; indicator.stop();
     engine?.interrupt(reason).catch(error => { try { ui.event('error', { message: error.message }); } catch { /* stop must work even when persistence fails */ } });
-    killTimer = setTimeout(() => engine?.close().catch(() => {}), 3000); killTimer.unref();
+    killTimer = setTimeout(forceClose, 3000); killTimer.unref();
   };
+  options.onContextStall = () => stop('context_no_progress');
   const interrupt = () => {
     const job = listRecords('execution', { sessionId: session.id, states: ['launching', 'running'] }).find(job => job.stopAction);
     stop(job?.stopAction === 'cancel' ? 'cancelled' : job?.stopAction === 'pause' ? 'user_pause' : 'interrupted');
@@ -238,7 +246,8 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     finally {
       try {
       if (fullText) artifact(session, fullText, 'agent-output');
-      const usageAttribution = endRunUsage(session, run.id, { noRequest: preRequestUsageFailure, uncertain: failedThisTurn && !preRequestUsageFailure });
+      const usageAttribution = endRunUsage(session, run.id, { noRequest: preRequestUsageFailure,
+        uncertain: failedThisTurn && !preRequestUsageFailure || forcedStopUsageUncertain || Boolean(engine?.contextStallForcedClose) });
       if (usageAttribution) {
         if (session.usage) session.usage.accountingComplete = usageAttribution.accountingComplete;
         else if (preRequestUsageFailure) session.usage = { tokens: usageAttribution.baselineTokens, available: true, accountingComplete: true, source: 'host-pre-request' };

@@ -1491,7 +1491,7 @@ public final class RelayConnection {
             guard catalogClient === client else { return false }
             let code = (error as? CoreApplicationError)?.code ?? "UNCERTAIN"
             chatErrorCode = code
-            if !dispatched || ["FORBIDDEN", "GRANT_UNAVAILABLE", "INVALID_REQUEST", "CONFLICT", "CAPACITY", "CORE_STOPPED", "ASSISTANT_SETUP_REQUIRED", "OPERATION_DENIED"].contains(code) {
+            if !dispatched || ["FORBIDDEN", "GRANT_UNAVAILABLE", "INVALID_REQUEST", "CONFLICT", "CAPACITY", "CORE_STOPPED", "ASSISTANT_SETUP_REQUIRED", "CHAT_SOURCE_UNAVAILABLE", "OPERATION_DENIED"].contains(code) {
                 state.pendingChat = nil; try? save(); chatPhase = "failed"
             } else { chatPhase = "uncertain"; startCoreChatPolling(client) }
             return dispatched && state.pendingChat != nil // Known rejections retain the editable draft.

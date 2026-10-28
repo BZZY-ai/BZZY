@@ -7,7 +7,7 @@ public enum CoreGoalDraft {
         return replacingBody(text)
     }
     public static func isStalled(status: String?, reason: String? = nil) -> Bool {
-        ["blocked", "usage_limited", "budget_limited", "awaiting_review"].contains(status ?? "") || status == "paused" && ["turn_limit", "recovery_required"].contains(reason ?? "")
+        ["blocked", "usage_limited", "budget_limited", "awaiting_review"].contains(status ?? "") || status == "paused" && ["turn_limit", "recovery_required", "context_no_progress"].contains(reason ?? "")
     }
     public static func canResumeStalled(status: String?, reason: String? = nil, executionState: String? = nil) -> Bool {
         isStalled(status: status, reason: reason) && !["queued", "launching", "running"].contains(executionState ?? "")

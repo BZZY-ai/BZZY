@@ -4,10 +4,10 @@ import Foundation
 struct NotificationReadinessChecks {
     static func main() {
         let relayMissing = NotificationDeliveryReadiness(status: "Device registered · Configure Apple push on Relay")
-        require(relayMissing == .relaySetupRequired && relayMissing.title.contains("Relay APNs not configured"),
-            "A registered phone with missing Relay APNs must show the missing remote prerequisite")
-        require(relayMissing.explanation.contains("Pairing and iPhone permission alone do not enable background delivery"),
-            "Device permission must stay separate from remote Apple setup")
+        require(relayMissing == .relaySetupRequired && relayMissing.title.contains("Notification service unavailable"),
+            "A registered phone must distinguish a service problem from local permissions")
+        require(relayMissing.explanation.contains("no SSH or key setup is required"),
+            "Central Apple setup must not become a customer Core installation step")
         require(NotificationDeliveryReadiness(status: "Relay APNs not configured · Remote alerts cannot be delivered") == .relaySetupRequired,
             "The current Relay readiness response must expose its missing Apple setup")
         let directMissing = NotificationDeliveryReadiness(status: "Device registered · Configure APNs on the source Core")

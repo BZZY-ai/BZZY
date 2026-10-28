@@ -21,9 +21,10 @@ import { recordBackendDiagnostics } from '../session-diagnostics.js';
 import { nativeContextBudget, prepareNativeReadiness, acknowledgeNativeReadiness, recordNativeCompaction,
   pendingNativeRefresh, consumeNativeRefresh, updateNativeRefresh } from '../native-context.js';
 import { nativeInputEstimate, assertNativeInputFits, observeContextPressure, nativeGoalTokenBudget } from '../native-context.js';
-import { toolSchemaManifest } from '../native-context.js';
-import { digest, getRecord, listRecords } from '../database.js';
-import { delegationUsage } from '../delegation-usage.js';
+import { toolSchemaManifest, observeNativeGoalProgress, recordNativeCompactionStall } from '../native-context.js';
+import { database, digest, getRecord, listRecords } from '../database.js';
+import { delegationUsage, assignmentFilter, assignmentParameters } from '../delegation-usage.js';
+import { identityAlive } from '../process-identity.js';
 import { recordWorkObservation } from '../episode.js';
 import { hydrateModelContext } from '../model-context.js';
 import { observeRunUsage } from '../usage-ledger.js';
@@ -156,6 +157,15 @@ export function codexLaunch(provider, session, options = {}) {
       model_messages: { instructions_template: fs.readFileSync(path.join(root, 'assets', 'agent-instructions.md'), 'utf8') },
     });
     const capabilities = providerModelCapabilities(provider, session.model, session.modelCapabilities);
+    if (Number.isSafeInteger(contextBudget.maxInputTokens) && contextBudget.maxInputTokens > 0) {
+      const reserve = nativeInputEstimate({ contextBudget }).outputHeadroomTokens;
+      const threshold = Math.max(1, Math.min(Math.floor(contextBudget.maxInputTokens * 0.9), contextBudget.tokens - reserve));
+      // Codex 0.162's supported model_auto_compact_token_limit controls native
+      // growing-history planning independently of the model's total window.
+      catalog.auto_compact_token_limit = threshold;
+      override('model_auto_compact_token_limit', threshold);
+      contextBudget.nativeAutoCompactTokens = threshold;
+    }
     if (provider.catalogFormat === 'experiential') {
       // A gateway slug does not inherit the template model's capabilities.
       // Unknown context uses a local planning budget, not an upstream claim.
@@ -201,6 +211,8 @@ export class CodexEngine {
     this.limiting = false;
     this.goalUpdates = 0;
     this.finalizedItems = new Set();
+    this.externalTools = new Set();
+    this.progressClock = Date.now;
     this.traffic = new BackendTraffic(session, ui);
     this.progress = options.activityReporter || new ActivityReporter(session, ui);
   }
@@ -233,6 +245,10 @@ export class CodexEngine {
           model: this.session.model, contextBudget: { metadata: metadata.provenance, changed: metadata.changed } });
       }
       const launchConfig = codexLaunch(this.provider, this.session, this.options);
+      if (launchConfig.contextBudget.source === 'conservative-local-fallback' && !this.contextFallbackNoticed) {
+        this.contextFallbackNoticed = true;
+        this.ui.event('info', { message: 'Model capacity metadata is unavailable. BZZY is using an assumed local 32,768-token planning window; this is not the provider’s verified limit. Refresh model metadata or select a model with known capacity if context pressure continues.' });
+      }
       this.nativeToolSchemaBytes = Buffer.byteLength(JSON.stringify(nativeTools)); this.nativeToolsKnown = true;
       const instructions = this.prepareInstructions(this.inputSource || '');
       if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { directory: launchConfig.env.CODEX_HOME }).available) throw new Error(`Codex / ChatGPT subscription authentication is unavailable in ${launchConfig.env.CODEX_HOME}. Run bzzy auth codex with the same BZZY_CODEX_HOME to sign in.`);
@@ -440,11 +456,12 @@ export class CodexEngine {
     if (!this.operation?.goal || !this.goalArmed || !this.session.goal || !goal) return;
     this.goalUpdates++;
     const tokens = (this.session.goal.nativeTokenOffset || 0) + goal.tokensUsed;
-    Object.assign(this.session.goal, { nativeStatus: goal.status, status: goal.status === 'complete' ? 'verifying' : goal.status, nativeGoalId: goal.id || goal.goalId,
+    Object.assign(this.session.goal, { nativeStatus: goal.status, status: this.contextStallRequested ? 'paused' : goal.status === 'complete' ? 'verifying' : goal.status, nativeGoalId: goal.id || goal.goalId,
       nativeTokensUsed: tokens, tokensUsed: tokens + (this.session.goal.delegatedTokensUsed || 0), timeUsedSeconds: goal.timeUsedSeconds });
+    if (this.contextStallRequested) this.session.goal.reason = 'context_no_progress';
     observeRunUsage(this.session, this.options.toolHost?.context?.runId, { nativeGoal: true });
     saveSession(this.session);
-    this.ui.event('goal', { status: goal.status, tokensUsed: tokens });
+    this.ui.event('goal', { status: this.contextStallRequested ? 'paused' : goal.status, tokensUsed: tokens });
   }
 
   notification(method, params) {
@@ -460,9 +477,19 @@ export class CodexEngine {
       }
       if (method !== 'item/started') pendingNativeRefresh(this.session, this.hostRefreshCapability ? 'native-refresh-builder-unavailable' : 'native-host-refresh-not-advertised');
       if (method !== 'item/started') this.queueContextRefresh();
+      if (changed && method !== 'item/started') this.observeLoopProgress({ kind: 'compaction' });
     }
     if (method === 'item/started' || method === 'item/completed') {
       const item = params.item, phase = method === 'item/started' ? 'started' : 'completed';
+      if (item?.id && ['commandExecution', 'fileChange', 'webSearch', 'mcpToolCall'].includes(item.type)) {
+        const toolIdentity = `${identity.turnId || 'unknown-turn'}:${item.id}`;
+        if (phase === 'started') this.externalTools.add(toolIdentity);
+        else {
+          this.externalTools.delete(toolIdentity);
+          this.observeLoopProgress({ kind: 'native-work', name: item.tool || item.type, input: { command: item.command },
+            failed: item.status === 'failed' || Boolean(item.error) || Number.isInteger(item.exitCode) && item.exitCode !== 0 });
+        }
+      }
       if (phase === 'started') {
         if (item?.type === 'commandExecution') this.progress.tool(item.id, item.type, { command: item.command });
         else if (item?.type === 'fileChange') this.progress.tool(item.id, item.type, {});
@@ -663,6 +690,60 @@ export class CodexEngine {
       .finally(() => { operation.contextPausePending = false; this.settle(); });
   }
 
+  observeLoopProgress(input) {
+    try { this.checkLoopProgress(input); }
+    catch { try { recordBackendDiagnostics(this.session, { method: 'native-progress-guard', outcome: 'observation-unavailable' }); } catch { /* Preserve the actual tool result. */ } }
+  }
+
+  checkLoopProgress(input) {
+    if (!this.operation?.goal || !this.goalArmed || this.options.learningReview || this.options.documentOnly) return;
+    const runId = this.options.toolHost?.context?.runId, at = this.progressClock();
+    const context = { runId, threadId: this.threadId, at };
+    const observation = observeNativeGoalProgress(this.session, { ...context, ...input });
+    if (!observation) return;
+    const workers = database().prepare(`SELECT a.id,json_extract(a.data,'$.currentRound') AS round,
+      json_extract(r.data,'$.state') AS state,json_extract(r.data,'$.reportArtifactId') AS report,
+      json_extract(r.data,'$.runner') AS runner,json_extract(r.data,'$.launcher') AS launcher,
+      json_extract(r.data,'$.createdAt') AS createdAt
+      FROM records a LEFT JOIN records r ON r.kind='round' AND r.id=a.id || ':' || json_extract(a.data,'$.currentRound')
+      WHERE a.kind='assignment' AND ${assignmentFilter(this.session, 'a.data')} AND COALESCE(json_extract(a.data,'$.importedUntrusted'),0)!=1
+      ORDER BY r.updated_at DESC,a.id LIMIT 128`).all(...assignmentParameters(this.session));
+    const fingerprint = digest(workers.map(({ id, round, state, report }) => ({ id, round, state, report })).sort((a, b) => a.id.localeCompare(b.id)));
+    observeNativeGoalProgress(this.session, { ...context, kind: 'worker-state', fingerprint });
+    const decision = observeNativeGoalProgress(this.session, { ...context, kind: 'check' });
+    if (!decision?.shouldPause || this.hostRequests || this.externalTools.size || this.userSteerInFlight || this.session.nativeContext?.refresh?.state === 'dispatching'
+      || this.interrupted || this.closing || listRecords('question', { sessionId: this.session.id, state: 'pending', limit: 1 }).length) return;
+    // A saved "running" label alone is not evidence of a live worker. Verify
+    // the exact current round's owned process, or its short admitted startup.
+    if (workers.some(worker => {
+      try {
+        if (worker.state === 'running') return Boolean(worker.runner && identityAlive(JSON.parse(worker.runner)));
+        if (worker.state === 'starting') return worker.launcher ? identityAlive(JSON.parse(worker.launcher))
+          : Date.now() - Date.parse(worker.createdAt) < 30000;
+      } catch { /* Missing/unverifiable identity cannot assert live work. */ }
+      return false;
+    })) return;
+    if (!recordNativeCompactionStall(this.session, context)) return;
+    this.contextStallRequested = true;
+    this.session.goal.status = 'paused'; this.session.goal.reason = 'context_no_progress';
+    try { saveSession(this.session); } catch { /* Stop even when persistence is unavailable. */ }
+    try { this.ui.event('info', { message: 'Goal stalled: repeated coordination reads and context churn produced no new host-observed work. The saved goal, evidence and owner budget limit are preserved. An unacknowledged stop may require usage reconciliation. Review the pending state before explicitly resuming; no work was replayed.' }); } catch { /* Reporting cannot suppress the bounded stop. */ }
+    if (typeof this.options.onContextStall === 'function') { this.options.onContextStall(); return; }
+    const operation = this.operation; operation.contextPausePending = true;
+    // Direct adapter callers receive the same bounded local shutdown as the
+    // controller. An unresponsive pause RPC must not leave inference looping.
+    const force = setTimeout(() => {
+      if (this.activeTurns.size) this.contextStallForcedClose = true;
+      void this.close().then(() => {
+      this.activeTurns.clear(); operation.contextPausePending = false; operation.resolve();
+      }, error => { operation.contextPausePending = false; operation.reject(error); });
+    }, 3000); force.unref?.();
+    void this.interrupt('context_no_progress').then(() => {
+      if (!this.activeTurns.size) clearTimeout(force);
+      operation.contextPausePending = false; this.settle();
+    }, () => { /* The bounded close above owns ambiguous stop cleanup. */ });
+  }
+
   settle() {
     if (!this.operation || this.operation.pendingStart || this.operation.contextPausePending || this.activeTurns.size) return;
     if ((!this.operation.goal && this.operation.seenTurn) || this.interrupted || (this.operation.goal && this.session.goal?.status !== 'active')) this.operation.resolve();
@@ -671,7 +752,7 @@ export class CodexEngine {
   async request(method, params) {
     this.hostRequests = (this.hostRequests || 0) + 1;
     try { return await this.handleRequest(method, params); }
-    finally { this.hostRequests--; this.pauseForContextPressure(); this.queueContextRefresh(); }
+    finally { this.hostRequests--; this.pauseForContextPressure(); this.observeLoopProgress({ kind: 'check' }); this.queueContextRefresh(); }
   }
 
   async handleRequest(method, params) {
@@ -680,8 +761,14 @@ export class CodexEngine {
       throw new Error('Documentation drafting has no tool access.');
     }
     if (method === 'item/tool/call' && this.options.toolHost) {
-      try { return { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(await this.options.toolHost.call(params.tool, params.arguments)) }] }; }
-      catch (error) { return { success: false, contentItems: [{ type: 'inputText', text: error.message }] }; }
+      try {
+        const result = await this.options.toolHost.call(params.tool, params.arguments);
+        this.observeLoopProgress({ kind: 'core-tool', name: params.tool, input: params.arguments || {}, result });
+        return { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(result) }] };
+      } catch (error) {
+        this.observeLoopProgress({ kind: 'core-tool', name: params.tool, input: params.arguments || {}, failed: true });
+        return { success: false, contentItems: [{ type: 'inputText', text: error.message }] };
+      }
     }
     if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {
       if (this.options.agentScope || this.options.strictPolicy) return { decision: 'decline' };

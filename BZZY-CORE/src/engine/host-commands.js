@@ -128,6 +128,7 @@ export function newConversation(previous, options) {
   const workspace = terminalWorkspace(options.cwd);
   const session = Object.assign(createSession(getProvider(previous.provider), workspace.cwd, previous.model), workspace);
   Object.assign(session, { selectedEffort: previous.selectedEffort, modelCapabilities: previous.modelCapabilities, modelSelectionRequired: previous.modelSelectionRequired, mode: previous.mode,
+    ...(previous.modelContextMetadata ? { modelContextMetadata: structuredClone(previous.modelContextMetadata) } : {}),
     executor: previous.executor, besties: previous.besties, parallelAgents: previous.parallelAgents, debateAgents: previous.debateAgents });
   saveSession(session); return session;
 }

@@ -29,9 +29,9 @@ enum NotificationDeliveryReadiness: Equatable {
 
     var title: String {
         switch self {
-        case .relaySetupRequired: return "Relay APNs not configured for this build"
+        case .relaySetupRequired: return "Notification service unavailable for this build"
         case .coreSetupRequired: return "Core APNs not configured for this build"
-        case .relayConfigured: return "Relay APNs configuration confirmed"
+        case .relayConfigured: return "Notification service configured"
         case .coreConfigured: return "Core APNs configuration confirmed"
         case .disabled: return "Remote activity alerts disabled"
         case .permissionRequired: return "iPhone notification permission required"
@@ -44,7 +44,7 @@ enum NotificationDeliveryReadiness: Equatable {
     var explanation: String {
         switch self {
         case .relaySetupRequired:
-            return "The Relay administrator must configure its Apple push key, app topic and matching sandbox or production environment. Pairing and iPhone permission alone do not enable background delivery. See Core docs/PUSH.md."
+            return "This iPhone is registered, but BZZY’s central notification service is not ready for this app build. Keep Activity alerts enabled and reconnect to refresh its status. Apple push keys are managed by the service; no SSH or key setup is required on your Core computer."
         case .coreSetupRequired:
             return "This connection uses direct Core delivery. The Core owner must configure Apple push for this app’s topic and environment. See Core docs/PUSH.md."
         case .relayConfigured, .coreConfigured:

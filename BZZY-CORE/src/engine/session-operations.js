@@ -137,7 +137,7 @@ function editSession(sessionId, owner, apply, authorize, existingDb, validate = 
 export function setSessionModel(sessionId, owner, selected, { authorize, db } = {}) {
   return editSession(sessionId, owner, (session, db) => {
     const previous = session.model;
-    Object.assign(session, { modelSelectionRequired: false, model: selected.model, resolvedModel: null, modelCapabilities: selected.capabilities, selectedEffort: selected.effort, reasoningEffort: null });
+    Object.assign(session, { modelSelectionRequired: false, model: selected.model, resolvedModel: null, modelCapabilities: selected.capabilities, modelContextMetadata: null, selectedEffort: selected.effort, reasoningEffort: null });
     appendEvent(session.id, 'model.changed', { provider: session.provider, previousModel: previous, model: session.model, effort: session.selectedEffort, appliesTo: 'next_turn' }, db);
   }, authorize, db);
 }
@@ -146,6 +146,7 @@ function applyProviderSelection(session, provider, selected, db, { preservePause
     const previous = { provider: session.provider, model: session.model, threadId: session.engineThreadId };
     Object.assign(session, {
       modelSelectionRequired: false, provider: provider.id, backend: provider.backend, model: selected.model, modelCapabilities: selected.capabilities, selectedEffort: selected.effort,
+      modelContextMetadata: null,
       engineThreadId: null, engineSessionId: provider.backend === 'claude' ? randomUUID() : null, engineHome: null,
       resolvedModel: null, reasoningEffort: null, failure: null, executionState: preservePause ? 'paused' : 'idle',
       engineTokenOffset: session.usage?.tokens || 0,

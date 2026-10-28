@@ -134,6 +134,7 @@ function experientialModel(entry) {
   const defaultEffort = efforts?.length && reasoners.every(value => value.reasoning_default_effort === reasoners[0].reasoning_default_effort)
     && efforts.includes(reasoners[0].reasoning_default_effort) ? reasoners[0].reasoning_default_effort : undefined;
   return { id: model.slug, display_name: model.display_name, description: model.description, context_window: model.context_window,
+    max_input_tokens: model.max_input_tokens, max_output_tokens: model.max_output_tokens,
     input_modalities: model.input_modalities,
     ...(noReasoning || efforts && !efforts.length ? { supportsEffort: false } : {}),
     ...(efforts ? { effort: { supported_levels: efforts, default_level: defaultEffort } } : {}) };
@@ -173,6 +174,8 @@ async function apiModels(provider, signal) {
 
 function apiModel(provider, model) {
   const context = model.context_window ?? model.context_length;
+  const tokenLimit = value => Number.isSafeInteger(value) && value > 0 && value <= 1000000000 &&
+    (!Number.isSafeInteger(context) || context <= 0 || value <= context);
   const modalities = model.input_modalities ?? model.architecture?.input_modalities;
   const cyber = provider.catalogFocus === 'cyber' && (/^orca\/orcacyber[-/]/i.test(model.id) || model.required_tier === 'sec-uncensored' || model.category === 'cyber');
   const capabilities = providerModelCapabilities(provider, model.id, {
@@ -180,6 +183,8 @@ function apiModel(provider, model) {
     supportedEfforts: Array.isArray(model.effort?.supported_levels) ? model.effort.supported_levels : undefined,
     defaultEffort: typeof model.effort?.default_level === 'string' ? model.effort.default_level : undefined,
     contextWindow: Number.isSafeInteger(context) && context > 0 ? context : undefined,
+    maxInputTokens: tokenLimit(model.max_input_tokens) ? model.max_input_tokens : undefined,
+    maxOutputTokens: tokenLimit(model.max_output_tokens) ? model.max_output_tokens : undefined,
     inputModalities: Array.isArray(modalities) ? modalities.filter(value => ['text', 'image'].includes(value)) : undefined,
     ...(cyber ? { category: 'cyber' } : {}),
   });

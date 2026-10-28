@@ -164,6 +164,25 @@ test('Full debug ZIP and /full_debug_export route to the full exporter without m
   } finally { ui.close(); }
 });
 
+test('export failures show safe cause categories and the matching ZIP or Markdown retry command', async () => {
+  for (const [action, code, message] of [['full-export', 'SESSION_DEBUG_PYTHON', /Python/], ['full-export', 'ENOSPC', /space/],
+    ['full-export', 'EACCES', /Access/], ['export', 'toString', /could not be collected safely/]]) {
+    const fail = async () => { throw Object.assign(new Error('api_key=PRIVATE_DIAGNOSTIC_DO_NOT_SHOW /root/private-account'), { code, exportPhase: 'packaging' }); };
+    const panel = new SessionMetricsPanel({}, { load: async id => snapshot(id), exportDebug: fail, exportFullDebug: fail });
+    try {
+      panel.open(firstId); await settle(); await panel.activate(action);
+      assert.match(panel.exportError, message);
+      assert.match(panel.exportError, action === 'full-export' ? /bzzy debug full NAME FILE\.zip/ : /bzzy debug export NAME FILE\.md/);
+      assert.doesNotMatch(panel.exportError, /PRIVATE_DIAGNOSTIC_DO_NOT_SHOW|private-account|original folder/);
+      if (action === 'full-export') assert.doesNotMatch(panel.exportError, /FILE\.md/);
+      assert.equal(panel.exporting, false);
+    } finally { panel.close(); }
+  }
+  const panel = new SessionMetricsPanel({});
+  panel.exportResult = { full: true, outputPath: '/project/debug.zip', exclusions: 3 };
+  assert.match(sessionMetricsLayout(panel, 90).lines.map(line => line.text).join('\n'), /3 context paths omitted/);
+});
+
 test('the production Metrics loader refreshes real durable Core receipts without restarting stopped Core or adding model work', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-metrics-read-')), before = process.env.BZZY_HOME;
   process.env.BZZY_HOME = directory;
@@ -235,6 +254,25 @@ test('Metrics separates follow-ups, distinguishes same-name skill scopes and ver
       assert.match(goalText, expected);
       if (reason === 'evidence_missing') assert.match(goalText, /Reason: evidence missing/);
     }
+  } finally { panel.close(); }
+});
+
+test('Metrics labels compaction and recovery pauses as stalled in the current goal and recorded-goal picker', async () => {
+  const data = snapshot(); let options;
+  const panel = new SessionMetricsPanel({ chooseOne: async (_title, entries) => { options = entries; return null; } }, { load: async () => data });
+  try {
+    panel.open(firstId); await settle();
+    for (const [reason, label] of [['context_no_progress', 'no progress'], ['recovery_required', 'recovery required']]) {
+      Object.assign(data.goals[0], { status: 'paused', reason });
+      const layout = sessionMetricsLayout(panel, 78), heading = layout.lines.find(line => line.text.includes('Current goal ·'));
+      assert.equal(heading.text.trim(), 'Current goal · Stalled · ' + label); assert.equal(heading.tone, 'danger');
+      assert.ok(layout.lines.some(line => line.text.includes('Reason: ' + reason.replaceAll('_', ' '))));
+      await panel.activate('history'); assert.match(options[0].label, new RegExp('Stalled · ' + label));
+      assert.equal(data.goals[0].status, 'paused'); assert.equal(data.goals[0].reason, reason);
+    }
+    Object.assign(data.goals[0], { reason: 'user_pause' });
+    const heading = sessionMetricsLayout(panel, 78).lines.find(line => line.text.includes('Current goal ·'));
+    assert.equal(heading.text.trim(), 'Current goal · Paused'); assert.equal(heading.tone, 'warning');
   } finally { panel.close(); }
 });
 

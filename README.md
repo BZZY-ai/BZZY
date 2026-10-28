@@ -134,6 +134,14 @@ checkpoints, compact paged task state, rolling completed-message indexes, native
 context diagnostics and explicit workflow consultation receipts. The bug-bounty
 pack includes a structured JSON workflow for new goals. Existing goals retain
 their original workflow on resume; source updates do not patch live runners.
+Core resolves a gateway model's exact context metadata before planning, keeps
+its total and input allowances separate, and labels an unavailable capacity as
+a local assumption. Updated Codex goal runners detect sustained compaction or
+repeated coordination reads without new host-observed work. A detected loop
+stops as **Stalled · no progress**, preserves the saved goal/evidence and owner
+budget limits, and requires explicit resume. Active work and new source/evidence
+coverage defer the safeguard; model plans and repeated reads do not establish
+progress. An unacknowledged forced stop retains uncertain usage conservatively.
 
 Transfer the [BZZY Library](BZZY-CORE/docs/LIBRARY-SHARING.md) between Mac and
 Linux from **Settings → BZZY Core → Export Library / Import Library**.

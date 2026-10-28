@@ -13,6 +13,7 @@ import { database, putRecord, appendEvent, digest } from '../src/engine/database
 import { knowledgeDatabase } from '../src/engine/knowledge-index.js';
 import { createSkill, setSkillEnabled, importSkill } from '../src/engine/skills.js';
 import { exportFullSessionDebug } from '../src/engine/session-full-debug.js';
+import { exportSessionDebug } from '../src/engine/session-debug.js';
 
 let directory, previous, parent;
 test.beforeEach(() => {
@@ -129,9 +130,129 @@ test('full ZIP default collisions are numbered and explicit destinations/symlink
   await assert.rejects(exportFullSessionDebug(parent.id, { cwd: current, output: 'bad.md' }), /\.zip/);
 });
 
-test('oversized full capture fails rather than publishing a clipped archive; the read-first guides stay identical', async () => {
+test('valid multibyte aliases keep export filenames within filesystem byte limits', async () => {
+  parent.alias = '名'.repeat(80); saveSession(parent);
+  const before = state(), regular = exportSessionDebug(parent.id), full = await exportFullSessionDebug(parent.id);
+  for (const result of [regular, full]) {
+    assert.ok(Buffer.byteLength(path.basename(result.outputPath)) <= 255);
+    assert.ok(fs.statSync(result.outputPath).isFile());
+  }
+  assert.deepEqual(state(), before);
+});
+
+test('large optional project files are listed as omissions while complete history and smaller files remain exportable', async () => {
   const large = path.join(parent.cwd, 'large.bin'); fs.closeSync(fs.openSync(large, 'wx')); fs.truncateSync(large, 65 * 1024 * 1024);
-  await assert.rejects(exportFullSessionDebug(parent.id), /size limit/);
-  assert.ok(!fs.readdirSync(parent.cwd).some(name => name.endsWith('.zip'))); assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+  fs.writeFileSync(path.join(parent.cwd, 'small.txt'), 'SMALL_INPUT_RETAINED');
+  appendEvent(parent.id, 'text', { text: 'COMPLETE_SAVED_HISTORY' }); const before = state();
+  const result = await exportFullSessionDebug(parent.id), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
+  assert.equal(manifest.complete, true);
+  assert.equal(files['workspace/large.bin'], undefined);
+  assert.equal(files['workspace/small.txt'].toString(), 'SMALL_INPUT_RETAINED');
+  assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'COMPLETE_SAVED_HISTORY'));
+  assert.deepEqual(manifest.exclusions.find(row => row.path === 'workspace/large.bin'),
+    { path: 'workspace/large.bin', reason: 'source_file_size_limit', sourceBytes: 65 * 1024 * 1024, limitBytes: 64 * 1024 * 1024 });
+  assert.equal(fs.statSync(large).size, 65 * 1024 * 1024); assert.deepEqual(state(), before);
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
   assert.deepEqual(fs.readFileSync(fileURLToPath(new URL('../../GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))), fs.readFileSync(fileURLToPath(new URL('../docs/GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))));
+});
+
+test('future events and incomplete records retain their valid JSON payloads without crashing or mutating history', async () => {
+  for (const data of [null, false, 17, 'visible diagnostic', ['first', 'second']]) appendEvent(parent.id, 'custom.future.event', data);
+  appendEvent(parent.id, 'backend', null); appendEvent(parent.id, 'text', null);
+  putRecord('checkpoint', parent.id, null); putRecord('future.private.kind', 'irrelevant', null);
+  const before = state(), files = contents((await exportFullSessionDebug(parent.id)).outputPath);
+  assert.deepEqual(rows(files['session/events.jsonl']).filter(row => row.type === 'custom.future.event').map(row => row.data),
+    [null, false, 17, 'visible diagnostic', ['first', 'second']]);
+  assert.ok(rows(files['session/events.jsonl']).some(row => row.type === 'backend' && row.data === null));
+  assert.ok(rows(files['session/records.jsonl']).some(row => row.kind === 'checkpoint' && row.id === parent.id && row.data === null));
+  assert.deepEqual(state(), before);
+});
+
+test('unreadable and disappearing optional directories are omitted without inventing their contents', async t => {
+  const blocked = path.join(parent.cwd, 'unreadable'), vanished = path.join(parent.cwd, 'vanished');
+  fs.mkdirSync(blocked); fs.mkdirSync(vanished); fs.writeFileSync(path.join(blocked, 'hidden.txt'), 'UNREAD_CAPTURE');
+  const readdir = fs.readdirSync, realpath = fs.realpathSync;
+  t.mock.method(fs, 'readdirSync', (file, ...args) => {
+    if (file === blocked) throw Object.assign(new Error('private source detail'), { code: 'EACCES' });
+    return readdir(file, ...args);
+  });
+  t.mock.method(fs, 'realpathSync', (file, ...args) => {
+    if (file === vanished) throw Object.assign(new Error('private vanished detail'), { code: 'ENOENT' });
+    return realpath(file, ...args);
+  });
+  const files = contents((await exportFullSessionDebug(parent.id)).outputPath), manifest = JSON.parse(files['manifest.json']);
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/unreadable' && row.reason === 'unreadable_source'));
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/vanished' && row.reason === 'missing_source'));
+  assert.doesNotMatch(Buffer.concat(Object.values(files)).toString(), /UNREAD_CAPTURE|private source detail|private vanished detail/);
+});
+
+test('mandatory history size limits publish no clipped ZIP and retain the saved original message', async () => {
+  appendEvent(parent.id, 'text', { text: 'x'.repeat(64 * 1024 * 1024 + 1) });
+  await assert.rejects(exportFullSessionDebug(parent.id), error => error.code === 'SESSION_DEBUG_SIZE' && error.exportPhase === 'history');
+  assert.ok(!fs.readdirSync(parent.cwd).some(name => name.endsWith('.zip')));
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+  assert.ok(database().prepare("SELECT length(data) AS bytes FROM events WHERE session_id=? AND type='text'").get(parent.id).bytes > 64 * 1024 * 1024);
+});
+
+test('staging disk failures remain fatal during optional capture and manifest writing without exposing private details', async t => {
+  fs.writeFileSync(path.join(parent.cwd, 'small.txt'), 'saved source'); const before = state();
+  for (const [suffix, phase] of [[path.join('workspace', 'small.txt'), 'workspace'], ['manifest.json', 'manifest']]) {
+    const write = fs.writeFileSync;
+    t.mock.method(fs, 'writeFileSync', (file, ...args) => {
+      if (String(file).endsWith(path.sep + suffix)) throw Object.assign(new Error('private-token=DO_NOT_DISPLAY'), { code: 'ENOSPC' });
+      return write(file, ...args);
+    });
+    await assert.rejects(exportFullSessionDebug(parent.id), error => error.code === 'SESSION_DEBUG_SPACE' && error.exportPhase === phase && !error.message.includes('DO_NOT_DISPLAY'));
+    t.mock.restoreAll();
+    assert.ok(!fs.readdirSync(parent.cwd).some(name => name.endsWith('.zip')));
+    assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+    assert.deepEqual(state(), before);
+  }
+});
+
+test('missing Python is distinguished from output permissions without exposing subprocess details', async () => {
+  const previousPath = process.env.PATH;
+  try {
+    process.env.PATH = path.join(directory, 'missing-tools');
+    await assert.rejects(exportFullSessionDebug(parent.id), error => error.code === 'SESSION_DEBUG_PYTHON' && error.exportPhase === 'packaging');
+  } finally { process.env.PATH = previousPath; }
+  assert.ok(!fs.readdirSync(parent.cwd).some(name => name.endsWith('.zip')));
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+});
+
+test('ZIP destination failures retain a safe phase and cause without publishing subprocess stderr', async () => {
+  await assert.rejects(exportFullSessionDebug(parent.id, { output: 'private-token=DO_NOT_SHOW/debug.zip' }),
+    error => error.code === 'SESSION_DEBUG_MISSING' && error.exportPhase === 'packaging' && !error.message.includes('DO_NOT_SHOW'));
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+});
+
+test('a stream flush failure closes its descriptor and removes private incomplete staging', async t => {
+  const open = fs.openSync, flush = fs.fsyncSync, close = fs.closeSync; let target, closed = false;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    const descriptor = open(file, ...args);
+    if (String(file).endsWith(path.join('session', 'records.jsonl'))) target = descriptor;
+    return descriptor;
+  });
+  t.mock.method(fs, 'fsyncSync', descriptor => {
+    if (descriptor === target) throw Object.assign(new Error('private flush detail'), { code: 'ENOSPC' });
+    return flush(descriptor);
+  });
+  t.mock.method(fs, 'closeSync', descriptor => { if (descriptor === target) closed = true; return close(descriptor); });
+  await assert.rejects(exportFullSessionDebug(parent.id), error => error.code === 'SESSION_DEBUG_SPACE' && error.exportPhase === 'history');
+  assert.equal(closed, true);
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+});
+
+test('a later stream-open failure closes the stream already opened for the history capture', async t => {
+  const open = fs.openSync, close = fs.closeSync; let target, closed = false;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (String(file).endsWith(path.join('session', 'messages.jsonl'))) throw Object.assign(new Error('private open detail'), { code: 'EMFILE' });
+    const descriptor = open(file, ...args);
+    if (String(file).endsWith(path.join('session', 'events.jsonl'))) target = descriptor;
+    return descriptor;
+  });
+  t.mock.method(fs, 'closeSync', descriptor => { if (descriptor === target) closed = true; return close(descriptor); });
+  await assert.rejects(exportFullSessionDebug(parent.id), error => error.code === 'SESSION_DEBUG_OPEN_FILES' && error.exportPhase === 'history');
+  assert.equal(closed, true);
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
 });

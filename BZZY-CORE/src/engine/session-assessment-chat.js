@@ -9,12 +9,35 @@ import { home, readJson } from './files.js';
 import { generationSecurityPolicy } from './instructions.js';
 import { authorizedUpdateGrant } from './update-access.js';
 import { runRestrictedDocumentModel } from './document-model.js';
+import { backendStartupFailure } from './backend-startup.js';
 
 const KIND = 'core.assessment.turn', active = new Set(['queued', 'running']);
 const keyFor = (row, requestId) => digest({ host: row.hostId, peer: row.peerId, grant: row.id, resource: row.resource, requestId });
 const scopeFor = row => digest({ host: row.hostId, peer: row.peerId, grant: row.id, resource: row.resource });
 const sourcePin = source => digest([source.id, source.cwd, source.projectRoot || null, source.agentNamespace || null]);
 const stopped = () => readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
+const startupFailureCodes = Object.freeze({
+  version: 'CHAT_BACKEND_VERSION_CHECK', configuration: 'CHAT_BACKEND_CONFIGURATION',
+  process_spawn: 'CHAT_BACKEND_PROCESS_START', initialize: 'CHAT_BACKEND_INITIALIZATION',
+  permission_profile: 'CHAT_BACKEND_PERMISSION_PROFILE', permission_activation: 'CHAT_BACKEND_PERMISSION_ACTIVATION',
+  thread_start: 'CHAT_BACKEND_THREAD_START', thread_resume: 'CHAT_BACKEND_THREAD_START',
+  budget_admission: 'CHAT_BACKEND_BUDGET',
+});
+function failureCode(error) {
+  // Only the adapter's private, host-created receipt can classify a startup
+  // failure. An error message/property or provider response cannot claim it.
+  const startup = backendStartupFailure(error);
+  if (startup) return startupFailureCodes[startup.stage] || 'CHAT_UNAVAILABLE';
+  return ['FORBIDDEN', 'CORE_STOPPED', 'CHAT_SOURCE_UNAVAILABLE', 'CHAT_OUTPUT_INVALID', 'DOCUMENT_CANCELLED', 'DOCUMENT_BUDGET'].includes(error.code)
+    ? error.code : 'CHAT_UNAVAILABLE';
+}
+function assessmentBudget(prompt, taskInstructions) {
+  // Input tokens are part of reported total usage. A fixed 8k allocation can
+  // stop an allowed large catalog before answering. UTF-8 byte count provides
+  // conservative input headroom, separate from native and bounded output room.
+  const inputByteEstimate = Buffer.byteLength(prompt) + Buffer.byteLength(taskInstructions);
+  return { tokenBudget: Math.min(200000, inputByteEstimate + 8192 + 32768), runtimeSeconds: 90 };
+}
 const bounded = (value, bytes) => {
   if (typeof value !== 'string') return null;
   let text = '', size = 0;
@@ -189,7 +212,7 @@ export class CoreSessionAssessmentChat {
       }, 100);
       if (controller.signal.aborted) throw controller.signal.reason;
       const result = await this.runModel({ source, selection: turn.selection, prompt, instructions, signal: controller.signal,
-        budget: { tokenBudget: 8000, runtimeSeconds: 90 }, task: { kind: 'session-assessment-chat', id: turn.id } });
+        budget: assessmentBudget(prompt, instructions), task: { kind: 'session-assessment-chat', id: turn.id } });
       this.#runningAllowed(row, turn.sourcePin, turn.sourceSessionId);
       this.#currentTurn(turn);
       if (controller.signal.aborted) throw controller.signal.reason;
@@ -198,7 +221,7 @@ export class CoreSessionAssessmentChat {
     } catch (error) {
       // Adapter errors can contain private data. Save only a small safe code;
       // revoked or interrupted results are discarded rather than disclosed later.
-      const code = ['FORBIDDEN', 'CORE_STOPPED', 'CHAT_SOURCE_UNAVAILABLE', 'CHAT_OUTPUT_INVALID', 'DOCUMENT_CANCELLED', 'DOCUMENT_BUDGET'].includes(error.code) ? error.code : 'CHAT_UNAVAILABLE';
+      const code = failureCode(error);
       if (home() === this.#home) {
         const current = getRecord(KIND, turn.id);
         if (current?.owner === this.#owner && active.has(current.state)) putRecord(KIND, turn.id, { ...turn,

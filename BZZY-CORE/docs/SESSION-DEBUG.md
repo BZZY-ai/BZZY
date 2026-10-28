@@ -21,7 +21,8 @@ session-name_debug_ddmmyyyy.md
 ```
 
 The date uses the exporting computer's local calendar. Filename-unsafe
-characters in the alias become hyphens; an unnamed session uses its short ID.
+characters in the alias become hyphens; long multibyte aliases are shortened to
+keep the complete filename within filesystem byte limits. An unnamed session uses its short ID.
 Existing files are preserved with `_2`, `_3`, etc. before `.md`.
 
 An existing long-running session can also be exported from a second terminal
@@ -61,12 +62,24 @@ safe evidence/snapshot/worker files and complete checked skill resources,
 including safe binary resources, are captured separately. The archive is not a
 project-import or execution package and copies no raw runtime database.
 
-The full streams have no overview text/array/family display clipping. Source
-files and individual logical messages have a 64 MiB limit; the full stage has a
-4 GiB limit. A size-limit failure publishes no clipped ZIP. The overview retains
+The full streams have no overview text/array/family display clipping. Optional
+source files over 64 MiB are skipped before reading and listed with their size
+in `manifest.exclusions`; an APK or browser binary cannot prevent exporting the
+saved chat. Unavailable or unlistable project directories are also recorded as
+omissions. Individual logical messages still have a 64 MiB limit, and the full
+stage has a 4 GiB limit. Reaching either mandatory limit publishes no clipped ZIP.
+The overview retains
 its own earlier cutoff/limits and can be unavailable without preventing full
 streams. File capture follows the database cutoff and validates each read;
 it cannot claim an atomic snapshot of a live project filesystem.
+
+Metrics shows the number of omitted context paths after a successful full export.
+If export fails, it reports a safe cause category and capture phase, distinguishing
+missing Python, unavailable paths, access, disk space, packaging and mandatory
+size limits. Raw exception text and subprocess output are not displayed. A full
+ZIP retry uses `bzzy debug full NAME FILE.zip` in a writable caller directory;
+the Markdown retry uses `bzzy debug export NAME FILE.md`. Neither command changes
+the saved chat or starts model work.
 
 Text-event payloads reference complete scrubbed messages, preventing credentials
 from escaping across streamed chunks. Native delta metadata is retained while

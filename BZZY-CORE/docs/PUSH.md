@@ -9,6 +9,12 @@ stay on their original machines. Older clients and Relays retain direct Core
 APNs delivery. A transient Relay failure never changes an accepted alert to a
 different delivery route.
 
+For an ordinary customer, setup is **install Core/CLI, install iOS, pair, and
+allow notifications**. Apple signing setup and Relay network policy belong to
+the BZZY service operator, once per supported app environment. Customers do not
+provide Apple keys or perform SSH/fingerprint steps for notifications. An SSH
+identity check during operator troubleshooting is separate from product pairing.
+
 For the Relay route, place the private APNs configuration described below at
 `STATE_DIRECTORY/push/apns.json` on the Relay service, with its private signing
 key readable only by the Relay service user. The same strict schema, ownership,
@@ -30,6 +36,22 @@ restarts. Relay returns the existing receipt rather than adding another push.
 Explicit Apple rejections use bounded backoff. Ambiguous Apple acceptance is
 reported as uncertain and is not blindly resent: APNs offers no end-to-end
 exactly-once or guaranteed display contract.
+
+The Relay service permits Apple's published networks in its otherwise
+deny-by-default systemd policy. Its HTTP/2 client completes TLS before it creates
+a notification POST. Failures proved to occur before POST retry with the original
+identifiers through the event/grant expiry, with a five-minute backoff cap.
+Connection-stage restarts can retry; a persisted dispatch with an unknown outcome
+remains uncertain. Authorization, phone preferences and token bindings are
+rechecked immediately before POST. Queue selection prioritizes eligible work so
+older backed-off or unsupported-environment rows cannot block a new ready alert.
+These Relay retries use the existing one-day lifetime; legacy direct Core
+delivery retains its separate retry bound.
+
+Test the actual service worker and durable queue when checking deployment.
+Running a one-off sender with `runuser` does not inherit systemd's cgroup network
+filter and cannot establish that the deployed worker can reach Apple. See the
+[Relay deployment guide](../../BZZY-RELAY/deploy/README.md).
 
 ## Legacy direct Core delivery
 
@@ -175,9 +197,11 @@ identifiers group updates without exposing project names or paths.
 Tests in `test/push.test.js` use generated disposable P256 keys and a loopback
 HTTP/2 APNs fixture. They verify signatures, headers, strict configuration,
 scopes, future-terminal coverage without a phone socket, durable deduplication,
-revocation, retry/uncertainty and token invalidation. Actual background delivery
-on a provisioned physical iPhone remains unverified until tested with the
-owner's Apple configuration and permission.
+revocation, retry/uncertainty and token invalidation. These fixtures do not establish physical delivery. An authorized sandbox
+notification was subsequently accepted through the deployed Relay worker and
+confirmed on a provisioned iPhone; see the field scope and limitations in
+[VALIDATION.md](VALIDATION.md). This is not production-environment or universal
+delivery verification.
 
 ## Diagnosing delivery
 
@@ -199,8 +223,9 @@ the setup requirement in the terminal.
 
 Tests cover waiting/setup recovery, rotating scans beyond 1,000 records and
 compact alias/objective previews in addition to the existing APNs, authorization
-and retry checks. Real background delivery still requires the owner's Apple
-configuration and an authorized physical-device verification.
+and retry checks. The Relay operator configures Apple signing for the published app environment;
+ordinary Core clients do not configure Apple keys. Physical-device delivery
+requires separate verification with the phone's permission and current binding.
 
 ## Update availability alerts
 

@@ -435,7 +435,11 @@ or `bzzy full_debug_export "session-name"`. This creates
 It includes the regular overview plus complete scoped event/record/message
 streams, memory/compaction/learning history, project notes and ledgers, source
 files, referenced evidence/snapshots and skill resources. Secrets/private stores
-remain excluded, and manifest.json lists missing/changing/unsafe files.
+remain excluded, and manifest.json lists missing/changing/unsafe files. Optional
+source files over 64 MiB and unreadable directories become explicit omissions,
+so large APKs or binaries do not block saved-history export. Metrics reports the
+omission count. Failures show a safe category and capture phase; a ZIP retry uses
+`bzzy debug full NAME FILE.zip` from a writable caller directory.
 Every ZIP includes the detailed [read-first guide](../../GUIDE_TO_BZZY_DEBUGGER.txt)
 for future debugging sessions; exporting neither executes its contents nor
 replays the investigation.

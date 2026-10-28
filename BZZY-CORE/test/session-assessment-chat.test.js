@@ -10,6 +10,7 @@ import { CoreAssistant } from '../src/assistant.js';
 import { digest, getRecord, listRecords, putRecord } from '../src/engine/database.js';
 import { sessionPermissions } from '../src/engine/session-access.js';
 import { runRestrictedDocumentModel } from '../src/engine/document-model.js';
+import { markBackendStartupFailure } from '../src/engine/backend-startup.js';
 import { validateRequest, permissionFor, COMMANDS } from '../src/relay/protocol.js';
 
 let directory, previous, services;
@@ -135,8 +136,8 @@ test('restricted document runner cannot control source sessions even when questi
   assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('input-intent').length, 0);
 });
 
-test('fifty maximum-field sessions retain an explicit bounded inventory and fit the restricted input', async () => {
-  const source = session(), row = phone(source); let input;
+test('maximum allowed input receives enough bounded allocation for actual restricted-runner usage above eight thousand tokens', async () => {
+  const source = session(), row = phone(source); let input, allocation, measured;
   for (let index = 0; index < 50; index++) session({ alias: `Session ${index} ` + '漢'.repeat(200),
     provider: 'p'.repeat(100), model: 'm'.repeat(300), mode: 'solo'.repeat(100), executionState: 'running'.repeat(50),
     goal: { id: randomUUID(), status: 'active', objective: '\n'.repeat(1000) + 'Untrusted objective', reason: '\t'.repeat(1000) },
@@ -144,10 +145,66 @@ test('fifty maximum-field sessions retain an explicit bounded inventory and fit 
   const inventory = sessionAssessmentInventory();
   assert.ok(Buffer.byteLength(JSON.stringify(inventory)) <= 72 * 1024);
   assert.equal(inventory.coverage.hasMore, true); assert.ok(inventory.coverage.omittedSessions > 0);
-  const chat = service(async request => { input = request; return { text: 'Bounded assessment.' }; });
-  await chat.send(row, '\n'.repeat(15900) + 'Assess', 'maximum-fields');
+  class Engine {
+    constructor(_provider, _draft, options, ui) { allocation = options; this.ui = ui; }
+    async run(prompt) {
+      input = prompt; measured = Buffer.byteLength(prompt);
+      this.ui.event('text', { text: 'Bounded assessment.' });
+      // Simulate a byte-level tokenizer's measured input+output receipt. The
+      // real document runner must accept it under the supplied allocation.
+      return { tokens: measured };
+    }
+    async close() {}
+  }
+  const chat = service(request => runRestrictedDocumentModel({ ...request, Engine }));
+  const question = 'Q' + '\n'.repeat(15993) + 'Assess';
+  assert.equal(Buffer.byteLength(question), 16000);
+  await chat.send(row, question, 'maximum-fields');
   await waitFor(() => chat.poll(row, 'maximum-fields').state === 'finished');
-  assert.ok(Buffer.byteLength(input.prompt) < 128 * 1024);
+  assert.ok(Buffer.byteLength(input) < 128 * 1024);
+  assert.equal(JSON.parse(input).currentQuestion, question, 'The accepted question cannot be silently shortened');
+  assert.ok(measured > 8000); assert.ok(allocation.tokenBudget > measured); assert.ok(allocation.tokenBudget <= 200000);
+  assert.deepEqual(allocation.policy, { mode: 'read-only', network: 'disabled', writablePaths: [] });
+  assert.equal(allocation.documentOnly, true); assert.equal(allocation.learningReview, true);
+  assert.equal(chat.poll(row, 'maximum-fields').text, 'Bounded assessment.');
+});
+
+test('trusted startup stages become fixed actionable poll codes without exposing native error details', async () => {
+  const row = phone(), failures = [
+    ['version', 'CHAT_BACKEND_VERSION_CHECK'], ['configuration', 'CHAT_BACKEND_CONFIGURATION'],
+    ['process_spawn', 'CHAT_BACKEND_PROCESS_START'], ['initialize', 'CHAT_BACKEND_INITIALIZATION'],
+    ['permission_profile', 'CHAT_BACKEND_PERMISSION_PROFILE'], ['permission_activation', 'CHAT_BACKEND_PERMISSION_ACTIVATION'],
+    ['thread_start', 'CHAT_BACKEND_THREAD_START'], ['thread_resume', 'CHAT_BACKEND_THREAD_START'],
+    ['budget_admission', 'CHAT_BACKEND_BUDGET'],
+  ];
+  let stage;
+  const chat = service(async () => { throw markBackendStartupFailure(Object.assign(new Error('SYNTHETIC_PRIVATE_NATIVE_DETAIL'),
+    { code: 'EACCES', rpcCode: -32602 }), stage); });
+  for (const [current, expected] of failures) {
+    stage = current;
+    await chat.send(row, 'Assess saved state', 'failure-' + stage);
+    await waitFor(() => chat.poll(row, 'failure-' + stage).state === 'failed');
+    const result = chat.poll(row, 'failure-' + stage);
+    assert.equal(result.code, expected); assert.equal(result.text, ''); assert.equal(result.verification, 'not-assessed');
+    assert.doesNotMatch(JSON.stringify(result), /SYNTHETIC_PRIVATE_NATIVE_DETAIL|EACCES|-32602/);
+  }
+  assert.doesNotMatch(JSON.stringify(listRecords('core.assessment.turn')), /SYNTHETIC_PRIVATE_NATIVE_DETAIL/);
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('untrusted adapter properties cannot impersonate startup diagnostics and document budgets stay explicit', async () => {
+  const row = phone(); let mode = 'forged';
+  const chat = service(async () => {
+    if (mode === 'budget') throw Object.assign(new Error('SYNTHETIC_PRIVATE_BUDGET_DETAIL'), { code: 'DOCUMENT_BUDGET' });
+    throw Object.assign(new Error('SYNTHETIC_PRIVATE_NATIVE_DETAIL'), { code: 'CHAT_BACKEND_PERMISSION_PROFILE',
+      backendFailure: { version: 1, backend: 'codex', stage: 'permission_profile', modelRequestStarted: false } });
+  });
+  await chat.send(row, 'Assess only', 'forged'); await waitFor(() => chat.poll(row, 'forged').state === 'failed');
+  assert.equal(chat.poll(row, 'forged').code, 'CHAT_UNAVAILABLE');
+  mode = 'budget';
+  await chat.send(row, 'Assess again', 'budget'); await waitFor(() => chat.poll(row, 'budget').state === 'failed');
+  assert.equal(chat.poll(row, 'budget').code, 'DOCUMENT_BUDGET');
+  assert.doesNotMatch(JSON.stringify(listRecords('core.assessment.turn')), /SYNTHETIC_PRIVATE/);
 });
 
 test('lost acceptance and repeated polls retain exact bounded raw output without another inference', async () => {

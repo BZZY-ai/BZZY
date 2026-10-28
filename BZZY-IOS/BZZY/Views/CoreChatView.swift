@@ -165,10 +165,35 @@ struct CoreChatView: View {
                     : relay.chatErrorCode == nil ? "Checking Core Chat readiness…" : "Core Chat readiness could not be confirmed. Refresh to check again.")
                     .bzzyFont(11).foregroundStyle(BZZYTheme.secondary).accessibilityIdentifier("core-chat-unconfigured")
             } else if relay.coreActionsAvailable && (relay.chatPhase == "failed" || relay.chatErrorCode != nil) {
-                Text("Core could not finish checking. Your draft is kept; refresh to check the recorded status.")
+                Text(failureMessage)
                     .bzzyFont(11).foregroundStyle(BZZYTheme.amber).accessibilityIdentifier("core-chat-error")
+                if let code = relay.chatErrorCode, code.range(of: "^[A-Z_]{1,64}$", options: .regularExpression) != nil {
+                    Text("Support code: \(code)").bzzyFont(10).foregroundStyle(BZZYTheme.muted)
+                        .textSelection(.enabled).accessibilityIdentifier("core-chat-error-code")
+                }
             }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
+    }
+
+    private var failureMessage: String {
+        switch relay.chatErrorCode {
+        case "CHAT_BACKEND_VERSION_CHECK", "CHAT_BACKEND_PROCESS_START":
+            return "Core could not start its model backend. Check the backend installation on that computer, then try again."
+        case "CHAT_BACKEND_CONFIGURATION":
+            return "The Core model connection needs attention. Check its provider setup on that computer, then try again."
+        case "CHAT_BACKEND_INITIALIZATION", "CHAT_BACKEND_THREAD_START":
+            return "Core’s model backend could not initialize. Update Core and its backend on that computer, then try again."
+        case "CHAT_BACKEND_PERMISSION_PROFILE", "CHAT_BACKEND_PERMISSION_ACTIVATION":
+            return "Core could not establish read-only access. Update its model backend, then try again."
+        case "CHAT_BACKEND_BUDGET", "DOCUMENT_BUDGET":
+            return "This check exceeded its allowance. Try asking about one session."
+        case "CHAT_SOURCE_UNAVAILABLE":
+            return "No terminal is available to assess. Open a named terminal on that computer, then try again."
+        case "CHAT_NOT_SENT":
+            return "Core did not accept the previous question. You can ask it again."
+        default:
+            return "Core could not complete this check. Try again, or share the support code below."
+        }
     }
 
     private var composer: some View {

@@ -1,3 +1,85 @@
+# Exact model context and host loop safeguards (2026-10-28)
+
+A private execution export showed 61 completed native compactions and repeated
+coordination/source reads without the planned assignment reviews or work-unit
+closures. Distinct messages and tool call identities ruled out simple display
+replay. Its selected gateway metadata lookup had failed and native planning used
+the local 32,768-token fallback. The provider/model selections differed, so this
+is not a controlled comparison of identical upstream model weights or proof
+that every behavioral difference came from BZZY.
+
+Selected Experiential metadata now uses the bounded keyless exact-model detail
+route, with one deadline shared by a narrowly eligible authenticated catalog
+fallback. Public metadata was also read successfully through the actual helper
+without an account key or inference. Tests cover response/body/deadline limits,
+redirect refusal, private catalog fallback, exact source/model/dispatch pins,
+TTL invalidation, cancelled/concurrent owner changes and provenance across
+`/new`. Separate input/output metadata stays distinct from total capacity;
+native growing-history compaction respects a conservative input threshold.
+
+The host safeguard detects sustained compaction/read churn or a longer
+coordination-only read loop. Local regressions reproduce the 61-compaction
+pattern with changing prose/IDs/counters; new source bytes and line pages,
+worker receipts and actual work renew progress. Tests cover overlapping/final
+UTF-8 pages, shell-wrapper cwd identity, bounded observation saturation, scope
+exclusions and real stdio pauses inside an active native turn. Held Core calls,
+native tools, pending questions and identity-verified workers defer the stop.
+Missing pause acknowledgments and interrupt acknowledgments without terminal
+completion both reach bounded local shutdown. Reporting errors cannot suppress
+the stop or turn an already successful tool result into failure. Forced-stop
+receipts retain uncertain final usage and conservative charging; an acknowledged
+terminal stop retains its reported usage. Goal identity, objective, evidence,
+permissions and owner budget limits remain intact, with no automatic replay.
+
+Final Node 24/macOS validation: the complete Core suite passed **1,161 tests,
+2 skipped**; the complete CLI suite passed **846 tests, 21 skipped**. All
+three Node product syntax checks and whitespace checks passed. The focused
+context/adapter/guard/forced-accounting group passed **53 tests** after the last
+shell-wrapper fix. Tests use isolated local state and offline backend fixtures;
+no paid provider investigation or live target testing was performed. Native
+Linux runtime parity and arbitrary model performance are not established here.
+
+Same-thread goal resume retains its native objective and budget accounting.
+Execution instructions/current worker state rebuild at resume; an unsupported
+versioned live-context refresh remains visibly pending rather than being
+acknowledged by rewriting/resetting the native goal.
+
+# Export, assessment diagnostics and deployed phone delivery (2026-10-28)
+
+Full debug capture now omits oversized/unreadable optional project context with
+manifest reasons while retaining required canonical history streams. Null or
+primitive historical records and long UTF-8 aliases have regression coverage;
+required capture, staging and packaging failures remain explicit safe categories.
+The CLI supplies the correct ZIP retry command and phase rather than blaming
+every failure on the original folder. The focused export regressions passed;
+they are included in the complete Core/CLI results above.
+
+Read-only Core Chat now allocates for its permitted bounded input instead of a
+fixed 8k total, and exposes only fixed trusted backend-startup support codes.
+Its no-tools execution boundary remains unchanged. The phone recognizes a
+known source-unavailable rejection and keeps the editable draft. A reported VPS
+initialization failure still requires host-specific diagnosis; successful
+initialize-only local backend probes do not establish its cause or live
+inference. These repairs introduce no unrestricted fallback.
+
+Relay's actual service network policy was repaired and a newly queued sandbox
+notification was accepted through its normal worker and confirmed on the
+physical phone. Reviewed connection/retry source was subsequently deployed
+with private backups and unchanged keys/database; health and the loopback
+listener were rechecked. **57 Relay tests** and **17 Core push tests** passed.
+See [the Relay field record](../../BZZY-RELAY/docs/VALIDATION.md) for the exact
+scope, including the distinction between Apple acceptance and phone display.
+
+The full iOS native/format/cache/notification check previously passed **104
+native cases**, followed by the real Core Chat rejection regression and final
+model/readiness and **7 goal-draft checks**. Signed development build **0.1.0
+(25)** passed artifact/privacy/APNs checks, was installed in place and launched
+normally on the connected iPhone; CoreDevice independently confirmed build 25.
+Its existing signed application/Keychain identity was retained without uninstall
+or data reset. The host Core/CLI installations and running investigations were
+not automatically updated. Updating the phone does not patch an active runner;
+pause, update Core/CLI, reopen and explicitly resume the saved goal.
+
 # Explicit owner-local signup aliases delivered with skill reads (2026-10-27)
 
 Core stores exact owner-supplied signup aliases in private

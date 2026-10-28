@@ -173,6 +173,7 @@ struct ModelChecks {
         require(store.liveTerminals.first?.activity == .achieved, "Saved goal outcome is shown beside its alias")
         require(TerminalGoalActivity(goal: nil, reason: nil, execution: "finished") == .idle, "An execution ending cannot turn the dot green")
         require(TerminalGoalActivity(goal: "paused", reason: "turn_limit", execution: "paused") == .stalled, "Turn limits need attention")
+        require(TerminalGoalActivity(goal: "paused", reason: "context_no_progress", execution: "paused") == .stalled, "A compaction loop needs attention rather than an achievement badge")
         require(TerminalGoalActivity(goal: "paused", reason: "user_pause", execution: "paused") == .paused, "An explicit pause is distinct from a stall")
         require(TerminalGoalActivity(goal: "active", reason: nil, execution: "waiting_for_input") == .waiting, "Questions stop the running animation")
         require(TerminalGoalActivity(goal: "active", reason: nil, execution: "running") == .running, "Active goals animate")

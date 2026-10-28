@@ -175,6 +175,12 @@ async function handle(input) {
       new CoreWorkspaces().configure({ path: path.join(directory, 'project') }, { expectedRevision: 0, requestId: randomUUID() });
       new CoreAssistant().configure({ source: 'core', provider: 'codex', model: 'native-voice-fixture' }, { expectedRevision: 0, requestId: randomUUID() });
       return { configured: true };
+    case 'chat-hide-sources': {
+      for (const current of listRecords('session').filter(item => terminalSession(item))) {
+        putRecord('session', current.id, { ...current, purpose: 'document' });
+      }
+      return { hidden: true };
+    }
     case 'chat-configure':
       // This offline backend already verifies the actual no-tools document
       // profile, declines attempted approval and returns a deterministic body.

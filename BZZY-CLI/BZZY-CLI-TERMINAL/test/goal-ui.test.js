@@ -160,6 +160,22 @@ test('goal colors follow authoritative lifecycle states and animated dots fit co
   assert.notEqual(goalIndicator({ status: 'active' }, 0).label, goalIndicator({ status: 'active' }, 1).label);
 });
 
+test('paused compaction and recovery goals show stalled while manual pauses keep their paused state', () => {
+  for (const reason of ['context_no_progress', 'recovery_required', 'turn_limit', 'user_pause']) {
+    const goal = { id: 'paused-goal', objective: 'Inspect retained evidence.', status: 'paused', reason };
+    ui.updateSession({ ...session, goal });
+    const stalled = reason !== 'user_pause', indicator = goalIndicator(ui.tui.goal);
+    assert.match(indicator.label, stalled ? /Goal stalled/ : /Goal paused/);
+    assert.equal(indicator.tone, stalled ? palette.danger : palette.warning);
+    for (const columns of [80, 140]) {
+      Object.assign(output, { columns, rows: 30 }); ui.tui.render();
+      assert.match(ui.tui.lastFrame.map(clean).join('\n'), stalled ? /Goal stalled/ : /Goal paused/);
+      assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
+    }
+    assert.equal(ui.tui.goal.status, 'paused'); assert.equal(ui.tui.goal.reason, reason);
+  }
+});
+
 
 test('ordinary chat shows Cooking through active execution and clears it on finish, failure and pause', () => {
   const goal = { id: 'previous-goal', objective: 'Previously achieved objective', status: 'complete' };

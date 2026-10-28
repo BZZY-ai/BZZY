@@ -34,6 +34,13 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 IPAddressDeny=any
 IPAddressAllow=localhost
+# APNs uses DNS load balancing. Permit Apple's published IPv4/IPv6 networks,
+# not one resolved address. The application still listens only on loopback.
+# See https://support.apple.com/en-us/101555 and deploy/README.md for DNS setup.
+IPAddressAllow=17.0.0.0/8
+IPAddressAllow=2403:300::/32
+IPAddressAllow=2620:149::/32
+IPAddressAllow=2a01:b740::/32
 MemoryMax=512M
 CPUQuota=100%
 TasksMax=64

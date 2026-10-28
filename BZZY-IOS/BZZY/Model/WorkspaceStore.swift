@@ -766,7 +766,7 @@ enum TerminalGoalActivity: String {
     case paused = "Paused", waiting = "Input needed", cancelled = "Cancelled", idle = "Idle"
     init(goal: String?, reason: String?, execution: String) {
         if goal == "complete" { self = .achieved }
-        else if ["blocked", "usage_limited", "budget_limited", "awaiting_review"].contains(goal ?? "") || goal == "paused" && ["turn_limit", "recovery_required"].contains(reason ?? "") || execution == "failed" { self = .stalled }
+        else if ["blocked", "usage_limited", "budget_limited", "awaiting_review"].contains(goal ?? "") || goal == "paused" && ["turn_limit", "recovery_required", "context_no_progress"].contains(reason ?? "") || execution == "failed" { self = .stalled }
         else if execution == "waiting_for_input" { self = .waiting }
         else if goal == "cancelled" || execution == "cancelled" { self = .cancelled }
         else if goal == "paused" || execution == "paused" { self = .paused }

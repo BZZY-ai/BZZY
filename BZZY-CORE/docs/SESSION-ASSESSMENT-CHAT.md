@@ -65,8 +65,39 @@ Core commits a private request fingerprint and turn before accepting it or
 starting provider work. Identical retries return that receipt; changed input
 with the same ID conflicts. Replies persist independently of phone connectivity.
 The host grants at most one active Chat turn per pairing and four per gateway.
-The restricted runner has an 8,000-token allocation and 90-second deadline.
-These execution bounds are not an exact billing guarantee.
+The restricted runner keeps a 90-second deadline. Its token allocation covers
+the UTF-8 byte count of the bounded question/inventory/context and task
+instructions as a conservative input estimate, plus 8,192 tokens of native
+overhead and 32,768 tokens of output headroom, within the document runner's
+200,000-token ceiling. This avoids rejecting a permitted large input merely
+because its input tokens already exceed a fixed small allocation. The accepted
+question is never shortened. The separate 32 KiB output limit still applies.
+An allocation reserves execution headroom; it is not a claim that those tokens
+were used or an instruction to spend them. Reported usage remains the backend's
+actual receipt. These bounds are not an exact billing guarantee.
+
+Startup failures return a fixed actionable code through the existing `code`
+field, preserving compatibility with strict clients. Only Core's trusted
+adapter-created startup receipt can select these categories; provider text and
+arbitrary error properties cannot impersonate them. Raw messages, stderr,
+arguments, environment values and provider responses are not included.
+
+| Code | Meaning |
+| --- | --- |
+| `CHAT_BACKEND_VERSION_CHECK` | Core could not verify a compatible backend version; this can include a missing executable |
+| `CHAT_BACKEND_CONFIGURATION` | Backend/provider configuration could not be prepared; this is not proof that an API key was rejected |
+| `CHAT_BACKEND_PROCESS_START` | The configured backend process could not start |
+| `CHAT_BACKEND_INITIALIZATION` | The process did not complete its initial protocol handshake; the category alone does not establish why |
+| `CHAT_BACKEND_PERMISSION_PROFILE` | Core could not confirm the required isolated no-tools profile |
+| `CHAT_BACKEND_PERMISSION_ACTIVATION` | The backend did not confirm activation of that exact isolated profile |
+| `CHAT_BACKEND_THREAD_START` | A restricted document thread could not be started or restored |
+| `CHAT_BACKEND_BUDGET` | The backend rejected budget admission before a model turn |
+| `DOCUMENT_BUDGET` | The restricted document runtime, token or output bound was reached |
+
+These failures start no unrestricted fallback. Unknown adapter failures remain
+`CHAT_UNAVAILABLE`; configuration status still means that a model selection was
+saved, not that a live provider request was verified. The existing own-phone
+`chat.poll` route checks the saved turn without SSH or another inference.
 
 Gateway restart marks an interrupted turn uncertain when inspected, without
 resubmitting it. A new explicit question needs a new ID. Operator stop, gateway

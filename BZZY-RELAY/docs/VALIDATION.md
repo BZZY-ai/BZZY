@@ -1,3 +1,27 @@
+# Deployed sandbox push service and connection recovery (2026-10-28 UTC)
+
+A deployed Relay's effective systemd policy allowed only loopback. A direct
+operator APNs test outside that service policy succeeded, while the actual
+background queue could not reach Apple. The operator installed a reviewed
+Apple-network allowlist while retaining deny-by-default filtering and the
+loopback-only application listener. A newly queued, explicitly labelled test
+then passed through the normal service worker in one attempt, recorded `sent`,
+cleared its preview payload, and was confirmed displayed by the phone owner.
+Earlier uncertain dispatches were not replayed. This verifies that sandbox
+configuration, binding, the actual service network policy and the physical phone
+worked together for that test; it does not promise every future iOS display or
+validate production APNs.
+
+The connection/retry repairs were subsequently deployed as the two reviewed
+source modules, with private code backups, unchanged private keys/database and
+no Core/model deployment. Relay restarted healthy; both loopback and public TLS
+health checks passed, and port 8787 remained loopback-only. That deployment was
+not followed by another physical push test. Local validation passed all **57
+Relay tests**, including real loopback HTTP/2 fixtures for connect/POST fencing,
+abort, missing response headers, retry recovery and uncertain dispatch, plus
+**17 Core push tests**. Private operator bindings and test routing data remain
+outside this repository.
+
 # Native alert queue validation — 2026-10-24
 
 Local Node 24 syntax checks and all **36 tests** pass. Disposable real WebSocket

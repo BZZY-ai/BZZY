@@ -317,8 +317,10 @@ Live home-host use automatically registers its public certificate with the updat
 Native iOS integration, on-demand Agent CRUD, typed Agent/Terminal sharing,
 Agent receive jobs and APNs registration/provider delivery code are implemented
 and tested locally. Scheduled triggers, persistent Agent account connectors,
-TestFlight distribution and physical Apple
-push/device verification remain separate work. The existing execution dispatcher
+TestFlight distribution and production Apple push verification remain separate
+work. One authorized sandbox notification was verified through the deployed
+Relay queue and confirmed on a physical iPhone; that field result does not
+establish universal delivery. See [validation](docs/VALIDATION.md). The existing execution dispatcher
 is reused. Persistent Agents use a restricted native provider/tool path plus the
 scoped filesystem broker; ordinary owner terminal execution retains its existing
 permissions and is not automatically confined by a broker grant. See [Core's default AI and tasks](docs/ASSISTANT.md),

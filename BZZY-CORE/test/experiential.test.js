@@ -81,6 +81,7 @@ test('authenticated rich catalog pages use slugs and per-model capabilities, exc
   rows[8].providers.push({ id: 'second-disjoint', status: 'active', routable: true, capabilities: {
     supports_tools: true, supports_streaming: true, supports_reasoning: true, supported_reasoning_efforts: ['high'] } });
   rows[8].default_provider_ids.push('second-disjoint');
+  rows[9] = entry('separate-input-output', { context_window: 1048576, max_input_tokens: 655360, max_output_tokens: 393216 });
   rows.push(entry('owner-private-model'));
   await catalogServer(t, (request, response) => {
     calls.push({ method: request.method, path: request.url, auth: request.headers.authorization });
@@ -100,6 +101,8 @@ test('authenticated rich catalog pages use slugs and per-model capabilities, exc
   assert.equal(disjoint.capabilities.supportsEffort, false);
   assert.equal(reasoningEffort({ provider: 'experiential', model: disjoint.id, selectedEffort: 'high', modelCapabilities: disjoint.capabilities }), 'high', 'Gateway request controls do not claim every route implements this effort');
   assert.ok(catalog.models.some(model => model.id === 'owner-private-model'));
+  const limits = catalog.models.find(model => model.id === 'separate-input-output').capabilities;
+  assert.equal(limits.contextWindow, 1048576); assert.equal(limits.maxInputTokens, 655360); assert.equal(limits.maxOutputTokens, 393216);
   assert.doesNotMatch(JSON.stringify(catalog), new RegExp(secret)); assert.match(catalog.description, /checked.*each request/);
 });
 

@@ -1,5 +1,6 @@
 import { palette } from './terminal-theme.js';
 import { clean } from './terminal-format.js';
+import { isStalledGoal } from '@bzzy/core/engine/goal-state.js';
 const dots = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const validationReasons = {
   original_goal_unsupported: 'The original goal was not supported.',
@@ -15,7 +16,7 @@ const validationReasons = {
 export function goalIndicator(goal, frame = 0, { validating = false } = {}) {
   if (!goal) return null;
   if (goal.status === 'complete') return { label: 'Goal achieved ✓', tone: palette.goalSuccess };
-  if (['blocked', 'usage_limited', 'budget_limited', 'awaiting_review'].includes(goal.status) || goal.status === 'paused' && goal.reason === 'turn_limit')
+  if (isStalledGoal(goal))
     return { label: '✕ Goal stalled', tone: palette.danger };
   if (goal.status === 'paused') return { label: 'Ⅱ Goal paused', tone: palette.warning };
   if (goal.status === 'cancelled') return { label: '✕ Goal cancelled', tone: palette.muted };

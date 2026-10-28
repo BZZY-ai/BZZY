@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { APNsClient, deviceToken } from './apns.js';
+import { APNsClient, PushError, deviceToken } from './apns.js';
 import { fail, hash, opaque, record } from './protocol.js';
 
 // Separate from encrypted application routing. Only bounded, sanitized alert
@@ -85,13 +85,13 @@ export class RelayPushService {
     const binding = this.get('push_devices', grant.recipientId);
     if (!binding?.enabled || binding.environment !== params.environment || binding.grants?.[grant.id] === undefined || params.occurredAt < binding.grants[grant.id]) fail('PUSH_REGISTRATION_REQUIRED');
     if (this.store.db.prepare('SELECT COUNT(*) AS count FROM push_queue').get().count >= 4096 ||
-      this.store.db.prepare("SELECT COUNT(*) AS count FROM push_queue WHERE json_extract(data,'$.hostId')=? AND json_extract(data,'$.state') IN ('queued','retry')").get(hostId).count >= 256) fail('PUSH_CAPACITY');
+      this.store.db.prepare("SELECT COUNT(*) AS count FROM push_queue WHERE json_extract(data,'$.hostId')=? AND json_extract(data,'$.state') IN ('queued','retry','connecting','dispatching')").get(hostId).count >= 256) fail('PUSH_CAPACITY');
     const row = { id, requestDigest, hostId, peerId: grant.recipientId, grantId: grant.id, environment: params.environment,
       tokenDigest: hash(binding.token), occurredAt: params.occurredAt, payload, state: 'queued', attempts: 0, apnsId: randomUUID(), expiresAt: Math.min(grant.expiresAt, params.occurredAt + 86400_000) };
     this.put('push_queue', id, row);
     return this.status(row);
   }
-  status(row) { return { state: row.state, providerConfigured: Boolean(this.configuration(row.environment)), ...(row.code ? { code: row.code } : {}) }; }
+  status(row) { return { state: row.state === 'connecting' ? 'queued' : row.state, providerConfigured: Boolean(this.configuration(row.environment)), ...(row.code ? { code: row.code } : {}) }; }
   start() {
     this.#timer ||= setInterval(() => { void this.tick().catch(() => {}); }, 1000);
     this.#timer.unref(); return this;
@@ -101,7 +101,18 @@ export class RelayPushService {
     this.#busy = true;
     try {
       this.store.db.prepare("DELETE FROM push_queue WHERE json_extract(data,'$.expiresAt')<?").run(this.clock());
-      const rows = this.store.db.prepare("SELECT data FROM push_queue WHERE json_extract(data,'$.state') IN ('queued','retry','dispatching') ORDER BY json_extract(data,'$.occurredAt') LIMIT 256").all();
+      const configuredEnvironment = this.configurationLoader()?.environment ?? null;
+      // Readiness comes before age: one host's backed-off or unconfigured
+      // environment cannot hide another host's due alert behind LIMIT 256.
+      // The whole table remains bounded by the existing 4096-row capacity.
+      const rows = this.store.db.prepare(`SELECT data FROM push_queue
+        WHERE json_extract(data,'$.state') IN ('queued','retry','connecting','dispatching')
+        ORDER BY CASE
+          WHEN json_extract(data,'$.state')!='dispatching'
+            AND COALESCE(json_extract(data,'$.nextAttemptAt'),0)<=?
+            AND json_extract(data,'$.environment')=? THEN 0
+          WHEN json_extract(data,'$.state')='dispatching' THEN 1
+          ELSE 2 END, json_extract(data,'$.occurredAt') LIMIT 256`).all(this.clock(), configuredEnvironment);
       let count = 0;
       for (const item of rows) {
         if (count >= 8 || this.#abort.signal.aborted) break;
@@ -122,15 +133,35 @@ export class RelayPushService {
         if (!cfg) continue;
         let client = this.#clients.get(cfg.fingerprint);
         if (!client) { for (const old of this.#clients.values()) old.close(); this.#clients.clear(); client = this.clientFactory({ configuration: cfg }); this.#clients.set(cfg.fingerprint, client); }
-        row = { ...row, state: 'dispatching', attempts: row.attempts + 1 };
+        // A restart while merely connecting can retry: APNsClient cannot post
+        // until the durable beforeDispatch fence below has completed.
+        row = { ...row, state: 'connecting', attempts: row.attempts + 1 };
         this.put('push_queue', row.id, row); count++;
         try {
-          await client.send({ token: binding.token, payload: row.payload, id: row.apnsId, collapseID: row.id, signal: this.#abort.signal });
+          await client.send({ token: binding.token, payload: row.payload, id: row.apnsId, collapseID: row.id, signal: this.#abort.signal,
+            beforeDispatch: () => {
+              // Connection setup can yield to revocation, token rotation or
+              // expiry. Recheck the exact same immutable binding before POST.
+              let currentGrant;
+              try { currentGrant = this.store.activeGrant(row.grantId, row.hostId); } catch { throw new PushError('FORBIDDEN', { permanent: true }); }
+              const current = this.get('push_devices', row.peerId);
+              if (this.#abort.signal.aborted) throw new PushError('APNS_UNAVAILABLE');
+              if (row.expiresAt <= this.clock() || currentGrant.hostId !== row.hostId || currentGrant.recipientId !== row.peerId ||
+                  !current?.enabled || current.environment !== row.environment || hash(current.token) !== row.tokenDigest ||
+                  current.grants?.[currentGrant.id] === undefined || row.occurredAt < current.grants[currentGrant.id]) {
+                throw new PushError('FORBIDDEN', { permanent: true });
+              }
+              row = { ...row, state: 'dispatching' };
+              this.put('push_queue', row.id, row);
+            } });
           finish('sent');
         } catch (error) {
-          const code = ['APNS_TOKEN_INVALID', 'APNS_REJECTED', 'APNS_UNAVAILABLE', 'APNS_PAYLOAD_INVALID', 'APNS_RESPONSE_INVALID'].includes(error?.code) ? error.code : 'APNS_UNAVAILABLE';
-          if (error?.uncertain || error?.permanent || row.attempts >= 8) finish(error?.uncertain ? 'uncertain' : 'failed', code);
-          else this.put('push_queue', row.id, { ...row, state: 'retry', code, nextAttemptAt: this.clock() + Math.min(300_000, 1000 * 2 ** row.attempts) });
+          const code = ['APNS_TOKEN_INVALID', 'APNS_REJECTED', 'APNS_UNAVAILABLE', 'APNS_PAYLOAD_INVALID', 'APNS_RESPONSE_INVALID', 'FORBIDDEN'].includes(error?.code) ? error.code : 'APNS_UNAVAILABLE';
+          if (error?.uncertain || error?.permanent) finish(error?.uncertain ? 'uncertain' : 'failed', code);
+          // Known pre-dispatch outages and explicit temporary Apple rejections
+          // retain the same request until the existing grant/event expiry.
+          // The queue and five-minute backoff bound storage and retry rate.
+          else this.put('push_queue', row.id, { ...row, state: 'retry', code, nextAttemptAt: this.clock() + Math.min(300_000, 1000 * 2 ** Math.min(row.attempts, 9)) });
           const current = this.get('push_devices', row.peerId);
           if (error?.invalidated && current?.token === binding.token && (!error.timestamp || current.registeredAt <= error.timestamp)) this.put('push_devices', row.peerId, { enabled: false });
         }

@@ -106,3 +106,58 @@ Configure the installed iOS build's exact topic and sandbox/production environme
 Missing configuration leaves queued alerts pending; transport health alone does
 not prove push readiness. Normal upgrades preserve the private state directory
 and SQLite goal-alert queue. Never copy Core owner/provider credentials here.
+
+### Service network policy
+
+The Relay's systemd unit must allow its APNs connection as well as local proxy
+traffic. `IPAddressDeny=any` with only `IPAddressAllow=localhost` blocks the
+background worker even when an administrator's direct Apple test succeeds:
+`runuser` changes the Unix user, but does not place that test in the service's
+network policy. Check the effective unit, including operator drop-ins:
+
+```sh
+systemctl show bzzy-relay -p IPAddressDeny -p IPAddressAllow -p PrivateNetwork
+systemctl cat bzzy-relay
+```
+
+The supplied unit keeps deny-by-default filtering and permits loopback plus
+Apple's published IPv4 network `17.0.0.0/8` and IPv6 networks
+`2403:300::/32`, `2620:149::/32` and `2a01:b740::/32`.
+These are Apple's network ranges, not an APNs-only port or hostname filter.
+Using the documented ranges handles address rotation; do not pin one DNS answer.
+Review changes against [Apple's firewall guidance](https://support.apple.com/en-us/101555).
+The provider connects through validated TLS/HTTP/2 to its fixed sandbox or
+production endpoint on TCP 443, as described in
+[Apple's provider connection contract](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns).
+No client request can supply a different APNs endpoint.
+
+DNS must also work inside that policy. A loopback resolver such as a locally
+configured `systemd-resolved` stub is covered by `localhost`. If this host uses
+an external resolver, add only that operator-approved resolver's exact IPv4
+`/32` or IPv6 `/128` address in a reviewed systemd drop-in; do not allow all
+internet traffic to make DNS work. Check the host's actual resolver setup before
+deploying the unit. Keep the host firewall's DNS and outbound TCP 443 rules
+consistent with this policy. Network ranges alone do not validate credentials,
+provisioning, device registration or notification delivery.
+
+The HTTP/WebSocket listener remains bound to `127.0.0.1` (or explicitly `::1`);
+the application rejects wildcard/public bind addresses. Keep port 8787 private
+and expose only Caddy's TLS entry point. Relay contains no model runtime or
+general outbound request API.
+
+After reviewing and applying a unit change, validate it with
+`systemd-analyze verify`, reload systemd, and restart only Relay during the
+operator's maintenance window. Verify APNs reachability from a transient probe
+with the same effective service network policy, then inspect one newly queued
+authorized outcome's dispatch receipt. A direct shell test and `/healthz`
+cannot establish that the service can reach Apple. Do not replay older
+`uncertain` deliveries: Apple may have accepted them without returning a receipt.
+An Apple acceptance still does not prove iPhone display.
+
+Known connection failures before an APNs POST remain queued for retry with
+backoff capped at five minutes, within the existing one-day event/grant expiry.
+The worker waits for TLS connection before constructing the POST, so DNS/TLS
+outages do not become permanently uncertain merely because a connection was
+attempted. Durable request IDs, retry timing, current authorization and device
+bindings survive/revalidate across restarts. A lost response after a POST may
+have reached Apple remains uncertain; upgrading does not replay those records.

@@ -181,6 +181,13 @@ final class PairingConnectionTests: XCTestCase {
             await restored.prepareCoreChat()
             XCTAssertEqual(restored.chatMessages.last { !$0.isUser }?.id, reply.id)
             XCTAssertEqual(try fixture.request(["op": .string("state")])["chatSendRequests"].integer, 1, "Background/reopen must poll or read, never resend")
+            _ = try fixture.request(["op": .string("chat-hide-sources")])
+            let rejected = await restored.sendCoreChatText("SYNTHETIC_REJECTED_QUESTION")
+            XCTAssertFalse(rejected, "A definite source rejection must retain the editable question")
+            XCTAssertEqual(restored.chatPhase, "failed")
+            XCTAssertEqual(restored.chatErrorCode, "CHAT_SOURCE_UNAVAILABLE")
+            XCTAssertFalse(restored.chatWaiting, "A rejected question must not become an unresolved receipt")
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["assessmentTurnCount"].integer, 1, "Rejected input starts no model work")
             return
         }
         if semanticCache {

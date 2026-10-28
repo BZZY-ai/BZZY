@@ -128,6 +128,14 @@ limits record provenance: exact capability/configuration, conservative fallback,
 or an unreported native window. Input token estimates are approximate.
 
 Admission includes instructions, schemas, the prepared prompt and output reserve.
+When exact metadata declares separate input/output limits, admission uses the
+smaller of the input limit and total window minus the bounded output reserve.
+The original total window remains recorded. For API-backed Codex, the supported
+`model_auto_compact_token_limit` also bounds growing native history to the
+smaller of 90% of the declared input limit and total window minus that reserve.
+This is a conservative planning threshold, not a tokenization or upstream
+acceptance guarantee; it does not reserve output twice against an independent
+input allowance.
 Before native thread start/resume, Core can replace bulky derived recovery maps,
 historical project records and reports in the execution preprompt with a bounded
 current-state map and authorized detail references. The complete original
@@ -139,13 +147,22 @@ Mandatory source is never clipped. Admission records distinguish preprompt
 compaction from conversation compaction and disclose original/selected sizes.
 
 For an API session without usable saved/configured capacity metadata, startup
-performs a bounded exact-model catalog lookup. Successful public metadata is
-cached for five minutes; unavailable metadata has a 60-second retry cooldown.
+performs a bounded exact-model catalog lookup. Recognized Experiential catalogs
+use the selected slug's same-origin public detail route, without an API key,
+cookies or redirects, instead of waiting for the entire paginated catalog.
+Responses are limited to 256 KiB. An unavailable/private detail route can fall
+back to the existing authenticated organization catalog within the same default
+eight-second deadline; redirects, oversized responses and timeouts cannot start
+another lookup budget. Successful metadata is cached for five minutes;
+unavailable metadata has a 60-second retry cooldown. Discovered fields retain
+provider/model/dispatch provenance across startup and `/new`, so expired or
+changed-source values can be refreshed without overwriting owner selections.
 Lookup cannot change provider, model, effort, goal or authorization, and does not
 run inference. Endpoint/selection changes or cancellation prevent applying a
 stale response. Restricted learning/document jobs retain their pinned metadata.
 Catalog failure retains the conservative 32,768-token fallback; it does not
-establish an upstream capacity or justify guessing a larger window. Context
+establish an upstream capacity or justify guessing a larger window. Startup
+visibly identifies that value as an assumed local planning window. Context
 window metadata describes total capacity, not independent verification of every
 route's maximum input. Model selection retains same-model saved capabilities
 when a catalog is unavailable, without lending them to another provider/model.
@@ -154,11 +171,40 @@ An explicitly configured trusted
 pressure policy can pause at a completed-turn boundary after repeated breaches
 with hysteresis; it creates no automatic restart loop or achieved outcome.
 
+A separate host loop safeguard covers ordinary root terminal goals while a
+native turn is still active. Within ten minutes it pauses after either six
+distinct completed native compactions, twelve repeated coordination reads and
+three minutes without host-observed work, or thirty-six repeated coordination
+reads and five minutes without that work. Changing model plans, activity prose,
+call IDs, usage counters, inspection headings or already-covered source ranges
+cannot reset these observations. New source bytes/explicit line pages, worker
+round/report receipts, reviews, closed work units, successful native edits and
+other actual tool work do reset them. Failed work does not. Bounded observation
+capacity defers uncertain novel inspections rather than inferring a stall.
+
+Core waits for in-flight host calls, native external tools, pending questions,
+user steering and identity-verified live assignment processes to reach a safe
+boundary. A stale saved running label alone does not prove live work. The
+decision is a conservative host churn heuristic, not proof about a model's
+reasoning or the truth of its findings. Its durable status is `paused` with
+`context_no_progress`, displayed as stalled; it never establishes achievement.
+The existing goal, original objective, evidence, history and owner budget limit
+remain intact. An unresponsive pause/interrupt gets a three-second local
+transport-close grace, including when an interrupt ACK arrives without turn
+completion. Unacknowledged final usage remains uncertain for reconciliation;
+this does not establish the provider's final billing. No automatic replay,
+replacement thread or new model invocation follows this pause.
+
 Pending refreshes insert a bounded current-state capsule at a safe prepared prompt.
 Automatic mid-goal steering additionally requires the backend's explicit
 acknowledged-refresh capability. Unadvertised backends remain visibly pending.
 Accepted delivery consumes its prepared epoch; uncertain delivery is journaled
 and never blindly replayed. Fixture support does not prove live backend support.
+Explicit resume rebuilds execution instructions/current assignment state, but
+an ordinary same-thread native goal retains its existing native objective.
+Without a supported acknowledged delivery path, its versioned mid-goal refresh
+capsule remains pending; this repair does not rewrite that objective or reset
+native goal counters merely to acknowledge a refresh.
 
 Version 2 [workflow routing](WORKFLOWS.md) pins relevant specialist/skill versions
 per declared hypothesis and checks actual full reads, matching assignments and

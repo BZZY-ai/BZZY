@@ -1,12 +1,16 @@
 import { clean, cellWidth, clip, wrap } from './terminal-format.js';
+import { debugExportErrorMessage } from '@bzzy/core/engine/debug-export-errors.js';
+import { isStalledGoal } from '@bzzy/core/engine/goal-state.js';
 
 const loadRecordedMetrics = async id => (await import('@bzzy/core/engine/session-metrics.js')).sessionMetrics(id);
 const exportRecordedDebug = async id => (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug(id);
 const exportFullRecordedDebug = async id => (await import('@bzzy/core/engine/session-full-debug.js')).exportFullSessionDebug(id);
 const recordedCount = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
 const pad = (value, width) => value + ' '.repeat(Math.max(0, width - cellWidth(value)));
-const stalled = goal => ['stalled', 'blocked', 'usage_limited', 'budget_limited', 'budget_exhausted', 'awaiting_review'].includes(goal?.status) || goal?.status === 'paused' && goal.reason === 'turn_limit';
-const statusLabel = (value, reason) => value === 'paused' && reason === 'turn_limit' ? 'Stalled · turn limit' : ({ complete: 'Achieved ✓', running: 'Working', active: 'Working', paused: 'Paused',
+const stalled = goal => ['stalled', 'budget_exhausted'].includes(goal?.status) || isStalledGoal(goal);
+const stalledPauseLabels = { turn_limit: 'turn limit', recovery_required: 'recovery required', context_no_progress: 'no progress' };
+const statusLabel = (value, reason) => value === 'paused' && isStalledGoal({ status: value, reason })
+  ? 'Stalled' + (Object.hasOwn(stalledPauseLabels, reason) ? ' · ' + stalledPauseLabels[reason] : '') : ({ complete: 'Achieved ✓', running: 'Working', active: 'Working', paused: 'Paused',
   stalled: 'Stalled', cancelled: 'Cancelled', failed: 'Failed', awaiting_review: 'Stalled · awaiting review',
   verifying: 'Verifying', blocked: 'Stalled', budget_limited: 'Stalled · budget limit', usage_limited: 'Stalled · usage limit',
   budget_exhausted: 'Stalled · budget limit' })[value] || clean(value || 'Unknown status').replaceAll('_', ' ');
@@ -80,8 +84,8 @@ export class SessionMetricsPanel {
         await new Promise(resolve => setImmediate(resolve));
         const result = await (action === 'full-export' ? this.exportFullDebug(id) : this.exportDebug(id));
         if (!this.closed && id === this.sessionId && epoch === this.epoch) this.exportResult = result;
-      } catch {
-        if (!this.closed && id === this.sessionId && epoch === this.epoch) this.exportError = 'Could not export this chat. Check its original folder is writable, or use bzzy debug export NAME FILE.md from another terminal.';
+      } catch (error) {
+        if (!this.closed && id === this.sessionId && epoch === this.epoch) this.exportError = debugExportErrorMessage(error, { full: action === 'full-export' });
       } finally { this.exporting = false; if (!this.closed) this.changed(); }
       return;
     }
@@ -120,6 +124,8 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
   const data = panel.data;
   if (panel.exportResult) {
     prose((panel.exportResult.full ? 'Full debug ZIP exported · ' : 'Debug exported · ') + panel.exportResult.outputPath, 'goalSuccess');
+    if (panel.exportResult.full && Number.isSafeInteger(panel.exportResult.exclusions) && panel.exportResult.exclusions > 0)
+      prose(`${panel.exportResult.exclusions.toLocaleString()} context paths omitted. Check manifest.exclusions inside the ZIP.`, 'warning');
     prose('Includes session history and skill/agent definitions. Review this private task content before sharing.', 'muted');
     put();
   }

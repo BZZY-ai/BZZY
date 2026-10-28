@@ -67,6 +67,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   else if (request.method === 'thread/goal/get') result = { goal: goal || { status: 'paused' } };
   else if (request.method === 'thread/goal/clear') { goal = null; result = { cleared: true }; }
   else if (request.method === 'thread/goal/set') {
+    if (scenario === 'context-guard-noack-pause' && request.params.status === 'paused') continue;
     if (scenario === 'exit-on-stop' && request.params.status === 'paused') process.exit(23);
     if (scenario === 'rpc-error-on-stop' && request.params.status === 'paused') {
       send({ id: request.id, error: { code: -32603, message: 'Backend connection closed.' } });
@@ -92,7 +93,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       } else turns();
     }, 20);
   } else if (request.method === 'turn/interrupt') {
-    notify('turn/completed', { turn: { id: request.params.turnId, status: 'interrupted' } });
+    if (scenario !== 'context-guard-ack-no-turn-complete') notify('turn/completed', { turn: { id: request.params.turnId, status: 'interrupted' } });
     if (scenario === 'interrupt-response-race') {
       setTimeout(() => send({ id: request.id, result }), 100);
       continue;

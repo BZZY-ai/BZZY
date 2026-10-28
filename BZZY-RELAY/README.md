@@ -74,12 +74,25 @@ to the service account's private `STATE_DIRECTORY/push/apns.json`; see
 [push configuration and delivery limits](../BZZY-CORE/docs/PUSH.md).
 
 The durable queue holds at most 4,096 receipts, with 256 pending alerts per host,
-a one-day lifetime, eight dispatches per second and bounded rejection retries.
+a one-day lifetime and at most eight dispatches per worker pass. Known failures
+before any notification POST (including DNS, TLS and connection timeout) and
+explicit temporary Apple rejections retry with backoff capped at five minutes,
+until the event or grant expires. Restart preserves the same alert identity and
+backoff; an eight-attempt cutoff no longer discards a still-valid queued alert.
 Immutable request IDs deduplicate Core retries and survive restarts. Relay sees
 bounded notification titles/previews and opaque routing hints; encrypted chats,
 Core owner keys and model-provider credentials remain outside this service.
 Dispatched preview text is removed. An Apple acceptance is distinct from a
 confirmed phone display; uncertain dispatch is preserved rather than repeated.
+Once a notification POST may have reached Apple, a timeout, lost response or
+interrupted dispatch remains uncertain and is never automatically replayed.
+Authorization, current device binding and preferences are rechecked before
+every eligible attempt. Expiry, revocation and Apple's/iOS delivery behavior
+still limit delivery; the service cannot guarantee that the phone displays an alert.
+Bounded queue reads prioritize due alerts for the configured Apple environment,
+so older entries waiting for backoff or another environment cannot hide ready
+alerts for a different computer. A stream ending without an explicit final Apple
+response remains uncertain, including HTTP/2 resets that report no stream error.
 
 ## Endpoint integration
 
