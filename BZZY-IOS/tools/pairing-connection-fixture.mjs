@@ -95,7 +95,9 @@ async function handle(input) {
         subscriptions: gateway.status().subscriptions, gateway: gateway.status().gateway,
         coordinatorConfigured: new CoreAssistant().settings().configured, executionCount: listRecords('execution').length,
         metricsFailures, cliReady, cliFinished, cliMode, inputClaimRequests, chatSendRequests,
-        assessmentTurnCount: listRecords('core.assessment.turn').length };
+        assessmentTurnCount: listRecords('core.assessment.turn').length,
+        assessmentBackendInitializations: fs.existsSync(path.join(directory, 'learning-calls.jsonl'))
+          ? fs.readFileSync(path.join(directory, 'learning-calls.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).filter(row => row.method === 'initialize').length : 0 };
     case 'second-session': {
       const second = core.createConversation({ provider: 'codex', model: 'pair-fixture', alias: 'Second fixture terminal', cwd: path.join(directory, 'project') }, { requestId: randomUUID() });
       return { sessionId: second.id, catalogEligible: terminalSession(second), sessionCount: listRecords('session').length };
@@ -185,7 +187,12 @@ async function handle(input) {
       // This offline backend already verifies the actual no-tools document
       // profile, declines attempted approval and returns a deterministic body.
       process.env.BZZY_CODEX_BIN = fileURLToPath(new URL('../../BZZY-CORE/test/fixtures/learning-codex.mjs', import.meta.url));
+      process.env.BZZY_TEST_LEARNING_LOG = path.join(directory, 'learning-calls.jsonl');
+      process.env.BZZY_ENV_ALLOW = 'BZZY_TEST_LEARNING_LOG,BZZY_TEST_LEARNING_STARTUP_FAILURE';
       new CoreAssistant().configure({ source: 'core', provider: 'codex', model: 'native-assessment-fixture' }, { expectedRevision: 0, requestId: randomUUID() });
+      return { configured: true };
+    case 'chat-fail-initialize':
+      process.env.BZZY_TEST_LEARNING_STARTUP_FAILURE = 'initialize';
       return { configured: true };
     case 'core-stop':
       await runtimeRequest(runtimeInfo(), 'POST', '/operator-stop', { shutdown: false });

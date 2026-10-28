@@ -1,3 +1,33 @@
+# Preserve Core Chat failure identity across cleanup and refresh (2026-10-28)
+
+Two local regressions reproduced diagnostic loss. A restricted runner's cleanup
+exception could replace an earlier trusted startup Error while its child draft
+still retained the original startup receipt. Separately, successful phone
+readiness refreshes cleared a failed question's support code. Cleanup now
+preserves the original thrown object/receipt, attempts every cleanup phase and
+records only the first fixed failure phase. Successful generation with failed
+finalization returns a trusted `CHAT_FINALIZATION_FAILED` instead of exposing an
+answer or claiming pre-request zero usage. Malformed thrown values finish with a
+safe generic failure rather than leaving an active turn behind. The phone keeps
+the failed question's code across refresh without submitting more model work or
+changing source execution, goal or ownership.
+
+Node 24/macOS: the complete Core suite passed **1,165 tests, 2 skipped**, plus
+Core syntax and whitespace checks. Focused tests cover close/state/filesystem
+failures, original Error identity, cleanup-only failure, forged receipts,
+malformed errors and unchanged source/execution authority. The fresh full iOS
+native suite passed **105 tests** with existing deadlines. An earlier broad run
+failed once before Chat readiness and cascaded after a rejected send; focused
+runs and the fresh full run passed. Safe fail-fast assertions now retain the
+initial readiness/error code if it recurs; the earlier cause is unconfirmed.
+No timeout increase or mutation retry was introduced.
+
+Signed development build **0.1.0 (26)** compiled and passed artifact/privacy/APNs
+checks but was not installed or launched on the live phone. No VPS service,
+provider configuration, live session or investigation was contacted or changed.
+The reported VPS failure itself remains unconfirmed pending its actual support
+code/host diagnostic; these local fixes do not establish its backend cause.
+
 # Exact model context and host loop safeguards (2026-10-28)
 
 A private execution export showed 61 completed native compactions and repeated

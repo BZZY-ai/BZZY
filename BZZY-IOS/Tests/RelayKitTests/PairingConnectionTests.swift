@@ -2,6 +2,10 @@ import XCTest
 @testable import RelayKit
 
 final class PairingConnectionTests: XCTestCase {
+    @MainActor func testCoreChatFailureSupportCodeSurvivesReadinessRefreshWithoutRetryingModelWork() async throws {
+        try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, coreChatFailure: true)
+    }
+
     @MainActor func testCoreChatRecoversDurableReadOnlyReplyAfterBackgroundWithoutResending() async throws {
         try await checkPairing(ignoreDecisionEvent: false, backgroundBeforeApproval: false, coreChat: true)
     }
@@ -55,13 +59,13 @@ final class PairingConnectionTests: XCTestCase {
     }
 
     @MainActor private func checkPairing(ignoreDecisionEvent: Bool, backgroundBeforeApproval: Bool,
-                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false, allowTakeover: Bool = true, resourceJournal: Bool = false, deletionSync: Bool = false, coreChat: Bool = false, semanticCache: Bool = false) async throws {
+                                        closeCLI: Bool = false, failMetrics: Bool = false, overlayResume: Bool = false, updatePreferences: Bool = false, voiceChat: Bool = false, goals: Bool = false, allowTakeover: Bool = true, resourceJournal: Bool = false, deletionSync: Bool = false, coreChat: Bool = false, semanticCache: Bool = false, coreChatFailure: Bool = false) async throws {
         let fixture = try PairingConnectionFixture()
         defer { fixture.shutdown() }
         let identity = try RelayIdentity.generate()
         var start: [String: WireValue] = ["op": .string("start"), "certificate": try RelayWire.object(identity.certificate), "allowTakeover": .bool(allowTakeover)]
         if deletionSync { start["alias"] = .string("Deleted fixture terminal") }
-        if coreChat || semanticCache { start["alias"] = .string("Cached fixture terminal") }
+        if coreChat || semanticCache || coreChatFailure { start["alias"] = .string("Cached fixture terminal") }
         let configuration = try fixture.request(start)
         XCTAssertEqual(configuration["coordinatorConfigured"].bool, false)
         let endpoint = try XCTUnwrap(URL(string: try XCTUnwrap(configuration["endpoint"].string)))
@@ -143,6 +147,42 @@ final class PairingConnectionTests: XCTestCase {
         XCTAssertFalse(connection.coreIsAssistant, "A terminal pair must not depend on coordinator setup")
         XCTAssertEqual(connection.corePermissions, Set(["observe", "claim", "takeover", "execute", "answer", "pause", "cancel", "steer"].filter { allowTakeover || $0 != "takeover" }))
         XCTAssertTrue(availabilityFailures.isEmpty, "Approval must not cancel its own initial Core read: \(availabilityFailures)")
+        if coreChatFailure {
+            let seed = try fixture.request(["op": .string("goal-seed")])
+            _ = try fixture.request(["op": .string("chat-configure")])
+            _ = try fixture.request(["op": .string("chat-fail-initialize")])
+            await connection.prepareCoreChat()
+            guard connection.chatConfigured else {
+                XCTFail("Chat readiness failed: \(connection.chatErrorCode ?? "none"); Core: \(connection.coreError ?? "none"); online: \(connection.coreActionsAvailable)")
+                return
+            }
+            let accepted = await connection.sendCoreChatText("SYNTHETIC_FAILED_ASSESSMENT")
+            guard accepted else {
+                XCTFail("Chat rejected synthetic question: \(connection.chatErrorCode ?? "none"); phase: \(connection.chatPhase)")
+                return
+            }
+            try await eventually { connection.chatPhase == "failed" }
+            XCTAssertEqual(connection.chatErrorCode, "CHAT_BACKEND_INITIALIZATION")
+            XCTAssertFalse(connection.chatWaiting)
+            let before = try fixture.request(["op": .string("state")])
+            XCTAssertEqual(before["assessmentTurnCount"].integer, 1)
+            XCTAssertEqual(before["assessmentBackendInitializations"].integer, 1)
+            for _ in 0..<3 {
+                await connection.prepareCoreChat()
+                XCTAssertTrue(connection.chatConfigured)
+                XCTAssertEqual(connection.chatPhase, "failed")
+                XCTAssertEqual(connection.chatErrorCode, "CHAT_BACKEND_INITIALIZATION", "Readiness must preserve the last question's support code")
+            }
+            let after = try fixture.request(["op": .string("state")])
+            XCTAssertEqual(after["assessmentTurnCount"].integer, before["assessmentTurnCount"].integer)
+            XCTAssertEqual(after["assessmentBackendInitializations"].integer, before["assessmentBackendInitializations"].integer)
+            XCTAssertEqual(after["chatSendRequests"].integer, 1)
+            XCTAssertEqual(after["executionCount"].integer, 0); XCTAssertEqual(after["inputClaimRequests"].integer, 0)
+            let goal = try fixture.request(["op": .string("goal-state")])
+            XCTAssertEqual(goal["goalID"].string, seed["goalID"].string)
+            XCTAssertEqual(goal["status"].string, "active"); XCTAssertEqual(goal["objective"].string, "Previous unfinished goal")
+            return
+        }
         if coreChat {
             await connection.prepareCoreChat()
             XCTAssertFalse(connection.chatConfigured); XCTAssertEqual(connection.chatErrorCode, "ASSISTANT_SETUP_REQUIRED")
@@ -188,6 +228,10 @@ final class PairingConnectionTests: XCTestCase {
             XCTAssertEqual(restored.chatErrorCode, "CHAT_SOURCE_UNAVAILABLE")
             XCTAssertFalse(restored.chatWaiting, "A rejected question must not become an unresolved receipt")
             XCTAssertEqual(try fixture.request(["op": .string("state")])["assessmentTurnCount"].integer, 1, "Rejected input starts no model work")
+            await restored.prepareCoreChat()
+            XCTAssertEqual(restored.chatPhase, "failed")
+            XCTAssertEqual(restored.chatErrorCode, "CHAT_SOURCE_UNAVAILABLE", "A readiness refresh must also retain a definite send rejection")
+            XCTAssertEqual(try fixture.request(["op": .string("state")])["assessmentTurnCount"].integer, 1)
             return
         }
         if semanticCache {

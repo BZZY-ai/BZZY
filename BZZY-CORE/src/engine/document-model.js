@@ -9,6 +9,11 @@ import { learningWorkingDirectory } from './learning-backend.js';
 import { backendStartupFailure } from './backend-startup.js';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
+const finalizationFailures = new WeakMap();
+export function documentFinalizationFailure(error) {
+  const failure = error && typeof error === 'object' && finalizationFailures.get(error);
+  return failure ? { ...failure } : null;
+}
 const stopped = () => readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
 const boundedText = (value, maximum, label) => {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > maximum || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(value)) {
@@ -46,7 +51,10 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
     modelCapabilities: chosen.capabilities, backendHomes: saved.backendHomes,
     documentSourceSessionId: saved.id, ...(task ? { documentTaskKind: task.kind, documentTaskId: task.id } : {}), executionState: 'running' });
   saveSession(draft);
-  let text = '', engine, closing, deadline, monitor;
+  const cleanupPaths = { workdir: path.join(home(), 'runtime', 'learning', draft.id),
+    backend_home: path.join(home(), 'runtime', 'agent-backends', draft.id),
+    catalog: path.join(home(), 'runtime', `${draft.id}-models.json`) };
+  let text = '', engine, closing, deadline, monitor, primaryFailure = false;
   const close = () => closing ||= Promise.resolve().then(() => engine?.close());
   const abort = reason => {
     if (controller.signal.aborted) return;
@@ -89,20 +97,33 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
       usageAvailable ? { tokens, usageAvailable: true } : {});
     return { text, tokens, usageAvailable, resolvedModel: draft.resolvedModel || chosen.model || null };
   } catch (error) {
+    primaryFailure = true;
     const failure = backendStartupFailure(error);
     if (failure) draft.backendFailure = failure;
     throw error;
   } finally {
     clearTimeout(deadline); clearInterval(monitor);
     signal?.removeEventListener('abort', externalAbort);
-    try { await close(); } finally {
-      try {
-        draft.executionState = 'idle'; draft.backendProcess = null;
-        if (!sessionDeleted(draft.id)) saveSession(draft);
-      } finally {
-        fs.rmSync(path.join(home(), 'runtime', 'learning', draft.id), { recursive: true, force: true });
-        fs.rmSync(path.join(home(), 'runtime', 'agent-backends', draft.id), { recursive: true, force: true });
-        fs.rmSync(path.join(home(), 'runtime', `${draft.id}-models.json`), { force: true });
+    let cleanupPhase;
+    const cleanup = async (phase, operation) => {
+      try { await operation(); } catch { cleanupPhase ||= phase; }
+    };
+    await cleanup('close', close);
+    await cleanup('state', () => {
+      draft.executionState = 'idle'; draft.backendProcess = null;
+      if (!sessionDeleted(draft.id)) saveSession(draft);
+    });
+    for (const [phase, target] of Object.entries(cleanupPaths)) await cleanup(phase, () => fs.rmSync(target,
+      phase === 'catalog' ? { force: true } : { recursive: true, force: true }));
+    if (cleanupPhase) {
+      // Cleanup errors can contain paths and backend/private detail. Keep only
+      // a fixed phase, and never replace an adapter-branded primary failure.
+      draft.documentCleanupFailure = { version: 1, phase: cleanupPhase };
+      try { if (!sessionDeleted(draft.id)) saveSession(draft); } catch { /* The primary outcome remains authoritative. */ }
+      if (!primaryFailure) {
+        const error = fail('DOCUMENT_CLEANUP', 'The restricted document execution could not finalize safely.');
+        finalizationFailures.set(error, Object.freeze({ version: 1, phase: cleanupPhase }));
+        throw error;
       }
     }
   }

@@ -4,6 +4,13 @@ Native Swift/SwiftUI, iOS 17+, with **Agents**, **Terminal** and read-only **Cha
 appearance follows the CLI: dark flat surfaces, compact monospaced prompt rows,
 cyan controls, teal user messages and lavender assistant messages.
 
+Build **0.1.0 (26)** preserves a failed Core Chat question's support code across
+readiness refreshes and describes a trusted finalization failure separately.
+The full native suite passed **105 tests**. Its signed development device build
+passed artifact/privacy/APNs checks and is prepared locally; it has **not been
+installed or launched on the live phone**. The existing installed build 25 and
+running host sessions remain unchanged.
+
 Build **0.1.0 (25)** retains the latest **100 complete cached entries** per
 conversation for immediate reopening. Older pages and rendering stay bounded;
 Core owns full history. The protected display cache is separate from durable

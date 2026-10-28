@@ -8,7 +8,7 @@ import { database, digest, getRecord, putRecord, transaction, now } from './data
 import { home, readJson } from './files.js';
 import { generationSecurityPolicy } from './instructions.js';
 import { authorizedUpdateGrant } from './update-access.js';
-import { runRestrictedDocumentModel } from './document-model.js';
+import { runRestrictedDocumentModel, documentFinalizationFailure } from './document-model.js';
 import { backendStartupFailure } from './backend-startup.js';
 
 const KIND = 'core.assessment.turn', active = new Set(['queued', 'running']);
@@ -28,8 +28,10 @@ function failureCode(error) {
   // failure. An error message/property or provider response cannot claim it.
   const startup = backendStartupFailure(error);
   if (startup) return startupFailureCodes[startup.stage] || 'CHAT_UNAVAILABLE';
-  return ['FORBIDDEN', 'CORE_STOPPED', 'CHAT_SOURCE_UNAVAILABLE', 'CHAT_OUTPUT_INVALID', 'DOCUMENT_CANCELLED', 'DOCUMENT_BUDGET'].includes(error.code)
-    ? error.code : 'CHAT_UNAVAILABLE';
+  if (documentFinalizationFailure(error)) return 'CHAT_FINALIZATION_FAILED';
+  const code = error?.code;
+  return ['FORBIDDEN', 'CORE_STOPPED', 'CHAT_SOURCE_UNAVAILABLE', 'CHAT_OUTPUT_INVALID', 'DOCUMENT_CANCELLED', 'DOCUMENT_BUDGET'].includes(code)
+    ? code : 'CHAT_UNAVAILABLE';
 }
 function assessmentBudget(prompt, taskInstructions) {
   // Input tokens are part of reported total usage. A fixed 8k allocation can

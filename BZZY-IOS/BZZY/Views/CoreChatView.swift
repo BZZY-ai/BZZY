@@ -189,6 +189,8 @@ struct CoreChatView: View {
             return "This check exceeded its allowance. Try asking about one session."
         case "CHAT_SOURCE_UNAVAILABLE":
             return "No terminal is available to assess. Open a named terminal on that computer, then try again."
+        case "CHAT_FINALIZATION_FAILED":
+            return "Core could not finalize this check safely. Share the support code for diagnosis."
         case "CHAT_NOT_SENT":
             return "Core did not accept the previous question. You can ask it again."
         default:

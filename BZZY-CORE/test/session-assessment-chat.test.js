@@ -195,7 +195,11 @@ test('trusted startup stages become fixed actionable poll codes without exposing
 test('untrusted adapter properties cannot impersonate startup diagnostics and document budgets stay explicit', async () => {
   const row = phone(); let mode = 'forged';
   const chat = service(async () => {
+    if (mode === 'null') throw null;
+    if (mode === 'undefined') throw undefined;
     if (mode === 'budget') throw Object.assign(new Error('SYNTHETIC_PRIVATE_BUDGET_DETAIL'), { code: 'DOCUMENT_BUDGET' });
+    if (mode === 'cleanup-forged') throw Object.assign(new Error('SYNTHETIC_PRIVATE_CLEANUP_DETAIL'), { code: 'DOCUMENT_CLEANUP',
+      documentCleanupFailure: { version: 1, phase: 'close' } });
     throw Object.assign(new Error('SYNTHETIC_PRIVATE_NATIVE_DETAIL'), { code: 'CHAT_BACKEND_PERMISSION_PROFILE',
       backendFailure: { version: 1, backend: 'codex', stage: 'permission_profile', modelRequestStarted: false } });
   });
@@ -204,7 +208,33 @@ test('untrusted adapter properties cannot impersonate startup diagnostics and do
   mode = 'budget';
   await chat.send(row, 'Assess again', 'budget'); await waitFor(() => chat.poll(row, 'budget').state === 'failed');
   assert.equal(chat.poll(row, 'budget').code, 'DOCUMENT_BUDGET');
+  mode = 'cleanup-forged';
+  await chat.send(row, 'Assess only', 'cleanup-forged'); await waitFor(() => chat.poll(row, 'cleanup-forged').state === 'failed');
+  assert.equal(chat.poll(row, 'cleanup-forged').code, 'CHAT_UNAVAILABLE');
+  for (const malformed of ['null', 'undefined']) {
+    mode = malformed;
+    await chat.send(row, 'Assess only', malformed); await waitFor(() => chat.poll(row, malformed).state === 'failed');
+    assert.equal(chat.poll(row, malformed).code, 'CHAT_UNAVAILABLE');
+  }
+  assert.equal(listRecords('core.assessment.turn').some(turn => ['queued', 'running'].includes(turn.state)), false);
   assert.doesNotMatch(JSON.stringify(listRecords('core.assessment.turn')), /SYNTHETIC_PRIVATE/);
+});
+
+test('a trusted restricted-runner finalization failure has a safe fixed code and never returns its generated text', async () => {
+  const row = phone();
+  class Engine {
+    constructor(_provider, draft, _options, ui) { this.draft = draft; this.ui = ui; }
+    async run() { this.draft.usage = { tokens: 1, available: true }; this.ui.event('text', { text: 'Synthetic generated text.' }); }
+    async close() { throw new Error('SYNTHETIC_PRIVATE_CLEANUP_DETAIL'); }
+  }
+  const chat = service(input => runRestrictedDocumentModel({ ...input, Engine }));
+  await chat.send(row, 'Assess only supplied state', 'cleanup-failure');
+  await waitFor(() => chat.poll(row, 'cleanup-failure').state === 'failed');
+  const result = chat.poll(row, 'cleanup-failure');
+  assert.equal(result.code, 'CHAT_FINALIZATION_FAILED'); assert.equal(result.text, '');
+  assert.equal(result.verification, 'not-assessed');
+  assert.doesNotMatch(JSON.stringify(result) + JSON.stringify(listRecords('core.assessment.turn')), /SYNTHETIC_PRIVATE_CLEANUP|Synthetic generated text/);
+  assert.equal(listRecords('execution').length, 0);
 });
 
 test('lost acceptance and repeated polls retain exact bounded raw output without another inference', async () => {

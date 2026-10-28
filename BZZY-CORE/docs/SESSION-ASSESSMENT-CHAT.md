@@ -93,6 +93,17 @@ arguments, environment values and provider responses are not included.
 | `CHAT_BACKEND_THREAD_START` | A restricted document thread could not be started or restored |
 | `CHAT_BACKEND_BUDGET` | The backend rejected budget admission before a model turn |
 | `DOCUMENT_BUDGET` | The restricted document runtime, token or output bound was reached |
+| `CHAT_FINALIZATION_FAILED` | Generation completed but trusted host cleanup/finalization failed; no answer is exposed |
+
+Cleanup attempts preserve an earlier model/startup failure and its trusted
+receipt instead of replacing it with a close, state-save or directory-removal
+error. All cleanup phases are attempted; only a fixed first failing phase is
+stored privately. A cleanup failure after successful generation fails closed,
+using a module-private host receipt for `CHAT_FINALIZATION_FAILED`; an arbitrary
+error property cannot claim that category or pre-request zero usage.
+
+The iPhone preserves a failed question's support code across readiness refreshes.
+Those refreshes neither resend the question nor change a terminal goal.
 
 These failures start no unrestricted fallback. Unknown adapter failures remain
 `CHAT_UNAVAILABLE`; configuration status still means that a model selection was

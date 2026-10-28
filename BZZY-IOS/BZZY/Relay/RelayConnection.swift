@@ -1448,16 +1448,22 @@ public final class RelayConnection {
     /// protocol exposes no target session execute, input, goal or control fields.
     public func prepareCoreChat() async {
         restoreCoreChatHistory()
-        guard coreActionsAvailable, !suspended, let client = catalogClient else { chatErrorCode = "OFFLINE"; return }
+        // Readiness is a separate observation from the last accepted question's
+        // outcome. A refresh must not erase its actionable support code.
+        func recordReadinessCode(_ code: String?) {
+            guard !(chatPhase == "failed" && state.pendingChat == nil && chatErrorCode != nil) else { return }
+            chatErrorCode = code
+        }
+        guard coreActionsAvailable, !suspended, let client = catalogClient else { recordReadinessCode("OFFLINE"); return }
         do {
             let result = try await client.request("chat.status")
             guard coreActionsAvailable, !suspended, catalogClient === client else { return }
             guard result["readOnly"].bool == true, let configured = result["configured"].bool else { throw CoreApplicationError("INVALID_RESPONSE") }
             chatConfigured = configured
-            chatErrorCode = configured ? nil : "ASSISTANT_SETUP_REQUIRED"
+            recordReadinessCode(configured ? nil : "ASSISTANT_SETUP_REQUIRED")
             if state.pendingChat != nil { startCoreChatPolling(client) }
         } catch {
-            if catalogClient === client { chatConfigured = false; chatErrorCode = (error as? CoreApplicationError)?.code ?? "OFFLINE" }
+            if catalogClient === client { chatConfigured = false; recordReadinessCode((error as? CoreApplicationError)?.code ?? "OFFLINE") }
         }
     }
 
