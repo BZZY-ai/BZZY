@@ -4,7 +4,7 @@
 Codex may still enforce /etc/codex system configuration. This checks a fresh
 process outside the daemon's cgroup; it does not verify its auth or model access.
 """
-import argparse, errno, json, math, os, pathlib, re, selectors, shutil, signal, subprocess, tempfile, time
+import argparse, errno, json, math, os, pathlib, re, selectors, shutil, signal, subprocess, tempfile, time, uuid
 
 TEMPLATE = json.loads('{"slug":"gpt-6.1-sol","prefer_websockets":true,"support_verbosity":true,"default_verbosity":"low","apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","input_modalities":["text","image"],"supports_image_detail_original":true,"truncation_policy":{"mode":"tokens","limit":10000},"supports_parallel_tool_calls":true,"tool_mode":"code_mode_only","multi_agent_version":"v2","multi_agent_reasoning_effort":"xhigh","use_responses_lite":true,"include_skills_usage_instructions":false,"include_apps_usage_instructions":false,"include_plugin_usage_instructions":false,"guardian":null,"node_repl_auto_review_required":true,"node_repl_disabled":false,"requires_sandboxed_review":false,"auto_review_model_override":null,"model_specialty":null,"context_window":272000,"max_context_window":872000,"auto_compact_token_limit":null,"comp_hash":"3000","default_reasoning_summary":"none","display_name":"GPT-6.1-Sol","description":"Latest workhorse model for coding and everyday work.","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"Fast responses with lighter reasoning"},{"effort":"medium","description":"Balances speed and reasoning depth for everyday tasks"},{"effort":"high","description":"Greater reasoning depth for complex problems"},{"effort":"xhigh","description":"Extra high reasoning depth for complex problems"},{"effort":"max","description":"Maximum reasoning depth for the hardest problems"},{"effort":"ultra","description":"Maximum reasoning with automatic task delegation"}],"shell_type":"shell_command","visibility":"list","minimal_client_version":"0.153.0","supported_in_api":true,"availability_nux":{"message":"Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost."},"upgrade":null,"priority":1,"model_messages":{},"experimental_supported_tools":["send_user_message_async","clock"],"available_in_plans":["business","edu","edu_plus","edu_pro","education","ent26","enterprise","enterprise_cbp_automation","enterprise_cbp_trial","enterprise_cbp_usage_based","finserv","free","free_workspace","go","hc","k12","law","plus","pro","prolite","promax","quorum","sci","self_serve_business_prolite","self_serve_business_usage_based","team"],"supports_search_tool":true,"supports_experimental_context":false,"default_service_tier":null,"service_tiers":[{"id":"priority","name":"Fast","description":"2x speed, increased usage"}],"additional_speed_tiers":["fast"],"supports_reasoning_summary_parameter":true,"supports_reasoning_summaries":true,"supports_reasoning_effort_updates":true}')
 FEATURES = 'shell_tool unified_exec multi_agent multi_agent_v2 view_image image_generation apps plugins remote_plugin hooks skill_search skill_mcp_dependency_install browser_use browser_use_external browser_use_full_cdp_access computer_use code_mode_host code_mode goals memories external_agent_memory_import'.split()
@@ -113,8 +113,9 @@ def main():
     overall_deadline = time.monotonic() + 12
     with tempfile.TemporaryDirectory(prefix='bzzy-chat-init-', dir='/tmp') as temporary:
         root = pathlib.Path(temporary).resolve(); home = root / 'home'; home.mkdir(mode=0o700)
-        codex = root / 'codex'; codex.mkdir(mode=0o700)
-        work = root / 'work'; work.mkdir(mode=0o700)
+        session_id = str(uuid.uuid4()); state = home / '.bzzy' / 'runtime'
+        codex = state / 'agent-backends' / session_id / 'codex'; codex.mkdir(parents=True, mode=0o700)
+        work = state / 'learning' / session_id / 'work'; work.mkdir(parents=True, mode=0o700)
         env = {'HOME': str(home), 'CODEX_HOME': str(codex), 'PATH': os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'),
             'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'TMPDIR': str(root), 'BZZY_INIT_PROBE_KEY': 'synthetic-not-an-account-key'}
         for key in ('XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME'): env[key] = str(root / key.lower())
@@ -133,7 +134,7 @@ def main():
             **{'features.' + feature: False for feature in FEATURES}, 'features.skip_host_skill_discovery': True,
             'shell_environment_policy.inherit': 'none', 'shell_environment_policy.set': {'PATH': '/usr/bin:/bin'},
             'mcp_servers': {}, 'web_search': 'disabled', 'project_doc_max_bytes': 0, 'project_doc_fallback_filenames': [],
-            'projects.' + json.dumps(str(work)) + '.trust_level': 'untrusted', 'model_reasoning_effort': 'high'}
+            'projects': {str(work): {'trust_level': 'untrusted'}}, 'model_reasoning_effort': 'high'}
         report['cases'] = {}
         for name, additional in (('restricted_subscription_without_auth', {'model_provider': 'openai'}),
                 ('restricted_synthetic_api', {'model_catalog_json': str(catalog_file), 'model_provider': 'bzzy_api',

@@ -1,3 +1,28 @@
+# Restricted Codex project-path initialization fix (2026-10-28)
+
+Testing the actual generated `codexLaunch` arguments reproduced an immediate
+configuration rejection before `initialize`: Codex splits CLI override keys on
+every dot, including a quoted `.bzzy` project path. The earlier standalone
+helper used a shorter temporary work path without that dot and missed the bug.
+Both restricted branches now encode literal paths inside one inline `projects`
+table. Untrusted project trust, named permission profiles, disabled tools,
+network restrictions and strict document configuration remain in force. The
+portable helper now uses the same encoding and production-shaped dotted paths.
+
+Node 24/macOS: the existing full Core suite passed **1,173 tests, 2 skipped**.
+The new three launch regressions and four helper tests passed; the explicit
+native check stays skipped in ordinary account-free test runs. An opted-in
+official Codex **0.162.0** run passed all **16 actual-launch initialization
+variants**, covering document/learning/Agent profiles, Codex/DeepSeek/Experiential
+selections and their selected efforts, with dots, spaces, quotes and Unicode in
+paths. The updated standalone helper also initialized both native cases.
+Core syntax and whitespace checks passed; an independent source review found
+no permission weakening. These checks created no native threads or model turns
+and used temporary account-free homes with synthetic credentials only. No live
+installation, VPS service, session or investigation was accessed or changed;
+Linux deployment, live model authentication and phone response remain separate
+verification after an owner-authorized update.
+
 # Isolated Core Chat initialization diagnosis (2026-10-28)
 
 Trusted RPC transport receipts now distinguish a deadline from child exit,

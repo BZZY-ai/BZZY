@@ -71,6 +71,10 @@ test('the portable probe uses production restricted flags and synthetic input on
     assert.match(overrides.get('permissions.bzzy_learning_review_v1'), /"network" = \{"enabled" = false\}/);
     assert.equal(overrides.get('mcp_servers'), '{}'); assert.equal(overrides.get('web_search'), '"disabled"');
     assert.equal(overrides.get('cli_auth_credentials_store'), '"file"');
+    assert.ok(row.cwd.includes('/.bzzy/runtime/learning/'));
+    assert.ok(row.codexHome.includes('/.bzzy/runtime/agent-backends/'));
+    assert.equal(overrides.get('projects'), '{' + JSON.stringify(row.cwd) + ' = {"trust_level" = "untrusted"}}');
+    assert.equal([...overrides.keys()].some(key => key.startsWith('projects.')), false);
   }
   const api = processes.find(row => row.catalog); assert.equal(api.catalog.models[0].slug, 'bzzy-initialize-probe');
   assert.equal(api.catalog.models[0].context_window, 32768);

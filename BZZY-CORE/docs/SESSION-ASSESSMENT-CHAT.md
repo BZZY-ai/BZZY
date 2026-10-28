@@ -112,6 +112,15 @@ saved, not that a live provider request was verified. The existing own-phone
 
 ## Isolate an initialization failure without changing running work
 
+Restricted Codex launches pass project trust as one inline `projects` table.
+Codex's CLI override parser splits key paths on dots even inside quoted path
+segments, so embedding a `.bzzy` working directory in a dotted override key
+caused an immediate configuration rejection before `initialize`. Carrying the
+literal path inside the table fixes that startup failure while retaining the
+untrusted project, named permission profile and disabled tool/network settings.
+The shared adapter uses the same encoding for learning/document jobs and
+persistent Agents.
+
 Run the standalone diagnostic from this Core package:
 
 ```sh
@@ -121,7 +130,8 @@ python3 scripts/core-chat-init-probe.py
 It locates the existing Codex executable, checks its version, and sends only
 `initialize`/`initialized` to two fresh native processes: the restricted profile
 without subscription login and a synthetic loopback API configuration. It creates
-and removes its own private directories under `/tmp`; it does not attach to Core,
+and removes its own private directories under `/tmp`, using the production-shaped
+`.bzzy/runtime/learning/…/work` and isolated backend paths; it does not attach to Core,
 open a session/thread, start a model turn, read project/user login stores, update
 software or restart a service. Inherited account environment variables are
 excluded. Fixed categories, bounded exit/signal/RPC codes and the existence of

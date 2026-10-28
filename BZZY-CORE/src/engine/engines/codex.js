@@ -119,7 +119,9 @@ export function codexLaunch(provider, session, options = {}) {
     override('shell_environment_policy.inherit', 'none'); override('shell_environment_policy.set', { PATH: '/usr/bin:/bin' });
     override('mcp_servers', {}); override('web_search', 'disabled');
     override('project_doc_max_bytes', 0); override('project_doc_fallback_filenames', []);
-    override(`projects.${JSON.stringify(session.cwd)}.trust_level`, 'untrusted');
+    // Codex splits CLI override keys on dots even inside quoted path segments.
+    // Keep literal project paths (including .bzzy) inside a TOML table value.
+    override('projects', { [session.cwd]: { trust_level: 'untrusted' } });
   } else if (options.agentScope) {
     const executable = fs.realpathSync(backendCommand('codex'));
     override('default_permissions', agentPermissionProfile);
@@ -129,7 +131,7 @@ export function codexLaunch(provider, session, options = {}) {
     override('features.skip_host_skill_discovery', true);
     override('shell_environment_policy.inherit', 'none'); override('shell_environment_policy.set', { PATH: '/usr/bin:/bin' });
     override('mcp_servers', {}); override('web_search', 'disabled');
-    override(`projects.${JSON.stringify(session.cwd)}.trust_level`, 'untrusted');
+    override('projects', { [session.cwd]: { trust_level: 'untrusted' } });
   } else {
     override('sandbox_mode', codexSandboxMode(options));
     if (options.policy?.network === 'disabled') override('sandbox_workspace_write.network_access', false);
