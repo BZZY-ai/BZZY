@@ -10,6 +10,13 @@ depends on Core and retains its commands and presentation; Core can run without
 the terminal source tree. Its existing host API and encrypted Relay gateway use
 the same engine and private state.
 
+Native authoring references are available through `bzzy-core --help-skills`,
+`--help-agents`, `--help-workflows` and `--help-goals`, and the same flags on
+`bzzy`. Each prints a complete AI-readable guide to this build's formats,
+examples, installation, validation and Library export/import. Core owns the
+references; printing one loads no runtime/account store, creates no state and
+starts no service, model or network request.
+
 Implemented:
 
 - [Read-only Core Chat](docs/SESSION-ASSESSMENT-CHAT.md) assesses a fresh bounded

@@ -37,6 +37,13 @@ such as HTTP analysts or finding reviewers. Core invokes them from normal chats
 and goals across supported models, with separate contexts, bounded parallelism
 and evidence review. Persistent iPhone Agents remain a separate resource type.
 
+For native Library authoring, run `bzzy --help-skills`, `bzzy --help-agents`,
+`bzzy --help-workflows` or `bzzy --help-goals`. Each prints a self-contained
+reference another AI can read: exact formats, complete examples, installation,
+verification and portable export/import. These commands work offline without
+starting Core or reading account settings. Standalone `bzzy-core` exposes the
+same flags.
+
 Chat identifies **Main**, named **Agents** and other **Workers** independently
 of their model. Activity, tool trees and skill-load rows retain that attribution
 when history is replayed or compacted, including in minimal chat. Worker rows

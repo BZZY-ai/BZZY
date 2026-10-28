@@ -1,3 +1,33 @@
+# Native Library authoring references (2026-10-28)
+
+Both `bzzy` and standalone `bzzy-core` expose `--help-skills`, `--help-agents`,
+`--help-workflows` and `--help-goals`. Core owns the versioned Markdown guides
+and appends the complete shared generation security policy. Entry points print
+them before importing runtime/account modules, initializing state or consuming
+CLI update handoffs. Mixed execution arguments and multiple guide flags are
+rejected; `--json` retains the plain reference output.
+
+Tests exercise both real entry points with storage/provider/runtime module
+imports forbidden, nonexistent backends, an empty HOME and a sentinel file as
+BZZY_HOME. All four references print without reading the sentinel, exposing
+synthetic secrets or creating state. Exact marked examples (one skill package,
+one specialist, two workflows including structured routing and one objective-only
+goal) pass native validators/save operations and a reviewed four-kind Library
+ZIP export/import into a second isolated home. Bodies/routing survive; no session,
+execution or assignment starts. The actual offline release packaging/install
+test includes the references and runs every flag from both standalone Core and
+bundled CLI without sibling source directories.
+
+Node 24/macOS: final full Core suite **1,179 passed, 3 skipped**; full CLI suite
+**846 passed, 21 skipped**. Both syntax checks and whitespace checks passed.
+An earlier simultaneous Core/CLI run exceeded an existing model-context test's
+250 ms wall-clock assertion; its focused 25-test group and the fresh full Core
+run passed without changing deadlines or provider code. Independent cross-review
+corrected documentation nuances in import scope, sync normalization, model
+availability and network inheritance. No live installation, VPS/NASA session,
+Relay or phone was accessed or changed. Checks validate native formats and
+sharing; they do not claim execution of the example tasks or live account setup.
+
 # Restricted Codex project-path initialization fix (2026-10-28)
 
 Testing the actual generated `codexLaunch` arguments reproduced an immediate

@@ -34,6 +34,7 @@ import { chooseDebate, configuredDebate } from './debate-setup.js';
 import { chooseSavedCombo } from './mode-presets.js';
 import { chatHelp } from './terminal-commands.js';
 import { whoami } from './whoami.js';
+import { authoringHelp } from '@bzzy/core/engine/authoring-guides.js';
 import { updateCoreAndCLI } from './update.js';
 import { readUpdateHandoff, execUpdatedCLI } from './update-handoff.js';
 import { retireTelegram } from './migrations.js';
@@ -147,6 +148,10 @@ Options:
   --agents A,B[,C]      Parallel or besties agents; optionally provider:model
   --default             Reuse this mode’s saved preset without questions or selectors
   --whoami              Print the detailed architecture, storage and integration reference
+  --help-skills         Print the complete native skill creation and sharing guide
+  --help-agents         Print the complete specialist agent creation and sharing guide
+  --help-workflows      Print the complete workflow creation and sharing guide
+  --help-goals          Print the complete saved goal creation and sharing guide
   --update              Pull the latest source and reinstall bzzy
   --artifact FILE       Material to snapshot and validate
   --rounds N            Legacy review-only challenge limit (default 5, maximum 5)
@@ -541,6 +546,8 @@ async function coreServiceSettings(ui, options) {
 }
 
 export async function main(argv) {
+  const guide = authoringHelp(argv);
+  if (guide !== null) { process.stdout.write(guide); return 0; }
   const updateHandoff = readUpdateHandoff();
   if (updateHandoff) argv = updateHandoff.sessionId && !updateHandoff.settingsOnly && !updateHandoff.coreStopped
     ? [updateHandoff.mode === 'VIEW' ? '--view' : '--attach', updateHandoff.sessionId]

@@ -1,5 +1,12 @@
 # bzzy 🐝
 
+Give another AI the installed format reference with `bzzy --help-skills`,
+`bzzy --help-agents`, `bzzy --help-workflows` or `bzzy --help-goals`.
+Each prints a detailed Markdown specification, complete native examples,
+installation/verification steps and Library export/import instructions.
+Output can be redirected to a file and needs no model, account setup, network
+or running Core service. The same flags work with standalone `bzzy-core`.
+
 Chat displays **Session .bzzy** from the selected saved session's Core project
 binding. Click it to copy the complete path, or use `/session-folder` to display
 the full location and availability. It follows attachment and selected worker
