@@ -8,7 +8,7 @@ const elapsed = value => value == null ? '' : value < 1000 ? `${Math.round(value
 
 export class ToolTreeProjection {
   constructor() { this.groups = new Map(); this.projectors = new Map(); this.boundary = 0; this.sequence = 0; }
-  event(entries, type, data = {}, { sessionId } = {}) {
+  event(entries, type, data = {}, { sessionId, actors } = {}) {
     if (data.eventSessionId && data.eventSessionId !== sessionId) return {};
     if (type === 'message.user' || type === 'execution.started') {
       this.boundary = data.executionId || data.id || data.seq || ++this.sequence;
@@ -41,7 +41,7 @@ export class ToolTreeProjection {
     let group = this.groups.get(key);
     if (!group || !entries.includes(group.entry)) {
       const entry = invocation || { kind: 'tool-tree', text: '', sessionId };
-      group = { key, actorSessionId: actor, assignmentId: data.assignmentId, agent: safe(data.agent || (actor === sessionId ? 'BZZY' : actor.slice(0, 8))), calls: [], expanded: true, page: 0, dropped: 0 };
+      group = { key, actorSessionId: actor, assignmentId: data.assignmentId, agent: safe(actors?.for(actor, sessionId).label || (actor === sessionId ? 'Main' : data.agent ? `Agent · ${data.agent}` : `Worker · ${actor.slice(0, 8)}`)), calls: [], expanded: true, page: 0, dropped: 0 };
       Object.defineProperty(group, 'entry', { value: entry });
       if (invocation) invocation.toolTree = group; else { entry.toolTree = group; entries.push(entry); }
       this.groups.set(key, group);

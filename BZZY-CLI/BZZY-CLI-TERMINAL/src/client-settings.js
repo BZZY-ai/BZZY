@@ -16,6 +16,7 @@ import { transferLibrary, libraryTransferErrorMessage } from './library-ui.js';
 import { listSkills } from '@bzzy/core/engine/skills.js';
 import { getSkillSignupAliases, setSkillSignupAliases, clearSkillSignupAliases } from '@bzzy/core/engine/skill-account-policy.js';
 import { wrap } from './terminal-format.js';
+import { WorkerBudgetSettings } from './worker-budget-settings.js';
 
 const loadRelay = () => {
   let location;
@@ -57,6 +58,10 @@ const messages = {
   SKILL_ACCOUNT_POLICY_INVALID: 'Use 1–32 distinct plain email addresses separated by semicolons or newlines. Check private Core configuration if the list cannot be opened.',
   GMAIL_SETTINGS_STALE: 'The Gmail account changed. Reopen Gmail / email access before replacing it.',
   GMAIL_SETTINGS_INVALID: 'Use a plain Gmail mailbox address and its app password. Check private Core configuration if the account cannot be opened.',
+  WORKER_BUDGET_CONTEXT: 'The host, terminal or goal changed. Reopen Agent execution settings.',
+  WORKER_BUDGET_STALE: 'Agent execution settings changed. Reopen them before saving or applying.',
+  WORKER_BUDGET_INVALID: 'Use positive whole numbers within Core’s supported ranges, or unlimited for a maximum. Maximums must cover the initial allocation.',
+  WORKER_BUDGET_ACTIVE: 'Pause the current owner terminal goal before applying settings to its future workers.',
 };
 const aliasesContextChanged = () => { throw Object.assign(new Error(), { code: 'SIGNUP_ALIASES_CONTEXT' }); };
 const directoryPin = location => {
@@ -78,19 +83,29 @@ export class ClientSettings {
   #emailView;
   constructor(ui, { relayLoader = loadRelay, hostLoader = loadHost, workspaces = new CoreWorkspaces(),
     qrImage = new PairingQRImage(), modelPicker = chooseDefaultModel, updater = updateCommand, libraryTransfer = transferLibrary,
-    gmailSettingsLoader = loadGmailSettings } = {}) {
+    gmailSettingsLoader = loadGmailSettings, workerBudgetLoader } = {}) {
     this.ui = ui; this.relayLoader = relayLoader; this.workspaces = workspaces;
     this.hostLoader = hostLoader; this.hostHome = home();
     this.qrImage = qrImage; this.modelPicker = modelPicker; this.updater = updater;
     this.libraryTransfer = libraryTransfer;
     this.gmailSettingsLoader = gmailSettingsLoader;
+    this.workerBudget = new WorkerBudgetSettings(ui, { ...(workerBudgetLoader ? { loader: workerBudgetLoader } : {}),
+      capture: () => { try {
+        if (home() !== this.hostHome) throw new Error();
+        const context = this.aliasContext(), session = context.session && loadSession(context.session);
+        return { ...context, goalId: session?.goal?.id || null, goalStatus: session?.goal?.status, executionState: session?.executionState || 'idle',
+          canApplyCurrentGoal: Boolean(session && !session.parentSessionId && !session.role && !session.agentId
+            && (!session.purpose || session.purpose === 'terminal') && !session.importedUntrusted) };
+      } catch { throw Object.assign(new Error(), { code: 'WORKER_BUDGET_CONTEXT' }); } },
+      check: context => { try { this.checkAliasContext(context); } catch { throw Object.assign(new Error(), { code: 'WORKER_BUDGET_CONTEXT' }); } },
+      isCurrent: () => !this.closed && this.page === 'worker-budget' && this.ui.tui?.panel === 'settings' });
     this.defaults = new DefaultModels(ui, { modelPicker, isCurrent: () => !this.closed && this.page === 'default-models'
       && (!this.ui.tui?.panel || this.ui.tui.panel === 'settings') });
     this.message = ''; this.warning = false; this.focus = 0; this.page = 'main';
   }
   changed() { if (this.closed) return; if (this.ui.tui) this.ui.tui.settingsEnsureFocus = true; this.ui.tui?.schedule(); }
   get pageTitle() {
-    return { main: 'Settings', core: 'BZZY Core', keys: 'API keys', 'default-models': 'Default models', pair: 'Pair iPhone', approve: 'Confirm iPhone', 'signup-aliases': 'Signup email aliases', 'email-access': 'Gmail / email access' }[this.page] || 'Settings';
+    return { main: 'Settings', core: 'BZZY Core', keys: 'API keys', 'default-models': 'Default models', pair: 'Pair iPhone', approve: 'Confirm iPhone', 'signup-aliases': 'Signup email aliases', 'email-access': 'Gmail / email access', 'worker-budget': 'Agent execution' }[this.page] || 'Settings';
   }
   get pageSubtitle() {
     return { main: 'Your workspace, connections and defaults', core: 'Service, email, Library, updates and status',
@@ -120,12 +135,14 @@ export class ClientSettings {
     }
     const previous = this.page;
     if (previous === 'default-models') this.defaults.leave();
+    if (previous === 'worker-budget') { this.workerBudget.leave(); this.page = 'core'; this.message = ''; this.warning = false; this.focusAction('worker-budget'); this.changed(); return true; }
     this.page = 'main'; this.qrView = false; this.message = ''; this.warning = false;
     this.focusAction(previous === 'core' ? 'core' : previous === 'default-models' ? 'default-models' : previous === 'keys' ? 'deepseek' : 'pair'); this.changed(); return true;
   }
   rows() {
     const rows = [], put = (text = '', tone = 'text', action) => rows.push({ text, tone, action });
     if (this.page === 'default-models') return [...this.defaults.rows(), { text: '← Back', action: 'back', tone: 'muted' }];
+    if (this.page === 'worker-budget') return [...this.workerBudget.rows(), { text: '← Back', action: 'back', tone: 'muted' }];
     if (this.page === 'main') {
       const keyProviders = this.keyProviders(), statuses = keyProviders?.map(provider => this.keyStatus(provider.id));
       const configured = statuses?.filter(status => status.saved || status.environment).length;
@@ -166,6 +183,8 @@ export class ClientSettings {
       if (this.libraryResult) for (const text of this.libraryResult.split('\n')) put(text, this.libraryResultWarning ? 'warning' : 'accent');
       rows.push({ text: 'Gmail / email access', action: 'email-access', icon: '@', card: true, tone: 'accent',
         detail: 'Read-only Gmail account and approved signup aliases · private to this host' });
+      rows.push({ text: 'Agent execution', action: 'worker-budget', icon: '◎', card: true, tone: 'accent',
+        detail: 'Initial allocations and optional ceilings · new goals only unless explicitly applied' });
       rows.push({ text: 'Update BZZY CLI + Core', action: 'update-bzzy', icon: '↻', card: true, tone: 'accent',
         detail: 'Check the official release and update both products · this terminal reloads' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
@@ -550,6 +569,8 @@ export class ClientSettings {
       else if (action === 'core-status') await this.refreshHost();
       else if (['core-start', 'core-stop', 'core-restart'].includes(action)) await this.controlHost(action);
       else if (action === 'email-access') await this.emailAccess();
+      else if (action === 'worker-budget') { this.page = 'worker-budget'; this.focus = 0; await this.workerBudget.open(); }
+      else if (action.startsWith('worker-budget:')) { const message = await this.workerBudget.run(action); if (message) this.message = message; }
       else if (['library-export', 'library-import'].includes(action)) {
         if (home() !== this.hostHome) throw Object.assign(new Error(), { code: 'HOST_CONTEXT_CHANGED' });
         if (this.ui.coreLifecycleInterrupted) throw Object.assign(new Error(), { code: 'CORE_STOPPED' });
@@ -622,7 +643,7 @@ export class ClientSettings {
   }
   close() {
     if (this.closeTask) return this.closeTask;
-    this.closed = true; this.defaults.leave(); this.clearInvitation();
+    this.closed = true; this.defaults.leave(); this.workerBudget.leave(); this.clearInvitation();
     if (this.#aliasDraft || this.#emailView) { this.#aliasDraft = undefined; this.#emailView = undefined; this.ui.reader?.close(); }
     return this.closeTask = Promise.resolve(this.gateway?.close()).catch(() => {});
   }

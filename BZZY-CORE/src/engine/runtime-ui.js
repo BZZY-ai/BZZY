@@ -13,9 +13,14 @@ export class RunnerUI {
     // IDs supplied by a backend take precedence. The fallback is unique to this
     // execution and advances at turn/tool boundaries for backends without IDs.
     this.peerStreamId = randomUUID(); this.peerTurn = 0; this.peerReply = 0;
+    let saved;
+    try { saved = loadSession(sessionId); } catch { /* Actor display must not change legacy event delivery. */ }
+    this.actorName = options.agent || saved?.subagentDefinition?.name || (saved?.role === 'reviewer' ? 'Reviewer' : saved?.parentSessionId ? 'Executor' : 'BZZY');
+    this.actorRole = options.peer ? 'peer' : saved?.subagentDefinition || options.parentSessionId && options.agent ? 'subagent' : saved?.role === 'reviewer' ? 'reviewer' : saved?.parentSessionId || options.parentSessionId ? 'worker' : 'main';
     this.toolActivity = createToolActivityProjector({ sessionId, runId: this.peerStreamId });
   }
   event(type, data = {}) {
+    data = { ...data, actorSessionId: this.sessionId, actorRole: this.actorRole, actorName: this.actorName };
     if (type === 'backend') data = { ...data, runId: data.runId || this.peerStreamId };
     if (type === 'backend' && data.method === 'turn/started') {
       this.peerNativeTurn = data.params?.turn?.id || data.params?.turnId; this.peerTurn++; this.peerReply = 0;
@@ -28,9 +33,10 @@ export class RunnerUI {
           assignmentId: this.options.assignmentId, agent: this.options.agent });
       } catch { /* Activity display cannot change a worker's execution. */ }
     }
-    if (this.options.parentSessionId && ['tool', 'goal', 'error', 'summary'].includes(type)) appendEvent(this.options.parentSessionId, 'worker.progress', { workerSessionId: this.sessionId, agent: this.options.agent, type, ...data });
+    if (this.options.parentSessionId && ['tool', 'goal', 'error', 'summary'].includes(type)) appendEvent(this.options.parentSessionId, 'worker.progress', { workerSessionId: this.sessionId, assignmentId: this.options.assignmentId, agent: this.options.agent, type, ...data });
     if (this.options.parentSessionId && type === 'text' && this.options.peer) appendEvent(this.options.parentSessionId, 'peer.text', {
       agent: this.options.agent, sessionId: this.sessionId, childSessionId: this.sessionId, text: data.text,
+      actorSessionId: this.sessionId, actorRole: this.actorRole, actorName: this.actorName,
       itemId: data.itemId || `bzzy-response:${this.peerStreamId}:${this.peerTurn}:${this.peerReply}`,
       turnId: data.turnId || this.peerNativeTurn || `bzzy-turn:${this.peerStreamId}:${this.peerTurn}`,
     });

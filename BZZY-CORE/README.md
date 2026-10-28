@@ -44,6 +44,20 @@ Implemented:
   version 2 workflow consultation gates. Existing goal pins and invocation-count
   semantics stay intact; optional foreground inference requires owner settings.
 
+- Owner-pinned specialist allocation policies, with fixed limits or reviewed
+  adaptive extensions, supervisor review headroom and partial-result handoffs.
+  Existing goals retain their previous policy until the owner explicitly applies
+  new settings to future workers; admitted workers keep their pins. Extensions
+  preserve the same worker conversation, cumulative
+  consumption, scope and evidence review. See [specialist budgets](docs/SUBAGENTS.md).
+  Durable run receipts attribute supervisor tokens to the actual goal runs,
+  excluding unrelated chat between resumes. Compatible Claude message/final
+  totals are reconciled without duplicate counting. Reported totals remain
+  measured lower bounds; uncertain completed work retains a conservative
+  allocation charge until reconciled, and unbounded uncertainty blocks finite
+  budget admission. Provider reporting and interruption can lag consumption:
+  these controls are execution budgets, not a guaranteed billing or USD cap.
+
 - Native Codex-backed cancellation distinguishes deliberate transport cleanup
   from backend failures. Goal replacement waits for the old runner to stop;
   late interrupt responses do not produce a false connection-closed error.

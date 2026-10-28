@@ -9,6 +9,8 @@ import { closeOpenActivities } from './activity.js';
 import { assignmentContextPage, compactAssignmentRound, compactAssignmentContextRequest } from './assignment-views.js';
 import { peerCollaborationState } from './peer-collaboration.js';
 import { routingStatus } from './workflow-routing.js';
+import { currentAssignmentMemoryCapsule } from './assignment-memory.js';
+import { currentBudgetCapsule, workerAllocationRevision } from './worker-budget.js';
 
 export { processIdentity, identityAlive, signalProcess } from './process-identity.js';
 
@@ -147,7 +149,8 @@ function taskStateSources(session, context) {
     : session.contract || null;
   const revision = digest({ scope: state.scope, goal, contract, checkpoint: state.current, historical: state.historical,
     recovery, assignments, routing, pendingInput, acceptance: session.acceptance || null, importedContext: session.importedContext || null,
-    mission: session.missionContext || null, assignmentContext: session.assignmentContext || null, knowledgeVersion });
+    mission: session.missionContext || null, assignmentContext: session.assignmentContext || null, knowledgeVersion,
+    allocationRevision: workerAllocationRevision(assignmentSession) });
   return { state, goal, assignments, recovery, routing, pendingInput, contract, revision, contextGeneration: contextGeneration(session, context) };
 }
 
@@ -157,7 +160,8 @@ export function compactTaskState(session, input = {}, context = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['knownRevision', 'contextGeneration'].includes(key))) throw new Error('Invalid task-state fields.');
   for (const key of ['knownRevision', 'contextGeneration']) if (input[key] != null && (typeof input[key] !== 'string' || input[key].length > 256)) throw new Error('Use a bounded task-state revision and context generation.');
   const source = taskStateSources(session, context), { state, goal, assignments, recovery, routing, revision } = source;
-  const header = { schemaVersion: 1, revision, contextGeneration: source.contextGeneration, scope: state.scope };
+  const header = { schemaVersion: 1, revision, contextGeneration: source.contextGeneration, scope: state.scope,
+    executionBudget: currentBudgetCapsule(session, context) };
   if (input.knownRevision === revision && input.contextGeneration === source.contextGeneration) return { ...header, notModified: true,
     notice: 'Unchanged within this context generation. Re-read without knownRevision if the earlier capsule is unavailable.' };
   const checkpoint = state.current;
@@ -170,6 +174,7 @@ export function compactTaskState(session, input = {}, context = {}) {
       pendingActions: preview(checkpoint.pendingActions || [], 700), unresolvedQuestions: preview(checkpoint.unresolvedQuestions || [], 450),
       evidenceCount: checkpoint.evidence?.length || 0, detail: 'checkpoint', authority: 'Agent progress claims; never verified completion.' } : null,
     historicalCheckpoint: state.historical,
+    liveAgents: !session.parentSessionId && !session.role && !session.agentId ? currentAssignmentMemoryCapsule(session, { ...context, limit: 3 }) : undefined,
     recovery: recovery ? { state: recovery.state, createdAt: recovery.createdAt, automaticallyReplayed: recovery.automaticallyReplayed,
       workspaceChangeCount: recovery.workspaceChanges?.length || 0, uncertainOperationCount: recovery.uncertainOperations?.length || 0,
       expiredQuestionCount: recovery.expiredQuestions?.length || 0, workspaceOmissionCount: recovery.workspaceOmissions?.length || 0,
@@ -193,6 +198,11 @@ export function compactTaskState(session, input = {}, context = {}) {
     result.checkpoint = checkpoint ? { revision: checkpoint.revision, pendingActions: preview(checkpoint.pendingActions || [], 320), detail: 'checkpoint' } : null;
     result.currentGoal = goal ? { id: goal.id, status: goal.status, objective: preview(goal.objective, 320) } : null;
     result.historicalCheckpoint = state.historical ? { revision: state.historical.revision, reason: state.historical.reason } : null;
+  }
+  if (Buffer.byteLength(JSON.stringify(result)) > 8192 && result.liveAgents) {
+    result.liveAgents = { ...result.liveAgents, assignments: result.liveAgents.assignments.map(item => ({ assignmentId: item.assignmentId, round: item.round,
+      state: item.state, closure: item.closure, reportArtifactId: item.reportArtifactId })),
+    taskPreviewsOmitted: true, lookup: 'Use assignment_status for each original/current assigned task and report references.' };
   }
   if (Buffer.byteLength(JSON.stringify(result)) > 8192) throw new Error('Task-state identity exceeds the compact response budget.');
   return result;

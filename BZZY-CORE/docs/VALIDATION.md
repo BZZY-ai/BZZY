@@ -2026,3 +2026,54 @@ No live Gmail mailbox, app password, real registration, Linux installation or
 running user installation was used or changed in this validation. Transport and
 UI checks use isolated fixtures; platform checks do not prove live Gmail delivery
 or externally configured alias forwarding.
+
+## Specialist allocations, actor activity and compaction receipts (2026-10-27)
+
+The full Core suite passes 1,093 tests, with two platform/filesystem skips.
+The full CLI suite passes 843 tests, with 21 platform/optional skips; a subsequent
+affected-context/UI/runtime run passes 116 tests, with four optional skips.
+Final focused adapter/accounting/task-preview regressions also pass.
+The new offline Codex and Claude runner tests use the real assignment controller,
+tool bridge, report artifacts, evidence inspection, revision-checked extension
+and follow-up path. They preserve the active parent goal and original contract,
+reuse the assignment/worker conversation and retain cumulative reported and
+charged usage across a partial handoff and continuation. Claude completes the
+bounded turn to obtain its final aggregate; Codex receives a native interruption.
+
+Accounting regressions cover duplicated stream updates, compatible final usage,
+goal pause/chat/resume attribution, crash uncertainty, conservative allowance
+holds, local pre-dispatch zero-work proofs and rejection of forged no-work
+claims. Allocation tests check shared parent reservations and review headroom,
+owner/definition caps, stale revisions, immediate cancellation, consumed progress
+reuse and unchanged permissions. Workspace preparation counts toward worker time.
+Optional agent-state preparation does not block older internal contexts or
+subscription authentication; existing owner-writable preference files remain
+compatible. Credential readers retain their stricter private-file requirements.
+
+Memory tests pass real typed lifecycle/allocation receipts to the restricted
+mock compactor, preserve original event/source hashes, deduplicate replay and
+keep current Core state separate from historical summaries. Imported projects
+discard source-local indexes, compactor jobs, allocation policy, consumed-progress
+receipts and usage ledgers; rebuilding recipient memory starts no execution.
+Usage polling leaves structural task revisions stable, while allocation changes
+invalidate their relevant navigation state.
+
+Assigned original and focused follow-up tasks have bounded 600-byte UTF-8
+previews. Whole-source masking precedes shortening, covers private aliases and
+credential-boundary cases, and preserves stable source hashes after credential
+rotation. The versioned index rebuild retains original history. A later owner
+chat can explicitly extend and follow up a valid stopped worker in its current
+run, preserving the assignment/worker, original event provenance and spent usage;
+active, missing or changed-source rounds cannot be rebound opportunistically.
+
+CLI checks cover Main versus named/generic worker activity, tool/skill captions,
+same-model interleaving, replay, compact layouts, reviewed checkpoint titles and
+clearing stale round metadata. Owner policy Settings preserve drafts and require
+an explicit confirmed application to future workers of an idle/paused goal.
+Shared configuration writer tests prevent alias/legacy cleanup from overwriting
+new worker settings. Existing running goals and installations were not changed.
+
+These are local deterministic tests, including real native protocol fixtures;
+they do not establish live provider billing precision, real vulnerability truth,
+an uninterrupted multi-day run or a deployed Linux VPS upgrade. Reported usage
+can arrive after consumption, and unknown usage remains explicitly conservative.

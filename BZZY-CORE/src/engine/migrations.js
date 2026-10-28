@@ -15,9 +15,20 @@ export async function retireTelegram() {
     if (identityAlive(info.identity)) throw new Error('The retired chat bridge is still stopping. Retry in a moment.');
   }
   fs.rmSync(runtimeFile, { force: true });
-  const configFile = path.join(home(), 'config.json'), config = readJson(configFile, null);
-  if (config?.notifications && Object.hasOwn(config.notifications, 'telegram')) {
-    delete config.notifications.telegram; writeJson(configFile, config);
+  const configFile = path.join(home(), 'config.json'); let releaseConfig;
+  try {
+    const initial = readJson(configFile, null);
+    if (initial?.notifications && Object.hasOwn(initial.notifications, 'telegram')) {
+      releaseConfig = lockFile(`${configFile}.lock`);
+      const config = readJson(configFile, null);
+      if (config?.notifications && Object.hasOwn(config.notifications, 'telegram')) {
+        delete config.notifications.telegram; writeJson(configFile, config);
+      }
+    }
+  } catch {
+    throw Object.assign(new Error('Private configuration cleanup is unavailable. Retry after other settings changes finish.'), { code: 'CONFIG_UNAVAILABLE' });
+  } finally {
+    if (releaseConfig) { try { releaseConfig(); } catch { throw Object.assign(new Error('Private configuration cleanup is unavailable.'), { code: 'CONFIG_UNAVAILABLE' }); } }
   }
   const credentialFile = path.join(home(), 'credentials.json'); let unlock;
   try {

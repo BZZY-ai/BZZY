@@ -1,5 +1,6 @@
 import { database, transaction } from './database.js';
 import { identityAlive } from './process-identity.js';
+import { assignmentBudgetView } from './worker-budget.js';
 
 const LIMIT = 64, live = new Map(), CACHE_MS = 750;
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
@@ -52,6 +53,10 @@ export function sessionInvocations(sessionId) {
       json_extract(a.data,'$.role') AS role, json_extract(a.data,'$.selection.provider') AS provider,
       json_extract(a.data,'$.selection.model') AS model, json_extract(a.data,'$.currentRound') AS round,
       json_extract(a.data,'$.closure') AS closure, json_extract(a.data,'$.contextRequest.state') AS contextState,
+      json_extract(a.data,'$.workerSessionId') AS workerSessionId, json_extract(a.data,'$.contract.limits') AS limits,
+      json_extract(a.data,'$.workerBudget') AS workerBudget, json_extract(a.data,'$.latestReport.usage') AS reportedUsage,
+      json_extract(a.data,'$.latestReport.reportArtifactId') AS reportArtifactId, json_extract(a.data,'$.latestReport.missingReport') AS missingReport,
+      json_extract(r.data,'$.stopReason') AS stopReason,
       r.id AS roundPresent, json_extract(r.data,'$.state') AS state, json_extract(r.data,'$.createdAt') AS createdAt,
       json_extract(r.data,'$.runner') AS runner, json_extract(r.data,'$.launcher') AS launcher,
       json_extract(c.data,'$.action') AS control, json_extract(c.data,'$.round') AS controlRound
@@ -64,11 +69,18 @@ export function sessionInvocations(sessionId) {
   return { version: 1, agents: rows.slice(0, LIMIT).filter(row => uuid(row.id)).map(row => {
     const specialist = row.specialistType === 'object', name = text(row.name, 128);
     const model = text(row.model, 256);
-    return { id: row.id, parentSessionId: sessionId,
+    const job = { id: row.id, parentSessionId: sessionId, workerSessionId: row.workerSessionId, closure: row.closure,
+      contract: { limits: identity(row.limits) || {} }, workerBudget: identity(row.workerBudget), latestReport: { usage: identity(row.reportedUsage) } };
+    const parent = db.prepare("SELECT json_extract(data,'$.executionState') AS state FROM records WHERE kind='session' AND id=?").get(sessionId);
+    return { id: row.id, parentSessionId: sessionId, workerSessionId: uuid(row.workerSessionId) ? row.workerSessionId : null,
+      role: ['executor', 'reviewer', 'peer', 'bestie'].includes(row.role) ? row.role : 'worker',
       name: specialist && /^[a-z0-9][a-z0-9_-]*$/i.test(name || '') ? name : row.role === 'reviewer' ? 'Reviewer' : row.role === 'executor' ? 'Executor' : 'Agent',
       specialist, provider: /^[a-z0-9][a-z0-9_.-]{0,63}$/i.test(row.provider || '') ? row.provider : null,
       model: model && /^[a-z0-9][a-z0-9_.:/@+-]*$/i.test(model) && !/^(?:[a-z]:\/|file:)/i.test(model) ? model : null,
       round: Number.isSafeInteger(row.round) && row.round > 0 ? row.round : null,
-      state: stateFor(row), closure: closures.has(row.closure) ? row.closure : 'unknown' };
+      state: stateFor(row), closure: closures.has(row.closure) ? row.closure : 'unknown', budget: assignmentBudgetView(job),
+      stopReason: ['runtime_limit', 'token_limit', 'allocation_checkpoint', 'needs_context', 'cancelled', 'parent_stopped', 'user_pause', 'interrupted'].includes(row.stopReason) ? row.stopReason : null,
+      result: { saved: Boolean(row.reportArtifactId), missingReport: row.missingReport == null ? null : Boolean(row.missingReport), reportArtifactId: uuid(row.reportArtifactId) ? row.reportArtifactId : null },
+      parentState: ['running', 'paused', 'idle', 'waiting_for_input', 'failed', 'cancelled', 'verifying'].includes(parent?.state) ? parent.state : 'unknown' };
   }), truncated: rows.length > LIMIT };
 }

@@ -13,6 +13,7 @@ import { conversationMessages, conversationCursor } from '../src/engine/conversa
 import { initializeProject } from '../src/engine/project.js';
 import { remember, recall, memoryHistory } from '../src/engine/memory.js';
 import { newGoal } from '../src/engine/goals.js';
+import { indexSessionMemory, sessionMemoryStatus } from '../src/engine/session-memory.js';
 
 const sender = 'A'.repeat(43), otherSender = 'B'.repeat(43);
 let directory, work, target, sourceHome, recipientHome, previous;
@@ -49,17 +50,41 @@ test('local project archives rebuild native context and derived source cursors r
     nativeBackendReadiness: { phase: 'request-accepted' }, contextEfficiency: { taskStateReads: 50 }, coreSkillsProtocol: 6,
     sessionMemoryRefresh: true, sessionMemorySeen: { generation: 'sender-generation' } }); saveSession(session);
   const kinds = ['native-compaction', 'core.conversation.source', 'core.conversation.pending', 'core.history.maintenance',
-    'core.task-state.read', 'core.checkpoint.scope', 'core.checkpoint.request', 'core.workflow.work-unit', 'core.workflow.consultation'];
+    'core.task-state.read', 'core.checkpoint.scope', 'core.checkpoint.request', 'core.workflow.work-unit', 'core.workflow.consultation',
+    'core.session.memory', 'core.session.memory.node', 'core.session.memory.history', 'core.session.compactor.job',
+    'core.session.compactor.control', 'core.session.compactor.reservation', 'usage.run', 'usage.goal', 'core.assignment.budget-progress'];
   for (const kind of kinds) putRecord(kind, randomUUID(), { sessionId: session.id, scanSeq: 900000, state: 'open' });
   const state = collectProjectState(work, session.id);
   assert.equal(state.records.some(row => kinds.includes(row.kind)), false);
   const archive = await exportProject(session, path.join(directory, 'local-project.zip'));
-  recipient(); const result = await importProject(archive.path, target), restored = result.primarySession;
+  // An older sender can still supply source-local cursors/jobs. Recipient
+  // filtering must reject them even when the sender did not know this policy.
+  const legacy = path.join(directory, 'legacy-runtime-project.zip');
+  const patched = spawnSync('python3', ['-I', '-B', '-c', `import json,sys,zipfile,uuid
+with zipfile.ZipFile(sys.argv[1]) as source, zipfile.ZipFile(sys.argv[2],'w') as target:
+ for item in source.infolist():
+  data=source.read(item.filename)
+  if item.filename=='bundle.json':
+   manifest=json.loads(data)
+   for kind in json.loads(sys.argv[3]): manifest['records'].append({'kind':kind,'id':str(uuid.uuid4()),'data':{'sessionId':sys.argv[4],'scanSeq':900000,'state':'running'}})
+   for row in manifest['records']:
+    if row['kind']=='session': row['data'].setdefault('goal',{})['workerBudgetPolicy']={'version':1,'mode':'adaptive','revision':99}
+   data=json.dumps(manifest).encode()
+  target.writestr(item,data)
+`, archive.path, legacy, JSON.stringify(kinds), session.id], { encoding: 'utf8' });
+  assert.equal(patched.status, 0, patched.stderr);
+  recipient(); const result = await importProject(legacy, target), restored = result.primarySession;
   assert.notEqual(restored.id, session.id); assert.equal(restored.engineThreadId, null);
   for (const field of ['nativeContext', 'nativeContextBudget', 'nativeBackendReadiness', 'contextEfficiency', 'coreSkillsProtocol', 'sessionMemoryRefresh', 'sessionMemorySeen']) {
     assert.equal(restored[field], undefined, field);
   }
   for (const kind of kinds) assert.equal(listRecords(kind, { sessionId: restored.id }).length, 0, kind);
+  assert.equal(restored.goal.workerBudgetPolicy, undefined);
+  assert.equal(sessionMemoryStatus(restored).generation, null);
+  indexSessionMemory(restored, { force: true });
+  assert.equal(sessionMemoryStatus(restored).sourceVersion, 4);
+  assert.equal(listRecords('core.session.compactor.job').length, 0);
+  assert.equal(listRecords('usage.run').length, 0); assert.equal(listRecords('usage.goal').length, 0);
   assert.ok(messages(restored.id).includes('Original complete assistant answer'));
 });
 

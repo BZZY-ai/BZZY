@@ -54,8 +54,13 @@ test('workers mirror sanitized tool lifecycles durably without changing their or
     const mirrored = events(parent.id).filter(event => event.type === 'worker.tool');
     assert.equal(mirrored.length, 2); assert.equal(mirrored[0].data.id, mirrored[1].data.id);
     assert.equal(mirrored[0].data.assignmentId, 'assignment'); assert.equal(mirrored[1].data.phase, 'completed');
+    assert.equal(mirrored[0].data.actorSessionId, child.id); assert.equal(mirrored[0].data.actorRole, 'subagent');
+    assert.equal(mirrored[0].data.actorName, 'http-reviewer');
     assert.doesNotMatch(JSON.stringify(mirrored), /PRIVATE_OUTPUT/);
     assert.equal(events(child.id).filter(event => event.type === 'backend').length, 2);
+    const body = '<message version="1"><p>Original worker body.</p></message>';
+    ui.event('text', { text: body });
+    assert.equal(events(child.id).find(event => event.type === 'text').data.text, body);
     ui.close();
   } finally {
     if (previous === undefined) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous;

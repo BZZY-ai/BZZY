@@ -1,5 +1,7 @@
 import { database } from './database.js';
 import { assignmentFilter, assignmentParameters } from './delegation-usage.js';
+import { assignmentBudgetView } from './worker-budget.js';
+import { sanitizedTaskPreview } from './assignment-task.js';
 
 // Model-facing views stay small; durable records and the local API retain the
 // full result. The supervisor opens decisive evidence or the report artifact.
@@ -67,6 +69,10 @@ export function compactAssignmentRound(round) {
 
 export function compactAssignmentStatus(job) {
   return clean({ id: job.id, closure: text(job.closure, 40), currentRound: job.currentRound, workspace: text(job.workspace, 640),
+    task: sanitizedTaskPreview(job.round?.objective || job.contract?.objective), budget: assignmentBudgetView(job),
+    nextActions: job.closure !== 'open' ? ['Inspect retained evidence; this assignment is closed.'] : job.workerBudget?.mode === 'adaptive'
+      ? ['Inspect new progress evidence.', 'Use extend_assignment_budget within the owner ceilings if more work is justified.', 'Use followup_assignment for a stopped worker, preserving the same investigation.', 'Review incomplete work as inconclusive when no useful continuation remains.']
+      : ['Inspect retained evidence.', 'Follow up only within the original remaining allowance.', 'Review incomplete work as inconclusive when its allowance is exhausted.'],
     contextRequest: compactAssignmentContextRequest(job.contextRequest),
     selection: job.selection ? clean({ provider: text(job.selection.provider, 80), model: text(job.selection.model, 160), effort: text(job.selection.effort, 40) }) : undefined,
     round: compactAssignmentRound(job.round || job.latestReport) });

@@ -10,6 +10,7 @@ import { sanitizeMissionValue } from './mission-context.js';
 import { reasoningEffort } from './instructions.js';
 import { compactAssignmentStatus } from './assignment-views.js';
 import { assertRoutingSpawn } from './workflow-routing.js';
+import { initialWorkerBudget } from './worker-budget.js';
 
 const fail = message => { throw new Error(message); };
 const text = (value, limit, label) => {
@@ -69,9 +70,7 @@ export function spawnSubagent(parent, input, context = {}) {
   const base = normalizePolicy(source.policy || source.contract?.policy);
   const defined = childPolicy(base, { ...base, ...definition.policy });
   const policy = childPolicy(defined, { ...defined, ...input.policy });
-  const runtimeSeconds = Math.min(input.limits?.runtimeSeconds || definition.limits?.runtimeSeconds || 300,
-    definition.limits?.runtimeSeconds || 3600, source.contract?.limits?.assignmentSeconds || 3600);
-  const tokenBudget = Math.min(input.limits?.tokenBudget || definition.limits?.tokenBudget || 20000, definition.limits?.tokenBudget || 200000);
+  const { limits: { runtimeSeconds, tokenBudget }, workerBudget } = initialWorkerBudget(source, context, definition, input.limits);
   const taskContext = sanitizeMissionValue({ mode: context.goalMode ? 'goal' : 'chat', request: text(context.prompt || objective, 128000, 'current request'), assignment: objective, context: input.context || '' });
   const payload = sanitizeMissionValue({ requestId, objective, context: `SPECIALIST DEFINITION (${definition.name}, ${definition.version}):\n${definition.instructions}\n\nCURRENT ASSIGNMENT:\n${input.context || objective}`, policy,
     acceptanceCriteria: [{ id: 'specialist-result', description: 'Return evidence-backed observations for the assigned task, explicit uncertainty and any blockers; do not claim the parent objective is complete.', modelJudgment: true }],
@@ -79,7 +78,7 @@ export function spawnSubagent(parent, input, context = {}) {
   return startAssignment(source, payload, { executor: selection, role: 'executor', sharedEvidence: [...new Set(input.evidence || [])],
     ...(context.launch ? { launch: context.launch } : {}),
     subagent: { definition, invocation, ...(routing ? { routing } : {}), chatRunId: context.goalMode ? null : context.runId, taskContext,
-      budget: context.goalMode ? source.goal?.tokenBudget : context.tokenBudget ?? null } });
+      workerBudget, budget: context.goalMode ? source.goal?.tokenBudget : context.tokenBudget ?? null } });
 }
 
 export function subagentStatus(parent, id) {

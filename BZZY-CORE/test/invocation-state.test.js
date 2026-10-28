@@ -58,10 +58,12 @@ test('the bounded invocation projection shows only direct-parent safe metadata a
   const value = sessionInvocations(parent.id);
   assert.equal(value.version, 1); assert.equal(value.truncated, false); assert.equal(value.agents.length, 2);
   const a = value.agents.find(item => item.id === named.id), b = value.agents.find(item => item.id === generic.id);
-  assert.deepEqual(a, { id: named.id, parentSessionId: parent.id, name: 'http-analyst', specialist: true,
+  assert.deepEqual(Object.fromEntries(['id', 'parentSessionId', 'name', 'specialist', 'provider', 'model', 'round', 'state', 'closure'].map(key => [key, a[key]])), { id: named.id, parentSessionId: parent.id, name: 'http-analyst', specialist: true,
     provider: 'codex', model: 'fixture-model', round: 1, state: 'awaiting_review', closure: 'open' });
   assert.equal(b.name, 'Reviewer'); assert.equal(b.specialist, false); assert.equal(b.round, 2); assert.equal(b.state, 'needs_context');
-  assert.doesNotMatch(JSON.stringify(value), /PRIVATE_|instructions|contract|workspace|report|error/);
+  assert.doesNotMatch(JSON.stringify(value), /PRIVATE_|instructions|contract|workspace|error/);
+  assert.equal(a.budget.mode, 'fixed'); assert.equal(a.budget.complete, false); assert.equal(a.parentState, 'idle');
+  assert.deepEqual(a.result, { saved: false, missingReport: null, reportArtifactId: null });
   assert.equal(database().prepare('SELECT total_changes() AS n').get().n, before);
   assert.equal(listRecords('execution').length, 0);
 });

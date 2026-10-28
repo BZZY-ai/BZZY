@@ -104,6 +104,44 @@ library; `bzzy subagents list|show|create|update|delete` provides JSON managemen
 See [subagent instructions and limits](../../BZZY-CORE/docs/SUBAGENTS.md). These
 definitions are separate from persistent iPhone Agents.
 
+Chat labels the parent assistant **Main**, named specialists **Agent · name**
+and other children **Worker** or **Reviewer**, even when they use the same
+model. Tool calls nest under the named Agent when its assignment is available;
+skill receipts show which actor loaded them. Compact activity rows retain actor
+identity in ordinary and minimal chat and rebuild from saved events after
+reopening or compaction. Original assistant bodies and response copy targets
+remain intact. Older events without enough identity use an explicit worker ID
+instead of guessing a name from the model.
+
+Agent rows show Core's recorded tokens used versus the current allowance,
+runtime used versus its allowance, incomplete usage and conservative charges
+when applicable. **Report saved**, **Report missing**, the next main-review step
+and **Main state** appear only when Core supplies those fields. **Partial
+handoff** describes an allocation checkpoint with work returned to the main
+assistant, independently of the final goal outcome. Missing usage or liveness
+does not become an assertion that the main assistant continued successfully.
+
+Open **Settings → BZZY Core → Agent execution** to choose **Adaptive** or
+**Fixed** mode, initial tokens/runtime, and maximum tokens/runtime. Adaptive
+workers may request bounded extensions; fixed workers keep the initial
+allocation. A maximum can be a positive whole number or **unlimited**. Unlimited
+removes only the host ceiling: the parent goal's overall budget and explicit
+specialist-definition limits still apply. Runtime values use seconds.
+
+Edits remain a draft until **Save changes for new goals**. Saving starts no work
+and leaves existing goals pinned to their original policy. For a paused or idle
+current goal, **Apply saved settings to current goal** offers a separate
+confirmation for future workers only. Existing worker allowances, permissions,
+scope and the goal's overall budget remain unchanged. Unsaved edits must be
+saved before that action is available. The settings page works while Core is
+stopped and refuses stale host, terminal, project, goal or policy contexts.
+
+After an update, reload the CLI to see these controls. Existing runner processes
+keep their loaded implementation until stopped. To adopt the saved policy in
+an existing goal, pause it, explicitly apply the policy, then resume through the
+normal goal flow. Neither updating, saving defaults nor applying the policy
+resumes work automatically.
+
 From chat, `/create-skill <requirements>` and `/create-agent <requirements>` ask
 for a lowercase hyphenated name and use that chat's current provider, model and
 effort. These explicit creation commands publish validated definitions globally
@@ -729,7 +767,7 @@ or launch `bzzy --settings` directly. It includes hidden API-key save/replacemen
 for Core's API-key providers, including Experiential Labs, and device
 pairing using the bundled Core Relay gateway. The main menu includes
 **API keys**, **Default BZZY folder**, **Pair iPhone**, **Default models** and **BZZY Core**.
-Open BZZY Core for status, Start, Stop, Restart, **Gmail / email access** and **Export Library / Import Library**.
+Open BZZY Core for status, Start, Stop, Restart, **Agent execution**, **Gmail / email access** and **Export Library / Import Library**.
 Stop leaves Settings usable. The BZZY Core page also provides **Update
 BZZY CLI + Core**, which uses the same checked updater and reloads this terminal
 with chat and draft retained. Start/Restart preserve paused work. Leaving

@@ -26,6 +26,7 @@ import { digest, getRecord, listRecords } from '../database.js';
 import { delegationUsage } from '../delegation-usage.js';
 import { recordWorkObservation } from '../episode.js';
 import { hydrateModelContext } from '../model-context.js';
+import { observeRunUsage } from '../usage-ledger.js';
 
 export { codexHome } from '../auth.js';
 
@@ -381,10 +382,17 @@ export class CodexEngine {
         let refreshEpoch;
         const budgetSession = this.session.goal.createdAt ? this.session : { ...this.session,
           goal: { ...this.session.goal, createdAt: '9999-12-31T23:59:59.999Z' } };
-        const budget = nativeGoalTokenBudget(this.session.goal, delegationUsage(budgetSession).delegatedTokens);
+        const observedUsage = delegationUsage(budgetSession);
+        if (this.session.goal.tokenBudget != null && observedUsage.unboundedUnknown) throw markBackendStartupFailure(Object.assign(new Error('This goal has unresolved model usage without a bounded allowance. Reconcile its accounting before resuming a finite token budget.'), { code: 'GOAL_TOKEN_BUDGET_UNCERTAIN' }), 'budget_admission');
+        const budget = nativeGoalTokenBudget(this.session.goal, observedUsage.chargedDelegatedTokens);
+        const conservativeSupervisorCharge = Math.max(0, observedUsage.chargedSupervisorTokens - (observedUsage.supervisorTokens || 0));
+        if (this.session.goal.tokenBudget != null) {
+          budget.remainingTokens = Math.min(budget.remainingTokens, Math.max(0, this.session.goal.tokenBudget - observedUsage.chargedTotalTokens));
+          budget.nativeBudget = Math.max(0, budget.nativeBudget - conservativeSupervisorCharge);
+        }
         const nativeBudget = budget.nativeBudget;
         recordBackendDiagnostics(this.session, { method: 'goal-budget-admission', outcome: budget.remainingTokens === 0 ? 'rejected' : 'admitted', budgetState: budget });
-        if (budget.remainingTokens === 0) throw Object.assign(new Error('This goal has exhausted its aggregate token budget, including specialist and delegate usage. Raise the authorized goal budget before resuming.'), { code: 'GOAL_TOKEN_BUDGET_EXHAUSTED' });
+        if (budget.remainingTokens === 0) throw markBackendStartupFailure(Object.assign(new Error('This goal has exhausted its aggregate token budget, including specialist and delegate usage. Raise the authorized goal budget before resuming.'), { code: 'GOAL_TOKEN_BUDGET_EXHAUSTED' }), 'budget_admission');
         if (resumeGoal && this.session.goal.tokenBudget != null) params.tokenBudget = nativeBudget;
         if (!resumeGoal || this.session.conversationHandoff?.pending) {
           refreshEpoch = this.session.nativeContext?.refresh?.epoch;
@@ -434,6 +442,7 @@ export class CodexEngine {
     const tokens = (this.session.goal.nativeTokenOffset || 0) + goal.tokensUsed;
     Object.assign(this.session.goal, { nativeStatus: goal.status, status: goal.status === 'complete' ? 'verifying' : goal.status, nativeGoalId: goal.id || goal.goalId,
       nativeTokensUsed: tokens, tokensUsed: tokens + (this.session.goal.delegatedTokensUsed || 0), timeUsedSeconds: goal.timeUsedSeconds });
+    observeRunUsage(this.session, this.options.toolHost?.context?.runId, { nativeGoal: true });
     saveSession(this.session);
     this.ui.event('goal', { status: goal.status, tokensUsed: tokens });
   }
@@ -475,6 +484,7 @@ export class CodexEngine {
     if (['item/started', 'item/completed', 'item/commandExecution/outputDelta', 'turn/started', 'turn/completed', 'thread/compacted'].includes(method) && params.item?.type !== 'reasoning') this.ui.event('backend', { method, params });
     if (method === 'thread/tokenUsage/updated') {
       this.session.usage = { ...(this.session.usage || {}), tokens: (this.session.engineTokenOffset || 0) + (params.tokenUsage?.total?.totalTokens || 0), available: true, source: 'backend-reported' };
+      observeRunUsage(this.session, this.options.toolHost?.context?.runId);
       this.ui.event('usage.updated', { provider: this.session.provider, model: this.session.model, ...this.session.usage, detail: params.tokenUsage?.total || null });
       saveSession(this.session);
       if (this.options.tokenBudget && !this.operation?.goal && this.session.usage.tokens >= this.options.tokenBudget) this.interrupt('token_limit').catch(() => {});

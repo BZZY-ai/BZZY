@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { recordInvocationEvent, reconcileInvocationEntries, invocationEntryLayout } from '../src/invocation-ui.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { createTerminalTheme } from '../src/terminal-theme.js';
+import { ActorProjection } from '../src/actor-ui.js';
 
 const sessionId = '11111111-2222-3333-4444-555555555555', other = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const receipt = (overrides = {}) => ({ id: 'receipt-one', kind: 'skill', sessionId, rootSessionId: sessionId, name: 'evidence-first', scope: 'project', seq: 1, ...overrides });
@@ -17,7 +18,7 @@ test('actual skill receipts create one loaded card, including validated worker-t
   assert.equal(record(entries, 'core.usage', receipt()).changed, true);
   assert.equal(record(entries, 'core.usage', receipt()).changed, false);
   assert.equal(entries.length, 1); assert.equal(entries[0].state, 'loaded');
-  assert.match(entries[0].text, /^Skill · evidence-first · Loaded · project$/);
+  assert.match(entries[0].text, /^Skill · evidence-first · Loaded · project · Main$/);
   assert.equal(record(entries, 'core.usage', receipt({ id: 'worker-receipt', sessionId: other })).changed, true);
   assert.equal(entries[1].actorSessionId, other);
   assert.equal(record(entries, 'core.usage', receipt({ id: 'foreign-receipt', sessionId: other, rootSessionId: other })).handled, false);
@@ -138,4 +139,36 @@ test('compact invocation layouts preserve Unicode geometry, sanitize controls an
   assert.doesNotMatch(entries[0].text, /\x1b|\n/);
   const plain = createTerminalTheme({ isTTY: true }, { NO_COLOR: '1' });
   assert.match(invocationEntryLayout(entries[2], 80, plain).lines.map(clean).join(' '), /Skill.*Loaded/);
+});
+
+test('duplicate named workers and generic same-role actors retain distinct display identities', () => {
+  const actors = new ActorProjection();
+  for (const actorSessionId of ['worker-one', 'worker-two']) actors.event('worker.tool', {
+    workerSessionId: actorSessionId, actorRole: 'subagent', actorName: 'http-analyst',
+  }, [], { sessionId });
+  assert.match(actors.for('worker-one', sessionId).label, /Agent · http-analyst.*worker-o/);
+  assert.match(actors.for('worker-two', sessionId).label, /Agent · http-analyst.*worker-t/);
+  assert.notEqual(actors.for('worker-one', sessionId).label, actors.for('worker-two', sessionId).label);
+  actors.event('activity', { actorSessionId: 'reviewer-one', actorRole: 'reviewer', actorName: 'Reviewer' }, [], { sessionId });
+  assert.match(actors.for('reviewer-one', sessionId).label, /Reviewer · Reviewer · reviewer/);
+});
+
+test('partial handoff presentation cannot hide a final review or leak previous-round report state into a followup', () => {
+  const progress = { stopReason: 'allocation_checkpoint', parentState: 'running',
+    budget: { tokensUsed: 18000, tokenLimit: 20000, elapsedSeconds: 250, runtimeLimitSeconds: 300, complete: true },
+    result: { saved: true, reportArtifactId: 'previous-report' } };
+  for (const outcome of ['accepted', 'rejected', 'inconclusive']) {
+    const entries = []; record(entries, 'assignment.created', assignment());
+    reconcileInvocationEntries(entries, snapshot([agent({ state: 'awaiting_review', ...progress })]), { sessionId });
+    assert.match(entries[0].text, /Partial handoff/);
+    record(entries, 'assignment.reviewed', { assignmentId: 'assignment-one', round: 1, outcome, seq: 4 });
+    assert.ok(entries[0].text.includes(outcome[0].toUpperCase() + outcome.slice(1)));
+    assert.doesNotMatch(entries[0].text, /Partial handoff/);
+  }
+  const entries = []; record(entries, 'assignment.created', assignment());
+  reconcileInvocationEntries(entries, snapshot([agent({ state: 'awaiting_review', ...progress })]), { sessionId });
+  record(entries, 'assignment.followup', { assignmentId: 'assignment-one', round: 2, seq: 5 });
+  assert.match(entries[0].text, /Starting.*round 2/); assert.doesNotMatch(entries[0].text, /Partial handoff/);
+  const text = invocationEntryLayout(entries[0], 100, createTerminalTheme({ isTTY: false }, {})).lines.map(clean).join('\n');
+  assert.doesNotMatch(text, /Report saved|previous-report|18,000|Runtime 250|Main state/);
 });

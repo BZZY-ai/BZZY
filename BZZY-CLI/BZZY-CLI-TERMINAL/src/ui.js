@@ -24,7 +24,8 @@ import { shareSavedSession, deleteSavedSession } from './session-browser.js';
 import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 import { cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { sessionProjectLocation, sessionProjectDetails } from './session-project-path.js';
-import { recordInvocationEvent, reconcileInvocationEntries } from './invocation-ui.js';
+import { recordInvocationEvent, reconcileInvocationEntries, attributeInvocationActors, invocationEntryLayout } from './invocation-ui.js';
+import { ActorProjection } from './actor-ui.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
@@ -49,6 +50,7 @@ export class UI {
     this.promptQueue = Promise.resolve();
     this.cursors = new Map();
     this.messageStreams = new Map();
+    this.actors = new ActorProjection();
     this.launchYolo = yolo; this.readOnlyExecution = readOnly; this.sessionPermissionStates = new Map();
     this.updateHandoff = updateHandoff;
     if (updateHandoff) { this.sessionId = updateHandoff.sessionId; this.activeTab = updateHandoff.activeTab; }
@@ -113,6 +115,7 @@ export class UI {
   setSession(id, mode = 'CONTROL') {
     if (this.sessionId !== id) {
       this.invocationEntries = [];
+      this.actors = new ActorProjection();
       this.tabs = null; this.activeTab = null; this.tui?.clear();
       this.skillPreview = null; this.skillHistoryState = null; this.skillPromotionDraft = null; this.skillSyncDetails = false;
       cancelDefinitionBundle(this);
@@ -139,8 +142,12 @@ export class UI {
     this.refreshSessionProjectLocation();
     if (snapshot.permissions) this.sessionPermissionStates.set(this.sessionId || snapshot.session?.id, snapshot.permissions.yolo === true);
     this.tui?.update(snapshot);
-    if (!this.tui && !this.json) for (const entry of reconcileInvocationEntries(this.invocationEntries || [], snapshot,
-      { sessionId: this.activeTab || this.sessionId })) this.writeInvocation(entry);
+    if (!this.tui && !this.json) {
+      const sessionId = this.activeTab || this.sessionId;
+      this.actors.snapshot(snapshot, { sessionId });
+      for (const entry of new Set([...reconcileInvocationEntries(this.invocationEntries || [], snapshot, { sessionId }),
+        ...attributeInvocationActors(this.invocationEntries || [], this.actors, { sessionId })])) this.writeInvocation(entry);
+    }
     if (this.accountStatusEnabled) {
       this.accountMonitor ||= new AccountStatusMonitor(status => { this.accountStatus = status; this.tui?.schedule(); });
       this.accountMonitor.update(snapshot.session || snapshot);
@@ -260,9 +267,11 @@ export class UI {
     if (this.tui) { this.tui.event(type, data); return; }
     if (this.json) { this.output.write(`${JSON.stringify({ type, ...data })}\n`); return; }
     const invocation = recordInvocationEvent(this.invocationEntries ||= [], type, data, { sessionId: this.activeTab || this.sessionId });
+    this.actors.event(type, data, this.invocationEntries, { sessionId: this.activeTab || this.sessionId });
+    const attributed = attributeInvocationActors(this.invocationEntries, this.actors, { sessionId: this.activeTab || this.sessionId });
     if (this.invocationEntries.length > 5000) this.invocationEntries.splice(0, 500);
     if (invocation.handled) {
-      if (invocation.changed && invocation.entry) this.writeInvocation(invocation.entry);
+      for (const entry of new Set([...(invocation.changed && invocation.entry ? [invocation.entry] : []), ...attributed])) this.writeInvocation(entry);
       return;
     }
     if (type === 'text' || type === 'peer.text') { this.assistantText(type, data); return; }
@@ -272,13 +281,17 @@ export class UI {
     if (type === 'activity') { this.activity = data.summary; this.renderFooter(); }
     // Invisible transport/usage events can interleave with a rich body. They
     // must not flush an incomplete root between its streamed chunks.
-    if (['tool', 'goal', 'error', 'worker.progress', 'activity', 'network.response', 'summary', 'execution.finished'].includes(type)
+    const actorMetadata = ['worker.tool', 'worker.progress', 'activity'].includes(type);
+    if (actorMetadata) { if (this.lineOpen) this.output.write('\n'); this.lineOpen = false; this.lastAssistantActor = null; }
+    else if (['tool', 'goal', 'error', 'network.response', 'summary', 'execution.finished'].includes(type)
       || type === 'backend' && /^(?:turn|item)\/completed$/.test(data.method || '') || data.message) this.newline();
-    if (type === 'tool') this.output.write(`  · ${clean(data.name)}${data.detail ? `  ${clean(data.detail).slice(0, 240)}` : ''}\n`);
+    const actor = this.actors.for(data.workerSessionId || data.actorSessionId || data.sessionId, this.activeTab || this.sessionId);
+    if (type === 'tool') this.output.write(`  · ${data.actorRole || data.actorSessionId ? actor.label + ' · ' : ''}${clean(data.name)}${data.detail ? `  ${clean(data.detail).slice(0, 240)}` : ''}\n`);
     else if (type === 'goal') this.output.write(`  goal ${data.status}${data.tokensUsed != null ? ` · ${data.tokensUsed} tokens` : ''}\n`);
     else if (type === 'error') this.error.write(`${clean(data.message)}\n`);
-    else if (type === 'worker.progress') this.output.write(`  [${clean(data.agent || data.workerSessionId?.slice(0, 8) || 'worker')}] ${clean(data.name || data.message || data.status || data.type)}\n`);
-    else if (type === 'activity') this.output.write(`  ◉ ${clean(data.message || data.summary)}\n`);
+    else if (type === 'worker.progress') this.output.write(`  [${actor.label}] ${clean(data.name || data.message || data.status || data.type)}\n`);
+    else if (type === 'worker.tool') this.output.write(`  [${actor.label}] ${clean(data.label || 'Tool')}${data.detail ? ` · ${clean(data.detail).slice(0, 240)}` : ''} · ${data.phase === 'completed' ? 'returned' : data.phase === 'failed' ? 'failed' : data.phase === 'stopped' ? 'stopped · result unknown' : 'running'}\n`);
+    else if (type === 'activity') this.output.write(`  ◉ ${actor.label} · ${clean(data.message || data.summary)}\n`);
     else if (type === 'network.response') this.output.write(`  ↔ ${clean(data.method)} ${clean(data.url)} → ${data.status} · ${data.durationMs}ms\n`);
     else if (type === 'debate.message') {
       this.newline();
@@ -299,21 +312,23 @@ export class UI {
   writeInvocation(entry) {
     // Metadata must not flush an unfinished structured assistant body.
     if (this.lineOpen) this.output.write('\n');
-    this.output.write('  · ' + entry.text + '\n'); this.lineOpen = false;
+    const theme = createTerminalTheme(this.output, process.env, this.colorPalette);
+    this.output.write(invocationEntryLayout(entry, Math.max(20, this.output.columns || 100), theme).lines.join('\n') + '\n'); this.lineOpen = false; this.lastAssistantActor = null;
   }
 
   assistantPrefix(stream) {
-    if (!stream.peer) return '';
+    if (!stream.peer && !stream.attributed) return '';
     const width = Math.max(4, Math.min(1000, this.output.columns || 80));
-    return `[${clip(stream.agent, Math.max(1, width - 4))}] `;
+    return `[${clip(stream.attributed ? stream.actorLabel : stream.agent, Math.max(1, width - 4))}] `;
   }
 
   // Call only with sanitized ordinary text or locally rendered, validated SGR.
   emitAssistantText(text, stream) {
     if (!text) return;
-    if (stream.peer) {
+    if (!stream.started || this.lastAssistantActor !== stream.actorKey) {
       if (this.lineOpen) this.output.write('\n');
       this.output.write(this.assistantPrefix(stream));
+      stream.started = true; this.lastAssistantActor = stream.actorKey;
     }
     this.output.write(text); this.lineOpen = !clean(text).endsWith('\n');
   }
@@ -327,7 +342,9 @@ export class UI {
         const oldest = this.messageStreams.keys().next().value;
         this.flushAssistantText(this.messageStreams.get(oldest)); this.messageStreams.delete(oldest);
       }
-      stream = { mode: 'probe', buffer: '', peer: type === 'peer.text', agent: data.agent || data.childSessionId || data.sessionId || 'Agent' };
+      const actor = this.actors.for(data.childSessionId || data.actorSessionId || data.sessionId, this.activeTab || this.sessionId);
+      stream = { mode: 'probe', buffer: '', peer: type === 'peer.text', agent: actor.name, actorLabel: actor.label, actorKey: actor.key,
+        attributed: Boolean(data.actorRole || data.actorSessionId) };
       this.messageStreams.set(key, stream);
     }
     const text = String(data.text ?? '');

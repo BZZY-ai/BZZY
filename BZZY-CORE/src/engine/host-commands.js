@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { getWorkerBudgetSettings } from './worker-budget.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config, getProvider, defaultSelection } from './providers.js';
@@ -133,7 +134,7 @@ export function newConversation(previous, options) {
 
 export function startConversationGoal(session, options, objective) {
   const previousGoal = session.goal;
-  prepareTask(session, options, objective); session.goal = newGoal(session.contract.objective, options.tokenBudget); saveSession(session);
+  prepareTask(session, options, objective); session.goal = newGoal(session.contract.objective, options.tokenBudget, { workerBudgetPolicy: getWorkerBudgetSettings() }); saveSession(session);
   session.acceptance = null; session.summary = null; session.failure = null; session.stopReason = null;
   if (previousGoal) putRecord('goal-history', previousGoal.id, { sessionId: session.id, ...previousGoal,
     supersededAt: new Date().toISOString(), supersededBy: session.goal.id });
@@ -222,7 +223,7 @@ export function createTaskSession(provider, options, prompt, { goal, initialCont
       if (workflow !== undefined) { putRecord('session', initial.id, initial, db); bindLaunchWorkflow(initial, workflow); }
       prepareTask(initial, taskOptions, prompt, { persist: false });
       initializeProject(initial);
-      if (goal && !initialContext) initial.goal = newGoal(initial.contract.objective, options.tokenBudget || initial.contract.limits.tokenBudget);
+      if (goal && !initialContext) initial.goal = newGoal(initial.contract.objective, options.tokenBudget || initial.contract.limits.tokenBudget, { workerBudgetPolicy: getWorkerBudgetSettings() });
       putRecord('session', initial.id, initial, db); appendEvent(initial.id, 'session.created', { sessionId: initial.id }, db); return { sessionId: initial.id };
     });
     session = loadSession(reserved.sessionId);
@@ -234,14 +235,14 @@ export function createTaskSession(provider, options, prompt, { goal, initialCont
     bindLaunchWorkflow(session, workflow);
     applySelections(session, options); prepareTask(session, taskOptions, prompt);
     initializeProject(session);
-    if (goal && !initialContext) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget);
+    if (goal && !initialContext) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget, { workerBudgetPolicy: getWorkerBudgetSettings() });
   }
   saveSession(session); return { session, existingExecution: false };
 }
 
 export function activateTaskGoal(session, options) {
   Object.assign(session, loadSession(session.id));
-  if (!session.goal) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget);
+  if (!session.goal) session.goal = newGoal(session.contract.objective, options.tokenBudget || session.contract.limits.tokenBudget, { workerBudgetPolicy: getWorkerBudgetSettings() });
   else if (session.goal.objective !== session.contract.objective.trim()) throw new Error('The saved goal does not match --goal. Use a new --request-id.');
   saveSession(session); return session;
 }

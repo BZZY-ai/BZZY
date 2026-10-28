@@ -145,15 +145,48 @@ Workers cannot recursively spawn agents. Core and native backend tools enforce
 that boundary. Subagent defaults are three concurrent workers per parent, up to
 four when the parent explicitly allows it, with a host cap of sixteen active
 assignment rounds and sixty-four new assignments per parent objective/chat scope.
-Parent contracts may lower these limits. Default worker limits are 300 seconds
-and 20,000 tokens; definitions/invocations can lower them or explicitly configure
-bounded alternatives (at most 3,600 seconds and 200,000 tokens). Parent budgets
-also reserve remaining allocations across concurrent specialists.
+Parent contracts may lower these limits. New owner goals pin the worker policy
+from **CLI Settings → BZZY Core → Agent execution**. Its initial allocation is
+300 seconds and 20,000 tokens. **Adaptive** permits the supervisor to extend an
+allocation after inspecting new progress evidence; **Fixed** keeps the admitted
+initial allowance. Settings can set a host maximum or remove that host ceiling.
+The parent's overall budget and explicit definition/invocation limits still
+apply. Definitions/invocations can configure initial values up to 3,600 seconds
+and 200,000 tokens. Parent accounting reserves concurrent worker allocations
+and adaptive review headroom before admitting or extending work.
+
+Settings changes apply to new goals and chat executions. Old goals keep their
+saved policy (legacy goals remain fixed). The owner can explicitly apply saved
+settings to future workers of a paused goal; this neither rewrites an existing
+worker's allowance nor resumes execution. Imported host allocation policy is
+discarded. Account, tool, scope, workflow and acceptance permissions never come
+from an allocation policy.
+
+`get_execution_budget` returns live measured/charged usage and accounting
+completeness. A near-limit warning asks the worker to save evidence and return a
+partial handoff before the hard allocation ends. An adaptive partial handoff
+stops that round for supervisor review. Warning delivery and timely reports
+depend on backend support and available usage signals; the hard stop remains.
+The parent alone can call `extend_assignment_budget`, using an idempotent
+request, the current allocation revision, bounded token/time increments and
+intact progress evidence it actually inspected. Extensions recheck the live
+parent, pinned/enabled specialist, routing, owner ceilings and available parent
+budget. They do not start another worker. A later explicit `followup_assignment`
+continues the same conversation and evidence within its updated allocation.
+Reusing already-consumed progress cannot justify another extension.
+
+`Budget reached` means the admitted token allocation ended; `Timed out` means
+its runtime ended. Saved partial text, artifacts and workspace changes remain
+available, but a structured worker report may be missing. Neither status proves
+the task succeeded or the tested behavior is safe. The parent reviews and
+replans; it does not reset spent usage or blindly retry an exhausted worker.
 
 Existing assignment operations provide status, bounded waits, cancellation,
 missing-context questions, explicit follow-ups, evidence inspection and review.
 Specialist progress and lifecycle events appear in the parent conversation and
-remain durable for replay. The Agents library shows invocation details. Active
+remain durable for replay. Compact typed receipts also enter session memory,
+including limit stops, missing reports, allocation changes and review references;
+raw worker/tool payloads stay outside compaction material. The Agents library shows invocation details. Active
 workers stop when their parent execution ends or pauses. Core's operator stop
 and recovery cover the same assignment records; recovery never automatically
 replays an orphaned worker. A later explicit follow-up can continue a stopped

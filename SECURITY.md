@@ -31,6 +31,26 @@ parent stop/recovery retains durable assignment records without replay. Existing
 native terminal read-isolation limits still apply; copies are not a blanket host
 confidentiality sandbox. See BZZY-CORE/docs/SUBAGENTS.md.
 
+Specialist allocation extensions require the live owner supervisor, the current
+allocation revision and intact progress evidence inspected in that assignment
+round. Extensions cannot widen an owner/definition ceiling, parent budget or
+permission policy, and imported policies or progress receipts do not authorize
+renewal. A stopped worker remains subject to supervisor review; a partial report
+or a larger allowance is never proof that its findings or parent goal are valid.
+
+Core-owned usage.run and usage.goal receipts separate per-run token attribution
+from lifetime conversation counters. They are local accounting state and are
+excluded from portable project authority. Compatible normalized token receipts
+are reconciled idempotently; USD values and unrelated billing fields are not
+token counters. Malformed or missing usage, including an unfinished receipt
+after interruption, cannot release a finished worker's bounded allocation as
+known zero. Trusted local
+pre-request failure receipts can establish zero new inference; an upstream error
+code or imported history cannot manufacture that proof. Unknown unbounded usage
+blocks a finite-budget continuation. Reported totals remain distinct from these
+conservative holds. Provider telemetry and stop handling can lag consumption;
+these controls do not promise an exact financial limit.
+
 Knowledge recall filters engagement identity and session ancestry before search;
 historical text does not authorize execution. Learning reviews use an empty
 private cwd and adapter-enforced no-tool backend profiles, bounded sanitized

@@ -71,10 +71,34 @@ Backfill rotates among sessions and yields after bounded parts/bytes/time.
 
 Masking joins the complete logical message before slicing excerpts. Unsealed
 native tails are excluded. Messages exceeding 128 KiB or 4,096 deltas receive an
-explicit derived omission marker; original history remains intact. Version 1
-derived maps are withheld and rebuilt into a new version 2 source generation;
+explicit derived omission marker; original history remains intact. Older
+derived maps are withheld and rebuilt into a new version 4 source generation;
 old nodes remain historical and stale summary jobs retire. Search retains ranges,
 hashes and completion provenance. Summaries never establish permissions or proof.
+
+The version 4 memory source merges conversation excerpts with allowlisted host
+assignment receipts by source event sequence. Specialist identities and versions,
+rounds, allocation warnings/extensions, limit stops, missing reports and review/
+evidence references survive as navigable historical data. Parent-assigned task
+previews retain which check was assigned and the focused objective of each
+follow-up. Complete original objectives are credential/email-masked before
+bounded exposure; raw context and worker prose stay excluded. Receipt IDs deduplicate
+replay; expanding a receipt rechecks its projection version, source hash and
+parent scope. Worker instructions, transcripts, raw tool results and account
+bindings are not copied into these receipts. A bounded current assignment view
+is rebuilt from Core after compaction separately from generated summaries. It
+cannot inherit a stale historical running state, reactivate imported work or
+replace current execution checks. Volatile accounting belongs to the live budget
+view rather than the structural task-state revision.
+
+New goals can use owner-configured adaptive worker allocations with partial
+handoffs, inspected progress and explicit supervisor extensions inside the parent
+budget. Existing goal/worker contracts remain pinned until an authorized owner
+action applies a future-worker policy or an admitted adaptive extension changes
+only its allocation. An update does not silently enlarge old fixed assignments.
+Source-local memory trees, compactor jobs, usage ledgers and extension-progress
+receipts do not cross project imports; historical messages and saved outcomes
+remain available for recipient-side indexing without automatic execution.
 
 ## Retention and learning
 

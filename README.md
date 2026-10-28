@@ -37,6 +37,26 @@ such as HTTP analysts or finding reviewers. Core invokes them from normal chats
 and goals across supported models, with separate contexts, bounded parallelism
 and evidence review. Persistent iPhone Agents remain a separate resource type.
 
+Chat identifies **Main**, named **Agents** and other **Workers** independently
+of their model. Activity, tool trees and skill-load rows retain that attribution
+when history is replayed or compacted, including in minimal chat. Worker rows
+show Core's available token/runtime allowances, incomplete usage, saved or
+missing reports and the main session's recorded state. A partial report handoff
+does not establish goal completion.
+
+Use **Settings → BZZY Core → Agent execution** for initial token/runtime
+allocations, adaptive or fixed mode, and optional hard ceilings. Adaptive
+allocations can be renewed within the owner's ceilings and parent budget;
+**Unlimited host ceiling** leaves the goal's overall budget and explicit
+specialist-definition limits in force. Save changes defaults for new goals and
+starts no work. Existing goals keep their pinned policy unless the owner
+explicitly chooses **Apply saved settings to current goal** while paused or idle.
+That action affects future workers, preserving current worker allowances,
+permissions, scope and the goal's overall budget. After updating and reloading
+the CLI, pause an existing goal before applying and resuming it; an already
+running process keeps its loaded code until it stops. Updating does not patch
+or resume an active runner automatically.
+
 While writing a chat message or `/goal`, type `$` to choose an enabled skill or
 specialist agent from the current workspace's catalog. Type to filter, then use
 Enter, Tab or a click to insert its reference without sending the draft.

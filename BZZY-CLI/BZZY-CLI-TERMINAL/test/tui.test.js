@@ -19,7 +19,7 @@ test('consecutive replies share one speaker heading and plain rails without merg
     ui.event('info', { message: 'Background checkpoint saved' });
     ui.event('text', { text: 'Second reply', itemId: 'second' });
     let lines = ui.tui.content(100), text = lines.map(clean).join('\n');
-    assert.equal((text.match(/AGENT · bzzy/g) || []).length, 1);
+    assert.equal((text.match(/MAIN · bzzy/g) || []).length, 1);
     assert.match(text, /│ First reply/); assert.match(text, /│ Second reply/);
     assert.equal(ui.tui.entries.filter(entry => entry.kind === 'assistant').length, 2);
     const copied = new Set(ui.tui.contentHits.filter(hit => hit.type === 'response').map(hit => hit.entry.text));
@@ -29,7 +29,7 @@ test('consecutive replies share one speaker heading and plain rails without merg
     ui.event('text', { text: 'Third reply', itemId: 'third' });
     ui.event('peer.text', { text: 'Specialist reply', childSessionId: 'worker', agent: 'Reviewer', itemId: 'worker-reply' });
     text = ui.tui.content(100).map(clean).join('\n');
-    assert.equal((text.match(/AGENT · bzzy/g) || []).length, 2);
+    assert.equal((text.match(/MAIN · bzzy/g) || []).length, 2);
     assert.match(text, /YOU/); assert.match(text, /AGENT · Reviewer/);
   } finally { ui.close(); }
 });
@@ -154,7 +154,7 @@ test('user and agent turns retain labeled, distinct rails in RGB, basic-color an
       ui.tui.theme = createTerminalTheme(output, { FORCE_COLOR: level }); ui.tui.entryLayouts = new WeakMap();
       const user = ui.tui.entryLayout({ kind: 'user', text: 'Review the café 🐝 and 漢字 layout.', goal: true }, 66).lines;
       const agent = ui.tui.entryLayout({ kind: 'assistant', label: 'Codex', text: 'I checked the layout.\nThe saved history stays intact.' }, 66).lines;
-      assert.match(user.map(clean).join('\n'), /YOU · GOAL/); assert.match(agent.map(clean).join('\n'), /AGENT · Codex/);
+      assert.match(user.map(clean).join('\n'), /YOU · GOAL/); assert.match(agent.map(clean).join('\n'), /MAIN · bzzy/);
       assert.match(clean(user[1]), /▎ Review the café/); assert.match(clean(agent[1]), /│ I checked the layout/);
       assert.doesNotMatch(agent.map(clean).join('\n'), /\[Copy\]/);
       assert.ok([...user, ...agent].every(line => cellWidth(line) <= 66));

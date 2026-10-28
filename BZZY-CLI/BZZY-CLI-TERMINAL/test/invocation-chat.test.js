@@ -11,7 +11,10 @@ import { createTerminalTheme } from '../src/terminal-theme.js';
 import { createChatSession } from '@bzzy/core/engine/host-commands.js';
 import { getProvider } from '@bzzy/core/engine/providers.js';
 import { saveSubagentDefinition } from '@bzzy/core/engine/subagent-definitions.js';
-import { listRecords } from '@bzzy/core/engine/database.js';
+import { listRecords, appendEvent, events } from '@bzzy/core/engine/database.js';
+import { createSession, saveSession } from '@bzzy/core/engine/store.js';
+import { RunnerUI } from '@bzzy/core/engine/runtime-ui.js';
+import { recordActivity } from '@bzzy/core/engine/activity.js';
 
 let directory, previousHome, session, terminals;
 test.beforeEach(() => {
@@ -137,4 +140,83 @@ test('plain output leaves structured reply buffering intact and JSON emits the o
   const events = json.written.trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(events.find(event => event.type === 'core.usage'), { type: 'core.usage', ...receipt });
   assert.deepEqual(events.find(event => event.type === 'text'), { type: 'text', itemId: 'json-rich', text: body });
+});
+
+test('saved main and same-model named worker activity retains attribution across replay, compaction and minimal chat', () => {
+  const job = agent('http-analyst'), second = agent('scope-reviewer');
+  const child = createSession(getProvider('codex'), directory, session.model), peer = createSession(getProvider('codex'), directory, session.model);
+  Object.assign(child, { parentSessionId: session.id, role: 'executor', subagentDefinition: job.subagentDefinition }); saveSession(child);
+  Object.assign(peer, { parentSessionId: session.id, role: 'executor', subagentDefinition: second.subagentDefinition }); saveSession(peer);
+  appendEvent(session.id, 'assignment.created', job); appendEvent(session.id, 'assignment.created', second);
+  const main = new RunnerUI(session.id), worker = new RunnerUI(child.id, { parentSessionId: session.id, assignmentId: job.id, agent: job.subagentDefinition.name });
+  const peerUI = new RunnerUI(peer.id, { parentSessionId: session.id, assignmentId: second.id, agent: second.subagentDefinition.name, peer: true });
+  const original = '<message version="1"><p>Main keeps the original response.</p></message>';
+  main.event('text', { text: original, itemId: 'main-response' });
+  main.event('backend', { method: 'tool.started', params: { id: 'main-read', name: 'Read', input: { file_path: 'main.md' } } });
+  recordActivity(session, { summary: 'Reviewing the target scope', details: 'Scope check in progress.' }, main);
+  worker.event('backend', { method: 'tool.started', params: { id: 'worker-read', name: 'Read', input: { file_path: 'worker.md', content: 'PRIVATE_CONTENT_MUST_NOT_APPEAR' } } });
+  recordActivity(child, { summary: 'Comparing the response controls', details: 'Worker observation.' }, worker);
+  appendEvent(session.id, 'core.usage', skill({ sessionId: child.id, id: 'worker-skill-receipt', name: 'response-analysis' }));
+  appendEvent(session.id, 'core.usage', skill({ id: 'main-skill-receipt', name: 'scope-check' }));
+  peerUI.event('text', { text: 'The scope reviewer is a separate actor.', itemId: 'peer-response' });
+  main.event('backend', { method: 'thread/compacted', params: {} });
+  const saved = events(session.id), beforeCount = saved.length;
+  const { ui, output } = terminal({ minimal: true });
+  const replay = () => { for (const event of saved) ui.event(event.type, { ...event.data, seq: event.seq, eventSessionId: session.id }); };
+  try {
+    replay();
+    const content = ui.tui.content(100).map(clean).join('\n');
+    assert.match(content, /MAIN · bzzy/); assert.match(content, /AGENT · scope-reviewer/);
+    assert.match(content, /Main · Reviewing the target scope/); assert.match(content, /Agent · http-analyst · Comparing/);
+    assert.match(content, /Main · Tool calls/); assert.match(content, /worker\.md/);
+    assert.match(content, /By Agent · http-analyst/); assert.match(content, /By Main/);
+    assert.doesNotMatch(content, /PRIVATE_(?:OBJECTIVE|CONTEXT|CONTENT)/);
+    assert.equal(ui.tui.entries.find(entry => entry.kind === 'assistant').text, original);
+    assert.equal(ui.tui.value, 'Keep my unsent investigation draft');
+    for (const width of [40, 80, 140]) { output.columns = width; ui.tui.render(); assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < width)); }
+    ui.tui.clear(); replay(); assert.match(ui.tui.content(100).map(clean).join('\n'), /By Agent · http-analyst/);
+    const plain = terminal({ tty: false });
+    for (const event of saved) plain.ui.event(event.type, { ...event.data, seq: event.seq, eventSessionId: session.id });
+    plain.ui.newline();
+    assert.match(plain.written, /\[Main\] Main keeps the original response/);
+    assert.match(plain.written, /\[Agent · http-analyst\].*worker\.md/);
+    assert.match(plain.written, /By Agent · http-analyst/);
+    assert.doesNotMatch(plain.written, /PRIVATE_(?:OBJECTIVE|CONTEXT|CONTENT)/);
+    assert.equal(events(session.id).length, beforeCount); assert.equal(listRecords('execution').length, 0);
+  } finally { main.close(); worker.close(); peerUI.close(); }
+});
+
+test('worker budget rows update even when status is unchanged and separate partial handoffs from missing results', () => {
+  const { ui } = terminal(), job = agent(); ui.event('assignment.created', job);
+  ui.updateSession(snapshot(job, 'running', { workerSessionId: randomUUID(), parentState: 'running',
+    budget: { tokensUsed: 18000, tokensCharged: 20000, tokenLimit: 20000, elapsedSeconds: 250, runtimeLimitSeconds: 300,
+      initialTokenBudget: 20000, complete: false, mode: 'adaptive', softReached: true, canRequestExtension: true },
+    result: { saved: false, missingReport: false } }));
+  let content = ui.tui.content(100).map(clean).join('\n');
+  assert.match(content, /Tokens ≥18,000 \/ 20,000.*incomplete/); assert.match(content, /Charged 20,000/);
+  assert.match(content, /Runtime 250s \/ 300s/); assert.match(content, /extension may be requested/); assert.match(content, /Main state · running/);
+  ui.updateSession(snapshot(job, 'awaiting_review', { parentState: 'running', stopReason: 'allocation_checkpoint',
+    budget: { tokensUsed: 19000, tokenLimit: 20000, elapsedSeconds: 260, runtimeLimitSeconds: 300, complete: true, mode: 'adaptive' },
+    result: { saved: true, reportArtifactId: 'artifact-fixture' } }));
+  content = ui.tui.content(100).map(clean).join('\n');
+  assert.match(content, /Partial handoff/); assert.match(content, /Report saved/); assert.match(content, /Next · main reviews/);
+  assert.doesNotMatch(content, /Budget reached|usage incomplete|Goal achieved/);
+  ui.updateSession(snapshot(job, 'awaiting_review', { parentState: 'paused', stopReason: 'interrupted',
+    result: { saved: false, missingReport: true, reportArtifactId: '/PRIVATE/PATH' },
+    budget: { tokensUsed: 19500, tokenLimit: 20000, elapsedSeconds: 270, runtimeLimitSeconds: 300, complete: false } }));
+  content = ui.tui.content(100).map(clean).join('\n');
+  assert.match(content, /19,500/); assert.match(content, /Report missing/); assert.match(content, /Main state · paused/);
+  assert.doesNotMatch(content, /PRIVATE\/PATH|Main.*continues|Report saved/);
+});
+
+test('interleaved worker activity and tools do not flush a main structured body in plain output', () => {
+  const term = terminal({ tty: false }), workerSessionId = randomUUID();
+  const body = '<message version="1"><p>One intact main response.</p></message>', split = body.indexOf('main');
+  term.ui.event('text', { actorSessionId: session.id, actorRole: 'main', actorName: 'BZZY', itemId: 'intact', text: body.slice(0, split) });
+  term.ui.event('worker.tool', { workerSessionId, actorSessionId: workerSessionId, actorRole: 'subagent', actorName: 'http-analyst', label: 'Read file', detail: 'worker.md', phase: 'started' });
+  term.ui.event('activity', { id: 'worker-progress', sessionId: workerSessionId, actorSessionId: workerSessionId, actorRole: 'subagent', actorName: 'http-analyst', summary: 'Reviewing the controls', status: 'running' });
+  assert.doesNotMatch(term.written, /<message|One intact/);
+  term.ui.event('text', { actorSessionId: session.id, actorRole: 'main', actorName: 'BZZY', itemId: 'intact', text: body.slice(split) }); term.ui.newline();
+  assert.match(term.written, /Agent · http-analyst/); assert.match(term.written, /\[Main\] One intact main response\./);
+  assert.doesNotMatch(term.written, /<message/);
 });

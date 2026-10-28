@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { home, writeJson } from './files.js';
 import { inspectSkill } from './skills.js';
+import { lockFile } from './store.js';
 
 const plain = value => value && typeof value === 'object' && !Array.isArray(value)
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -55,6 +56,20 @@ function checkRevision(value, expectedRevision) {
     fail('The private skill account policy changed. Reopen it before replacing it.', 'SKILL_ACCOUNT_POLICY_STALE');
   }
 }
+function mutate(operation) {
+  let release;
+  try {
+    release = lockFile(path.join(home(), 'config.json.lock'));
+    // Every shared config writer uses this lock. Read after acquiring it so an
+    // unrelated policy/permission change cannot be replaced by a stale copy.
+    return operation(configuration());
+  } catch (error) {
+    if (['SKILL_ACCOUNT_POLICY_INVALID', 'SKILL_ACCOUNT_POLICY_STALE'].includes(error.code)) throw error;
+    fail();
+  } finally {
+    if (release) { try { release(); } catch { fail(); } }
+  }
+}
 
 // Trusted host administration only. These methods are never model tools and
 // policies never enter skill packages, immutable versions or Library archives.
@@ -64,18 +79,22 @@ export function getSkillSignupAliases(identifier, options = {}) {
 }
 
 export function setSkillSignupAliases(identifier, value, options = {}) {
-  const approvedSignupAliases = aliases(value), skill = skillFor(identifier, options), config = configuration();
-  const previous = policyFor(config, skill.id); checkRevision(previous, options.expectedRevision);
-  const next = { skillId: skill.id, approvedSignupAliases, revision: (previous?.revision || 0) + 1 };
-  writeJson(path.join(home(), 'config.json'), { ...config, skillAccountPolicies: { ...config.skillAccountPolicies, [skill.id]: next } });
-  return structuredClone(next);
+  const approvedSignupAliases = aliases(value), skill = skillFor(identifier, options);
+  return mutate(config => {
+    const previous = policyFor(config, skill.id); checkRevision(previous, options.expectedRevision);
+    const next = { skillId: skill.id, approvedSignupAliases, revision: (previous?.revision || 0) + 1 };
+    writeJson(path.join(home(), 'config.json'), { ...config, skillAccountPolicies: { ...config.skillAccountPolicies, [skill.id]: next } });
+    return structuredClone(next);
+  });
 }
 
 export function clearSkillSignupAliases(identifier, options = {}) {
-  const skill = skillFor(identifier, options), config = configuration(), previous = policyFor(config, skill.id);
-  checkRevision(previous, options.expectedRevision);
-  if (!previous?.approvedSignupAliases.length) return { skillId: skill.id, cleared: false, revision: previous?.revision || 0 };
-  const next = { skillId: skill.id, approvedSignupAliases: [], revision: previous.revision + 1 };
-  writeJson(path.join(home(), 'config.json'), { ...config, skillAccountPolicies: { ...config.skillAccountPolicies, [skill.id]: next } });
-  return { skillId: skill.id, cleared: true, revision: next.revision };
+  const skill = skillFor(identifier, options);
+  return mutate(config => {
+    const previous = policyFor(config, skill.id); checkRevision(previous, options.expectedRevision);
+    if (!previous?.approvedSignupAliases.length) return { skillId: skill.id, cleared: false, revision: previous?.revision || 0 };
+    const next = { skillId: skill.id, approvedSignupAliases: [], revision: previous.revision + 1 };
+    writeJson(path.join(home(), 'config.json'), { ...config, skillAccountPolicies: { ...config.skillAccountPolicies, [skill.id]: next } });
+    return { skillId: skill.id, cleared: true, revision: next.revision };
+  });
 }

@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { database, getRecord, putRecord, digest, now, transaction } from './database.js';
 import { loadSession, sessionDeleted } from './store.js';
-import { sanitizeLearningText } from './learning.js';
+import { sanitizeLearningText, maskLearningText } from './learning.js';
 import { advanceConversationSource, conversationSourceStatus, conversationRedactionContext, conversationSQL } from './conversation-source.js';
+import { assignmentMemoryEventTypes, assignmentMemoryProjectionVersion, assignmentMemoryReceipt } from './assignment-memory.js';
+import { maskAssignmentTaskText, sanitizedTaskPreview } from './assignment-task.js';
 
 const META = 'core.session.memory', NODE = 'core.session.memory.node';
-const VERSION = 2, SOURCE_CHARS = 2048, LEAF_BYTES = 12000, LEAF_MESSAGES = 8, SUMMARY_BYTES = 2048;
+const VERSION = 4, SOURCE_CHARS = 2048, LEAF_BYTES = 12000, LEAF_MESSAGES = 8, SUMMARY_BYTES = 2048;
+const receiptTypes = assignmentMemoryEventTypes.map(type => `'${type}'`).join(',');
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
 const fail = (message, code = 'SESSION_MEMORY_SCOPE') => { throw Object.assign(new Error(message), { code }); };
 const { body, visible } = conversationSQL();
@@ -20,7 +23,7 @@ function source(value) {
   if (!sessionMemoryEligible(saved) || typeof value === 'object' && !sessionMemoryEligible(value)) fail('Session memory belongs only to this terminal conversation.');
   return saved;
 }
-const metaFor = id => { const meta = getRecord(META, id); return meta?.sourceVersion === 2 ? meta : null; };
+const metaFor = id => { const meta = getRecord(META, id); return meta?.sourceVersion === VERSION ? meta : null; };
 const key = (meta, level, index) => digest([VERSION, meta.sessionId, meta.generation, level, index]);
 const nodeHash = node => digest({ sessionId: node.sessionId, generation: node.generation, level: node.level, index: node.index,
   firstSeq: node.firstSeq, lastSeq: node.lastSeq, refs: node.refs || [], children: node.children || [], sourceHash: node.sourceHash });
@@ -35,6 +38,12 @@ function ownNode(session, id) {
 
 function original(ref, sessionId) {
   if (!Number.isSafeInteger(ref.seq) || !Number.isSafeInteger(ref.offset) || ref.offset < 0 || !Number.isSafeInteger(ref.length) || ref.length < 0 || ref.length > SOURCE_CHARS) fail('Invalid memory source.', 'SESSION_MEMORY_INTEGRITY');
+  if (ref.kind === 'assignment-receipt') {
+    const receipt = ref.projectionVersion === assignmentMemoryProjectionVersion && assignmentMemoryReceipt(sessionId, ref.seq);
+    const text = receipt && [...receipt.text].slice(ref.offset, ref.offset + ref.length).join('');
+    if (!receipt || receipt.id !== ref.receiptId || receipt.sha256 !== ref.sourceHash || receipt.type !== ref.type || digest(text) !== ref.hash) fail('Original assignment receipt is unavailable or changed.', 'SESSION_MEMORY_INTEGRITY');
+    return text;
+  }
   const row = database().prepare(`SELECT e.type, substr(${body},?,?) AS text FROM events e
     WHERE e.session_id=? AND e.seq=? AND ${visible}`).get(ref.offset + 1, ref.length, sessionId, ref.seq);
   if (!row || typeof row.text !== 'string' || row.type !== ref.type || digest(row.text) !== ref.hash) fail('Original memory source is unavailable or changed. Rebuild this session’s memory index.', 'SESSION_MEMORY_INTEGRITY');
@@ -43,8 +52,28 @@ function original(ref, sessionId) {
 
 function redactedOriginals(refs, sessionId, throughSeq) {
   const contexts = new Map(), overflow = [], output = [], omitted = new Set();
+  const display = (characters, marker) => {
+    let text = '', masking = false;
+    for (const character of characters) {
+      if (character === marker) { if (!masking) text += '[redacted]'; masking = true; }
+      else { text += character; masking = false; }
+    }
+    return text;
+  };
   for (const ref of refs) {
     original(ref, sessionId); // Always validate the immutable unredacted slice.
+    if (ref.kind === 'assignment-receipt') {
+      const full = assignmentMemoryReceipt(sessionId, ref.seq), masked = full.maskingContext
+        ? maskAssignmentTaskText(full.maskingContext) : maskLearningText(full.text);
+      const characters = [...masked.text].slice(ref.offset, ref.offset + ref.length);
+      // Task-bearing receipts fit one bounded source part. Keep a separate
+      // display bound because a short secret can expand to '[redacted]'. The
+      // complete original was masked before this prefix was selected.
+      const split = full.taskOffset === undefined ? characters.length : Math.max(0, full.taskOffset - ref.offset);
+      const text = display(characters.slice(0, split), masked.marker)
+        + (split < characters.length ? sanitizedTaskPreview(display(characters.slice(split), masked.marker)) || '' : '');
+      output.push({ ref, text }); continue;
+    }
     let context = contexts.get(ref.seq) || overflow.find(value => value.start < ref.seq && ref.seq < value.end);
     if (!context) {
       context = conversationRedactionContext(sessionId, ref, throughSeq);
@@ -94,30 +123,41 @@ export function indexSessionMemory(value, { throughSeq, force = false, maxParts 
   return atomic(db => {
     source(session);
     const old = getRecord(META, session.id);
-    if (old && old.sourceVersion !== 2) putRecord('core.session.memory.history', `${session.id}:${old.generation || 'legacy'}`, old, db);
-    const meta = metaFor(session.id) || { sessionId: session.id, version: VERSION, sourceVersion: 2, generation: randomUUID(), revision: 0,
+    if (old && old.sourceVersion !== VERSION) putRecord('core.session.memory.history', `${session.id}:${old.generation || 'legacy'}`, old, db);
+    const meta = metaFor(session.id) || { sessionId: session.id, version: VERSION, sourceVersion: VERSION, generation: randomUUID(), revision: 0,
       cursorSeq: 0, cursorOffset: 0, throughSeq: 0, leafCount: 0, pending: [], pendingBytes: 0, pendingMessages: 0 };
     meta.throughSeq = Math.max(meta.throughSeq, throughSeq);
     let parts = 0;
     while (parts < maxParts) {
-      const row = db.prepare(`SELECT e.seq,e.type,e.created_at, length(${body}) AS chars, json_extract(e.data,'$.itemId') AS itemId,
+      let row = db.prepare(`SELECT e.seq,e.type,e.created_at, length(${body}) AS chars, json_extract(e.data,'$.itemId') AS itemId,
         json_extract(e.data,'$.runId') AS runId,json_extract(e.data,'$.threadRef') AS threadRef,json_extract(e.data,'$.turnId') AS turnId
         FROM events e WHERE e.session_id=? AND e.seq>=? AND e.seq<=? AND ${visible} AND typeof(${body})='text'
         AND (e.seq>? OR ? > 0) ORDER BY e.seq LIMIT 1`).get(session.id, meta.cursorSeq, meta.throughSeq, meta.cursorSeq, meta.cursorOffset);
+      const receiptRow = db.prepare(`SELECT seq,type,created_at FROM events WHERE session_id=? AND seq>=? AND seq<=?
+        AND type IN (${receiptTypes}) AND (seq>? OR ?>0) ORDER BY seq LIMIT 1`)
+        .get(session.id, meta.cursorSeq, meta.throughSeq, meta.cursorSeq, meta.cursorOffset);
+      let receipt;
+      if (receiptRow && (!row || receiptRow.seq < row.seq)) {
+        row = receiptRow; receipt = assignmentMemoryReceipt(session, row.seq);
+        if (!receipt) { meta.cursorSeq = row.seq; meta.cursorOffset = 0; parts++; continue; }
+        row.chars = [...receipt.text].length;
+      }
       if (!row) { meta.cursorSeq = meta.throughSeq; meta.cursorOffset = 0; break; }
       const offset = row.seq === meta.cursorSeq ? meta.cursorOffset : 0;
-      const role = row.type === 'message.user' || row.type === 'question.answered' ? 'user' : 'assistant';
+      const role = receipt ? 'host-receipt' : row.type === 'message.user' || row.type === 'question.answered' ? 'user' : 'assistant';
       const previousSeal = row.runId && row.threadRef && row.itemId ? db.prepare(`SELECT coalesce(max(seq),0) AS seq FROM events
         WHERE session_id=? AND type='message.finalized' AND seq<? AND json_extract(data,'$.itemId') IS ?
         AND json_extract(data,'$.runId') IS ? AND json_extract(data,'$.threadRef') IS ? AND json_extract(data,'$.turnId') IS ?`).get(session.id, row.seq, row.itemId, row.runId, row.threadRef, row.turnId).seq : 0;
       const messageKey = row.type === 'text' ? row.itemId ? 'assistant:' + digest([row.runId, row.threadRef, row.turnId, row.itemId, previousSeal])
         : meta.lastType === 'text' ? meta.lastMessageKey : `assistant:${row.seq}` : `${row.type}:${row.seq}`;
       const length = Math.min(SOURCE_CHARS, row.chars - offset);
-      const text = db.prepare(`SELECT substr(${body},?,?) AS text FROM events e WHERE e.session_id=? AND e.seq=?`).get(offset + 1, length, session.id, row.seq).text;
+      const text = receipt ? [...receipt.text].slice(offset, offset + length).join('')
+        : db.prepare(`SELECT substr(${body},?,?) AS text FROM events e WHERE e.session_id=? AND e.seq=?`).get(offset + 1, length, session.id, row.seq).text;
       const bytes = Buffer.byteLength(text), newMessage = messageKey !== meta.lastMessageKey;
       if (meta.pending.length && (meta.pendingBytes + bytes > LEAF_BYTES || newMessage && meta.pendingMessages >= LEAF_MESSAGES || meta.pending.length >= 128)) appendLeaf(meta, db);
       meta.pending.push({ seq: row.seq, sourceId: `${session.id}:${row.seq}`, type: row.type, role, offset, length,
-        hash: digest(text), date: row.created_at });
+        hash: digest(text), date: row.created_at,
+        ...(receipt ? { kind: 'assignment-receipt', receiptId: receipt.id, projectionVersion: receipt.version, sourceHash: receipt.sha256 } : {}) });
       meta.pendingBytes += bytes; if (newMessage || meta.pendingMessages === 0) meta.pendingMessages++;
       meta.lastMessageKey = messageKey; meta.lastType = row.type;
       meta.cursorSeq = row.seq; meta.cursorOffset = offset + length;
@@ -135,9 +175,9 @@ export function pendingSessionMemoryNodes({ limit = 100, sessionId, offset = 0 }
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) fail('Invalid memory work page.');
   if (sessionId !== undefined) source(sessionId);
   const rows = database().prepare(`SELECT n.data FROM records n JOIN records m ON m.kind=? AND m.id=json_extract(n.data,'$.sessionId')
-    WHERE n.kind=? AND json_extract(m.data,'$.sourceVersion')=2 AND json_extract(n.data,'$.state')='pending' AND json_extract(n.data,'$.generation')=json_extract(m.data,'$.generation')
+    WHERE n.kind=? AND json_extract(m.data,'$.sourceVersion')=? AND json_extract(n.data,'$.state')='pending' AND json_extract(n.data,'$.generation')=json_extract(m.data,'$.generation')
     AND (? IS NULL OR json_extract(n.data,'$.sessionId')=?)
-    ORDER BY n.updated_at,n.id LIMIT ? OFFSET ?`).all(META, NODE, sessionId ?? null, sessionId ?? null, limit, offset).map(row => JSON.parse(row.data));
+    ORDER BY n.updated_at,n.id LIMIT ? OFFSET ?`).all(META, NODE, VERSION, sessionId ?? null, sessionId ?? null, limit, offset).map(row => JSON.parse(row.data));
   return rows.filter(node => { try { return Boolean(source(node.sessionId)); } catch { return false; } });
 }
 
@@ -242,14 +282,14 @@ export function expandSessionMemory(value, { id, offset = 0, limit = 8000 } = {}
   if (end === offset && offset < bytes.length) fail('Memory page is too short for one UTF-8 character.');
   return { id, sessionId: session.id, text: bytes.subarray(offset, end).toString('utf8'), offset, nextOffset: end, hasMore: end < bytes.length,
     sources: node.refs.map(ref => ({ sourceId: ref.sourceId, role: ref.role, characterOffset: ref.offset, characterLength: ref.length })),
-    provenance: 'original-conversation-excerpts', redacted: true };
+    provenance: node.refs.some(ref => ref.kind === 'assignment-receipt') ? 'conversation-and-host-assignment-receipts' : 'original-conversation-excerpts', redacted: true };
 }
 
 export function sessionMemoryStatus(value) {
   const session = source(value), meta = metaFor(session.id);
   const counts = meta && database().prepare(`SELECT count(*) AS total, sum(json_extract(data,'$.state')='ready') AS ready FROM records
     WHERE kind=? AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.generation')=?`).get(NODE, session.id, meta.generation);
-  return { sessionId: session.id, sourceVersion: 2, legacyRebuildPending: Boolean(!meta && getRecord(META, session.id)), generation: meta?.generation || null, revision: meta?.revision || 0, leaves: meta?.leafCount || 0,
+  return { sessionId: session.id, sourceVersion: VERSION, legacyRebuildPending: Boolean(!meta && getRecord(META, session.id)), generation: meta?.generation || null, revision: meta?.revision || 0, leaves: meta?.leafCount || 0,
     nodes: counts?.total || 0, ready: counts?.ready || 0, pendingNodes: (counts?.total || 0) - (counts?.ready || 0), pendingMessages: meta?.pendingMessages || 0,
     source: conversationSourceStatus(session),
     indexedThroughSeq: meta?.cursorSeq || 0, throughSeq: meta?.throughSeq || 0, indexingRemaining: Boolean(meta && (meta.cursorSeq < meta.throughSeq || meta.cursorOffset > 0)) };
@@ -262,7 +302,7 @@ export function resetSessionMemory(value, { expectedGeneration } = {}) {
     if (['starting', 'running', 'waiting_for_input', 'verifying'].includes(current.executionState)) fail('Pause this terminal before rebuilding session memory.', 'CONFLICT');
     const previous = metaFor(session.id);
     if (expectedGeneration !== undefined && expectedGeneration !== previous?.generation) fail('Session memory changed before rebuilding.', 'CONFLICT');
-    putRecord(META, session.id, { sessionId: session.id, version: VERSION, sourceVersion: 2, generation: randomUUID(), revision: 0,
+    putRecord(META, session.id, { sessionId: session.id, version: VERSION, sourceVersion: VERSION, generation: randomUUID(), revision: 0,
       cursorSeq: 0, cursorOffset: 0, throughSeq: 0, leafCount: 0, pending: [], pendingBytes: 0, pendingMessages: 0, createdAt: now() }, db);
     return sessionMemoryStatus(session);
   });

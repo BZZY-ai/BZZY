@@ -19,8 +19,10 @@ import { assertSubagentDefinitionPin, assertSubagentDefinitionEnabled } from './
 import { normalizeValidationAssessment, naturalValidationSummary } from './validation-assessment.js';
 import { finalValidationReportProtocol, normalizeValidationDecision } from './validation-decision.js';
 import { reserveRoutingAssignment, recordRoutingReview, assertRoutingFollowup } from './workflow-routing.js';
+import { assignmentBudgetView, supervisorHeadroom } from './worker-budget.js';
 
 const contextKind = 'assignment-context';
+const chargedUsage = job => { const usage = currentAssignmentUsage(job); return usage.chargedTokens ?? usage.tokens ?? 0; };
 const contextText = (value, limit, label) => {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > limit || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error(`Invalid ${label}.`);
   if (/(?:["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|authorization)["']?)\s*[=:]\s*["']?(?!<|\$\{|\[redacted\])[^\s"']+/i.test(value)) throw new Error('Context answers must use authorized host setup, never credential values.');
@@ -218,14 +220,17 @@ export function startAssignment(parent, input, { executor, snapshot, role = 'exe
     if (remaining != null && remaining <= 0) throw new Error('Parent usage budget is exhausted.');
     if (remaining != null) contract.limits.tokenBudget = Math.min(contract.limits.tokenBudget || remaining, remaining);
     if (subagent?.budget != null) {
-      const reserved = activeAssignmentsFor(usageScope).reduce((sum, item) => { const job = getRecord('assignment', item.id); return sum + Math.max(0, (job.contract?.limits.tokenBudget || 0) - (currentAssignmentUsage(job).tokens || 0)); }, 0);
-      const available = subagent.budget - budgetUsage(usageScope) - reserved;
+      const reserved = activeAssignmentsFor(usageScope).reduce((sum, item) => { const job = getRecord('assignment', item.id); return sum + Math.max(0, (job.contract?.limits.tokenBudget || 0) - chargedUsage(job)); }, 0);
+      const available = subagent.budget - budgetUsage(usageScope) - reserved - supervisorHeadroom(parent, subagent.workerBudget, subagent.budget);
       if (available < 1) throw new Error('Parent usage budget is exhausted or reserved by active workers.');
       contract.limits.tokenBudget = Math.min(contract.limits.tokenBudget, available);
     }
     const job = { id, parentSessionId: parent.id, goalId: subagent?.chatRunId ? null : parent.goal?.id || null, missionContext, selection, contract, role, closure: 'open', currentRound: 1, createdAt: now(), snapshotId: snapshot?.id || null, workspace: null, sharedEvidence, captureNetwork: Boolean(parent.captureNetwork),
       ...(reportProtocol ? { reportProtocol } : {}),
-      ...(subagent ? { subagentDefinition: subagent.definition, chatRunId: subagent.chatRunId || null, sourceGoalId: parent.goal?.id || null, subagentTaskContext: subagent.taskContext,
+      ...(subagent ? { subagentDefinition: subagent.definition,
+        workerBudget: subagent.workerBudget ? { ...subagent.workerBudget, initialTokenBudget: contract.limits.tokenBudget,
+          reportReserveTokens: Math.min(subagent.workerBudget.reportReserveTokens, Math.max(1, Math.floor(contract.limits.tokenBudget / 5))) } : undefined,
+        chatRunId: subagent.chatRunId || null, sourceGoalId: parent.goal?.id || null, subagentTaskContext: subagent.taskContext,
         ...(subagent.routing ? { subagentRouting: subagent.routing } : {}) } : {}) };
     reserveRoutingAssignment(source, subagent?.routing, id, db);
     putRecord('assignment', id, job, db);
@@ -272,7 +277,7 @@ export function followupAssignment(parent, id, input, { sharedEvidence, launch =
   if (parentStopped(source, runScope)) throw new Error('The parent conversation is paused. No follow-up was launched.');
   if (job.parentSessionId !== parent.id || job.goalId != null && job.goalId !== parent.goal?.id) throw new Error('Assignment belongs to another objective.');
   if (!input.feedback?.trim() || !input.objective?.trim()) throw new Error('Follow-up needs supervisor feedback and a focused objective.');
-  const maxRounds = (parent.contract?.limits.maxRetries ?? 2) + 1;
+  const maxRounds = (parent.contract?.limits.maxRetries ?? (job.workerBudget?.mode === 'adaptive' ? 63 : 2)) + 1;
   const result = reserveRequest(`followup:${id}`, input.requestId || randomUUID(), input, db => {
     const latest = getRecord('assignment', id);
     currentSource(source, latest);
@@ -289,15 +294,16 @@ export function followupAssignment(parent, id, input, { sharedEvidence, launch =
       if (active >= Math.min(parent.contract?.limits.concurrency || 3, 4)) throw new Error('Assignment concurrency limit reached.');
       if (database().prepare("SELECT count(*) AS n FROM records WHERE kind='round' AND json_extract(data,'$.state') IN ('starting','running')").get().n >= 16) throw new Error('Host worker concurrency limit reached.');
       if (budget != null) {
-        const reserved = activeAssignmentsFor(usageScope).reduce((sum, item) => { const activeJob = getRecord('assignment', item.id); return sum + Math.max(0, (activeJob.contract?.limits.tokenBudget || 0) - (currentAssignmentUsage(activeJob).tokens || 0)); }, 0);
-        const available = budget - budgetUsage(usageScope) - reserved;
+        const reserved = activeAssignmentsFor(usageScope).reduce((sum, item) => { const activeJob = getRecord('assignment', item.id); return sum + Math.max(0, (activeJob.contract?.limits.tokenBudget || 0) - chargedUsage(activeJob)); }, 0);
+        const available = budget - budgetUsage(usageScope) - reserved - supervisorHeadroom(parent, job.workerBudget, budget);
         if (available < 1) throw new Error('Parent usage budget is exhausted or reserved by active workers.');
-        const used = currentAssignmentUsage(job).tokens || 0;
+        const used = chargedUsage(job);
         const contract = { ...latest.contract, limits: { ...latest.contract.limits, tokenBudget: Math.min(latest.contract.limits.tokenBudget, used + available) } };
         putRecord('assignment', id, { ...latest, contract }, db);
       }
     }
-    if (job.contract.limits.tokenBudget != null && (currentAssignmentUsage(job).tokens || 0) >= job.contract.limits.tokenBudget) throw new Error('Assignment usage budget is exhausted.');
+    const budgetJob = getRecord('assignment', id);
+    if (budgetJob.contract.limits.tokenBudget != null && chargedUsage(budgetJob) >= budgetJob.contract.limits.tokenBudget) throw new Error('Assignment usage budget is exhausted.');
     let contextRequest = assignmentContextRequest(latest);
     if (contextRequest?.state === 'pending') {
       if (!input.contextRequestId) throw new Error('Answer the outstanding context questions in this follow-up before restarting the worker.');
@@ -330,6 +336,70 @@ export async function waitAssignment(parentId, id, timeoutSeconds = 30, number) 
     if (!['starting', 'running'].includes(round.state) || Date.now() >= deadline) return { id, round, closure: job.closure, terminal: !['starting', 'running'].includes(round.state) };
     await delay(100);
   }
+}
+// This reallocates an owner-approved adaptive allowance; it never changes the
+// owner ceiling, permission policy, immutable mission or verified goal state.
+export function extendAssignmentBudget(parent, id, input, context = {}) {
+  if (context.signal?.aborted) throw new Error('The supervisor execution stopped. No allocation was changed.');
+  const source = currentSource(parent), run = getRecord('run', source.id);
+  if (source.parentSessionId || source.role || source.agentId || source.purpose && source.purpose !== 'terminal'
+    || !context.runId || run?.id !== context.runId || run.state !== 'running' || parentStopped(source, { chatRunId: context.goalMode === false ? context.runId : null })) throw new Error('Budget extensions require the current owner supervisor execution.');
+  if (!input || Object.keys(input).some(key => !['id', 'requestId', 'expectedRevision', 'addTokens', 'addSeconds', 'progress', 'evidence'].includes(key))
+    || typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId)
+    || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1
+    || ![input.addTokens, input.addSeconds].some(value => Number.isSafeInteger(value) && value > 0)
+    || input.addTokens !== undefined && (!Number.isSafeInteger(input.addTokens) || input.addTokens < 1 || input.addTokens > 200000)
+    || input.addSeconds !== undefined && (!Number.isSafeInteger(input.addSeconds) || input.addSeconds < 1 || input.addSeconds > 3600)
+    || !Array.isArray(input.evidence) || !input.evidence.length || input.evidence.length > 16) throw new Error('A budget extension needs a revision, bounded increments and inspected progress evidence.');
+  const progress = contextText(input.progress, 1500, 'progress summary');
+  return reserveRequest(`assignment-budget:${source.id}:${id}`, input.requestId, input, db => {
+    if (context.signal?.aborted) throw new Error('The supervisor execution stopped. No allocation was changed.');
+    const job = getRecord('assignment', id), saved = currentSource(loadSession(source.id), job), currentRun = getRecord('run', source.id);
+    if (!job || job.parentSessionId !== saved.id || job.closure !== 'open' || job.importProvenance || !job.subagentDefinition
+      || (job.chatRunId ? context.goalMode !== false : job.goalId !== saved.goal?.id || context.goalMode === false)
+      || parentStopped(saved, job.chatRunId ? { ...job, chatRunId: context.runId } : job)
+      || currentRun?.id !== context.runId || currentRun.state !== 'running') throw new Error('The assignment is not available to this live supervisor.');
+    const round = getRecord('round', `${id}:${job.currentRound}`);
+    if (job.chatRunId && job.chatRunId !== context.runId && (!round || round.assignmentId !== id || (round.number ?? round.round) !== job.currentRound
+      || !['awaiting_review', 'budget_limited', 'timed_out', 'interrupted', 'paused', 'cancelled', 'failed', 'needs_context'].includes(round.state))) {
+      throw new Error('Reconcile the earlier chat worker to a valid stopped round before extending it.');
+    }
+    const policy = job.workerBudget;
+    if (policy?.version !== 1 || policy.mode !== 'adaptive' || policy.revision !== input.expectedRevision) throw new Error('The allocation is fixed or changed. Refresh assignment_status before extending it.');
+    assertSubagentDefinitionPin(job.subagentDefinition); assertSubagentDefinitionEnabled(job.subagentDefinition);
+    assertRoutingFollowup(saved, job);
+    const usage = currentAssignmentUsage(job);
+    if ((!usage.available || usage.accountingComplete === false) && !['starting', 'running'].includes(getRecord('round', `${id}:${job.currentRound}`)?.state)) throw new Error('Finished worker usage is unknown. Reconcile it before allocating more work.');
+    const hashes = input.evidence.map(ref => {
+      const item = getRecord('artifact', ref);
+      const inspected = listRecords('artifact-read').some(read => read.sessionId === saved.id && read.assignmentId === id
+        && read.assignmentRound === job.currentRound && read.artifactId === ref && read.sha256 === item?.sha256 && read.bytesRead > 0);
+      if (!item || !inspected || fileInfo(item.path).sha256 !== item.sha256) throw new Error('Extensions require intact worker evidence inspected in this assignment round.');
+      return item.sha256;
+    });
+    if (hashes.every(hash => getRecord('core.assignment.budget-progress', digest([id, hash])))) throw new Error('Provide new inspected progress before another allocation extension.');
+    const tokens = job.contract.limits.tokenBudget + (input.addTokens || 0), seconds = job.contract.limits.runtimeSeconds + (input.addSeconds || 0);
+    if (!Number.isSafeInteger(tokens) || !Number.isSafeInteger(seconds) || policy.hardTokenLimit != null && tokens > policy.hardTokenLimit
+      || policy.hardRuntimeLimitSeconds != null && seconds > policy.hardRuntimeLimitSeconds) throw new Error('The requested extension exceeds an owner or definition hard limit.');
+    const usageScope = job.chatRunId ? { ...saved, goal: null } : saved, parentLimit = job.chatRunId ? context.tokenBudget ?? null : saved.goal?.tokenBudget ?? null;
+    if (parentLimit != null) {
+      const reserved = activeAssignmentsFor(usageScope).filter(active => active.id !== id).reduce((sum, active) => {
+        const other = getRecord('assignment', active.id); return sum + Math.max(0, (other.contract?.limits.tokenBudget || 0) - chargedUsage(other));
+      }, 0);
+      const available = parentLimit - budgetUsage(usageScope) - reserved - supervisorHeadroom(saved, policy, parentLimit);
+      if (tokens - chargedUsage(job) > available) throw new Error('The extension exceeds the parent budget after worker reservations and review headroom.');
+    }
+    const changed = { ...job, ...(job.chatRunId ? { chatRunId: context.runId } : {}), contract: { ...job.contract, limits: { ...job.contract.limits, tokenBudget: tokens, runtimeSeconds: seconds } },
+      workerBudget: { ...policy, revision: policy.revision + 1, extensionCount: (policy.extensionCount || 0) + 1, lastProgressEvidence: hashes,
+        reportReserveTokens: Math.min(policy.requestedReportReserveTokens || policy.reportReserveTokens, Math.max(1, Math.floor(tokens / 5))) } };
+    putRecord('assignment', id, changed, db);
+    for (const hash of hashes) putRecord('core.assignment.budget-progress', digest([id, hash]), {
+      sessionId: saved.id, assignmentId: id, evidenceSha256: hash, round: job.currentRound, allocationRevision: changed.workerBudget.revision }, db);
+    appendEvent(saved.id, 'assignment.budget.extended', { assignmentId: id, round: job.currentRound, revision: changed.workerBudget.revision,
+      tokenLimit: tokens, runtimeLimitSeconds: seconds, progress, evidence: input.evidence }, db);
+    return { id, budget: assignmentBudgetView(changed), next: ['starting', 'running'].includes(getRecord('round', `${id}:${job.currentRound}`)?.state)
+      ? 'The current worker receives the increased allocation; no duplicate execution was started.' : 'Use followup_assignment to continue this same conversation with a focused objective and inspected evidence.' };
+  });
 }
 export function reviewAssignment(parent, id, input) {
   const job = assignmentStatus(id);
@@ -418,6 +488,7 @@ export function applyAssignment(parent, id) {
 }
 export async function runAssignment(id, number) {
   let job, round, childSession;
+  const preparationStarted = Date.now();
   const token = randomUUID();
   const acquired = transaction(db => {
     job = getRecord('assignment', id); round = getRecord('round', `${id}:${number}`);
@@ -453,8 +524,9 @@ export async function runAssignment(id, number) {
       // A worker edits its own copy; review snapshots remain fixed.
       const work = path.join(home(), 'workers', id); privateDir(path.dirname(work));
       copyWorkspaceSnapshot(snapshot, work, { sessionId: parent.id });
-      job.workspace = work; putRecord('assignment', id, job);
+      job = { ...getRecord('assignment', id), snapshotId: snapshot.id, workspace: work }; putRecord('assignment', id, job);
     }
+    job = getRecord('assignment', id);
     const provider = getProvider(job.selection.provider);
     childSession = job.workerSessionId ? loadSession(job.workerSessionId) : createSession(provider, job.workspace, job.selection.model);
     Object.assign(childSession, { role: job.role, parentSessionId: job.parentSessionId, assignmentId: id, assignmentRound: number, suppressNotifications: true,
@@ -464,7 +536,13 @@ export async function runAssignment(id, number) {
       ...(job.subagentDefinition ? { subagentDefinition: job.subagentDefinition } : {}),
       ...(job.selection.effort != null ? { selectedEffort: job.selection.effort } : {}),
       ...(job.selection.capabilities != null ? { modelCapabilities: job.selection.capabilities } : {}) });
-    saveSession(childSession); job.workerSessionId = childSession.id; putRecord('assignment', id, job);
+    childSession.elapsedSeconds = (childSession.elapsedSeconds || 0) + (Date.now() - preparationStarted) / 1000;
+    if (!childSession.usage) childSession.usage = { tokens: 0, available: true, accountingComplete: true, source: 'host-before-model-request' };
+    saveSession(childSession); job = { ...getRecord('assignment', id), workerSessionId: childSession.id }; putRecord('assignment', id, job);
+    if (parentStopped(loadSession(parent.id), job) || getRecord('assignment-control', id)?.action === 'cancel') {
+      putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), state: 'paused', stopReason: 'parent_stopped', finishedAt: now() });
+      appendEvent(parent.id, 'assignment.paused', { id, round: number, reason: 'Parent stopped before the model request; workspace preparation was retained.' }); return 0;
+    }
     removeRecord('worker-report', childSession.id);
     const prompt = `You are the ${job.role} for a bounded assignment. The supervisor owns the parent objective, strategy and final judgment.
 Use tools to perform substantial work within this contract. Preserve evidence with record_evidence and return finish_assignment.
@@ -475,7 +553,7 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
     const { RunnerUI } = await import('./runtime-ui.js');
     const { runSession } = await import('./controller.js');
     const runtimeSeconds = job.subagentDefinition ? job.contract.limits.runtimeSeconds - (childSession.elapsedSeconds || 0) : job.contract.limits.runtimeSeconds;
-    if (runtimeSeconds <= 0) throw new Error('Subagent runtime budget is exhausted.');
+    if (runtimeSeconds <= 0) throw Object.assign(new Error('Subagent runtime budget was exhausted during workspace preparation.'), { code: 'WORKER_PREPARATION_LIMIT' });
     const code = await runSession(provider, childSession, { cwd: childSession.cwd, pet: false, strictPolicy: true, policy: job.contract.policy,
       runtimeSeconds, tokenBudget: job.contract.limits.tokenBudget, scopedAutonomy: true, captureNetwork: job.captureNetwork }, new RunnerUI(childSession.id, { unattended: true, parentSessionId: parent.id, assignmentId: id, agent: job.subagentDefinition?.name }), prompt);
     const report = getRecord('worker-report', childSession.id);
@@ -483,8 +561,8 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
     const changes = inspectWorkspace(snapshot, job.workspace);
     const patch = artifact(childSession, JSON.stringify(changes, null, 2), 'workspace-changes', 'application/json');
     const request = compactContext(assignmentContextRequest(getRecord('assignment', id)));
-    const result = { assignmentId: id, round: number, state: report?.status === 'needs_context' && request?.state === 'pending' ? 'needs_context' : code === 0 ? 'awaiting_review' : childSession.stopReason === 'runtime_limit' ? 'timed_out' : childSession.stopReason === 'token_limit' ? 'budget_limited' : childSession.executionState === 'cancelled' ? 'cancelled' : 'failed', stopReason: childSession.stopReason || childSession.failure?.category || null,
-      error: code === 0 ? null : childSession.failure?.message || childSession.goal?.reason || childSession.stopReason || null,
+    const result = { assignmentId: id, round: number, state: report?.status === 'needs_context' && request?.state === 'pending' ? 'needs_context' : code === 0 || childSession.stopReason === 'allocation_checkpoint' && report?.status === 'partial' ? 'awaiting_review' : childSession.stopReason === 'runtime_limit' ? 'timed_out' : childSession.stopReason === 'token_limit' ? 'budget_limited' : childSession.executionState === 'cancelled' ? 'cancelled' : 'failed', stopReason: childSession.stopReason || childSession.failure?.category || null,
+      error: code === 0 || childSession.stopReason === 'allocation_checkpoint' && report?.status === 'partial' ? null : childSession.failure?.message || childSession.goal?.reason || childSession.stopReason || null,
       workerClaim: report?.status || 'unknown', summary: (report?.summary || 'Worker returned without a structured assignment report.').slice(0, 8000),
       report: report || null, contextRequest: request, artifacts: [...outputs, patch].map(a => ({ id: a.id, label: a.label, size: a.size, sha256: a.sha256 })),
       missingReport: !report, changes, workspaceOmissions: changes.omissions, uninspectedPaths: changes.uninspected,
@@ -498,7 +576,8 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
       appendEvent(parent.id, 'assignment.finished', { id, round: number, state: result.state, report: { ...result, changes: undefined, report: undefined } }, db);
     });
   } catch (error) {
-    putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), state: 'failed', error: error.message, finishedAt: now() });
+    putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), state: error.code === 'WORKER_PREPARATION_LIMIT' ? 'timed_out' : 'failed',
+      ...(error.code === 'WORKER_PREPARATION_LIMIT' ? { stopReason: 'runtime_limit' } : {}), error: error.message, finishedAt: now() });
     if (job) appendEvent(job.parentSessionId, 'assignment.failed', { id, round: number, error: error.message });
   }
   return 0;

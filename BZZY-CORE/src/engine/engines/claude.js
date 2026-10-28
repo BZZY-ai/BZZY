@@ -19,8 +19,10 @@ import { assertLearningWorkingDirectory } from '../learning-backend.js';
 import { recordBackendDiagnostics } from '../session-diagnostics.js';
 import { nativeContextBudget, prepareNativeReadiness, acknowledgeNativeReadiness, recordNativeCompaction,
   pendingNativeRefresh, consumeNativeRefresh, nativeInputEstimate } from '../native-context.js';
-import { digest } from '../database.js';
+import { digest, getRecord } from '../database.js';
 import { recordWorkObservation } from '../episode.js';
+import { createClaudeUsageCounter, observeRunUsage } from '../usage-ledger.js';
+import { markBackendStartupFailure } from '../backend-startup.js';
 
 export function claudeEnvironment(backendHomes) {
   return subscriptionEnvironment('claude', { backendHomes });
@@ -63,7 +65,14 @@ export class ClaudeEngine {
     this.options.goalMode = goal;
     this.progress.setPrompt(goal ? this.session.goal.objective : prompt);
     const env = { ...claudeEnvironment(this.session.backendHomes), ...this.options.networkEnv };
-    if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { backendHomes: this.session.backendHomes }).available) throw new Error('Claude subscription authentication is unavailable. Run bzzy auth claude to sign in through official Claude Code.');
+    if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { backendHomes: this.session.backendHomes }).available) {
+      const error = new Error('Claude subscription authentication is unavailable. Run bzzy auth claude to sign in through official Claude Code.');
+      // A later turn can share the same controller run. Its local preflight
+      // cannot erase usage already observed during an earlier turn.
+      const runId = this.options.toolHost?.context?.runId;
+      throw runId && getRecord('usage.run', runId)?.observed ? error
+        : markBackendStartupFailure(error, 'configuration', { backend: 'claude' });
+    }
     const nonce = this.options.toolHost?.nonce || randomUUID();
     let configFile;
     if (goal || this.options.toolHost) {
@@ -73,7 +82,7 @@ export class ClaudeEngine {
     }
     let activity = false, text = '', result, stderr = '', tokens = 0;
     const priorTokens = this.session.usage?.tokens || 0;
-    const messageUsage = new Map();
+    const usageCounter = createClaudeUsageCounter();
     const args = claudeArgs(this.session, this.options, configFile);
     const promptIndex = args.indexOf('--append-system-prompt');
     const nativeInstructions = args[promptIndex + 1];
@@ -186,15 +195,15 @@ export class ClaudeEngine {
           }
           if (!event.parent_tool_use_id) seal(event.message?.id || currentMessageId, 'assistant-message-completed');
           if (event.message?.id) {
-            const usage = event.message.usage || {};
-            const current = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.output_tokens || 0);
-            const previous = messageUsage.get(event.message.id) || 0;
-            tokens += Math.max(0, current - previous);
-            messageUsage.set(event.message.id, Math.max(previous, current));
-            this.session.usage = { ...(this.session.usage || {}), tokens: priorTokens + tokens, available: true, source: 'backend-reported' };
+            const usage = event.message.usage || {}, receipt = usageCounter.observeMessage(event.message.id, usage);
+            tokens = receipt.tokens;
+            this.session.usage = { ...(this.session.usage || {}), tokens: priorTokens + tokens, available: receipt.available,
+              accountingComplete: receipt.accountingComplete, counter: receipt.counter, source: 'backend-reported' };
+            observeRunUsage(this.session, this.options.toolHost?.context?.runId);
             saveSession(this.session);
-            this.ui.event('usage.updated', { provider: this.session.provider, model: this.session.model, tokens: priorTokens + tokens, available: true, source: 'backend-reported',
-              detail: usage });
+            this.ui.event('usage.updated', { provider: this.session.provider, model: this.session.model, tokens: priorTokens + tokens,
+              available: receipt.available, accountingComplete: receipt.accountingComplete, counter: receipt.counter,
+              source: 'backend-reported', detail: usage });
             if (!goal && this.options.tokenBudget != null && priorTokens + tokens >= this.options.tokenBudget) this.interrupt('token_limit').catch(() => {});
           }
         } else if (event.type === 'user') {
@@ -243,9 +252,12 @@ export class ClaudeEngine {
     finally { clearTimeout(initializeTimeout); clearTimeout(exitTimer); clearTimeout(forceTimer); lines.close(); this.child = null; this.session.backendProcess = null; cleanup(); }
     this.ui.newline();
     this.session.turns++;
-    const reportedTokens = tokens || (result?.usage?.input_tokens || 0) + (result?.usage?.cache_creation_input_tokens || 0) + (result?.usage?.cache_read_input_tokens || 0) + (result?.usage?.output_tokens || 0);
-    this.session.usage = { tokens: priorTokens + reportedTokens, available: Boolean(result?.usage || tokens), source: 'backend-reported',
+    const receipt = usageCounter.finalize(result?.usage), reportedTokens = receipt.tokens;
+    tokens = reportedTokens;
+    this.session.usage = { tokens: priorTokens + reportedTokens, available: receipt.available, accountingComplete: receipt.accountingComplete,
+      counter: receipt.counter, reconciliation: { streamedTokens: receipt.streamedTokens, finalTokens: receipt.finalTokens, rule: 'compatible-total-high-water' }, source: 'backend-reported',
       estimatedConversationCostUsd: result?.total_cost_usd ?? null, modelUsage: result?.modelUsage || null };
+    observeRunUsage(this.session, this.options.toolHost?.context?.runId, { final: receipt.accountingComplete });
     saveSession(this.session);
     if (!goal && this.options.tokenBudget != null && this.session.usage.tokens >= this.options.tokenBudget) await this.interrupt('token_limit');
     if (this.interrupted) { fs.rmSync(reportPath(this.session.id, nonce), { force: true }); return { interrupted: true, activity, tokens }; }
@@ -258,7 +270,6 @@ export class ClaudeEngine {
       this.ui.event('text', { text: result.result + '\n', ...messageIdentity(`${nonce}:result`) });
       seal(`${nonce}:result`, 'result-completed');
     }
-    if (!tokens) tokens = (result.usage?.input_tokens || 0) + (result.usage?.cache_creation_input_tokens || 0) + (result.usage?.cache_read_input_tokens || 0) + (result.usage?.output_tokens || 0);
     completeConversationHandoff(this.session);
     return { activity, tokens, report: goal ? readReport(this.session.id, nonce) : null };
   }

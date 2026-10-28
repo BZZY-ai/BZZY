@@ -16,7 +16,8 @@ import { cancelAssignment, waitAssignment } from './delegation.js';
 import { TrafficRecorder } from './traffic.js';
 import { closeOpenActivities } from './activity.js';
 import { ActivityReporter } from './live-activity.js';
-import { activeAssignmentsFor, delegationUsage, assignmentCounts } from './delegation-usage.js';
+import { activeAssignmentsFor, delegationUsage, assignmentCounts, budgetUsage } from './delegation-usage.js';
+import { getWorkerBudgetSettings, assignmentBudgetView } from './worker-budget.js';
 import { duration } from './format-duration.js';
 import { delegationTokenLines } from './delegation-format.js';
 import { agentExecutionScope } from './agent-execution.js';
@@ -28,6 +29,8 @@ import { randomUUID } from 'node:crypto';
 import { maintainSessionHistory } from './history-maintenance.js';
 import { captureEpisode } from './episode.js';
 import { captureSkillOutcomes } from './skill-feedback.js';
+import { beginRunUsage, endRunUsage } from './usage-ledger.js';
+import { backendStartupFailure } from './backend-startup.js';
 
 export function classifyFailure(error) {
   const message = String(error.message || error);
@@ -63,10 +66,11 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   } else options = { ...options, agentScope: null };
   const policy = effectivePolicy(session, options);
   const unlock = lockSession(session), started = Date.now(), indicator = ui.executionIndicator?.(options.pet !== false && !ui.persistsEvents) || { start() {}, stop() {} }, abort = new AbortController();
-  let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, historyMaintenance, controls, processing = false, failedThisTurn = false;
+  let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, historyMaintenance, controls, processing = false, failedThisTurn = false, preRequestUsageFailure = false, handoffRequested = false;
   options = { ...options, goalMode: goal, policy, strictPolicy: Boolean(options.strictPolicy || options.readOnly || session.strictPolicy) }; session.policy = policy; session.captureNetwork = Boolean(options.captureNetwork);
   const run = { id: randomUUID(), sessionId: session.id, state: 'running', goalMode: goal, goalId: goal ? session.goal?.id || null : null,
-    runner: processIdentity(), startedAt: now(), heartbeatAt: now() };
+    runner: processIdentity(), startedAt: now(), heartbeatAt: now(),
+    ...(!goal && !session.parentSessionId && !session.role && !session.agentId ? { workerBudgetPolicy: getWorkerBudgetSettings() } : {}) };
   const stop = (reason = 'interrupted') => {
     if (stopping) { engine?.close().catch(() => {}); return; }
     stopping = reason; abort.abort(); ui.cancelled = true; indicator.stop();
@@ -88,13 +92,24 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     session.executionState = 'running'; if (goal) { session.goal.status = 'active'; session.deferTerminalNotification = true; }
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
     putRecord('run', session.id, run); saveSession(session);
+    beginRunUsage(session, run, { tokenBudget: goal ? session.goal.tokenBudget : options.tokenBudget });
     options.activityReporter = new ActivityReporter(session, recorded, goal ? session.goal.objective : prompt);
-    host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, runId: run.id, signal: abort.signal, prompt, tokenBudget: options.tokenBudget, onNeedsContext: () => stop('needs_context') }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
+    host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, runId: run.id, signal: abort.signal, prompt, tokenBudget: options.tokenBudget,
+      onNeedsContext: () => stop('needs_context'), onWorkerReport: input => {
+        const job = session.assignmentId && getRecord('assignment', session.assignmentId);
+        if (input.status === 'partial' && job?.workerBudget?.mode === 'adaptive' && assignmentBudgetView(job).softReached) {
+          // Claude supplies its canonical aggregate in the final turn result.
+          // Let this bounded turn return it instead of discarding it with SIGINT.
+          if (provider.backend === 'claude') handoffRequested = true;
+          else stop('allocation_checkpoint');
+        }
+      } }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
     if (options.captureNetwork) { traffic = await new TrafficRecorder(session, provider, recorded).open(); options.networkEnv = traffic.env; }
     if (options.yolo) recorded.event('info', { message: provider.backend === 'codex' ? 'YOLO · approvals off · Codex sandbox disabled' : 'YOLO · Claude permission checks bypassed' });
     const limit = options.runtimeSeconds || session.contract?.limits.runtimeSeconds;
     const remainingMs = limit == null ? null : Math.max(0, limit - (session.goal?.runtimeUsedSeconds || 0)) * 1000;
-    let deadline; if (remainingMs != null) deadline = setTimeout(() => stop('runtime_limit'), remainingMs);
+    const adaptiveWorker = session.assignmentId && getRecord('assignment', session.assignmentId)?.workerBudget?.mode === 'adaptive';
+    let deadline; if (remainingMs != null && !adaptiveWorker) deadline = setTimeout(() => stop('runtime_limit'), remainingMs);
     heartbeat = guardedInterval(() => { const record = getRecord('run', session.id); if (record) putRecord('run', session.id, { ...record, heartbeatAt: now() }); }, 2000, { label: 'Run heartbeat', onError: (_error, failures) => { if (failures >= 3) stop('persistence_failure'); } });
     let lastEpisodeAt = 0;
     if (sessionMemoryEligible(session)) historyMaintenance = guardedInterval(() => {
@@ -106,13 +121,15 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
         learningForEpisode(session, episode, { runId: run.id, goalMode: goal });
       }
     }, 2000, { label: 'Finalized conversation indexing', onError: () => {} });
-    let lastUsageKey, lastUsageAt = 0;
+    let lastUsageKey, lastUsageAt = 0, warnedAllocation;
     controls = guardedInterval(async () => {
       if (processing) return; processing = true;
       try {
         const cancellation = session.assignmentId && getRecord('assignment-control', session.assignmentId);
         if (cancellation?.action === 'cancel' && (cancellation.round == null || cancellation.round === session.assignmentRound)) stop('cancelled');
         if (session.assignmentId && getRecord('worker-report', session.id)?.status === 'needs_context') stop('needs_context');
+        const workerAssignment = session.assignmentId && getRecord('assignment', session.assignmentId);
+        if (workerAssignment?.workerSessionId === session.id && workerAssignment.currentRound === session.assignmentRound) options.tokenBudget = workerAssignment.contract?.limits?.tokenBudget;
         if (goal && (session.mode === 'delegate' || assignmentCounts(session).total)) {
           const usage = delegationUsage(session), key = JSON.stringify([usage.supervisorTokens, usage.delegatedTokens, usage.complete]);
           if (key !== lastUsageKey && Date.now() - lastUsageAt >= 2000) {
@@ -121,10 +138,24 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
             session.goal.tokensUsed = usage.totalTokens; saveSession(session);
             recorded.event('delegation.usage', usage);
           }
-          if (session.goal.tokenBudget != null && usage.totalTokens >= session.goal.tokenBudget) stop('token_limit');
-        } else if (!goal && options.tokenBudget != null && delegationUsage({ ...session, goal: null }).totalTokens >= options.tokenBudget) stop('token_limit');
+          if (session.goal.tokenBudget != null && budgetUsage(session) >= session.goal.tokenBudget) stop('token_limit');
+        } else if (!goal && options.tokenBudget != null && budgetUsage({ ...session, goal: null }) >= options.tokenBudget) stop('token_limit');
         if (session.assignmentId) {
           const assignment = getRecord('assignment', session.assignmentId), parent = assignment?.parentSessionId && loadSession(assignment.parentSessionId);
+          if (assignment?.subagentDefinition && assignment.workerSessionId === session.id && assignment.currentRound === session.assignmentRound) {
+            options.tokenBudget = assignment.contract.limits.tokenBudget;
+            const budget = assignmentBudgetView(assignment);
+            if (budget.elapsedSeconds >= budget.runtimeLimitSeconds) stop('runtime_limit');
+            if (budget.softReached && warnedAllocation !== budget.revision && !stopping) {
+              warnedAllocation = budget.revision;
+              const message = 'Worker allocation is nearing its limit. Save evidence and call finish_assignment with a partial report covering observations, uncertainty and unfinished checks. '
+                + (budget.mode === 'adaptive' ? 'The supervisor can review and extend an adaptive allocation within the owner limits.' : 'This allocation has a fixed hard limit; the supervisor will review the incomplete work.');
+              appendEvent(parent.id, 'assignment.budget.warning', { assignmentId: assignment.id, round: assignment.currentRound, revision: budget.revision,
+                tokensUsed: budget.tokensUsed, tokenLimit: budget.tokenLimit, elapsedSeconds: budget.elapsedSeconds, runtimeLimitSeconds: budget.runtimeLimitSeconds });
+              recorded.event('info', { message });
+              if (engine?.steer) engine.steer(message).catch(() => {});
+            }
+          }
           if (assignment?.chatRunId && (!parent || getRecord('run', parent.id)?.id !== assignment.chatRunId || getRecord('run', parent.id)?.state !== 'running' || ['paused', 'cancelled', 'failed', 'idle'].includes(parent.executionState))) stop('parent_stopped');
         }
         for (const control of listRecords('control', { sessionId: session.id, state: 'queued' })) {
@@ -152,6 +183,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
             if (stopping) break;
             if (goal) { session.goal.turns++; saveSession(session); }
             indicator.start(); const result = await engine.run(prompt, { goal }); indicator.stop(); turns++;
+            if (handoffRequested && !result.interrupted && !engine.interrupted) stopping ||= 'allocation_checkpoint';
             if (result.interrupted || engine.interrupted) stopping ||= engine.stopReason || 'interrupted';
             if (goal) session.goal.supervisorTokensUsed = (session.goal.supervisorTokensUsed || 0) + Math.max(0, result.tokens || 0);
             if (goal && stopping) session.goal.tokensUsed += Math.max(0, result.tokens || 0);
@@ -184,6 +216,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     } else session.executionState = 'idle';
     return stopping ? ['interrupted', 'user_pause', 'cancelled'].includes(stopping) ? 130 : 2 : goal && session.goal.status !== 'complete' ? 2 : 0;
   } catch (error) {
+    preRequestUsageFailure = Boolean(backendStartupFailure(error));
     failedThisTurn = true;
     const failure = classifyFailure(error); session.failure = failure; session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping ? 'paused' : 'failed';
     const budgetLimited = ['runtime_limit', 'token_limit'].includes(stopping);
@@ -205,6 +238,11 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     finally {
       try {
       if (fullText) artifact(session, fullText, 'agent-output');
+      const usageAttribution = endRunUsage(session, run.id, { noRequest: preRequestUsageFailure, uncertain: failedThisTurn && !preRequestUsageFailure });
+      if (usageAttribution) {
+        if (session.usage) session.usage.accountingComplete = usageAttribution.accountingComplete;
+        else if (preRequestUsageFailure) session.usage = { tokens: usageAttribution.baselineTokens, available: true, accountingComplete: true, source: 'host-pre-request' };
+      }
       const elapsed = (Date.now() - started) / 1000;
       session.elapsedSeconds = (session.elapsedSeconds || 0) + elapsed; session.stopReason = stopping || null;
       if (goal) session.goal.runtimeUsedSeconds = (session.goal.runtimeUsedSeconds || 0) + elapsed;

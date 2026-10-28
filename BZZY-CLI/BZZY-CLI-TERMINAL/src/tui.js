@@ -26,8 +26,9 @@ import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
 import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
 import { SessionMetricsPanel, sessionMetricsLayout } from './session-metrics-ui.js';
 import { returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
-import { recordInvocationEvent, reconcileInvocationEntries, invocationEntryLayout } from './invocation-ui.js';
+import { recordInvocationEvent, reconcileInvocationEntries, invocationEntryLayout, attributeInvocationActors } from './invocation-ui.js';
 import { ToolTreeProjection, toolTreeLayout, changeToolTree } from './tool-tree-ui.js';
+import { ActorProjection } from './actor-ui.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -42,6 +43,7 @@ export class TerminalChat {
     this.assignments = new Map();
     this.executionFeedback = new ExecutionFeedback();
     this.toolTrees = new ToolTreeProjection(); this.showTools = true;
+    this.actors = new ActorProjection();
     this.value = ''; this.cursor = 0; this.history = []; this.historyIndex = 0; this.drafts = new Map();
     this.entryLayouts = new WeakMap(); this.inputQueue = [];
     this.state = 'ready'; this.model = 'default'; this.provider = ''; this.frame = 0; this.lastFrame = [];
@@ -150,7 +152,13 @@ export class TerminalChat {
       ? job?.stopAction ? 'stopping' : job?.state === 'queued' ? 'queued' : job?.state === 'launching' ? 'starting' : this.streaming ? 'responding' : 'working'
       : session.failure && session.executionState === 'failed' ? 'failed' : 'ready';
     if (!this.busy) { this.streaming = false; this.currentTool = ''; }
-    const invocations = reconcileInvocationEntries(this.entries, snapshot, { sessionId: this.ui.activeTab || this.ui.sessionId });
+    const sessionId = this.ui.activeTab || this.ui.sessionId, actorRevision = this.actors.revision;
+    this.actors.snapshot(snapshot, { sessionId });
+    if (actorRevision !== this.actors.revision) {
+      this.entryLayouts = new WeakMap(); this.bodyCache = null;
+      for (const group of this.toolTrees.groups.values()) group.agent = this.actors.for(group.actorSessionId, sessionId).label;
+    }
+    const invocations = [...reconcileInvocationEntries(this.entries, snapshot, { sessionId }), ...attributeInvocationActors(this.entries, this.actors, { sessionId })];
     if (invocations.length) this.contentRevision = (this.contentRevision || 0) + 1;
     for (const entry of invocations) this.entryLayouts.delete(entry);
     if (!this.pinned && session.goal?.objective) this.pinned = session.goal.objective;
@@ -181,23 +189,32 @@ export class TerminalChat {
     this.goalValidation = { ...value }; this.goalValidationVersions.set(value.sourceGoalId, this.goalValidation);
   }
   event(type, data) {
+    if (data.eventSessionId && data.eventSessionId !== (this.ui.activeTab || this.ui.sessionId)) return;
     this.executionFeedback.event(type, data);
     this.contentRevision = (this.contentRevision || 0) + 1;
     const invocation = recordInvocationEvent(this.entries, type, data, { sessionId: this.ui.activeTab || this.ui.sessionId });
     if (invocation.changed && invocation.entry) this.entryLayouts.delete(invocation.entry);
-    const tools = this.toolTrees.event(this.entries, type, data, { sessionId: this.ui.activeTab || this.ui.sessionId });
+    const sessionId = this.ui.activeTab || this.ui.sessionId, actorRevision = this.actors.revision;
+    this.actors.event(type, data, this.entries, { sessionId });
+    if (actorRevision !== this.actors.revision) {
+      this.entryLayouts = new WeakMap(); this.bodyCache = null;
+      for (const group of this.toolTrees.groups.values()) group.agent = this.actors.for(group.actorSessionId, sessionId).label;
+    }
+    for (const entry of attributeInvocationActors(this.entries, this.actors, { sessionId })) this.entryLayouts.delete(entry);
+    const tools = this.toolTrees.event(this.entries, type, data, { sessionId, actors: this.actors });
     for (const entry of tools.changed || []) this.entryLayouts.delete(entry);
     if (this.entries.length > 5000) this.entries.splice(0, 500);
     if (type === 'text' || type === 'peer.text') {
       const peerSessionId = type === 'peer.text' ? data.childSessionId || data.sessionId || data.agent : null;
-      const label = type === 'peer.text' ? data.agent || peerSessionId || 'Agent' : 'bzzy';
+      const actorSessionId = data.childSessionId || data.actorSessionId || (type === 'peer.text' ? data.sessionId : sessionId), actor = this.actors.for(actorSessionId, sessionId);
+      const label = actor.role === 'main' ? 'bzzy' : actor.name;
       // Peer chunks can interleave. Stable response IDs keep one complete entry
       // per reply so its copy button includes chunks received between peers.
       const previous = peerSessionId && data.itemId ? this.entries.findLast(entry => entry.kind === 'assistant' && entry.peerSessionId === peerSessionId && entry.itemId === data.itemId && entry.turnId === data.turnId)
-        : this.entries.findLast(entry => !['invocation', 'tool-tree'].includes(entry.kind));
+        : this.entries.findLast(entry => !['invocation', 'tool-tree', 'actor-activity'].includes(entry.kind));
       if (previous?.kind === 'assistant' && previous.label === label && previous.peerSessionId === peerSessionId && previous.itemId === data.itemId && previous.turnId === data.turnId
         && (peerSessionId || (previous.replyBoundary || 0) === (this.replyBoundary || 0))) previous.text += String(data.text ?? '');
-      else this.add('assistant', data.text, { label, peerSessionId, itemId: data.itemId, turnId: data.turnId, replyBoundary: this.replyBoundary || 0 });
+      else this.add('assistant', data.text, { label, peerSessionId, actorSessionId, itemId: data.itemId, turnId: data.turnId, replyBoundary: this.replyBoundary || 0 });
       this.streaming = true;
     } else if (type === 'message.user') {
       if (data.kind === 'goal') { this.goal = { status: 'active', objective: clean(data.text) }; this.goalValidation = null; }
@@ -224,11 +241,18 @@ export class TerminalChat {
       this.currentTool = clean(data.name || 'Tool');
       if (!tools.handled) this.add('tool', this.currentTool); this.streaming = false;
     } else if (type === 'activity') {
-      const worker = this.mode === 'delegate' && data.sessionId && data.sessionId !== (this.ui.activeTab || this.ui.sessionId);
-      this.currentActivity = data.closedAt ? '' : (worker ? 'Hands · ' : '') + data.summary;
+      const worker = data.sessionId && data.sessionId !== sessionId;
+      const actor = this.actors.for(data.actorSessionId || data.sessionId, sessionId);
+      this.currentActivity = data.closedAt ? '' : actor.label + ' · ' + data.summary;
       if (worker && !data.closedAt && data.status === 'running') this.delegationPhase = 'Executor running';
       const index = this.activities.findIndex(item => item.id && item.id === data.id);
       if (index >= 0) this.activities[index] = data; else this.activities.push(data);
+      if (typeof data.summary === 'string' && data.summary.trim() && (!data.eventSessionId || data.eventSessionId === sessionId)) {
+        const prior = data.id && this.entries.find(entry => entry.kind === 'actor-activity' && entry.activityId === data.id);
+        const content = { actorSessionId: data.actorSessionId || data.sessionId || sessionId, status: data.status, closed: Boolean(data.closedAt) };
+        if (prior) { Object.assign(prior, content, { text: clean(data.summary) }); this.entryLayouts.delete(prior); }
+        else this.add('actor-activity', data.summary, { ...content, activityId: data.id });
+      }
     } else if (type.startsWith('assignment.')) {
       const id = data.assignmentId || data.id, previous = this.assignments.get(id);
       if (data.subagentDefinition || previous?.specialist) this.subagentEvent(type, data);
@@ -338,7 +362,7 @@ export class TerminalChat {
     if (message) this.add('notice', message);
   }
 
-  clear() { this.executionFeedback = new ExecutionFeedback(); this.toolTrees = new ToolTreeProjection(); this.toolFocus = null; this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.goalValidation = null; this.goalValidationVersions = new Map(); this.retiredGoalIds = new Set(); this.snapshotGoalId = null; this.schedule(); }
+  clear() { this.actors = new ActorProjection(); this.executionFeedback = new ExecutionFeedback(); this.toolTrees = new ToolTreeProjection(); this.toolFocus = null; this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.goalValidation = null; this.goalValidationVersions = new Map(); this.retiredGoalIds = new Set(); this.snapshotGoalId = null; this.schedule(); }
   selectTab(previous, next) {
     if (previous === next) return;
     this.textSelection = null;
@@ -1188,8 +1212,7 @@ export class TerminalChat {
       }
     } else if (this.panel === 'activity') {
       for (const item of this.activities) {
-        const worker = this.mode === 'delegate' && item.sessionId && item.sessionId !== (this.ui.activeTab || this.ui.sessionId);
-        const attribution = worker ? `Hands · ${item.agent || this.executor?.provider || 'executor'} · ` : '';
+        const attribution = this.actors.for(item.actorSessionId || item.sessionId, this.ui.activeTab || this.ui.sessionId).label + ' · ';
         put(`  ${item.closedAt ? '✓' : '›'} ${clip(attribution + item.summary, width - 4)}`, item.tool ? palette.muted : palette.accent, !item.tool);
         if (!item.tool) for (const line of wrap(item.details || '', width - 5)) put('    ' + line, palette.muted);
         if (item.inference) for (const line of wrap('Inference: ' + item.inference, width - 5)) put('    ' + line, palette.muted);
@@ -1212,7 +1235,7 @@ export class TerminalChat {
         const continuation = speaker !== null && speaker === assistantSpeaker;
         const entryLines = continuation ? layout.lines.slice(1) : layout.lines;
         if (speaker !== null) assistantSpeaker = speaker;
-        else if (!['tool', 'tool-tree', 'invocation', 'notice'].includes(entry.kind)) assistantSpeaker = null;
+        else if (!['tool', 'tool-tree', 'invocation', 'notice', 'actor-activity'].includes(entry.kind)) assistantSpeaker = null;
         if (entry.kind === 'assistant') for (let offset = 0; offset < entryLines.length - 1; offset++)
           this.contentHits.push({ type: 'response', entry, row: lines.length + offset, left: 3, right: width - 2 });
         if (entry.kind === 'approval') this.contentHits.push({ type: 'approval-details', id: entry.questionId, row: lines.length, left: 3, right: width - 2 });
@@ -1260,6 +1283,12 @@ export class TerminalChat {
       put('');
     }
     else if (entry.kind === 'notice') { for (const line of wrap(entry.text, width - 5)) put('  · ' + line, palette.muted); put(''); }
+    else if (entry.kind === 'actor-activity') {
+      const actor = this.actors.for(entry.actorSessionId, this.ui.activeTab || this.ui.sessionId);
+      const status = ['planned', 'running', 'completed', 'blocked', 'inconclusive'].includes(entry.status) ? entry.status : 'reported';
+      for (const line of wrap(`${actor.label} · ${entry.text} · ${entry.closed ? 'stopped' : status}`, Math.max(1, width - 4))) put(clip('  › ' + line, width), palette.muted);
+      put('');
+    }
     else if (entry.kind === 'tool') put('  › ' + clip(entry.text, width - 5), palette.muted);
     else {
       // Keep the original body for replay and copying; derive presentation only
@@ -1268,7 +1297,8 @@ export class TerminalChat {
       const displayText = clean(projection ? projection.plainText : entry.text);
       const isFormatted = Boolean(projection?.isFormatted);
       const tone = ['error', 'question'].includes(entry.kind) ? palette.warning : palette.agent;
-      const label = entry.kind === 'assistant' ? 'AGENT · ' + (entry.label || 'BZZY') : entry.kind === 'question' ? 'YOUR INPUT IS NEEDED' : entry.kind.toUpperCase();
+      const actor = this.actors.for(entry.actorSessionId || entry.peerSessionId, this.ui.activeTab || this.ui.sessionId);
+      const label = entry.kind === 'assistant' ? actor.role === 'main' ? 'MAIN · bzzy' : actor.label.replace(/^(Agent|Worker|Reviewer)/, word => word.toUpperCase()) : entry.kind === 'question' ? 'YOUR INPUT IS NEEDED' : entry.kind.toUpperCase();
       const displayLabel = entry.kind === 'assistant' ? clip(label, width - 4) : label;
       if (isFormatted) {
         put(`  ${displayLabel}`, tone, true);

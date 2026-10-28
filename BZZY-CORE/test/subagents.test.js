@@ -54,7 +54,8 @@ const rejected = (operation, pattern) => assert.rejects(async () => operation(),
 function finishOfflineRound(id) {
   const job = getRecord('assignment', id), round = getRecord('round', `${id}:${job.currentRound}`);
   const result = { ...round, state: 'awaiting_review', summary: 'Offline claim needs supervisor inspection.',
-    workerClaim: 'partial', report: { status: 'partial', summary: 'Offline claim.', evidence: [] }, artifacts: [], changes: [], finishedAt: now() };
+    workerClaim: 'partial', report: { status: 'partial', summary: 'Offline claim.', evidence: [] }, artifacts: [], changes: [],
+    usage: { tokens: 0, available: true, accountingComplete: true, elapsedSeconds: 0 }, finishedAt: now() };
   putRecord('round', `${id}:${job.currentRound}`, result); putRecord('assignment', id, { ...job, latestReport: result });
 }
 

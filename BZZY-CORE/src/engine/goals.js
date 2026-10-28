@@ -18,11 +18,11 @@ export function parseGoalCommand(text) {
   return ['status', 'resume', 'pause', 'cancel', 'clear'].includes(value) ? { action: value } : { objective: value };
 }
 
-export function newGoal(objective, tokenBudget) {
+export function newGoal(objective, tokenBudget, { workerBudgetPolicy } = {}) {
   if (!objective?.trim()) throw new Error('A goal needs an objective.');
   return { id: randomUUID(), objective: objective.trim(), status: 'active', tokenBudget: tokenBudget ?? null,
     tokensUsed: 0, turns: 0, noActivityTurns: 0, blockerStreak: 0, lastBlocker: null,
-    evidence: [], createdAt: new Date().toISOString() };
+    evidence: [], createdAt: new Date().toISOString(), ...(workerBudgetPolicy ? { workerBudgetPolicy: structuredClone(workerBudgetPolicy) } : {}) };
 }
 
 export function continuationPrompt(goal) {

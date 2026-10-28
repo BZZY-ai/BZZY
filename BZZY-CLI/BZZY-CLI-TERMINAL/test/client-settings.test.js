@@ -15,7 +15,8 @@ import { ClientSettings } from '../src/client-settings.js';
 import { PairingQRImage } from '../src/pairing-qr-image.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { palette, createTerminalTheme } from '../src/terminal-theme.js';
-import { createSession } from '../src/store.js';
+import { createSession, loadSession, saveSession } from '../src/store.js';
+import { getWorkerBudgetSettings, setWorkerBudgetSettings } from '@bzzy/core/engine/worker-budget.js';
 import { BUILTINS, providers, addProvider, defaultSelection } from '../src/providers.js';
 import { home, readJson, writeJson } from '../src/files.js';
 import { listRecords, getRecord, putRecord, digest } from '../src/database.js';
@@ -178,6 +179,86 @@ test('BZZY Core Settings exposes one action that updates both CLI and Core', asy
   assert.equal(updatedWith, ui);
   assert.equal(ui.settings.busy, false);
   assert.equal(listRecords('execution').length, 0);
+});
+
+test('Agent execution settings save owner allocations for new goals without changing live work or permissions', async () => {
+  const { ui, output } = terminal(), beforeSession = loadSession(ui.sessionId);
+  ui.tui.value = 'Retain this draft'; ui.tui.cursor = 4; ui.openSettings(); ui.settings.page = 'core';
+  await ui.settings.run('worker-budget'); assert.equal(ui.settings.page, 'worker-budget');
+  assert.match(ui.settings.rows().map(row => row.text).join('\n'), /new goals.*Existing goals keep/i);
+  assert.equal(ui.settings.rows().some(row => row.action === 'worker-budget:apply'), false);
+  ui.chooseOne = async () => 'fixed'; await ui.settings.run('worker-budget:mode');
+  const answers = ['30000', '600', '50000', 'unlimited']; ui.ask = async () => answers.shift();
+  for (const field of ['initialTokenBudget', 'initialRuntimeSeconds', 'maxTokenBudget', 'maxRuntimeSeconds']) await ui.settings.run(`worker-budget:${field}`);
+  assert.equal(getWorkerBudgetSettings().revision, 0, 'Editing is a draft until Save');
+  for (const [columns, rows] of [[50, 20], [80, 24]]) {
+    Object.assign(output, { columns, rows }); ui.settings.focusAction('worker-budget:save'); ui.tui.render();
+    assert.ok(ui.tui.hitTargets.some(hit => hit.action === 'worker-budget:save'));
+    assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
+  }
+  await ui.settings.run('worker-budget:save');
+  assert.equal(ui.settings.warning, false, ui.settings.message);
+  assert.deepEqual(getWorkerBudgetSettings(), { version: 1, revision: 1, mode: 'fixed', initialTokenBudget: 30000, initialRuntimeSeconds: 600,
+    maxTokenBudget: 50000, maxRuntimeSeconds: null, reportReserveTokens: 2000, supervisorReserveTokens: 2000 });
+  assert.deepEqual(loadSession(ui.sessionId), beforeSession); assert.equal(listRecords('execution').length, 0);
+  assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
+  ui.settings.back(); assert.equal(ui.settings.page, 'core');
+  ui.tui.setPanel('chat'); assert.equal(ui.tui.value, 'Retain this draft'); assert.equal(ui.tui.cursor, 4);
+});
+
+test('Agent execution applies saved policy to a paused goal only after explicit confirmation', async () => {
+  const { ui } = terminal(), saved = loadSession(ui.sessionId);
+  saved.goal = { id: randomUUID(), status: 'paused', objective: 'Retain the original task', tokenBudget: 90000 };
+  saved.executionState = 'paused'; saveSession(saved);
+  ui.openSettings(); ui.settings.page = 'core'; await ui.settings.run('worker-budget');
+  assert.ok(ui.settings.rows().some(row => row.action === 'worker-budget:apply'));
+  let offered; ui.chooseOne = async (_title, choices) => { offered = choices; return 'keep'; };
+  await ui.settings.run('worker-budget:apply'); assert.equal(loadSession(saved.id).goal.workerBudgetPolicy, undefined);
+  assert.equal(offered[0].selected, true); assert.match(offered[1].description, /allowances.*permissions.*scope.*overall budget/i);
+  ui.chooseOne = async () => 'apply'; await ui.settings.run('worker-budget:apply');
+  const current = loadSession(saved.id);
+  assert.equal(ui.settings.warning, false, ui.settings.message); assert.equal(current.goal.workerBudgetPolicy.revision, 0);
+  assert.equal(current.goal.tokenBudget, 90000); assert.equal(current.goal.id, saved.goal.id); assert.equal(current.executionState, 'paused');
+  assert.equal(listRecords('execution').length, 0); assert.match(ui.settings.message, /future workers/);
+});
+
+test('Agent execution drafts and current-goal application reject stale settings and switched goal contexts', async () => {
+  const { ui } = terminal(), saved = loadSession(ui.sessionId);
+  saved.goal = { id: randomUUID(), status: 'paused', tokenBudget: 90000 }; saved.executionState = 'paused'; saveSession(saved);
+  ui.openSettings(); ui.settings.page = 'core'; await ui.settings.run('worker-budget');
+  const original = getWorkerBudgetSettings();
+  setWorkerBudgetSettings({ mode: 'fixed' }, { expectedRevision: original.revision });
+  await ui.settings.run('worker-budget:save'); assert.match(ui.settings.message, /changed/); assert.equal(getWorkerBudgetSettings().mode, 'fixed');
+  ui.settings.back(); await ui.settings.run('worker-budget');
+  ui.chooseOne = async () => {
+    const current = loadSession(saved.id); current.goal.id = randomUUID(); saveSession(current); return 'apply';
+  };
+  await ui.settings.run('worker-budget:apply'); assert.equal(ui.settings.warning, true); assert.match(ui.settings.message, /goal changed/);
+  assert.equal(loadSession(saved.id).goal.workerBudgetPolicy, undefined);
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('Agent execution remains local with Core stopped and rejects a switched private host during an edit', async () => {
+  const { ui } = terminal(); ui.openSettings(); ui.settings.page = 'core'; ui.coreLifecycleInterrupted = true;
+  await ui.settings.run('worker-budget'); assert.equal(ui.settings.warning, false, ui.settings.message);
+  const before = getWorkerBudgetSettings();
+  ui.ask = async () => { process.env.BZZY_HOME = path.join(directory, 'other-host'); return '45000'; };
+  await ui.settings.run('worker-budget:initialTokenBudget');
+  assert.equal(ui.settings.warning, true); assert.match(ui.settings.message, /host, terminal or goal changed/);
+  assert.equal(fs.existsSync(path.join(directory, 'other-host')), false);
+  process.env.BZZY_HOME = path.join(directory, 'private'); assert.deepEqual(getWorkerBudgetSettings(), before);
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('only an ordinary owner terminal goal offers explicit future-worker policy adoption', async () => {
+  for (const extra of [{ parentSessionId: randomUUID() }, { role: 'reviewer' }, { purpose: 'agent', agentId: randomUUID() }, { importedUntrusted: true }]) {
+    const { ui } = terminal(), saved = loadSession(ui.sessionId);
+    Object.assign(saved, extra, { executionState: 'paused', goal: { id: randomUUID(), status: 'paused', tokenBudget: 80000 } }); saveSession(saved);
+    ui.openSettings(); ui.settings.page = 'core'; await ui.settings.run('worker-budget');
+    assert.equal(ui.settings.rows().some(row => row.action === 'worker-budget:apply'), false);
+    await ui.settings.run('worker-budget:apply'); assert.equal(loadSession(saved.id).goal.workerBudgetPolicy, undefined);
+    assert.equal(listRecords('execution').length, 0);
+  }
 });
 
 test('Gmail settings save distinct mailbox credentials privately without reading mail or changing the chat draft', async () => {
@@ -628,7 +709,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'email-access', 'update-bzzy', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'email-access', 'worker-budget', 'update-bzzy', 'back']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');

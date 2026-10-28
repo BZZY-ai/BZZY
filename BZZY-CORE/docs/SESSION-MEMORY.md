@@ -1,7 +1,7 @@
 # Session history memory
 
 Core keeps a bounded hierarchical index of a terminal session's saved visible
-conversation. It belongs to the existing session ID: renaming the alias, changing
+conversation and typed host assignment receipts. It belongs to the existing session ID: renaming the alias, changing
 models or switching Solo, Delegate and Validate preserves it. Two terminals in the
 same directory have separate indexes. There is no new project entity.
 
@@ -14,8 +14,18 @@ context window or lossless model recall.
 ## Index and recall
 
 During a continuing native goal and after finalized responses, Core indexes visible user/assistant messages and
-input questions/answers. Tool output, private reasoning, approval answers and
-intermediate debate transcripts are excluded. Leaves group eight logical messages
+input questions/answers. A separate allowlisted projection adds specialist
+creation, execution, allocation warnings/extensions, stopped rounds and supervisor
+reviews. Receipts retain assignment/round identities, immutable specialist pins,
+stop reasons, missing-report flags and report/evidence references. Creation and
+follow-up receipts also retain a bounded, sanitized preview of the parent-assigned
+objective, so a generic or missing report does not erase which check was assigned.
+The focused objective for a later round stays distinct from the original task. Worker claims
+and supervisor review outcomes stay distinct; an accepted review is not proof of
+a vulnerability. Replayed copies of the same transition count once.
+
+Raw tool output, worker transcripts, account bindings, private reasoning, approval
+answers and intermediate debate transcripts are excluded. Leaves group eight logical source messages/receipts
 or about 12 KB of source text, reading bounded Unicode slices. Ready sibling
 summaries form a binary tree. Source hashes are checked before publishing or
 expanding; maps validate node integrity without rereading the entire original
@@ -27,6 +37,13 @@ streamed assistant deltas, before source excerpts are sliced. Logical messages
 larger than 128 KiB or 4,096 deltas are safely omitted from derived material and
 memory expansion, with an explicit omission marker. Their original saved history
 remains intact for local inspection; no partial secret fragments are exposed.
+Task previews expose at most 600 UTF-8 bytes. Credential and private email-alias
+masking processes the complete original task before bounding it; originals above
+128 KiB receive an omission marker. Raw task text is not copied into a derived
+record. Its source hash remains independent of current credentials, and the
+complete original is used only as ephemeral redaction context. Receipt masking
+likewise processes the complete projected receipt before slices.
+Projection versions and hashes are checked when original receipts are reopened.
 
 Ordinary chat and Delegate supervisors receive a bounded map on first recall,
 provider handoff or native context compaction. Models can call
@@ -34,7 +51,12 @@ provider handoff or native context compaction. Models can call
 and inspect sanitized original excerpts. Tools cannot select another session.
 Native provider compaction and recent-message handoffs remain in place.
 Independent workers receive explicit mission context, scope and original evidence,
-without arbitrary parent-history summary access.
+without arbitrary parent-history summary access. After context refresh, a bounded
+current assignment capsule comes from live Core records separately from history.
+An old summary saying a worker was running cannot restart it, override a newer
+round, enable a disabled specialist or supply budget/account permissions. Live
+usage has its own budget view; polling counters does not invalidate structural
+task-state revisions on every tick.
 
 ## Background compactor
 
@@ -70,8 +92,13 @@ An already dispatched summary can finish against immutable sources during an
 ordinary foreground turn. Paused compaction requires explicit resume.
 
 Completed native messages now advance deterministic indexing while the overall
-goal continues. Source generation 2 masks whole messages and excludes unfinished
-tails; older derived maps rebuild without rewriting original events. Owner-only
+goal continues. Source generation 4 retains whole-message masking and the
+unfinished-tail boundary, adds typed assignment receipts and keeps task previews
+separate from worker prose and private bindings. Older
+derived maps rebuild in bounded batches without rewriting original events or
+active goal contracts. Source-local memory/compactor cursors, nodes, jobs and
+accounting receipts are excluded from project transfer; recipients rebuild their
+own indexes from historical originals and never resume imported compactor jobs. Owner-only
 settings can allow budgeted inference during foreground work, with a cooldown;
 the default retains foreground priority. See [long-run reliability](LONG-RUN-RELIABILITY.md)
 for update/resume behavior, source boundaries and scheduling controls.

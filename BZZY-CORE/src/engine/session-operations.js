@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { getWorkerBudgetSettings } from './worker-budget.js';
 import { ensureRuntime, runtimeRequest, requireOwner } from './runtime.js';
 import { delay } from './delegation.js';
 import { loadSession, sessionPath, writeJson, recordSessionLifecycle } from './store.js';
@@ -93,7 +94,7 @@ export async function enqueueGoalTurn(sessionId, owner, options = {}, { resume =
             limits: { ...boundary.limits, ...fresh.contract.limits } }, objective);
           fresh.policy = fresh.contract.policy; fresh.strictPolicy ||= strict;
         }
-        fresh.goal = newGoal(objective, options.tokenBudget || fresh.contract.limits.tokenBudget);
+        fresh.goal = newGoal(objective, options.tokenBudget || fresh.contract.limits.tokenBudget, { workerBudgetPolicy: getWorkerBudgetSettings() });
         fresh.acceptance = null; fresh.summary = null; fresh.failure = null; fresh.stopReason = null;
         if (previousGoal) putRecord('goal-history', previousGoal.id, { sessionId: fresh.id, ...previousGoal,
           supersededAt: now(), supersededBy: fresh.goal.id }, db);

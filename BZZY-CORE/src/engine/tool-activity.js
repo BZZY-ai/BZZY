@@ -57,10 +57,12 @@ export function createToolActivityProjector({ sessionId, runId, secrets } = {}) 
     const namespace = data.runId || runId || 'historical';
     const [label, detail] = type === 'tool.action' && data.label ? [data.label, data.detail] : describe(name, input, item);
     redactor ||= diagnosticRedactor({ ...(secrets ? { secrets } : {}), maxString: 2048, maxItems: 8 });
-    const safe = redactor.scrub({ name, label, detail: typeof detail === 'string' ? detail : '' });
+    const safe = redactor.scrub({ name, label, detail: typeof detail === 'string' ? detail : '', actorName: data.actorName });
     const line = value => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000) : '';
     return { version: 1, id: `${namespace}:${callId}`, callId, runId: namespace, actorSessionId,
       phase, name: line(safe.name), label: line(safe.label), detail: line(safe.detail), provenance,
+      ...(['main', 'subagent', 'worker', 'reviewer', 'peer'].includes(data.actorRole) ? { actorRole: data.actorRole } : {}),
+      ...(line(safe.actorName) ? { actorName: line(safe.actorName) } : {}),
       ...(Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs } : {}), ...(Number.isInteger(exitCode) ? { exitCode } : {}),
       ...(data.occurredAt ? { occurredAt: data.occurredAt } : {}) };
   };

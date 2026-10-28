@@ -1,4 +1,4 @@
-import { clean, clip, cellWidth } from './terminal-format.js';
+import { clean, clip, cellWidth, wrap } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
 
 const tones = [palette.agent, palette.goalSuccess, palette.warning, palette.accent, palette.goalActive, palette.yolo];
@@ -17,6 +17,11 @@ const sequence = data => Number.isSafeInteger(data.seq) && data.seq > 0 ? data.s
 const roundOf = data => Number.isSafeInteger(data.round) && data.round > 0 ? data.round
   : Number.isSafeInteger(data.currentRound) && data.currentRound > 0 ? data.currentRound : 1;
 const stateOf = value => Object.hasOwn(labels, value) ? value : 'unavailable';
+const stopLabels = { runtime_limit: 'Runtime allowance reached', token_limit: 'Token allowance reached',
+  allocation_checkpoint: 'Partial report handoff', needs_context: 'Context requested', cancelled: 'Cancelled',
+  parent_stopped: 'Main stopped', user_pause: 'Paused by owner', interrupted: 'Interrupted' };
+const status = entry => entry.stopReason === 'allocation_checkpoint' && ['awaiting_review', 'finished', 'budget_limited', 'timed_out', 'interrupted'].includes(entry.state)
+  ? 'Partial handoff' : labels[entry.state] || labels.unavailable;
 const sessionFor = (snapshot, explicit) => explicit || snapshot?.session?.id || snapshot?.id;
 function sameView(data, sessionId, skill = false) {
   if (!safeId(sessionId)) return false;
@@ -25,11 +30,37 @@ function sameView(data, sessionId, skill = false) {
   return !data.parentSessionId || data.parentSessionId === sessionId;
 }
 function textFor(entry) {
-  return `${entry.invocationType === 'skill' ? 'Skill' : 'Agent'} · ${entry.name} · ${labels[entry.state] || labels.unavailable}`
+  return `${entry.invocationType === 'skill' ? 'Skill' : 'Agent'} · ${entry.name} · ${status(entry)}`
     + (entry.invocationType === 'agent' && entry.round > 1 ? ` · round ${entry.round}` : '')
-    + (entry.invocationType === 'skill' && entry.scope ? ` · ${entry.scope}` : '');
+    + (entry.invocationType === 'skill' && entry.scope ? ` · ${entry.scope}` : '')
+    + (entry.invocationType === 'skill' && entry.actorLabel ? ` · ${entry.actorLabel}` : '');
 }
 function refresh(entry) { entry.text = textFor(entry); return entry; }
+const amount = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? value : null;
+function presentation(row) {
+  const budget = row.budget && typeof row.budget === 'object' ? {
+    ...Object.fromEntries(['tokensUsed', 'tokensCharged', 'tokenLimit', 'initialTokenBudget', 'elapsedSeconds', 'runtimeLimitSeconds']
+      .map(key => [key, amount(row.budget[key])])),
+    complete: row.budget.complete === true, mode: row.budget.mode === 'adaptive' ? 'adaptive' : 'fixed',
+    softReached: row.budget.softReached === true, canRequestExtension: row.budget.canRequestExtension === true,
+  } : null;
+  const result = row.result && typeof row.result === 'object' ? {
+    saved: row.result.saved === true, missingReport: row.result.missingReport === true,
+    reportArtifactId: safeId(row.result.reportArtifactId) ? row.result.reportArtifactId : null,
+  } : null;
+  return { budget, result,
+    stopReason: Object.hasOwn(stopLabels, row.stopReason) ? row.stopReason : null,
+    parentState: ['idle', 'running', 'paused', 'waiting_for_input', 'verifying', 'failed', 'complete'].includes(row.parentState) ? row.parentState : null };
+}
+export function attributeInvocationActors(entries, actors, { sessionId } = {}) {
+  const changed = [];
+  for (const entry of entries) {
+    if (entry.kind !== 'invocation' || entry.invocationType !== 'skill' || entry.sessionId !== sessionId) continue;
+    const label = actors.for(entry.actorSessionId, sessionId).label;
+    if (entry.actorLabel !== label) { entry.actorLabel = label; refresh(entry); changed.push(entry); }
+  }
+  return changed;
+}
 function result(entry, changed = false) { return { handled: true, ...(entry ? { entry } : {}), changed }; }
 function eventState(type, data) {
   if (type === 'assignment.created' || type === 'assignment.followup') return 'starting';
@@ -55,6 +86,7 @@ export function recordInvocationEvent(entries, type, data = {}, { sessionId } = 
     if (previous) return result(previous);
     const entry = refresh({ kind: 'invocation', invocationType: 'skill', invocationId: id, sessionId,
       actorSessionId: data.sessionId, name: display(data.name), scope: ['project', 'global'].includes(data.scope) ? data.scope : null,
+      actorLabel: data.sessionId === sessionId ? 'Main' : `Worker · ${String(data.sessionId || '').slice(0, 8) || 'Unknown'}`,
       state: 'loaded', eventSeq: sequence(data) });
     entries.push(entry); return result(entry, true);
   }
@@ -74,6 +106,7 @@ export function recordInvocationEvent(entries, type, data = {}, { sessionId } = 
     if (round < entry.round || seq && seq <= (entry.eventSeq || 0)) return result(entry);
     if (round === entry.round && (entry.snapshotBound && seq && seq <= entry.snapshotSeq || phase(next) < phase(entry.state))) return result(entry);
     if (round === entry.round && next === entry.state) { entry.eventSeq = Math.max(seq, entry.eventSeq || 0); return result(entry); }
+    if (round > entry.round) Object.assign(entry, { budget: null, result: null, stopReason: null, parentState: null, presentationKey: undefined });
     Object.assign(entry, { round, state: next, eventSeq: Math.max(seq, entry.eventSeq || 0), snapshotBound: false });
   } else {
     entry = { kind: 'invocation', invocationType: 'agent', invocationId, assignmentId: id, sessionId,
@@ -107,15 +140,17 @@ export function reconcileInvocationEntries(entries, snapshot, { sessionId } = {}
     if (round === entry.round && (settledStates.has(entry.state) && !settledStates.has(state)
       || activeStates.has(state) && phase(entry.state) > 1 && !['unavailable', 'unknown'].includes(entry.state))) continue;
     entry.snapshotBound = true; entry.snapshotSeq = entry.eventSeq || 0;
-    if (entry.round === round && entry.state === state) continue;
-    Object.assign(entry, { round, state }); refresh(entry); changed.push(entry);
+    const projection = presentation(row), metadata = JSON.stringify(projection);
+    if (entry.round === round && entry.state === state && entry.presentationKey === metadata) continue;
+    Object.assign(entry, { round, state, ...projection, presentationKey: metadata,
+      ...(safeId(row.workerSessionId) ? { actorSessionId: row.workerSessionId } : {}) }); refresh(entry); changed.push(entry);
   }
   return changed;
 }
 
 export function invocationEntryLayout(entry, width, theme) {
   width = Math.max(1, Math.floor(width));
-  const agent = entry.invocationType === 'agent', state = labels[entry.state] || labels.unavailable;
+  const agent = entry.invocationType === 'agent', state = status(entry);
   const tone = agent ? tones[(entry.agentSlot || 0) % tones.length] : palette.accent;
   const icon = agent ? activeStates.has(entry.state) ? '●' : entry.state === 'failed' || entry.state === 'rejected' ? '✕' : '◇' : '◆';
   const prefix = `  ${icon} ${agent ? 'Agent' : 'Skill'} · `;
@@ -128,5 +163,25 @@ export function invocationEntryLayout(entry, width, theme) {
     lines.push(theme.color(clip(prefix + entry.name, width), tone, true));
     lines.push(theme.color(clip('    ' + details, width), tone));
   }
+  if (!agent && entry.actorLabel) lines.push(theme.color(clip('    By ' + entry.actorLabel, width), tone));
+  const number = value => Math.round(value).toLocaleString('en-US');
+  const detail = text => {
+    for (const line of wrap(text, Math.max(1, width - 4))) lines.push(theme.color(clip('    ' + line, width), palette.muted));
+  };
+  if (agent && entry.budget) {
+    const b = entry.budget;
+    const used = b.tokensUsed == null ? 'unknown' : `${b.complete ? '' : '≥'}${number(b.tokensUsed)}`;
+    detail(`Tokens ${used} / ${b.tokenLimit == null ? 'unknown allowance' : number(b.tokenLimit)}${!b.complete ? ' · usage incomplete' : ''}`);
+    if (!b.complete && b.tokensCharged != null && b.tokensCharged !== b.tokensUsed) detail(`Charged ${number(b.tokensCharged)} tokens · conservative accounting`);
+    if (b.elapsedSeconds != null || b.runtimeLimitSeconds != null) detail(`Runtime ${b.elapsedSeconds == null ? 'unknown' : number(b.elapsedSeconds) + 's'} / ${b.runtimeLimitSeconds == null ? 'unknown allowance' : number(b.runtimeLimitSeconds) + 's'}`);
+    if (b.softReached) detail(b.canRequestExtension ? 'Allocation nearly used · extension may be requested' : 'Allocation nearly used · save partial report');
+  }
+  if (agent && entry.result) {
+    if (entry.result.saved) detail('Report saved' + (entry.result.reportArtifactId ? ` · ${entry.result.reportArtifactId.slice(0, 8)}` : ''));
+    else if (entry.result.missingReport) detail('Report missing · main recovery needed');
+    if (['awaiting_review', 'finished', 'budget_limited', 'timed_out', 'interrupted', 'failed'].includes(entry.state)) detail('Next · main reviews available work and chooses the next step');
+  }
+  if (agent && entry.stopReason) detail(stopLabels[entry.stopReason]);
+  if (agent && entry.parentState) detail(`Main state · ${entry.parentState.replace(/_/g, ' ')}`);
   lines.push(''); return { lines };
 }

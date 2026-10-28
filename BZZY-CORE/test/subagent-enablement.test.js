@@ -48,6 +48,7 @@ function beginRun() {
 function finishRound(id) {
   const job = getRecord('assignment', id), round = { ...getRecord('round', `${id}:1`), state: 'awaiting_review',
     report: { status: 'partial', summary: 'Synthetic evidence remains for owner review.', evidence: [] },
+    usage: { tokens: 0, available: true, accountingComplete: true, elapsedSeconds: 0 },
     changes: [], artifacts: [], finishedAt: now() };
   putRecord('round', `${id}:1`, round); putRecord('assignment', id, { ...job, latestReport: round });
 }

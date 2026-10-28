@@ -68,7 +68,7 @@ test('delegate handoffs and attributed activity stay readable without exposing r
     assert.equal(ui.tui.delegationPhase, 'Executor running');
     ui.event('activity', { id: 'worker-activity', sessionId: 'worker-chat', agent: 'deepseek', status: 'running', summary: 'Checking archive entry points', details: 'I am mapping the supplied files and recording evidence for the supervisor.' });
     ui.tui.setPanel('activity'); ui.tui.render();
-    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Hands · deepseek · Checking archive entry points/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Worker · worker-c · Checking archive entry points/);
     ui.event('assignment.finished', { id: 'assignment-a', round: 1, state: 'awaiting_review', report: { summary: 'RAW-REPORT-MUST-STAY-OUT', workerClaim: 'complete' } });
     assert.equal(ui.tui.delegationPhase, 'Supervisor reviewing');
     ui.tui.setPanel('chat'); ui.tui.render();

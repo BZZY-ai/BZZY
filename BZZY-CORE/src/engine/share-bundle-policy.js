@@ -14,7 +14,7 @@ const privateSuffix = /(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|AUTH_TOKEN|SECRET|P
 const workflowAuthorityField = /^(?:workflowAdmission|workflowSelection|workflowBinding|goalWorkflow|workflowReceipt|workflowPin|subagentRouting)$/i;
 // These snapshots belong to the sender's native process and event sequence.
 // They are rebuilt locally, never resumed from a project/Library package.
-const nativeRuntimeAuthorityField = /^(?:nativeContext|nativeContextBudget|nativeBackendReadiness|contextEfficiency|coreSkillsProtocol|sessionMemoryRefresh|sessionMemorySeen)$/i;
+const nativeRuntimeAuthorityField = /^(?:nativeContext|nativeContextBudget|nativeBackendReadiness|contextEfficiency|coreSkillsProtocol|sessionMemoryRefresh|sessionMemorySeen|workerBudgetPolicy|workerBudget|workerBudgetSettings)$/i;
 const secretPattern = /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\bsk-[a-zA-Z0-9_-]{16,}|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/;
 export const SHARE_LIMITS = Object.freeze({ bytes: 256 * 1024 * 1024, fileBytes: 64 * 1024 * 1024, entries: 50000, records: 50000, events: 100000 });
 

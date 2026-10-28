@@ -8,7 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { getSkillSignupAliases, setSkillSignupAliases, clearSkillSignupAliases } from '../src/engine/skill-account-policy.js';
 import { createSkill, setSkillEnabled, readSkill, deleteSkill } from '../src/engine/skills.js';
 import { ToolHost, taskTools, bridgeRequest } from '../src/engine/tools.js';
-import { createSession, saveSession, loadSession } from '../src/engine/store.js';
+import { createSession, saveSession, loadSession, lockFile } from '../src/engine/store.js';
+import { getWorkerBudgetSettings, setWorkerBudgetSettings } from '../src/engine/worker-budget.js';
 import { listRecords, putRecord, events } from '../src/engine/database.js';
 import { readJson, writeJson } from '../src/engine/files.js';
 import { CoreAgents } from '../src/agents.js';
@@ -50,6 +51,61 @@ test('host alias administration preserves other private configuration, revisions
   assert.deepEqual(clearSkillSignupAliases(entry.id, { expectedRevision: 1 }), { skillId: entry.id, cleared: true, revision: 2 });
   assert.deepEqual(getSkillSignupAliases(entry.id).approvedSignupAliases, []);
   assert.equal(setSkillSignupAliases(entry.id, aliases, { expectedRevision: 2 }).revision, 3);
+});
+
+test('cross-process alias edits respect the shared config lock and preserve a newly restrictive worker policy', () => {
+  const entry = skill(); setSkillSignupAliases(entry.id, aliases, { expectedRevision: 0 });
+  const policy = setWorkerBudgetSettings({ mode: 'fixed', initialTokenBudget: 12000, maxTokenBudget: 12000,
+    initialRuntimeSeconds: 120, maxRuntimeSeconds: 120 }, { expectedRevision: 0 });
+  const stricter = { ...policy, revision: policy.revision + 1, initialTokenBudget: 10000, maxTokenBudget: 10000,
+    initialRuntimeSeconds: 90, maxRuntimeSeconds: 90 };
+  const mutate = (operation, revision) => {
+    const source = `import {setSkillSignupAliases,clearSkillSignupAliases} from ${JSON.stringify(new URL('../src/engine/skill-account-policy.js', import.meta.url).href)};
+      try { ${operation === 'set' ? `setSkillSignupAliases(${JSON.stringify(entry.id)},${JSON.stringify(aliases.slice(0, 2))},{expectedRevision:${revision}})` : `clearSkillSignupAliases(${JSON.stringify(entry.id)},{expectedRevision:${revision}})`};
+        process.stdout.write(JSON.stringify({ok:true}));
+      } catch(error) {process.stdout.write(JSON.stringify({code:error.code,message:error.message}));}`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], { env: process.env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
+  };
+  const release = lockFile(`${config}.lock`);
+  try {
+    writeJson(config, { ...readJson(config), workerBudgetSettings: stricter, theme: { palette: 'black' } });
+    const before = fs.readFileSync(config, 'utf8');
+    for (const operation of ['set', 'clear']) {
+      const result = mutate(operation, 1);
+      assert.equal(result.code, 'SKILL_ACCOUNT_POLICY_INVALID');
+      assert.ok(!result.message.includes(directory)); assert.ok(!result.message.includes('config.json.lock'));
+      assert.equal(fs.readFileSync(config, 'utf8'), before);
+    }
+  } finally { release(); }
+  assert.deepEqual(mutate('set', 1), { ok: true });
+  assert.deepEqual(getWorkerBudgetSettings(), stricter); assert.equal(getSkillSignupAliases(entry.id).revision, 2);
+  assert.deepEqual(mutate('clear', 2), { ok: true });
+  assert.deepEqual(getWorkerBudgetSettings(), stricter); assert.equal(getSkillSignupAliases(entry.id).revision, 3);
+  assert.deepEqual(readJson(config).theme, { palette: 'black' });
+});
+
+test('cross-process retired bridge cleanup uses the same config lock and keeps restrictive worker settings', () => {
+  skill();
+  const policy = setWorkerBudgetSettings({ mode: 'fixed', initialTokenBudget: 11000, maxTokenBudget: 11000,
+    initialRuntimeSeconds: 100, maxRuntimeSeconds: 100 }, { expectedRevision: 0 });
+  writeJson(config, { ...readJson(config), notifications: { telegram: { enabled: true }, iphone: { enabled: true } } });
+  const cleanup = () => {
+    const source = `import {retireTelegram} from ${JSON.stringify(new URL('../src/engine/migrations.js', import.meta.url).href)};
+      try {await retireTelegram();process.stdout.write(JSON.stringify({ok:true}));}
+      catch(error){process.stdout.write(JSON.stringify({code:error.code,message:error.message}));}`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], { env: process.env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
+  };
+  const release = lockFile(`${config}.lock`);
+  try {
+    const before = fs.readFileSync(config, 'utf8'), result = cleanup();
+    assert.equal(result.code, 'CONFIG_UNAVAILABLE'); assert.ok(!result.message.includes(directory));
+    assert.equal(fs.readFileSync(config, 'utf8'), before);
+  } finally { release(); }
+  assert.deepEqual(cleanup(), { ok: true });
+  assert.deepEqual(getWorkerBudgetSettings(), policy);
+  assert.deepEqual(readJson(config).notifications, { iphone: { enabled: true } });
 });
 
 test('invalid alias input never edits the store and damaged configuration errors reveal no raw contents', () => {
