@@ -157,6 +157,9 @@ Implemented:
   supports multi-gigabyte ZIP64 archives without aggregate capture caps;
   large individual sources use disk-backed text/JSON redaction and binary scanning.
   `--bounded` opts into the previous size-limited project capture.
+  `bzzy --full-debug-export SESSION` validates and detaches a durable export job;
+  owner-local status retains progress/results after the shell closes. Completion
+  and failure use the own-phone notification queue without starting model work.
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).

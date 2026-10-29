@@ -89,6 +89,11 @@ interrupted dispatch remains uncertain and is never automatically replayed.
 Authorization, current device binding and preferences are rechecked before
 every eligible attempt. Expiry, revocation and Apple's/iOS delivery behavior
 still limit delivery; the service cannot guarantee that the phone displays an alert.
+The title allowlist also accepts `Full debug export ready` and
+`Full debug export failed`, with an optional safe alias. These alerts require
+the existing exact terminal resource/session routing hint; Agent/update routes
+and new metadata fields are rejected. Deploy this Relay build before enabling
+detached-export alerts in Core. No pairing or encrypted application format changes.
 Bounded queue reads prioritize due alerts for the configured Apple environment,
 so older entries waiting for backoff or another environment cannot hide ready
 alerts for a different computer. A stream ending without an explicit final Apple

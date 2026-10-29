@@ -12,13 +12,15 @@ function alertPayload(value, hostId, grant) {
     if (typeof text !== 'string' || [...text].length > max || /[\x00-\x1f\x7f]/u.test(text)) fail('INVALID_PUSH');
   }
   const libraryCreation = /^(Skill|Agent) created( - .+)?$/.test(value.aps.alert.title);
-  if ((!libraryCreation && !/^(Goal (achieved|stalled|paused|cancelled)|Input needed)( - .+)?$|^BZZY update available$/.test(value.aps.alert.title)) ||
+  const debugExport = /^Full debug export (ready|failed)( - .+)?$/.test(value.aps.alert.title);
+  if ((!libraryCreation && !debugExport && !/^(Goal (achieved|stalled|paused|cancelled)|Input needed)( - .+)?$|^BZZY update available$/.test(value.aps.alert.title)) ||
     value.aps.sound !== 'default' || value.aps.category !== 'BZZY_UPDATE') fail('INVALID_PUSH');
   opaque(value.aps['thread-id']);
   const hint = value.bzzy;
   record(hint, ['v', 'eventId', 'hostId', 'destination', 'resource', 'sessionId', 'agentId']);
   if (hint.v !== 1 || hint.hostId !== hostId || !['terminal', 'agents', 'updates'].includes(hint.destination)) fail('INVALID_PUSH');
   opaque(hint.eventId);
+  if (debugExport && (hint.destination !== 'terminal' || hint.agentId !== undefined)) fail('INVALID_PUSH');
   if (hint.destination === 'updates') {
     if (libraryCreation || hint.resource !== undefined || hint.sessionId !== undefined || hint.agentId !== undefined) fail('INVALID_PUSH');
   } else if (!(libraryCreation && hint.resource === undefined && hint.sessionId === undefined && hint.agentId === undefined)) {

@@ -144,6 +144,9 @@ pipeline diagnostics start with updated runners. See
 
 For a deeper investigation, `/full_debug_export`, **Metrics → Full debug ZIP**
 or `bzzy debug full SESSION` creates `session-name_full_debug_ddmmyyyy.zip`.
+`bzzy --full-debug-export SESSION` detaches the capture and returns a job ID;
+`bzzy debug status JOB_ID` shows progress, its ZIP path or failure. Completion and
+failure queue an own-phone notification through Core's existing push service.
 It adds complete scoped record/event/message streams, memory and learning state,
 project files/notes/ledgers, referenced evidence and safe binary skill resources.
 Complete capture supports multi-gigabyte ZIP64 archives without aggregate capture

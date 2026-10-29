@@ -51,6 +51,30 @@ Use `/full_debug_export --bounded` or append `--bounded` to either terminal
 command when a size-limited project capture is preferred. The regular Markdown
 export remains available independently.
 
+For a long capture, run `bzzy --full-debug-export SESSION [FILE.zip]` from a
+second shell. `bzzy debug full SESSION --detach` and
+`bzzy full_debug_export SESSION --detach` use the same path. Add `--bounded` only
+when intentionally limiting optional project files. Core resolves the saved
+session first; missing/ambiguous names, worker sessions, invalid destinations and
+existing explicit output files fail before a process starts. It creates no chat
+and resumes no model or goal.
+
+The command returns an export job ID after a separate detached process starts.
+You can close the launching terminal. `bzzy debug status JOB_ID` reads the saved
+phase/counters, ZIP path or safe failure code. Only one detached export runs per
+host; repeating the same request returns its existing job instead of duplicating
+capture. Jobs persist in Core's private database. A dead worker becomes an
+interrupted failure when status or Core's push worker checks it; it is never
+automatically replayed. Inspect any existing output before explicitly retrying.
+
+Completion and failure each create one durable iPhone notification event. Alerts
+need a running Core, an enabled, fully approved own-phone registration and working
+Apple delivery. The export itself works while Core is stopped and leaves that
+stop intent intact; its notification waits until Core returns. The Relay server
+must include the new export-title allowlist. Direct Core APNs uses the existing
+private configuration. Notifications carry a safe alias/result or error, not
+project files or host output paths. Status remains available without phone push.
+
 The CLI runs full export in a separate Core worker so history scanning and file
 capture do not block terminal repainting. Metrics and the command-line exporter
 show the current capture phase, elapsed time and completed record/event/file/byte

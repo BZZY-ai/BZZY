@@ -87,6 +87,9 @@ Full debug ZIP:
   Optional destination: bzzy debug full "session-name" investigation_full.zip
   Optional bounded capture: /full_debug_export --bounded
   Or: bzzy debug full "session-name" investigation_full.zip --bounded
+  Detached: bzzy --full-debug-export "session-name" [FILE.zip]
+  Equivalent: bzzy debug full "session-name" --detach
+  Saved job: bzzy debug status JOB_ID
 
 Default filename:
 
@@ -99,6 +102,16 @@ ledgers, referenced execution/evidence/snapshot files, and skill resources.
 The full streams do not inherit the regular overview's text/array display caps.
 Complete capture is the default. The result reports mode, file count,
 uncompressed captured bytes and compressed ZIP bytes separately.
+
+The detached command validates the saved session and destination first, then
+returns a job ID while an independent process captures the ZIP. Closing its shell
+does not cancel capture. Status retains progress, the saved path or a safe error.
+Only one detached capture runs per host; identical active requests reuse it.
+Missing sessions create no jobs or chats. Interrupted jobs require inspection and
+explicit retry; they are never silently replayed. Core/session stop intent stays
+unchanged. Completion/failure enters Core's durable own-phone push queue. Delivery
+requires running Core, enabled phone alerts and updated Relay export-title support
+or configured direct Core APNs. No host output path enters the push payload.
 
 Inside the TUI, output goes into the saved terminal's original project directory.
 From a separate terminal, output goes into the calling directory or --cwd. Date

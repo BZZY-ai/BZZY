@@ -62,7 +62,8 @@ provider authorization. Closing/backgrounding iOS does not remove registration.
 
 Implemented events are `goal.completed`, `goal.stalled`, `goal.paused`,
 `goal.cancelled`, `goal.waiting_for_input`, `library.skill_created` and
-`library.agent_created`. An execution merely ending does not create a verified
+`library.agent_created`, plus `debug.export.completed` and `debug.export.failed`
+for explicitly requested detached diagnostic captures. An execution merely ending does not create a verified
 goal-completion alert. Titles use `Goal achieved - ALIAS`, `Goal stalled - ALIAS`
 or `Input needed - ALIAS` (the alias is omitted if unavailable/unsafe). Completion
 and stalled descriptions preview the last assistant reply, capped at **180 Unicode
@@ -93,6 +94,18 @@ the already-authorized source conversation; they never create or execute work.
 The Relay route requires a Relay release supporting the new creation titles and
 screen-only library navigation. Older direct Core APNs registrations continue
 using the local provider configuration.
+
+Detached full-debug captures queue `Full debug export ready - ALIAS` or
+`Full debug export failed - ALIAS` only after Core records a terminal job outcome.
+The event is bound to that job receipt and session; altered or imported outbox
+text cannot forge a result. Success includes an opaque job ID; failures contain
+only the safe export diagnostic. Host output paths, captured files and raw
+exceptions are excluded. Only the full own-phone grant may receive these alerts,
+and the existing terminal hint opens the authorized saved chat without executing
+anything. The Relay server needs the export-title allowlist from this version;
+older servers reject these titles. Core/device permissions, expiry, retries and
+uncertain-delivery rules remain in force. Stopped Core retains the queued event
+until it is explicitly started; the detached export itself can still finish.
 
 Blocked goals, provider usage limits, token/runtime budget limits, acceptance
 review, turn limits and interrupted goals requiring recovery all produce the

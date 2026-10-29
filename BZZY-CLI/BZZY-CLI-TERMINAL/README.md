@@ -484,6 +484,18 @@ For the full archive, use `/full_debug_export`, **Metrics → Full debug ZIP**,
 or **F** in Metrics. From another terminal, run `bzzy debug full "session-name"`
 or `bzzy full_debug_export "session-name"`. This creates
 `session-name_full_debug_ddmmyyyy.zip` in the same current-directory flow.
+
+For a detached capture, run `bzzy --full-debug-export "session-name" [FILE.zip]`
+or `bzzy debug full "session-name" --detach`. The saved session is validated
+before launch, then the command returns a job ID so you can close the shell.
+Use `bzzy debug status JOB_ID` for progress, the ZIP path or a safe error. A
+repeated identical active request returns the existing job; only one detached
+capture runs per host. It starts no model work and does not restart stopped Core.
+Completion/failure enters the existing iPhone push queue. Delivery requires Core
+running, an approved own-phone registration with alerts enabled, and an updated
+Relay accepting the export notification titles (or configured direct Core APNs).
+An interrupted capture is recorded for inspection and is not replayed automatically.
+
 Full export runs off the terminal UI thread. Metrics shows its current phase,
 elapsed time and completed counts while the terminal remains responsive; the
 command-line exporter writes progress to stderr and keeps its final result on

@@ -111,6 +111,9 @@ Usage:
   bzzy sessions                         Open named terminal chats; ↑/↓ select, Enter open
   bzzy debug export SESSION [FILE.md]   Export session + skills/agents here without stopping work
   bzzy debug full SESSION [FILE.zip] [--bounded]  Full diagnostic ZIP; --bounded limits project capture
+  bzzy --full-debug-export SESSION [FILE.zip]    Detach full export; notify iPhone on completion/error
+  bzzy debug full SESSION --detach              Same detached full export
+  bzzy debug status JOB_ID                      Saved export progress, output path or failure
   bzzy full_debug_export SESSION [--bounded]    Same full debug ZIP in the current directory
   bzzy export [FILE.zip]                Export this directory and all saved project context
   bzzy --import FILE.zip|CODE          Restore a project ZIP or Relay terminal copy here
@@ -287,6 +290,10 @@ export function parseArgs(argv) {
     else if (raw === '--no-pet') options.pet = false;
     else if (raw === '--device') options.device = true;
     else if (raw === '--detach') options.detach = true;
+    else if (raw === '--full-debug-export') {
+      if (args.length) throw new Error('Use bzzy --full-debug-export SESSION [FILE.zip] as its own command.');
+      args.push('debug', 'full'); options.detach = true;
+    }
     else if (raw === '--follow') options.follow = true;
     else if (raw === '--read-only') options.readOnly = true;
     else if (raw === '--capture-network') options.captureNetwork = true;
@@ -600,8 +607,21 @@ export async function main(argv) {
     const [command, ...rest] = args;
     if (command === 'debug' || command === 'full_debug_export') {
       const parts = command === 'full_debug_export' ? ['full', ...rest] : rest;
+      if (parts[0] === 'status') {
+        if (parts.length !== 2) throw new Error('Use bzzy debug status JOB_ID.');
+        const job = (await import('@bzzy/core/engine/debug-export-jobs.js')).debugExportJob(parts[1]);
+        const detail = job.result ? `ZIP: ${job.result.outputPath}` : job.error ? `${job.error.message} [${job.error.code}]` : `Phase: ${job.progress?.phase || 'starting'}`;
+        ui.event('debug.export.status', { ...job, message: `Full debug export ${job.id} · ${job.state}\n${detail}` }); return 0;
+      }
       if (!['export', 'full'].includes(parts[0]) || !parts[1] || parts.length > 3) throw new Error('Use bzzy debug export SESSION [FILE.md] or bzzy debug full SESSION [FILE.zip] [--bounded].');
       const full = parts[0] === 'full';
+      if (options.detach) {
+        if (!full) throw new Error('Detached export requires bzzy debug full SESSION --detach.');
+        const { startDebugExportJob } = await import('@bzzy/core/engine/debug-export-jobs.js');
+        const job = await startDebugExportJob(parts[1], { cwd: options.cwd, output: parts[2], captureMode: options.debugBounded ? 'bounded' : 'complete' });
+        ui.event('debug.export.started', { ...job, message: `Full debug export ${job.existing ? 'already running' : 'detached'} · ${job.id}\nYou can close this terminal. Check: bzzy debug status ${job.id}\nCompletion/errors enter the iPhone push queue; delivery needs Core running and phone alerts enabled.` });
+        return 0;
+      }
       const exportDebug = full ? (await import('@bzzy/core/engine/session-full-debug.js')).exportFullSessionDebugInWorker : (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug;
       const captureMode = options.debugBounded ? 'bounded' : 'complete';
       const id = findSession(parts[1]).id, progress = full ? createDebugExportProgressReporter({ captureMode }) : null;

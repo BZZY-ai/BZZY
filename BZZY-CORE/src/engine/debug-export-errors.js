@@ -10,6 +10,8 @@ const reasons = {
   SESSION_DEBUG_SIZE: 'The export reached a diagnostic size limit; no incomplete export was published.',
   SESSION_DEBUG_SOURCE_SIZE: 'A source exceeded the buffered capture boundary. Complete project capture supports large files using disk-backed processing.',
   SESSION_DEBUG_CAPTURE_MODE: 'Choose complete capture without a context byte budget, or bounded capture with its optional byte budget.',
+  SESSION_DEBUG_START: 'The detached export process could not start. No session work was resumed.',
+  SESSION_DEBUG_INTERRUPTED: 'The export process stopped before confirming completion. Inspect its output before retrying.',
   SESSION_DEBUG_PYTHON: 'Full debug ZIP requires Python 3.9 or newer on PATH.',
   SESSION_DEBUG_PACKAGE: 'The ZIP packager could not finish. Check available disk space and retry.',
   SESSION_DEBUG_PRIVATE_STORAGE: 'Full debug needs a project separate from private Core storage.',

@@ -7,9 +7,11 @@ import { authorizedPushRegistration } from './registration.js';
 import { sharedSecrets } from '../engine/share-bundle-policy.js';
 import { notificationPreview } from '../engine/notification-preview.js';
 import { libraryNotificationTypes, currentLibraryCreation, libraryCreationAlert } from '../engine/library-notifications.js';
+import { debugExportNotificationTypes, currentDebugExportOutcome, reconcileDebugExportJobs } from '../engine/debug-export-jobs.js';
+import { debugExportAlert } from '../engine/debug-export-notifications.js';
 import { APNsClient, loadAPNsConfiguration } from './apns.js';
 
-const types = new Set(['goal.completed', 'goal.stalled', 'goal.paused', 'goal.cancelled', 'goal.waiting_for_input', 'system.update_available', ...libraryNotificationTypes]);
+const types = new Set(['goal.completed', 'goal.stalled', 'goal.paused', 'goal.cancelled', 'goal.waiting_for_input', 'system.update_available', ...libraryNotificationTypes, ...debugExportNotificationTypes]);
 export function goalAlert(event, session, secrets = []) {
   const safe = (value, maximum = 180) => notificationPreview(value, maximum, secrets);
   const state = { 'goal.completed': 'Goal achieved', 'goal.waiting_for_input': 'Input needed', 'goal.paused': 'Goal paused', 'goal.cancelled': 'Goal cancelled' }[event.type] || 'Goal stalled';
@@ -45,6 +47,7 @@ export class CorePushWorker {
     if (this.#busy || this.#abort.signal.aborted || home() !== this.#home) return;
     this.#busy = true;
     try {
+      reconcileDebugExportJobs({ force: false });
       const configuration = this.configurationLoader();
       if (!configuration && this.#client) { this.#client.close(); this.#client = null; this.#configuration = null; }
       if (configuration && (!this.#client || this.#configuration !== configuration.fingerprint)) {
@@ -66,12 +69,13 @@ export class CorePushWorker {
       const secrets = sharedSecrets();
       for (const row of records) {
         const record = JSON.parse(row.data);
-        const event = record.event, isUpdate = event?.type === 'system.update_available', isLibrary = libraryNotificationTypes.has(event?.type),
+        const event = record.event, isUpdate = event?.type === 'system.update_available', isLibrary = libraryNotificationTypes.has(event?.type), isDebug = debugExportNotificationTypes.has(event?.type),
           hostWide = isUpdate || isLibrary, occurred = Date.parse(event?.occurredAt);
         if (!event || typeof event.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(event.id) ||
           (!hostWide && (typeof event.sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(event.sessionId))) ||
           !types.has(event.type) || !Number.isFinite(occurred) || occurred < this.clock() - 24 * 3600_000) continue;
         if (isLibrary && !currentLibraryCreation(event)) continue;
+        if (isDebug && !currentDebugExportOutcome(event)) continue;
         if (isUpdate) {
           const update = getRecord('core.update.status', 'default');
           if (update?.phase !== 'ready' || update.available !== true || update.blocked || update.target !== event.target) continue;
@@ -80,6 +84,7 @@ export class CorePushWorker {
           if (sent >= 8 || this.#abort.signal.aborted) return;
           if (occurred < registration.enabledSince || !authorizedPushRegistration(registration, hostWide ? undefined : event.sessionId)) continue;
           if (isLibrary && !authorizedUpdateGrant(registration.relayGrantId)) continue;
+          if (isDebug && !authorizedUpdateGrant(registration.relayGrantId)) continue;
           if (isUpdate && (!authorizedUpdateGrant(registration.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(registration.relayGrantId)).notificationsEnabled === false)) continue;
           const id = digest({ hostId, peer: registration.peerId, token: registration.tokenDigest, event: event.id });
           let delivery = getRecord('core.push.delivery', id);
@@ -102,6 +107,7 @@ export class CorePushWorker {
             const current = getRecord('core.push.registration', registration.id);
             if (!current?.enabled || current.hostId !== hostId || current.tokenDigest !== registration.tokenDigest || !authorizedPushRegistration(current, hostWide ? undefined : event.sessionId) ||
                 isLibrary && (!authorizedUpdateGrant(current.relayGrantId) || !currentLibraryCreation(event)) ||
+                isDebug && (!authorizedUpdateGrant(current.relayGrantId) || !currentDebugExportOutcome(event)) ||
                 isUpdate && (!authorizedUpdateGrant(current.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(current.relayGrantId)).notificationsEnabled === false)) {
               putRecord('core.push.delivery', id, { ...delivery, state: 'failed', code: 'FORBIDDEN', updatedAt: now() }); continue;
             }
@@ -113,7 +119,7 @@ export class CorePushWorker {
             // device binding; pre-capability registrations retain their shape.
             const hostHint = current.hostHints === true || viaRelay ? { hostId: current.hostId } : {};
             const payload = delivery.payload || { aps: { alert: isUpdate ? { title: 'BZZY update available', body: 'Update CLI and Core from Settings on your iPhone.' }
-                  : isLibrary ? libraryCreationAlert(event, secrets) : goalAlert(event, session, secrets), sound: 'default', category: 'BZZY_UPDATE',
+                  : isLibrary ? libraryCreationAlert(event, secrets) : isDebug ? debugExportAlert(event, secrets) : goalAlert(event, session, secrets), sound: 'default', category: 'BZZY_UPDATE',
                   'thread-id': digest({ hostId, resource: current.resource, sessionId: event.sessionId, ...(isLibrary ? { library: event.definitionKind } : {}) }) },
                 // This public routing hint comes from the reauthorized private
                 // binding, never from a model reply or the queued event. Clients

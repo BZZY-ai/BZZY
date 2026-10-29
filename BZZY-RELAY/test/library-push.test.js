@@ -27,4 +27,11 @@ test('library-only screen hints retain strict title, route, metadata and legacy 
   for (const value of rejects) await assert.rejects(enqueue(value), error => ['INVALID_PUSH', 'INVALID_ID', 'INVALID_MESSAGE'].includes(error.code));
   assert.equal((await enqueue(payload('BZZY update available', 'updates'))).state, 'queued');
   assert.equal((await enqueue(payload('Goal achieved - legacy', 'terminal', { resource: grant.spec.resource, sessionId: randomUUID() }))).state, 'queued');
+  const route = { resource: grant.spec.resource, sessionId: randomUUID() };
+  for (const title of ['Full debug export ready - fixture', 'Full debug export failed']) {
+    assert.equal((await enqueue(payload(title, 'terminal', route))).state, 'queued');
+    await assert.rejects(enqueue(payload(title, 'agents', route)), error => error.code === 'INVALID_PUSH');
+    await assert.rejects(enqueue(payload(title, 'updates')), error => error.code === 'INVALID_PUSH');
+    await assert.rejects(enqueue(payload(title, 'terminal')), error => ['INVALID_PUSH', 'INVALID_ID'].includes(error.code));
+  }
 });

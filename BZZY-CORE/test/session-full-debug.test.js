@@ -151,12 +151,13 @@ test('full streams scrub split credentials, private envelopes, HAR headers, auth
   appendEvent(parent.id, 'backend', { method: 'item/completed', params: { item: { type: 'commandExecution', command: 'cat ~/.aws/credentials', aggregatedOutput: 'BARE_AUTH_FILE_OUTPUT' } } });
   putRecord('core.binding', 'owner', { sessionId: parent.id, token: 'OWNER_BINDING_PRIVATE' });
   fs.writeFileSync(path.join(parent.cwd, '.env'), 'PRIVATE_ENV_VALUE');
+  fs.writeFileSync(path.join(parent.cwd, 'relay credentials'), 'PRIVATE_RELAY_BINDING_FIXTURE');
   fs.writeFileSync(path.join(parent.cwd, '.bzzy', 'credentials.json'), '{"secret":"PRIVATE_AUTH_STORE"}');
   fs.writeFileSync(path.join(parent.cwd, 'capture.har'), JSON.stringify({ headers: [{ name: 'Cookie', value: 'PRIVATE_HAR_COOKIE' }] }));
   fs.writeFileSync(path.join(parent.cwd, 'packet.bin'), Buffer.concat([Buffer.from([255, 0]), Buffer.from('Cookie: sid=PRIVATE_BINARY_COOKIE')]));
   const external = path.join(directory, 'outside.txt'); fs.writeFileSync(external, 'ESCAPING_LINK_VALUE'); fs.symlinkSync(external, path.join(parent.cwd, 'escape'));
   const files = contents((await exportFullSessionDebug(parent.id)).outputPath), text = Buffer.concat(Object.values(files)).toString();
-  for (const value of [synthetic, synthetic.slice(0, 15), synthetic.slice(15), 'PRIVATE_REASONING_VALUE', 'BARE_AUTH_FILE_OUTPUT', 'OWNER_BINDING_PRIVATE', 'PRIVATE_ENV_VALUE', 'PRIVATE_AUTH_STORE', 'PRIVATE_HAR_COOKIE', 'PRIVATE_BINARY_COOKIE', 'ESCAPING_LINK_VALUE']) assert.ok(!text.includes(value), value);
+  for (const value of [synthetic, synthetic.slice(0, 15), synthetic.slice(15), 'PRIVATE_REASONING_VALUE', 'BARE_AUTH_FILE_OUTPUT', 'OWNER_BINDING_PRIVATE', 'PRIVATE_ENV_VALUE', 'PRIVATE_RELAY_BINDING_FIXTURE', 'PRIVATE_AUTH_STORE', 'PRIVATE_HAR_COOKIE', 'PRIVATE_BINARY_COOKIE', 'ESCAPING_LINK_VALUE']) assert.ok(!text.includes(value), value);
   const messages = rows(files['session/messages.jsonl']); assert.ok(messages.some(row => row.text.includes('SAFE_PREFIX') && row.text.includes('SAFE_SUFFIX') && row.text.includes('[redacted]')));
   const manifest = JSON.parse(files['manifest.json']); assert.ok(manifest.exclusions.some(row => row.path.endsWith('/.env'))); assert.ok(manifest.exclusions.some(row => row.path.endsWith('/escape')));
 });
