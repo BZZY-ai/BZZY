@@ -12,7 +12,8 @@ import { taskKnowledgeBrief } from '../src/engine/task-knowledge-brief.js';
 
 const usage = 'node scripts/memory-retrieval-benchmark.mjs [--documents 100000] [--pulls 50] [--source-bytes 20000000]';
 const options = { documents: 100000, pulls: 50, 'source-bytes': 0 };
-const arguments_ = process.argv.slice(2);
+const arguments_ = process.argv.slice(2).flatMap(argument => /^--[^=]+=/.test(argument)
+  ? [argument.slice(0, argument.indexOf('=')), argument.slice(argument.indexOf('=') + 1)] : [argument]);
 if (arguments_.includes('--help')) { console.log(usage); process.exit(0); }
 for (let index = 0; index < arguments_.length; index += 2) {
   const name = arguments_[index].replace(/^--/, ''), value = arguments_[index + 1];

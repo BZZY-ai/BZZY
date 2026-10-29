@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSession, saveSession } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
-import { initializeProject } from '../src/engine/project.js';
+import { initializeProject, issue } from '../src/engine/project.js';
+import { artifact } from '../src/engine/evidence.js';
 import { getRecord, listRecords, events, putRecord } from '../src/engine/database.js';
 import { recordActivity, closeOpenActivities } from '../src/engine/activity.js';
 import { sessionMemoryDocument, exportSessionMemoryDocument } from '../src/engine/session-memory-document.js';
@@ -57,4 +58,14 @@ test('export preserves edits made while the new view is being written', () => {
     assert.throws(() => exportSessionMemoryDocument(session, { expectedRevision: view.revision }), { code: 'MEMORY_VIEW_EDITED' });
   } finally { fs.fsyncSync = sync; }
   assert.match(fs.readFileSync(receipt.path, 'utf8'), /Concurrent owner proposal/);
+});
+
+test('readable memory includes report lifecycle separately from finding truth', () => {
+  const evidence = artifact(session, 'Fictional saved report', 'Offline report package only.');
+  const finding = issue(session, { title: 'Fictional report history', status: 'resolved', evidence: [evidence.id],
+    reportLifecycle: { state: 'saved', evidence: [evidence.id] } });
+  const view = sessionMemoryDocument(session);
+  const issues = JSON.parse(view.markdown.split('## issues\n\n```json\n')[1].split('\n```')[0]);
+  assert.deepEqual(issues[0].reportLifecycle, finding.reportLifecycle);
+  assert.equal(issues[0].truth, 'inconclusive'); assert.equal(issues[0].reportLifecycle.state, 'saved');
 });

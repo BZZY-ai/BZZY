@@ -78,6 +78,10 @@ The optional worker gives foreground work scheduling priority. Indexing never
 waits for model output; short material may be retained verbatim without inference.
 Larger pending nodes receive source-linked host extractive fallback views. Query
 recall combines relevant nodes with recent coverage; originals stay unchanged.
+Local extraction also runs when paid compaction is disabled, without creating
+paid jobs or reservations. Explicit session/owner/operator stops still apply.
+Status distinguishes `fallbackNodes`, `hostSummaries`, `modelSummaries` and
+`uncoveredNodes`; extracts do not increase the completed model-summary count.
 Model jobs use the verified restricted document profile, an empty private working
 directory and no tools, native commands, account operations or network tool access.
 
@@ -123,7 +127,10 @@ Session pause/cancel, Core stop, deletion and shutdown stop background work.
 An already dispatched summary can finish against immutable sources during an
 ordinary foreground turn. Owner/source stops and uncertain requests require
 explicit inspection/resume. Startup can recover provably undispatched shutdown
-work and checked cached publication without another model request.
+work and checked cached publication without another model request. Known
+invalid-output retries retain their settled-attempt receipts and backoff across
+shutdown, while uncertain requests remain paused. Already-paused legacy jobs
+without enough provenance still require inspection.
 
 Health diagnostics expose `scheduleReason` and `reasonPaused` separately; their
 compatibility `reason` prefers the actual pause reason for stopped jobs. A daemon

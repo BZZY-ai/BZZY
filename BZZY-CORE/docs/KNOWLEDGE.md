@@ -81,6 +81,11 @@ review with current recorded evidence; these are different authorities.
 Changed source hashes, expiration, environment/version conditions, missing proof
 and supersession can make knowledge stale. Verification is bounded; unverified
 records are treated as stale when its file/hash budget is exhausted.
+Relationship-index migration is separate: pending coverage keeps recorded truth
+and search visibility with `freshnessStatus: unverified`, not `stale`. Owner truth
+review uses a bounded canonical check when needed, with a precise incomplete-check
+error if it cannot establish relationship coverage. Historical fact/CLI views
+show pending coverage; it is not a guarantee of current validity.
 Contradictions stay visible in both records. Updates, stale decisions, owner
 reviews and rollback preserve revision history; rollback creates a new uncertain
 revision rather than silently restoring old certainty.

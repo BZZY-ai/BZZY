@@ -29,7 +29,7 @@ export function sessionMemoryDocument(value) {
   const investigation = investigationCapsule(session, {}, { maxBytes: 8192 });
   const issues = database().prepare("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.sessionId')=? ORDER BY updated_at DESC,id LIMIT 40")
     .all(session.id).map(row => JSON.parse(row.data)).map(item => ({ id: item.id, revision: item.revision, title: item.title,
-      status: item.status, truth: item.truth, report: item.report, evidence: item.evidence, updatedAt: item.updatedAt }));
+      status: item.status, truth: item.truth, reportLifecycle: item.reportLifecycle, evidence: item.evidence, updatedAt: item.updatedAt }));
   const memory = readSessionMemory(session, { maxBytes: 12000, limit: 12, query: session.goal?.objective?.slice(0, 500), recent: true });
   const sections = { session: { id: session.id, alias: session.alias || null },
     goal: session.goal ? { id: session.goal.id, objective: session.goal.objective, status: session.goal.status, reason: session.goal.reason } : null,

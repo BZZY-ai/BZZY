@@ -21,6 +21,10 @@ Known revision plus context generation returns `notModified` when unchanged;
 after compaction the new generation requires delivery again. Source changes,
 expiry, evidence drift and changed dependency fingerprints invalidate relevant
 state. Paged section/source readers retain exact revisions and UTF-8 boundaries.
+When the capsule fills, historical excerpts shrink before current checkpoint
+decisions/questions or branch identity. Large valid state falls back to a small
+navigation view with every checkpoint category and branch references; invalid
+access and stale source revisions still fail normally.
 
 The normal goal handoff also includes current investigation state. Native push
 refresh remains capability- and acknowledgment-dependent; unsupported backends
@@ -39,8 +43,12 @@ through durable keyset cursors; older records can therefore require several
 maintenance passes before discovery. Polling task state is read-only and does
 not perform migration. Native writes remain authoritative: search candidates
 are checked against live source identity, access and freshness before delivery.
-During legacy relationship backfill, notes carry explicit incomplete freshness
-coverage until superseding and contradictory records have been accounted for.
+During legacy relationship backfill, notes and issues remain discoverable with
+their recorded truth, `relationshipCoverage: backfill-pending` and
+`freshnessStatus: unverified`. This uncertainty does not mark their evidence stale.
+Confirmed historical facts retain the same warning. Explicit owner truth review
+can perform a separate bounded canonical relationship check; if it cannot finish,
+the error identifies incomplete relationships rather than claiming invalid evidence.
 Oversized legacy sources are omitted from the bounded task brief with coverage
 reported; their original records remain intact.
 Optional owner-approved local embeddings use dirty rows and archive backfill,
@@ -66,17 +74,31 @@ artifacts and work units. Resolution requires a changed recorded dependency and
 retains an attributed resolution receipt. Changed input permits review; it does
 not automatically retry an external action or resume a stopped goal.
 
-One blocked branch leaves other work available. An explicit `blockGoal` claim
-must cover every declared current open branch and have no outstanding current
-assignments. The controller then stops execution and retains the typed reason.
+One blocked branch leaves other work available. Agent-resolvable technical
+obstacles never qualify for `blockGoal`. That claim must cover every declared
+current open branch with an unchanged owner/external prerequisite and have no
+outstanding current assignments. Owner input/external waits require recorded
+session-input dependencies; scope blockers require an execution-policy dependency.
+The controller then stops execution and retains the typed reason.
 This checks declared work coverage; it cannot prove that the model has identified
 every possible useful branch. Native backend blockers also retain a sanitized
 reason, including an explicit unavailable-reason marker when necessary.
 
-`read_investigation` opens revision-pinned historical branches. The current
-capsule has a bounded branch/observation window and reports omissions. Earlier
+`read_investigation` opens revision-pinned historical branches. Its `action: list`
+returns a separate cursor-paged branch index, including IDs, revisions and open
+blocker counts. Task-state investigation details expose that index rather than
+repeating the truncated capsule. Capsule overflow keeps branch stubs; exact
+blockers remain available through source reads. Earlier
 goals and chat runs remain historical, never current completion. Archive search
 and source expansion are needed for older attempts outside that window.
+New blockers require recorded dependencies. `set_dependencies` repairs a legacy
+branch with missing dependencies and records a new baseline; changing that list
+alone cannot resolve a blocker.
+For an agent-solvable technical obstacle, a branch can record its own
+`tool_outcome` dependency after declaration. A subsequent successful host-recorded
+command/file-change observation permits an attributed resolution. Failed retries,
+metadata reads and dependency-list edits do not. This records progress, not proof
+that a finding or fix has been verified; owner/scope blockers keep their own gates.
 
 ## Checkpoints, findings and evidence
 
@@ -85,9 +107,13 @@ per-item revision checks. Replacement arrays remain compatible. Removed text
 stays in the original checkpoint revision; later checkpoints carry bounded archive
 pointers. Contract-owned constraints cannot be changed through item operations.
 Display grouping combines exact strings only: capitalization, whitespace, target
-differences and negation never become a fuzzy merge. Legacy constraint-array
-union remains readable; the new protocol directs models to keep the contract's
-constraints in the contract and archive obsolete working items explicitly.
+differences and negation never become a fuzzy merge. An explicitly supplied
+`constraints` list replaces the working constraints; omission preserves them and
+`[]` clears them. Contract-owned constraints remain present. Superseded working
+items stay in revision history. The 50-item working allowance excludes contract
+items, and an oversized legacy list does not prevent unrelated checkpoint saves.
+Grouping counts explicit repeated declarations of the exact working text; inherited
+copies and idempotent retries do not increase them. Counts never imply confidence.
 
 `evidenceOperations` add/remove current evidence references. Historical evidence
 remains in source revisions and artifacts rather than accumulating forever in
@@ -157,7 +183,9 @@ history, copied scope text or a generated MEMORY.md cannot authorize execution.
 ## Background memory and evaluated improvement
 
 Host extractive summaries provide navigation while paid compaction is deferred,
-unconfigured or budget-limited. They retain source headers and selected complete
+disabled, unconfigured or budget-limited. This bounded local lane creates no paid
+jobs or reservations and still respects explicit source/owner/operator stops.
+Extracts retain source headers and selected complete
 lines, are labeled incomplete, and never replace original content or mark a paid
 summary job completed. Query-aware recall combines relevant nodes with recent
 coverage. Later model summaries can improve the same navigation tree.
@@ -168,11 +196,14 @@ processors. Cached local publication requires no additional inference. Queue
 capacity is a scheduler deferral; explicit owner/source stops stay durable.
 Health shows scheduler and pause reasons separately, including backlog age.
 
-Startup automatically recovers only provably undispatched interrupted work or
-already cached results that can be validated and published locally. An uncertain
+Startup recovers provably undispatched interrupted work, validated cached local
+publication, and known rejected-output retries with exact settled-attempt receipts.
+Retry backoff and attempt budgets survive shutdown. An uncertain
 paid request remains paused for inspection. User pause/cancel/disable, source
 pause and operator stop are never inferred to have ended. Repeated maintenance
 polls do not rewrite an unchanged compactor control record.
+Status reports fallback nodes, host/model summaries and uncovered nodes separately;
+useful extracts do not imply completed model summaries.
 
 Learned updates retain source packets and exact base versions. Semantic fixture
 evaluation and offline continuation evaluation are separate: a continuation
@@ -237,6 +268,7 @@ edits are preserved as proposals: a later export refuses to overwrite a changed
 view, and no ingestion path treats edits as facts or approval. This file is
 navigation, not a complete backup. Preserve Core's private durable store and
 project evidence through the existing backup/transfer procedures.
+The issue view includes `reportLifecycle` separately from technical truth.
 
 Regression tests cover continuing/new goals, stale completion, scope changes,
 blocker resolution, contradictory findings, source updates, compaction,
@@ -257,9 +289,15 @@ originals are not automatically destructively compressed or expired.
 
 `node scripts/memory-retrieval-benchmark.mjs --documents=100000 --pulls=50`
 measures indexed navigation in an isolated temporary home. The local 100,000-row
-run used 3.9 MB of source text: warm p95 was 4.04 ms for the rare query and
-22.87 ms for the broad query; the cold broad query was 109.87 ms. Briefs stayed
-at or below 2,190 bytes and polling made zero SQL writes. This local run overlapped
-the regression suite; timings depend on host load. A 5,000-cycle
-accelerated lifecycle soak passed in 73.38 seconds. These are reproducible
+run used 3.9 MB of source text: warm p95 was 4.53 ms for the rare query and
+26.04 ms for the broad query; the cold broad query was 110.68 ms. Briefs stayed
+at or below 2,190 bytes and polling made zero SQL writes. Timings depend on host
+load. A 5,000-cycle accelerated lifecycle soak passed in 51.21 seconds. These are reproducible
 synthetic checks, not measured token savings or live investigation quality.
+
+Before claiming unattended multi-hour effectiveness, compare an authorized Linux
+engagement before/after the repair: task-state calls and `notModified` responses,
+current decision/question and blocker delivery after compaction, fallback coverage
+and model-summary counts, compactor control revisions, working-constraint counts,
+and why the goal stopped. Offline fixtures do not establish model attention to
+retrieved state or successful live investigation.
