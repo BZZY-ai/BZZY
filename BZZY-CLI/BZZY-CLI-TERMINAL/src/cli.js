@@ -48,6 +48,7 @@ import { skillsAliasesCLI } from './skills-aliases-cli.js';
 import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
 import { workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { resolveInteractiveGoal } from './goal-controls.js';
+import { createDebugExportProgressReporter } from './debug-export-progress.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, openOrCreateChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
@@ -599,8 +600,11 @@ export async function main(argv) {
       const parts = command === 'full_debug_export' ? ['full', ...rest] : rest;
       if (!['export', 'full'].includes(parts[0]) || !parts[1] || parts.length > 3) throw new Error('Use bzzy debug export SESSION [FILE.md] or bzzy debug full SESSION [FILE.zip].');
       const full = parts[0] === 'full';
-      const exportDebug = full ? (await import('@bzzy/core/engine/session-full-debug.js')).exportFullSessionDebug : (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug;
-      const result = await exportDebug(findSession(parts[1]).id, { cwd: options.cwd, output: parts[2] });
+      const exportDebug = full ? (await import('@bzzy/core/engine/session-full-debug.js')).exportFullSessionDebugInWorker : (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug;
+      const id = findSession(parts[1]).id, progress = full ? createDebugExportProgressReporter() : null;
+      let result;
+      try { result = await exportDebug(id, { cwd: options.cwd, output: parts[2], ...(full ? { onProgress: progress.update } : {}) }); }
+      finally { progress?.close(); }
       ui.event('debug.exported', { ...result, message: `Debug exported: ${result.outputPath}\nIncludes session history and skill/agent definitions. Review this private task content before sharing.` });
       return 0;
     }

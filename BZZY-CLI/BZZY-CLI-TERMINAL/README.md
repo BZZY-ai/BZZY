@@ -484,6 +484,13 @@ For the full archive, use `/full_debug_export`, **Metrics → Full debug ZIP**,
 or **F** in Metrics. From another terminal, run `bzzy debug full "session-name"`
 or `bzzy full_debug_export "session-name"`. This creates
 `session-name_full_debug_ddmmyyyy.zip` in the same current-directory flow.
+Full export runs off the terminal UI thread. Metrics shows its current phase,
+elapsed time and completed counts while the terminal remains responsive; the
+command-line exporter writes progress to stderr and keeps its final result on
+stdout. ZIP byte progress measures uncompressed input processed, not a predicted
+final archive size. Wait for the success message before opening or sharing the ZIP.
+For a baseline before starting another goal, use
+`bzzy debug full "session-name" before-next-goal.zip` from a second terminal.
 It includes the regular overview plus complete scoped event/record/message
 streams, memory/compaction/learning history, project notes and ledgers, source
 files, referenced evidence/snapshots and skill resources. Secrets/private stores

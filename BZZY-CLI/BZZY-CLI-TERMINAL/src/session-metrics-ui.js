@@ -2,10 +2,11 @@ import { clean, cellWidth, clip, wrap } from './terminal-format.js';
 import { debugExportErrorMessage } from '@bzzy/core/engine/debug-export-errors.js';
 import { isStalledGoal } from '@bzzy/core/engine/goal-state.js';
 import { costLabel, deepseekSpendingVisible, sessionCostLines } from './session-cost-format.js';
+import { debugExportProgressLines, safeDebugExportProgress } from './debug-export-progress.js';
 
 const loadRecordedMetrics = async id => (await import('@bzzy/core/engine/session-metrics.js')).sessionMetrics(id);
 const exportRecordedDebug = async id => (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug(id);
-const exportFullRecordedDebug = async id => (await import('@bzzy/core/engine/session-full-debug.js')).exportFullSessionDebug(id);
+const exportFullRecordedDebug = async (id, options) => (await import('@bzzy/core/engine/session-full-debug.js')).exportFullSessionDebugInWorker(id, options);
 const recordedCount = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
 const pad = (value, width) => value + ' '.repeat(Math.max(0, width - cellWidth(value)));
 const stalled = goal => ['stalled', 'budget_exhausted'].includes(goal?.status) || isStalledGoal(goal);
@@ -33,12 +34,18 @@ export class SessionMetricsPanel {
     if (this.sessionId !== id) {
       this.sessionId = id; this.data = null; this.error = null; this.exportResult = null; this.exportError = null; this.scope = 'goal'; this.selectedGoalId = null;
     }
+    if (this.exportJob?.sessionId === id) {
+      this.exportResult = this.exportJob.result || null; this.exportError = this.exportJob.error || null;
+    }
     this.changed(); void this.refresh();
   }
   stop() { this.active = false; this.epoch++; clearTimeout(this.timer); this.timer = null; this.loading = false; }
-  close() { this.stop(); this.closed = true; this.data = null; this.error = null; this.sessionId = null; }
+  close() { this.stop(); clearInterval(this.exportTimer); this.exportTimer = null; this.closed = true; this.data = null; this.error = null; this.sessionId = null; }
   async refresh() {
     if (!this.active || this.loading || this.closed) return;
+    // Metrics also reads saved history synchronously. Avoid competing with the
+    // background export and blocking its visible progress on the UI thread.
+    if (this.exportJob?.running && this.exportJob.full) return;
     const epoch = this.epoch, id = this.sessionId;
     clearTimeout(this.timer); this.loading = true; this.changed();
     try {
@@ -64,8 +71,8 @@ export class SessionMetricsPanel {
       { action: 'chat', text: 'Outside goals', selected: this.scope === 'chat' },
       { action: 'history', text: 'Choose goal ▾', disabled: !this.data?.goals?.length },
       { action: 'refresh', text: this.loading ? 'Reading…' : 'Refresh' },
-      { action: 'export', text: this.exporting ? 'Exporting…' : 'Export debug', disabled: this.exporting || !this.sessionId || this.data?.available === false },
-      { action: 'full-export', text: 'Full debug ZIP', disabled: this.exporting || !this.sessionId || this.data?.available === false },
+      { action: 'export', text: this.exporting && !this.exportJob?.full ? 'Exporting…' : 'Export debug', disabled: this.exporting || !this.sessionId || this.data?.available === false },
+      { action: 'full-export', text: this.exporting && this.exportJob?.full ? 'Exporting ZIP…' : 'Full debug ZIP', disabled: this.exporting || !this.sessionId || this.data?.available === false },
     ];
   }
   async activate(action) {
@@ -78,16 +85,35 @@ export class SessionMetricsPanel {
     if (action === 'refresh') { await this.refresh(); return; }
     if (action === 'export' || action === 'full-export') {
       if (this.exporting || !this.sessionId || this.data?.available === false) return;
-      const id = this.sessionId, epoch = this.epoch;
+      const id = this.sessionId, full = action === 'full-export';
+      const job = { sessionId: id, full, running: true, startedAt: Date.now(), updatedAt: Date.now(), progress: { phase: 'session' } };
+      this.exportJob = job;
       this.exporting = true; this.exportError = null; this.exportResult = null; this.changed();
+      if (full) {
+        clearTimeout(this.timer); this.timer = null;
+        this.exportTimer = setInterval(() => {
+          if (!this.closed && this.active && this.exportJob === job) this.changed();
+        }, 1000); this.exportTimer.unref?.();
+      }
       try {
-        // Let the visible button paint before reading a long saved history.
+        // Paint the initial state before the worker starts collecting data.
         await new Promise(resolve => setImmediate(resolve));
-        const result = await (action === 'full-export' ? this.exportFullDebug(id) : this.exportDebug(id));
-        if (!this.closed && id === this.sessionId && epoch === this.epoch) this.exportResult = result;
+        const onProgress = value => {
+          if (this.closed || this.exportJob !== job || !job.running) return;
+          const progress = safeDebugExportProgress(value); if (!progress) return;
+          job.progress = progress; job.updatedAt = Date.now();
+          if (this.active && id === this.sessionId) this.changed();
+        };
+        const result = await (full ? this.exportFullDebug(id, { onProgress }) : this.exportDebug(id));
+        job.result = result;
+        if (!this.closed && id === this.sessionId) this.exportResult = result;
       } catch (error) {
-        if (!this.closed && id === this.sessionId && epoch === this.epoch) this.exportError = debugExportErrorMessage(error, { full: action === 'full-export' });
-      } finally { this.exporting = false; if (!this.closed) this.changed(); }
+        job.error = debugExportErrorMessage(error, { full });
+        if (!this.closed && id === this.sessionId) this.exportError = job.error;
+      } finally {
+        job.running = false; this.exporting = false; clearInterval(this.exportTimer); this.exportTimer = null;
+        if (!this.closed) { this.changed(); if (full) void this.refresh(); }
+      }
       return;
     }
     if (action !== 'history' || !this.data?.goals?.length) return;
@@ -123,6 +149,14 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
   }
   put(buttons, 'accent', true); put();
   const data = panel.data;
+  if (panel.exportJob?.running && panel.exportJob.full) {
+    if (panel.exportJob.sessionId === panel.sessionId) {
+      for (const line of debugExportProgressLines(panel.exportJob.progress, {
+        elapsedMs: Date.now() - panel.exportJob.startedAt, quietMs: Date.now() - panel.exportJob.updatedAt,
+      })) prose(line, 'accent');
+    } else prose('A full debug export for another chat is still in progress.', 'muted');
+    put();
+  }
   if (panel.exportResult) {
     prose((panel.exportResult.full ? 'Full debug ZIP exported · ' : 'Debug exported · ') + panel.exportResult.outputPath, 'goalSuccess');
     if (panel.exportResult.full && Number.isSafeInteger(panel.exportResult.exclusions) && panel.exportResult.exclusions > 0)

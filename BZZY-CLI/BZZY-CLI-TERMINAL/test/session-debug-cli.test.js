@@ -32,10 +32,20 @@ test('a separate CLI exports a saved running session into the caller folder with
     assert.deepEqual(fs.readdirSync(original), []);
     const full = spawnSync(process.execPath, [binary, 'full_debug_export', session.alias, '--json'], { cwd: current, env: process.env, encoding: 'utf8', timeout: 15000 });
     assert.equal(full.status, 0, full.stderr + full.stdout);
+    assert.match(full.stderr, /Full debug ZIP.*elapsed/); assert.match(full.stderr, /Packaging ZIP/);
+    assert.doesNotMatch(full.stderr, /SAVED_EXISTING_SESSION_HISTORY/);
+    assert.ok(full.stdout.trim().split('\n').every(line => JSON.parse(line).type === 'debug.exported'), 'Progress must not pollute JSON stdout.');
     const fullResult = full.stdout.trim().split('\n').map(JSON.parse).find(event => event.type === 'debug.exported');
     const fullData = fullResult.data || fullResult; assert.equal(fullData.full, true); assert.equal(path.dirname(fullData.outputPath), current);
     assert.match(path.basename(fullData.outputPath), /^nine-hour-session_full_debug_\d{8}\.zip$/);
     assert.equal(runtimeInfo(), null); assert.equal(operatorStopRequested(), true); assert.equal(loadSession(session.id).executionState, 'running');
+    assert.deepEqual(database().prepare('SELECT * FROM records ORDER BY kind,id').all(), state);
+    assert.deepEqual(database().prepare('SELECT * FROM events ORDER BY seq').all(), events);
+    const failedFull = spawnSync(process.execPath, [binary, 'debug', 'full', session.alias, path.basename(fullData.outputPath), '--json'],
+      { cwd: current, env: process.env, encoding: 'utf8', timeout: 15000 });
+    assert.notEqual(failedFull.status, 0); assert.equal(failedFull.signal, null, 'Failed export exits without a progress timer keeping it alive.');
+    assert.match(failedFull.stderr, /Full debug ZIP.*elapsed/); assert.match(failedFull.stderr, /SESSION_DEBUG_EXISTS/);
+    assert.ok(failedFull.stdout.trim().split('\n').filter(Boolean).every(line => JSON.parse(line).type !== 'debug.exported'));
     assert.deepEqual(database().prepare('SELECT * FROM records ORDER BY kind,id').all(), state);
     assert.deepEqual(database().prepare('SELECT * FROM events ORDER BY seq').all(), events);
     const bad = spawnSync(process.execPath, [binary, 'debug', 'export', '--json'], { cwd: current, env: process.env, encoding: 'utf8', timeout: 15000 });

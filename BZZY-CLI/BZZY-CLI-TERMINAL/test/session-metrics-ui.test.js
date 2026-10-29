@@ -216,6 +216,46 @@ test('Full debug ZIP and /full_debug_export route to the full exporter without m
   } finally { ui.close(); }
 });
 
+test('full-export progress survives panel navigation without leaking to other chats or starting duplicates', async () => {
+  let report, complete, calls = 0, loads = 0;
+  const panel = new SessionMetricsPanel({}, { load: async id => { loads++; return snapshot(id); },
+    exportFullDebug: (id, { onProgress }) => { calls++; report = onProgress; return new Promise(resolve => { complete = resolve; }); } });
+  const text = () => sessionMetricsLayout(panel, 100).lines.map(line => line.text).join('\n');
+  try {
+    panel.open(firstId); await settle();
+    const task = panel.activate('full-export'); await settle();
+    assert.ok(panel.exportTimer); assert.equal(panel.exporting, true);
+    report({ phase: 'history', records: 1234, events: 5678, files: 3, bytes: 1024 ** 2, path: 'PRIVATE_PATH', message: 'PRIVATE_TEXT' });
+    assert.match(text(), /Reading saved history/); assert.match(text(), /1,234 records/); assert.match(text(), /1\.0 MiB captured/);
+    assert.doesNotMatch(text(), /PRIVATE_PATH|PRIVATE_TEXT|%/);
+    const before = loads; await panel.refresh(); assert.equal(loads, before, 'Heavy Metrics reads wait for export completion.');
+    panel.exportJob.startedAt -= 65000; panel.exportJob.updatedAt -= 12000;
+    assert.match(text(), /1m 05s elapsed/); assert.match(text(), /Last progress update 12s ago/);
+    assert.ok(sessionMetricsLayout(panel, 40).lines.every(line => cellWidth(line.text) <= 40));
+    panel.stop(); report({ phase: 'workspace', files: 12, bytes: 2 * 1024 ** 2 });
+    panel.open(firstId); await panel.activate('full-export'); assert.equal(calls, 1);
+    assert.match(text(), /Capturing project files/); assert.match(text(), /12 files/);
+    panel.open(secondId); report({ phase: 'packaging', packagedFiles: 12, packagedBytes: 2 * 1024 ** 2 });
+    assert.match(text(), /another chat/); assert.doesNotMatch(text(), /12 files|Packaging ZIP/);
+    complete({ full: true, outputPath: '/project/first-chat.zip' }); await task; await settle();
+    assert.equal(panel.exportResult, null); assert.equal(panel.exportTimer, null); assert.equal(panel.exporting, false);
+    const revision = panel.revision; report({ phase: 'history', records: 999999 }); assert.equal(panel.revision, revision);
+    panel.open(firstId); await settle(); assert.equal(panel.exportResult.outputPath, '/project/first-chat.zip');
+  } finally { panel.close(); }
+});
+
+test('closing Metrics clears the export timer and ignores late progress without interrupting file creation', async () => {
+  let report, complete;
+  const panel = new SessionMetricsPanel({}, { load: async id => snapshot(id),
+    exportFullDebug: (id, { onProgress }) => { report = onProgress; return new Promise(resolve => { complete = resolve; }); } });
+  panel.open(firstId); await settle(); const task = panel.activate('full-export'); await settle();
+  panel.close(); const revision = panel.revision;
+  report({ phase: 'packaging', packagedFiles: 5 });
+  assert.equal(panel.exportTimer, null); assert.equal(panel.revision, revision);
+  complete({ full: true, outputPath: '/project/finished.zip' }); await task;
+  assert.equal(panel.exportResult, null); assert.equal(panel.exporting, false);
+});
+
 test('export failures show safe cause categories and the matching ZIP or Markdown retry command', async () => {
   for (const [action, code, message] of [['full-export', 'SESSION_DEBUG_PYTHON', /Python/], ['full-export', 'ENOSPC', /space/],
     ['full-export', 'EACCES', /Access/], ['export', 'toString', /could not be collected safely/]]) {
@@ -228,6 +268,7 @@ test('export failures show safe cause categories and the matching ZIP or Markdow
       assert.doesNotMatch(panel.exportError, /PRIVATE_DIAGNOSTIC_DO_NOT_SHOW|private-account|original folder/);
       if (action === 'full-export') assert.doesNotMatch(panel.exportError, /FILE\.md/);
       assert.equal(panel.exporting, false);
+      assert.equal(panel.exportTimer, null);
     } finally { panel.close(); }
   }
   const panel = new SessionMetricsPanel({});
