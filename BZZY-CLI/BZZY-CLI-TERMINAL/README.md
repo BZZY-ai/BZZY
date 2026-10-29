@@ -357,8 +357,11 @@ with `build`, and control background work with `pause`, `resume` or `cancel`.
 DeepSeek API provider, or Delegate with either Brain or Hands using that provider.
 Only direct DeepSeek calls add dollars, including Hands under a Codex/Claude
 Brain; DeepSeek models from OrcaRouter/Experiential Labs do not qualify. The
-existing **Balance $…** stays separate and account-wide. These displays hide
-outside the eligible selections while retaining saved amounts.
+**Balance $…** remains account-wide. It appears beside **Chat**, **Compactor** and
+**Total** as matching styled badges in a dedicated row directly below navigation. Balance
+opens account details; the cost badges open Metrics. The row wraps in narrower
+terminals. These displays hide outside the eligible selections while retaining
+saved amounts.
 **Metrics → DeepSeek spending · whole chat** and `bzzy cost NAME` inspect the same
 lifetime estimate; `bzzy session-memory cost NAME` gives compactor details.
 Existing chats work, with old missing usage and interrupted calls visibly partial.
@@ -370,7 +373,7 @@ This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
 `bzzy` opens a Codex-style terminal chat with three fixed sections: a responsive
-top bar for Open Sessions, New Session, Skills, Agents, Workflows, Goals, Metrics
+top bar for Open Sessions, Skills, Agents, Workflows, Goals, Metrics
 and Settings, with host CPU/RAM on a compact second row when necessary; the live chat transcript; and a compact composer with the current model, effort, token count,
 `HH:MM:SS` runtime and color-coded goal state. User turns and agent replies use
 separate labeled rails, and the latest user request stays pinned directly below
@@ -462,9 +465,9 @@ Every ZIP includes the detailed [read-first guide](../../GUIDE_TO_BZZY_DEBUGGER.
 for future debugging sessions; exporting neither executes its contents nor
 replays the investigation.
 
-When the active terminal model uses the DeepSeek API key, the top bar also shows
-the current USD balance; click it for freshness/source details. Subscription
-providers do not show an account balance control.
+The DeepSeek money row keeps the account balance beside session estimates; click
+Balance for freshness/source details. The **+ New Session** navigation button is
+temporarily hidden. A fresh `bzzy` launch still creates a terminal normally.
 
 `bzzy` opens terminal chat. The character workspace, graph links and drawers have
 been removed from the CLI. Saved chats remain available through Sessions;

@@ -105,13 +105,13 @@ test('Send, top Settings and Back controls react to actual SGR clicks', async t 
   assert.equal(await help, '/help');
 });
 
-test('top New Session dispatches a local new-chat command instead of model input', async t => {
-  const { ui, tui, input } = terminal(t);
+test('top navigation hides New Session without submitting or clearing the current draft', async t => {
+  const { ui, tui } = terminal(t);
   const next = ui.ask('bzzy › '); await Promise.resolve();
   tui.value = 'draft survives'; tui.cursor = 14; tui.render();
-  const create = tui.hitTargets.find(hit => hit.type === 'session-new'); assert.ok(create);
-  input.write(`\x1b[<0;${create.left + 1};${create.row}M`);
-  assert.equal(await next, '/new');
+  assert.equal(tui.hitTargets.some(hit => hit.type === 'session-new'), false);
+  assert.doesNotMatch(clean(tui.lastFrame[0]), /\+ New/);
+  ui.reader.close(); assert.equal(await next, null);
   assert.equal(tui.value, 'draft survives');
   assert.equal(tui.inputQueue.length, 0);
 });

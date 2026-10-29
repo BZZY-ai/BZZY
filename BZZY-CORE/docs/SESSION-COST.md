@@ -3,7 +3,8 @@
 CLI shows **Chat ≈ $… | Compactor ≈ $… = Total ≈ $…** for Solo using the
 official `deepseek` provider, or Delegate when either Brain or Hands uses that
 provider. The existing **Balance $…** control remains a separate account-wide
-balance. Minimal chat labels it **DeepSeek account balance**. DeepSeek model
+balance. Balance, Chat, Compactor and Total use matching badges in a dedicated
+row directly below the CLI navigation, wrapping in narrow terminals. DeepSeek model
 names served by OrcaRouter, Experiential Labs or other providers do not qualify.
 The cost and balance controls are hidden outside these selections.
 

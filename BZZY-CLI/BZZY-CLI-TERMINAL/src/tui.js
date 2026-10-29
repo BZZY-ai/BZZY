@@ -25,7 +25,7 @@ import { escapeInputKind, TerminalKeyInput } from './terminal-keys.js';
 import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
 import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
 import { SessionMetricsPanel, sessionMetricsLayout } from './session-metrics-ui.js';
-import { deepseekSpendingVisible, sessionCostLines } from './session-cost-format.js';
+import { costLabel, deepseekSpendingVisible } from './session-cost-format.js';
 import { returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { recordInvocationEvent, reconcileInvocationEntries, invocationEntryLayout, attributeInvocationActors } from './invocation-ui.js';
 import { ToolTreeProjection, toolTreeLayout, changeToolTree } from './tool-tree-ui.js';
@@ -1421,26 +1421,18 @@ export class TerminalChat {
       return left + ' '.repeat(Math.max(0, width - leftWidth - rightWidth)) + right;
     }
     const leftVariants = [
-      { sessions: '  Open Sessions ▾', create: '   + New Session', alias: true },
-      { sessions: 'Sessions ▾', create: '+ New', alias: true },
-      { sessions: 'Sessions', create: '+ New', alias: true },
-      { sessions: '  Open Sessions ▾', create: '   + New Session', alias: false },
-      { sessions: ' Open Sessions ▾', create: '  + New Session', alias: false },
-      { sessions: '  Open Sessions ▾', create: '   + New', alias: false },
-      { sessions: 'Open Sessions ▾', create: '+ New', alias: false },
-      { sessions: '  Open Sessions', create: '   + New', alias: false },
-      { sessions: 'Sessions', create: '+ New', alias: false },
+      { sessions: '  Open Sessions ▾', alias: true },
+      { sessions: 'Sessions ▾', alias: true },
+      { sessions: 'Sessions', alias: true },
+      { sessions: '  Open Sessions ▾', alias: false },
+      { sessions: 'Open Sessions ▾', alias: false },
+      { sessions: 'Sessions', alias: false },
     ];
     const alias = this.alias ? clip(this.alias, Math.max(1, Math.floor(width / 4))) : '';
     const relayOnline = this.ui.connectionStatus?.core === true && this.ui.connectionStatus?.relay === true;
     const relayTone = relayOnline ? palette.goalSuccess : palette.danger;
     const relayFull = color('●', relayTone, true) + color(' BZZY Relay', palette.muted);
     const relayDot = color('●', relayTone, true);
-    const deepseekBalance = deepseekSpendingVisible(this) ? accountStatusLabels(this.ui.accountStatus)[2].value : null;
-    const balance = deepseekBalance != null ? {
-      text: ` Balance ${deepseekBalance} `, tone: deepseekBalance.startsWith('$') ? palette.goalSuccess : palette.muted,
-      bold: true, type: 'usage-balance', surface: true,
-    } : null;
     const metric = hostMetricsCompact(this.ui.hostMetrics).replace(/\sGB$/, 'G');
     const tinyMetric = metric.replace('CPU ', 'CPU').replace(' · RAM ', ' ');
     const selectedRelay = width >= 112 ? relayFull : relayDot;
@@ -1462,13 +1454,10 @@ export class TerminalChat {
       { text: '⚙ Settings', tone: palette.accent, bold: true, type: 'top-settings' },
     ];
     const actionOptions = [actionsFull, actionsCompact];
-    const withBalance = tokens => balance ? [tokens[0], balance, ...tokens.slice(1)] : tokens;
     const rightVariants = [
-      withBalance([{ text: selectedRelay }, { text: selectedMetric }, ...actionsFull]),
-      withBalance([{ text: selectedRelay }, { text: selectedMetric }, ...actionsCompact]),
-      withBalance([{ text: relayDot }, ...actionsFull]),
-      withBalance([{ text: relayDot }, ...actionsCompact]),
-      [{ text: relayDot }, { text: selectedMetric }, ...actionsFull],
+      [{ text: selectedRelay }, { text: selectedMetric }, ...actionsFull],
+      [{ text: selectedRelay }, { text: selectedMetric }, ...actionsCompact],
+      [{ text: relayDot }, ...actionsFull],
       [{ text: relayDot }, ...actionsCompact],
       ...actionOptions,
     ];
@@ -1479,7 +1468,7 @@ export class TerminalChat {
         const rightWidth = rightTokens.reduce((sum, token) => sum + cellWidth(token.text), 0) + Math.max(0, rightTokens.length - 1) * tokenGap;
         for (const variant of leftVariants) {
           if (preserveAlias && !variant.alias) continue;
-          let left = variant.sessions + '  │ ' + variant.create;
+          let left = variant.sessions;
           if (variant.alias && alias) left += '  │ ' + alias;
           if (cellWidth(left) + rightWidth + 1 <= width) {
             selected = { ...variant, alias: variant.alias && alias, rightTokens, rightWidth, tokenGap, left };
@@ -1492,16 +1481,13 @@ export class TerminalChat {
     }
     if (!selected) {
       selected = width >= 20
-        ? { sessions: 'Sessions', create: '+ New', alias: false, rightTokens: [{ text: relayDot }], rightWidth: 1, tokenGap: 1 }
-        : { sessions: 'S', create: '', alias: false, rightTokens: [{ text: relayDot }], rightWidth: 1, tokenGap: 1 };
+        ? { sessions: 'Sessions', alias: false, rightTokens: [{ text: relayDot }], rightWidth: 1, tokenGap: 1 }
+        : { sessions: 'S', alias: false, rightTokens: [{ text: relayDot }], rightWidth: 1, tokenGap: 1 };
       this.topBarOverflow = actionsCompact;
     }
     this.topBarHasMetrics = selected.rightTokens.some(token => /CPU/.test(clean(token.text)));
-    this.topBarHasBalance = selected.rightTokens.some(token => token.type === 'usage-balance');
     const tokens = [
       { text: selected.sessions, tone: palette.accent, bold: true, type: 'top-sessions' },
-      { text: '  │ ', tone: palette.muted },
-      { text: selected.create, tone: palette.accent, bold: true, type: 'session-new' },
       ...(selected.alias ? [{ text: '  │ ', tone: palette.muted }, { text: alias, tone: palette.text, type: 'alias' }] : []),
     ];
     let left = '', column = 0;
@@ -1529,6 +1515,34 @@ export class TerminalChat {
       offset += size;
     }
     return left + ' '.repeat(Math.max(1, rightStart - column)) + right;
+  }
+  spendingHeader(width, firstRow) {
+    if (!deepseekSpendingVisible(this) || this.promptDraft) return [];
+    const spending = this.spending?.sessionId === (this.ui.activeTab || this.ui.sessionId) ? this.spending : null;
+    const balance = accountStatusLabels(this.ui.accountStatus)[2].value;
+    const tiles = [
+      { label: `Balance ${balance}`, known: balance.startsWith('$'), type: 'usage-balance' },
+      { label: `Chat ≈ ${costLabel(spending?.chat?.estimatedUsd)}`, known: Boolean(spending?.chat?.estimatedUsd), separator: '│', type: 'top-metrics' },
+      { label: `Compactor ≈ ${costLabel(spending?.compactor?.estimatedUsd)}`, known: Boolean(spending?.compactor?.estimatedUsd), separator: '+', type: 'top-metrics' },
+      { label: `Total ≈ ${costLabel(spending?.total?.estimatedUsd)}`, known: Boolean(spending?.total?.estimatedUsd), separator: '=', type: 'top-metrics' },
+    ];
+    const lines = []; let line = '  ', column = 2;
+    for (const tile of tiles) {
+      for (const part of wrap(tile.label, Math.max(1, width - 4))) {
+        const text = ` ${part} `, size = cellWidth(text);
+        if (column > 2 && column + 1 + size > width) { lines.push(line); line = '  '; column = 2; }
+        if (column > 2) { line += this.theme.color(tile.separator || ' ', palette.muted); column++; }
+        this.hitTargets.push({ type: tile.type, row: firstRow + lines.length, left: column + 1, right: column + size });
+        line += fillSurface(text, size, this.theme, palette.selection, tile.known ? palette.goalSuccess : palette.muted, true);
+        column += size;
+      }
+    }
+    if (column > 2) lines.push(line);
+    if (spending && !spending.total?.complete) {
+      const message = spending.bounded ? 'Partial estimate · linked-session limit reached' : 'Partial estimate · pending or unpriced usage';
+      for (const part of wrap(message, Math.max(1, width - 4))) lines.push(this.theme.color('  ' + part, palette.warning));
+    }
+    return lines;
   }
   settingsTopBar(width) {
     const { color } = this.theme, surface = palette.surface;
@@ -1961,7 +1975,7 @@ export class TerminalChat {
     const pinned = this.pinned && !['settings', 'metrics'].includes(this.panel) ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
     const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
     const simpleChat = this.simpleChatLayout();
-    const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme), ...this.delegateHeader(width)]
+    const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme)]
       : [this.simpleTopBar(width)];
     if (!this.ui.minimal && this.topBarOverflow) {
       let line = '', column = 0;
@@ -1974,6 +1988,8 @@ export class TerminalChat {
       }
       if (line) header.push(line);
     }
+    header.push(...this.spendingHeader(width, header.length + 1));
+    if (this.ui.minimal) header.push(...this.delegateHeader(width));
     if (!this.ui.minimal && !this.topBarHasMetrics && width >= 60) {
       header.push(color(clip('  ' + hostMetricsCompact(this.ui.hostMetrics), width), palette.muted));
     }
@@ -1991,19 +2007,6 @@ export class TerminalChat {
     }
     if (this.panel === 'activity' && this.ui.accountStatusEnabled) {
       header.push(color(clip('  ' + accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width), palette.muted));
-    }
-    if (deepseekSpendingVisible(this) && !this.promptDraft) {
-      if (this.spending?.sessionId === (this.ui.activeTab || this.ui.sessionId)) {
-        for (const line of sessionCostLines(this.spending, width - 4))
-          for (const part of wrap(line, Math.max(8, width - 4))) header.push(color('  ' + part, palette.muted));
-      }
-      if (this.ui.minimal || !this.topBarHasBalance) {
-        const label = 'DeepSeek account balance: ' + accountStatusLabels(this.ui.accountStatus)[2].value;
-        for (const part of wrap(label, Math.max(8, width - 4))) {
-          this.hitTargets.push({ type: 'usage-balance', row: header.length + 1, left: 3, right: Math.min(width, cellWidth(part) + 2) });
-          header.push(color('  ' + part, palette.muted));
-        }
-      }
     }
     if (pinned.length && !this.ui.minimal) {
       if (simpleChat) {

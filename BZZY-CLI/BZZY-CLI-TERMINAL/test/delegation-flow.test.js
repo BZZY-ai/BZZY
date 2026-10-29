@@ -147,7 +147,8 @@ test('terminal navigation keeps top session actions, model controls and composer
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      for (const type of ['top-sessions', 'session-new', 'top-settings']) assert.ok(ui.tui.hitTargets.some(hit => hit.type === type));
+      for (const type of ['top-sessions', 'top-settings']) assert.ok(ui.tui.hitTargets.some(hit => hit.type === type));
+      assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'session-new'), false);
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'model-control' && hit.command === '/providers'));
       assert.doesNotMatch(frame, /TELEGRAM/);
       assert.match(frame, /Ask BZZY to do anything/); assert.match(frame, /fixture-brain.*effort default/);
