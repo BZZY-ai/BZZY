@@ -48,6 +48,22 @@ tool, project import format, sharing code or permission grant.
 `bzzy debug full SESSION [FILE.zip]` or `bzzy full_debug_export SESSION [FILE.zip]`.
 The regular Markdown export remains available independently.
 
+The CLI runs full export in a separate Core worker so history scanning and file
+capture do not block terminal repainting. Metrics and the command-line exporter
+show the current capture phase, elapsed time and completed record/event/file/byte
+counts as available. ZIP packaging reports files and uncompressed bytes processed;
+these are not a global completion percentage or an estimate of the final ZIP size.
+Progress contains no source filenames, payloads or credentials. Command-line
+progress goes to stderr, preserving stdout for the final result or JSON output.
+Wait for the exported-file success message before treating the ZIP as complete.
+
+To capture a baseline before another goal, export the existing saved session from
+a second terminal; no new model run is needed:
+
+```sh
+bzzy debug full "session-name" before-next-goal.zip
+```
+
 The ZIP includes its read-first guide, the bounded overview, a manifest, complete
 scoped saved record/event streams and complete logical conversation text. It adds
 session-memory nodes, compactor jobs/outputs/controls, learning jobs/material/

@@ -12,7 +12,7 @@ import { initializeProject } from '../src/engine/project.js';
 import { database, putRecord, appendEvent, digest } from '../src/engine/database.js';
 import { knowledgeDatabase } from '../src/engine/knowledge-index.js';
 import { createSkill, setSkillEnabled, importSkill } from '../src/engine/skills.js';
-import { exportFullSessionDebug } from '../src/engine/session-full-debug.js';
+import { exportFullSessionDebug, exportFullSessionDebugInWorker } from '../src/engine/session-full-debug.js';
 import { exportSessionDebug } from '../src/engine/session-debug.js';
 
 let directory, previous, parent;
@@ -35,6 +35,47 @@ function contents(file) {
 }
 const rows = buffer => buffer.toString().trim().split('\n').filter(Boolean).map(JSON.parse);
 const state = () => ({ records: database().prepare('SELECT * FROM records ORDER BY kind,id').all(), events: database().prepare('SELECT * FROM events ORDER BY seq').all() });
+
+test('worker export reports safe real progress while the caller remains responsive during capture', async () => {
+  for (let index = 0; index < 500; index++) appendEvent(parent.id, 'diagnostic.fixture', { index, text: 'Offline capture fixture. '.repeat(600) });
+  fs.writeFileSync(path.join(parent.cwd, 'private-looking-file-name.txt'), 'Retained fixture file.');
+  const before = state(), updates = [], timerPhases = []; let phase, callbackThrew = false;
+  const timer = setInterval(() => { if (phase) timerPhases.push(phase); }, 1);
+  let result;
+  try {
+    result = await exportFullSessionDebugInWorker(parent.id, { at: new Date(2026, 9, 26), onProgress: value => {
+      updates.push(value); phase = value.phase;
+      if (phase === 'workspace' && !callbackThrew) { callbackThrew = true; throw new Error('UI display failed; capture must continue.'); }
+    } });
+  } finally { clearInterval(timer); }
+  assert.ok(timerPhases.some(value => ['overview', 'history', 'workspace', 'resources'].includes(value)), 'Caller timers must run during synchronous source capture, not just ZIP packaging.');
+  assert.equal(callbackThrew, true);
+  assert.equal(updates.at(-1).phase, 'complete');
+  assert.equal(updates.at(-1).records, result.records); assert.equal(updates.at(-1).events, result.savedEvents);
+  assert.equal(updates.at(-1).files, result.files); assert.equal(updates.at(-1).exclusions, result.exclusions);
+  assert.ok(updates.at(-1).packagedFiles > 0); assert.ok(updates.at(-1).packagedBytes > 0);
+  assert.ok(updates.some(value => value.phase === 'history' && value.records > 0));
+  assert.ok(updates.some(value => value.phase === 'packaging' && value.packagedBytes > 0));
+  const fields = new Set(['phase', 'elapsedMs', 'records', 'events', 'files', 'bytes', 'exclusions', 'packagedFiles', 'packagedBytes']);
+  for (const update of updates) {
+    assert.ok(Object.keys(update).every(key => fields.has(key)));
+    for (const [key, value] of Object.entries(update)) if (key !== 'phase') assert.ok(Number.isSafeInteger(value) && value >= 0);
+  }
+  assert.doesNotMatch(JSON.stringify(updates), /private-looking-file-name|Offline capture fixture|project|sessionId/);
+  assert.deepEqual(state(), before);
+  const files = contents(result.outputPath); assert.equal(rows(files['session/events.jsonl']).filter(row => row.type === 'diagnostic.fixture').length, 500);
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+});
+
+test('worker export failures keep safe phase diagnostics and never publish a completed result', async () => {
+  const updates = [];
+  await assert.rejects(exportFullSessionDebugInWorker(parent.id, { output: 'private-token=DO_NOT_SHOW/debug.zip', onProgress: value => updates.push(value) }),
+    error => error.code === 'SESSION_DEBUG_MISSING' && error.exportPhase === 'packaging' && !error.message.includes('DO_NOT_SHOW'));
+  assert.ok(updates.some(value => value.phase === 'packaging'));
+  assert.ok(!updates.some(value => value.phase === 'complete'));
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+  await assert.rejects(exportFullSessionDebugInWorker(randomUUID()), error => error.code === 'SESSION_DEBUG_SESSION' && error.exportPhase === 'session');
+});
 
 test('full ZIP preserves long chat, memory, learning, notes, ledgers, evidence and derived sessions without changing the running session', async () => {
   const long = 'x'.repeat(90000) + 'END_OF_COMPLETE_DATA';

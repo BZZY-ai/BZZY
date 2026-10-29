@@ -3,11 +3,21 @@ import json
 import os
 import stat
 import sys
+import time
 import zipfile
 
 spec = json.load(sys.stdin)
 source, destination = spec['source'], spec['destination']
 created = None
+packaged_files, copied, last_progress = 0, 0, 0.0
+
+def progress(force=False):
+    global last_progress
+    clock = time.monotonic()
+    if force or clock - last_progress >= 0.25:
+        print(json.dumps({'type': 'progress', 'files': packaged_files, 'bytes': copied}), flush=True)
+        last_progress = clock
+
 try:
     with open(destination, 'xb') as output:
         created = os.fstat(output.fileno())
@@ -34,9 +44,14 @@ try:
                                 if not data:
                                     break
                                 target.write(data)
+                                copied += len(data)
+                                progress()
+                        packaged_files += 1
+                        progress()
         output.flush()
         os.fsync(output.fileno())
-    print(json.dumps({'bytes': os.path.getsize(destination)}))
+    progress(True)
+    print(json.dumps({'type': 'complete', 'bytes': os.path.getsize(destination)}), flush=True)
 except BaseException:
     if created is not None:
         try:

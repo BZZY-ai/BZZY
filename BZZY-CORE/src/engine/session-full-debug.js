@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
 import { createHash } from 'node:crypto';
+import { Worker } from 'node:worker_threads';
 import { transaction, getRecord, digest, now } from './database.js';
 import { home, privateDir } from './files.js';
 import { sessionMetricsFamily } from './session-metrics.js';
@@ -25,6 +26,23 @@ const settings = new Set(['core.learning.settings', 'core.session.compactor.sett
 const relation = /^(?:sessionId|parentSessionId|sourceSessionId|rootSessionId|workerSessionId|reviewSessionId|documentSourceSessionId|learningSourceSessionId|jobId|learningJobId|documentTaskId|assignmentId|goalId|sourceGoalId|missionContextId|nodeId|candidateId|evaluationId|reservationId|skillId)$/;
 const projectKinds = /^(?:memory|issue|checkpoint|core\.(?:memory|issue|checkpoint|knowledge|project\.facts|retrieval\.settings|resolution|skill\.candidate))/;
 const safeKind = kind => kinds.has(kind) || /^debate(?:-|$)/.test(kind) || kindPrefix.test(kind) || settings.has(kind);
+const progressPhases = new Set(['session', 'destination', 'staging', 'overview', 'history', 'workspace', 'resources', 'manifest', 'packaging', 'complete']);
+const progressFields = ['records', 'events', 'files', 'bytes', 'exclusions', 'packagedFiles', 'packagedBytes'];
+function progressReporter(onProgress) {
+  const started = Date.now(), counts = Object.fromEntries(progressFields.map(key => [key, 0]));
+  let phase = 'session', lastSent = 0;
+  const emit = force => {
+    const clock = Date.now(); if (!force && clock - lastSent < 250) return;
+    lastSent = clock;
+    try { onProgress?.({ phase, elapsedMs: Math.max(0, clock - started), ...counts }); } catch { /* Display must never fail or replay capture. */ }
+  };
+  emit(true);
+  return { get phase() { return phase; }, set phase(value) { if (progressPhases.has(value)) { phase = value; emit(true); } },
+    update(values = {}, force = false) {
+      for (const key of progressFields) if (Number.isSafeInteger(values[key]) && values[key] >= 0) counts[key] = values[key];
+      emit(force);
+    } };
+}
 const references = (value, found = []) => {
   if (!value || typeof value !== 'object') return found;
   for (const [key, child] of Object.entries(value)) {
@@ -46,17 +64,32 @@ function readFile(file) {
   } finally { fs.closeSync(descriptor); }
 }
 
-function zip(source, destination) {
+function zip(source, destination, progress) {
   return new Promise((resolve, reject) => {
     const child = spawn('python3', [fileURLToPath(new URL('./debug-archive.py', import.meta.url))], { stdio: ['pipe', 'pipe', 'pipe'] });
-    let output = '', error = '';
-    child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { error = (error + data).slice(-2000); });
+    let output = '', error = '', result, malformed = false;
+    child.stdout.on('data', data => {
+      output += data;
+      let newline;
+      while ((newline = output.indexOf('\n')) >= 0) {
+        const line = output.slice(0, newline); output = output.slice(newline + 1);
+        if (line.length > 4096) { malformed = true; continue; }
+        try {
+          const value = JSON.parse(line);
+          if (value.type === 'progress') progress.update({ packagedFiles: value.files, packagedBytes: value.bytes });
+          else if (value.type === 'complete' && Number.isSafeInteger(value.bytes) && value.bytes >= 0) result = { bytes: value.bytes };
+          else malformed = true;
+        } catch { malformed = true; }
+      }
+      if (output.length > 4096) { malformed = true; output = ''; }
+    }); child.stderr.on('data', data => { error = (error + data).slice(-2000); });
     child.once('error', cause => reject(debugExportFailure(cause.code === 'ENOENT' ? 'SESSION_DEBUG_PYTHON' : 'SESSION_DEBUG_PACKAGE')));
     child.stdin.on('error', () => {});
     child.once('close', code => {
       if (code) reject(debugExportFailure(/FileExistsError/.test(error) ? 'SESSION_DEBUG_EXISTS' : /ENOSPC|No space left|Disk quota exceeded/.test(error) ? 'SESSION_DEBUG_SPACE'
         : /PermissionError/.test(error) ? 'SESSION_DEBUG_ACCESS' : /FileNotFoundError/.test(error) ? 'SESSION_DEBUG_MISSING' : 'SESSION_DEBUG_PACKAGE'));
-      else { try { resolve(JSON.parse(output)); } catch { reject(debugExportFailure('SESSION_DEBUG_PACKAGE')); } }
+      else if (result && !malformed && !output.trim()) { progress.update({}, true); resolve(result); }
+      else reject(debugExportFailure('SESSION_DEBUG_PACKAGE'));
     });
     child.stdin.end(JSON.stringify({ source, destination }));
   });
@@ -80,10 +113,40 @@ function eventData(type, original) {
 // A deliberately separate owner-local diagnostic artifact, not an importable
 // project backup. It captures all scoped saved records without report field
 // clipping, plus individually validated filesystem context and explicit omissions.
-export async function exportFullSessionDebug(sessionId, { cwd, output, at = new Date() } = {}) {
-  const progress = { phase: 'session' };
-  try { return await captureFullSessionDebug(sessionId, { cwd, output, at }, progress); }
+export async function exportFullSessionDebug(sessionId, { cwd, output, at = new Date(), onProgress } = {}) {
+  const progress = progressReporter(onProgress);
+  try { const result = await captureFullSessionDebug(sessionId, { cwd, output, at }, progress); progress.phase = 'complete'; return result; }
   catch (error) { throw wrapDebugExportFailure(error, progress.phase); }
+}
+
+// The CLI uses this Core-owned worker so synchronous SQLite, redaction and file
+// capture cannot freeze its event loop. The inline API remains available to
+// trusted local callers and fault-injection tests; both use the same capture.
+export function exportFullSessionDebugInWorker(sessionId, { cwd, output, at = new Date(), onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    let worker, result, failure, phase = 'session';
+    try {
+      worker = new Worker(new URL('./session-full-debug-worker.js', import.meta.url), {
+        workerData: { sessionId, options: { cwd, output, at } }, execArgv: [], stdout: true, stderr: true });
+    } catch (error) { reject(wrapDebugExportFailure(error, phase)); return; }
+    // Never forward module warnings or raw worker exceptions to the terminal.
+    worker.stdout.resume(); worker.stderr.resume();
+    worker.on('message', message => {
+      if (message?.type === 'progress' && progressPhases.has(message.value?.phase)) {
+        phase = message.value.phase;
+        const value = { phase, elapsedMs: Number.isSafeInteger(message.value.elapsedMs) && message.value.elapsedMs >= 0 ? message.value.elapsedMs : 0 };
+        for (const key of progressFields) if (Number.isSafeInteger(message.value[key]) && message.value[key] >= 0) value[key] = message.value[key];
+        try { onProgress?.(value); } catch { /* Progress cannot change the archive result. */ }
+      } else if (message?.type === 'result') result = message.value;
+      else if (message?.type === 'error') failure = wrapDebugExportFailure(message.value, message.value?.exportPhase || phase);
+    });
+    worker.once('error', error => { failure = wrapDebugExportFailure(error, phase); });
+    worker.once('exit', code => {
+      if (failure) reject(failure);
+      else if (code !== 0 || !result) reject(wrapDebugExportFailure(debugExportFailure('SESSION_DEBUG_FAILED'), phase));
+      else resolve(result);
+    });
+  });
 }
 
 async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress) {
@@ -105,12 +168,15 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
     transformations: ['Conversation text events reference complete scrubbed logical messages to prevent split credential leakage.',
       'Native streamed deltas retain metadata; their text is represented by completed output/messages when recorded.', 'JSON/JSONL files are structurally scrubbed. Source and exported hashes differ after redaction.'] };
   let total = 0;
-  const omit = (name, reason, detail = {}) => manifest.exclusions.push({ path: scrub(name), reason, ...detail });
+  const omit = (name, reason, detail = {}) => {
+    manifest.exclusions.push({ path: scrub(name), reason, ...detail }); progress.update({ exclusions: manifest.exclusions.length });
+  };
   const write = (name, data, source = {}) => {
     if (path.posix.isAbsolute(name) || name.split('/').some(part => part === '..' || !part)) throw new Error('Unsafe debug archive path.');
     total += data.length; if (total > totalLimit) throw debugExportFailure('SESSION_DEBUG_SIZE');
     const file = path.join(stage, name); privateDir(path.dirname(file)); fs.writeFileSync(file, data, { mode: 0o600, flag: 'wx' });
     manifest.inventory.push({ path: name, bytes: data.length, sha256: digest(data), ...source });
+    progress.update({ files: manifest.inventory.length, bytes: total });
   };
   const encode = value => Buffer.from(JSON.stringify(scrub(value)) + '\n');
   const captureBytes = (name, data) => {
@@ -137,9 +203,10 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
   const stream = name => {
     const file = path.join(stage, name); privateDir(path.dirname(file)); const fd = fs.openSync(file, 'wx', 0o600), hash = createHash('sha256'); let bytes = 0;
     return { row(value) { const data = encode(value); bytes += data.length; total += data.length; if (total > totalLimit) throw debugExportFailure('SESSION_DEBUG_SIZE');
-      hash.update(data); let offset = 0; while (offset < data.length) offset += fs.writeSync(fd, data, offset); },
+      hash.update(data); let offset = 0; while (offset < data.length) offset += fs.writeSync(fd, data, offset); progress.update({ bytes: total }); },
     close() { try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      manifest.inventory.push({ path: name, bytes, sha256: hash.digest('hex'), encoding: 'jsonl' }); } };
+      manifest.inventory.push({ path: name, bytes, sha256: hash.digest('hex'), encoding: 'jsonl' });
+      progress.update({ files: manifest.inventory.length, bytes: total }); } };
   };
   let selected, sessionIds, overview;
   const skillRefs = new Map();
@@ -154,6 +221,7 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
     }
     const overviewBytes = fs.statSync(path.join(stage, 'overview.md')).size; total += overviewBytes;
     manifest.inventory.push({ path: 'overview.md', bytes: overviewBytes, bounded: true });
+    progress.update({ files: manifest.inventory.length, bytes: total });
     progress.phase = 'history';
     transaction(db => {
       const relatives = sessionMetricsFamily(sessionId, { full: true });
@@ -186,6 +254,7 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
           if (related.has(row.id) || references(row.data).some(id => related.has(id)) || projectKinds.test(row.kind) && projectIds.has(row.data?.projectId) || settings.has(row.kind) ||
             row.kind === 'core.knowledge.cursor' && [...projectIds].some(id => row.id.startsWith(`history:${id}:`))) {
             selected.set(key, row); related.add(row.id);
+            progress.update({ records: selected.size });
             for (const id of references(row.data)) related.add(id);
           }
         }
@@ -194,6 +263,7 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
       for (const row of candidates) if (/^core\.(?:learning|session\.compactor)\.usage$/.test(row.kind) && days.has(row.data?.day || row.id)) selected.set(`${row.kind}:${row.id}`, row);
       manifest.cutoffSeq = db.prepare('SELECT coalesce(max(seq),0) AS seq FROM events').get().seq;
       manifest.sessionIds = [...sessionIds]; manifest.records = selected.size;
+      progress.update({ records: selected.size }, true);
       const records = stream('session/records.jsonl');
       try { for (const row of selected.values()) records.row(row); } finally { records.close(); }
       const events = stream('session/events.jsonl'), pending = new Map(); let messages, count = 0;
@@ -202,6 +272,7 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
         messages = stream('session/messages.jsonl');
         for (const row of db.prepare('SELECT seq,session_id AS sessionId,type,data,created_at AS createdAt FROM events WHERE session_id IN (SELECT value FROM json_each(?)) AND seq<=? ORDER BY seq').iterate(JSON.stringify([...sessionIds]), manifest.cutoffSeq)) {
           const data = JSON.parse(row.data), metadata = data && typeof data === 'object' ? data : {}; count++;
+          progress.update({ events: count });
           const skillId = row.type === 'core.usage' && metadata.kind === 'skill' ? metadata.skillId : row.type === 'skill.loaded' ? metadata.skillId : null;
           const skillVersion = row.type === 'core.usage' ? metadata.skillVersion : metadata.version;
           if (skillId && /^[a-f0-9]{64}$/.test(skillVersion || '')) skillRefs.set(`${skillId}:${skillVersion}`, { id: skillId, version: skillVersion, owner: getRecord('session', row.sessionId) });
@@ -220,6 +291,7 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
           }
         }
         for (const id of pending.keys()) flush(id); manifest.events = count;
+        progress.update({ events: count }, true);
       } finally { try { events.close(); } finally { messages?.close(); } }
       if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_documents'").get()) {
         const index = stream('memory/knowledge-index.jsonl');
@@ -302,7 +374,7 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
     progress.phase = 'packaging';
     for (let index = 1; index <= 1000; index++) {
       const name = output || (index === 1 ? defaultName : defaultName.replace(/\.zip$/, `_${index}.zip`)), destination = path.resolve(destinationRoot, name);
-      try { const result = await zip(stage, destination); return { outputPath: destination, sessionId, full: true, ...result, records: selected.size, savedEvents: manifest.events, files: manifest.inventory.length, exclusions: manifest.exclusions.length }; }
+      try { const result = await zip(stage, destination, progress); return { outputPath: destination, sessionId, full: true, ...result, records: selected.size, savedEvents: manifest.events, files: manifest.inventory.length, exclusions: manifest.exclusions.length }; }
       catch (error) { if (!output && error.code === 'SESSION_DEBUG_EXISTS') continue; throw error; }
     }
     throw debugExportFailure('SESSION_DEBUG_COLLISIONS');
