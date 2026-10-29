@@ -14,9 +14,10 @@ import { sharedSecrets, assertShareText } from './share-bundle-policy.js';
 import { privateWorkspacePath } from './private-paths.js';
 import { skillVersionForDiagnostics } from './skills.js';
 import { debugExportFailure, wrapDebugExportFailure } from './debug-export-errors.js';
+import { createDebugContextBudget, debugExportLimits } from './debug-export-budget.js';
 
 const within = (root, value) => value === root || value.startsWith(root + path.sep);
-const fileLimit = 64 * 1024 * 1024, totalLimit = 4 * 1024 * 1024 * 1024;
+const fileLimit = 64 * 1024 * 1024, totalLimit = debugExportLimits.stageBytes;
 const kinds = new Set(['session', 'goal-history', 'goal-event', 'checkpoint', 'issue', 'memory', 'activity', 'artifact', 'artifact-read', 'artifact-import',
   'snapshot', 'run', 'execution', 'operation', 'acceptance', 'assessment', 'assignment', 'round', 'worker-report', 'review', 'recovery', 'coordination-history',
   'parallel', 'parallel-result', 'besties', 'besties-result', 'conversation-debate', 'peer-message', 'peer-review', 'peer-cursor', 'question', 'control',
@@ -113,21 +114,21 @@ function eventData(type, original) {
 // A deliberately separate owner-local diagnostic artifact, not an importable
 // project backup. It captures all scoped saved records without report field
 // clipping, plus individually validated filesystem context and explicit omissions.
-export async function exportFullSessionDebug(sessionId, { cwd, output, at = new Date(), onProgress } = {}) {
+export async function exportFullSessionDebug(sessionId, { cwd, output, at = new Date(), onProgress, maxContextBytes } = {}) {
   const progress = progressReporter(onProgress);
-  try { const result = await captureFullSessionDebug(sessionId, { cwd, output, at }, progress); progress.phase = 'complete'; return result; }
+  try { const result = await captureFullSessionDebug(sessionId, { cwd, output, at, maxContextBytes }, progress); progress.phase = 'complete'; return result; }
   catch (error) { throw wrapDebugExportFailure(error, progress.phase); }
 }
 
 // The CLI uses this Core-owned worker so synchronous SQLite, redaction and file
 // capture cannot freeze its event loop. The inline API remains available to
 // trusted local callers and fault-injection tests; both use the same capture.
-export function exportFullSessionDebugInWorker(sessionId, { cwd, output, at = new Date(), onProgress } = {}) {
+export function exportFullSessionDebugInWorker(sessionId, { cwd, output, at = new Date(), onProgress, maxContextBytes } = {}) {
   return new Promise((resolve, reject) => {
     let worker, result, failure, phase = 'session';
     try {
       worker = new Worker(new URL('./session-full-debug-worker.js', import.meta.url), {
-        workerData: { sessionId, options: { cwd, output, at } }, execArgv: [], stdout: true, stderr: true });
+        workerData: { sessionId, options: { cwd, output, at, maxContextBytes } }, execArgv: [], stdout: true, stderr: true });
     } catch (error) { reject(wrapDebugExportFailure(error, phase)); return; }
     // Never forward module warnings or raw worker exceptions to the terminal.
     worker.stdout.resume(); worker.stderr.resume();
@@ -149,7 +150,8 @@ export function exportFullSessionDebugInWorker(sessionId, { cwd, output, at = ne
   });
 }
 
-async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress) {
+async function captureFullSessionDebug(sessionId, { cwd, output, at, maxContextBytes }, progress) {
+  const contextBudget = createDebugContextBudget({ limitBytes: maxContextBytes });
   const root = getRecord('session', sessionId);
   if (!root || typeof root !== 'object' || Array.isArray(root) || root.parentSessionId || root.purpose && root.purpose !== 'terminal' || getRecord('session-deletion', sessionId)) throw debugExportFailure('SESSION_DEBUG_SESSION');
   if (output !== undefined && (typeof output !== 'string' || !/\.zip$/i.test(output))) throw debugExportFailure('SESSION_DEBUG_OUTPUT');
@@ -162,20 +164,51 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
   const { scrub, stats } = diagnosticRedactor({ roots: [projectRoot, root.cwd, home()], secrets, maxString: Infinity, maxItems: Infinity, maxDepth: Infinity, maxFields: Infinity });
   const stage = fs.mkdtempSync(path.join(stageRoot, '.full-')); fs.chmodSync(stage, 0o700);
   const manifest = { format: 'bzzy-full-session-debug', version: 1, sessionId, exportedAt: now(), exclusions: [], inventory: [],
-    scope: 'Selected terminal, linked workers and derived learning/compaction sessions; project-shared knowledge and complete project files/notes/ledgers.',
+    scope: 'Complete scoped saved records/events/messages for the selected terminal and linked workers/reviews; optional project notes, evidence and files within explicit capture budgets.',
     safety: 'Credentials, private authentication stores, host account bindings and private provider reasoning are excluded. This is private execution data; review before sharing.',
     capture: 'Database streams share one read-only cutoff. Files are individually checked after that cutoff; a live filesystem is not an atomic workspace snapshot.',
     transformations: ['Conversation text events reference complete scrubbed logical messages to prevent split credential leakage.',
       'Native streamed deltas retain metadata; their text is represented by completed output/messages when recorded.', 'JSON/JSONL files are structurally scrubbed. Source and exported hashes differ after redaction.'] };
-  let total = 0;
-  const omit = (name, reason, detail = {}) => {
-    manifest.exclusions.push({ path: scrub(name), reason, ...detail }); progress.update({ exclusions: manifest.exclusions.length });
+  let total = 0, metadataOmissionRecorded = false;
+  // Flat inventory/exclusion entries have fixed fields. Include ample room for
+  // indentation in the final pretty-printed manifest, without repeatedly
+  // serializing the growing manifest on every file.
+  const metadataCost = entry => Buffer.byteLength(JSON.stringify(scrub(entry))) + 512;
+  const metadataOmission = () => {
+    if (metadataOmissionRecorded) return;
+    metadataOmissionRecorded = true;
+    manifest.exclusions.push({ path: 'optional-context', reason: 'context_manifest_budget', subtree: true,
+      scope: 'Remaining optional paths under workspace/, workers/, execution-files/ and library/skills/ are not individually listed; unvisited subtrees may not have been enumerated. Inventory entries remain captured.' });
+    progress.update({ exclusions: manifest.exclusions.length });
   };
-  const write = (name, data, source = {}) => {
+  const omit = (name, reason, detail = {}, counted = false) => {
+    const entry = { path: scrub(name), reason, ...detail };
+    if (!contextBudget.metadata(metadataCost(entry))) {
+      if (counted) contextBudget.unlisted(); else contextBudget.omit({ subtree: detail.subtree === true, unlisted: true });
+      metadataOmission(); return;
+    }
+    manifest.exclusions.push(entry); progress.update({ exclusions: manifest.exclusions.length });
+  };
+  const omitBudget = (name, reason, detail = {}) => {
+    contextBudget.omit({ subtree: detail.subtree === true });
+    omit(name, reason, { ...detail, limitBytes: contextBudget.snapshot().limitBytes }, true);
+  };
+  const admitContext = (name, bytes, detail = {}) => {
+    const reason = contextBudget.reason(bytes, total);
+    if (reason) { omitBudget(name, reason, { sourceBytes: bytes, ...detail }); return false; }
+    return true;
+  };
+  const write = (name, data, source = {}, optional = false) => {
     if (path.posix.isAbsolute(name) || name.split('/').some(part => part === '..' || !part)) throw new Error('Unsafe debug archive path.');
-    total += data.length; if (total > totalLimit) throw debugExportFailure('SESSION_DEBUG_SIZE');
+    const entry = { path: name, bytes: data.length, sha256: digest(data), ...source };
+    if (optional && !admitContext(name, data.length, { sourceBytes: source.sourceBytes, exportedBytes: data.length })) return false;
+    if (optional && !contextBudget.metadata(metadataCost(entry))) {
+      contextBudget.omit({ unlisted: true }); metadataOmission(); return false;
+    }
+    if (total + data.length > totalLimit) throw debugExportFailure('SESSION_DEBUG_SIZE');
     const file = path.join(stage, name); privateDir(path.dirname(file)); fs.writeFileSync(file, data, { mode: 0o600, flag: 'wx' });
-    manifest.inventory.push({ path: name, bytes: data.length, sha256: digest(data), ...source });
+    total += data.length; if (optional) contextBudget.capture(data.length);
+    manifest.inventory.push(entry);
     progress.update({ files: manifest.inventory.length, bytes: total });
   };
   const encode = value => Buffer.from(JSON.stringify(scrub(value)) + '\n');
@@ -188,7 +221,7 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
       const visible = data.toString('latin1');
       try { assertShareText(visible, secrets); } catch { omit(name, 'credential_in_binary'); return; }
       if (/\b(?:authorization|set-cookie|cookie|password|passwd|api[-_]?key|access[-_]?token|refresh[-_]?token|client[-_]?secret)\s*[:=]|\bAKIA[A-Z0-9]{16}\b|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/i.test(visible)) { omit(name, 'credential_in_binary'); return; }
-      write(name, data, { sourceSha256, sourceBytes, encoding: 'binary' }); return;
+      write(name, data, { sourceSha256, sourceBytes, encoding: 'binary' }, true); return;
     }
     let cleaned;
     if (/\.jsonl$/i.test(name)) cleaned = text.split('\n').map(line => line.trim() ? JSON.stringify(scrub(JSON.parse(line))) : '').join('\n');
@@ -198,7 +231,7 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
       cleaned = valid ? JSON.stringify(scrub(parsed), null, 2) + '\n' : scrub(text);
     } else cleaned = scrub(text);
     assertShareText(cleaned, secrets);
-    write(name, Buffer.from(cleaned), { sourceSha256, sourceBytes, encoding: 'utf8', redacted: cleaned !== text });
+    write(name, Buffer.from(cleaned), { sourceSha256, sourceBytes, encoding: 'utf8', redacted: cleaned !== text }, true);
   };
   const stream = name => {
     const file = path.join(stage, name); privateDir(path.dirname(file)); const fd = fs.openSync(file, 'wx', 0o600), hash = createHash('sha256'); let bytes = 0;
@@ -300,7 +333,6 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
       }
     }, { readOnly: true });
 
-    progress.phase = 'workspace';
     const copied = new Set(), excludeRoot = value => within(stageRoot, value) || value === path.resolve(destinationRoot, output || defaultName);
     const walk = (source, archive, sourceRoot = source, relative = '') => {
       if (excludeRoot(source)) { omit(archive, 'debug_export_storage'); return; }
@@ -315,14 +347,27 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
       catch (error) { omit(archive, error.code === 'ENOENT' ? 'missing_source' : 'unreadable_source'); return; }
       if (copied.has(archive)) return; copied.add(archive);
       if (stat.isDirectory()) {
+        const exhausted = contextBudget.reason(0, total) || (contextBudget.remainingBytes(total) <= 0 ? contextBudget.reason(1, total) : null);
+        if (exhausted) { omitBudget(archive, exhausted, { subtree: true, remainingDescendantsOnly: true }); return; }
         // Every child is revalidated. No symlink is traversed into account or
         // unrelated host storage, and empty directories need no executable entry.
         let names;
-        try { names = fs.readdirSync(source).sort(); }
+        try {
+          names = fs.readdirSync(source).sort();
+          if (relative === '.bzzy') {
+            const notes = new Set(['NOTES.md', 'MEMORY.md', 'ledger', 'memory', 'issues', 'checkpoints', 'goals', 'sessions']);
+            names.sort((left, right) => Number(notes.has(right)) - Number(notes.has(left)));
+          }
+        }
         catch (error) { omit(archive, error.code === 'ENOENT' ? 'missing_source' : 'unreadable_source'); return; }
-        for (const name of names) walk(path.join(source, name), archive + '/' + name, sourceRoot, relative ? path.join(relative, name) : name);
+        for (const name of names) {
+          const exhausted = contextBudget.reason(0, total) || (contextBudget.remainingBytes(total) <= 0 ? contextBudget.reason(1, total) : null);
+          if (exhausted) { omitBudget(archive, exhausted, { subtree: true, remainingDescendantsOnly: true }); break; }
+          walk(path.join(source, name), archive + '/' + name, sourceRoot, relative ? path.join(relative, name) : name);
+        }
       } else {
         if (stat.size > fileLimit) { omit(archive, 'source_file_size_limit', { sourceBytes: stat.size, limitBytes: fileLimit }); return; }
+        if (!admitContext(archive, stat.size)) return;
         let data;
         try { assertShareText(archive, secrets); data = readFile(source); if (!within(fs.realpathSync(sourceRoot), fs.realpathSync(source))) throw new Error('changed_during_capture'); }
         catch (error) { omit(archive, error.message === 'file_limit' ? 'source_file_size_limit' : /credential/.test(error.message) ? 'credential_content' : 'changed_or_unreadable_source'); return; }
@@ -331,7 +376,66 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
           omit(archive, /credential/.test(error.message) ? 'credential_content' : error instanceof SyntaxError || error.message === 'unparseable_structured_data' ? 'unparseable_structured_data' : 'unsafe_source_content'); }
       }
     };
+    progress.phase = 'resources';
+    // Include complete, hash-checked skill resources, including safe binaries.
+    const overviewLines = readline.createInterface({ input: fs.createReadStream(path.join(stage, 'overview.md')), crlfDelay: Infinity });
+    for await (const line of overviewLines) if (line.startsWith('{"kind":"skill.version",')) {
+      const row = JSON.parse(line); if (skillRefs.has(`${row.data.id}:${row.data.version}`)) continue;
+      const owner = [...selected.values()].find(candidate => candidate.kind === 'session' && (!row.data.id.startsWith('project:') || candidate.data?.projectId && row.data.id.startsWith(`project:${candidate.data.projectId}:`)))?.data || root;
+      skillRefs.set(`${row.data.id}:${row.data.version}`, { id: row.data.id, version: row.data.version, owner });
+    }
+    const skillMetadata = stream('library/skills/metadata.jsonl'), skillResources = [];
+    try { for (const reference of skillRefs.values()) {
+      let definition;
+      try { definition = skillVersionForDiagnostics(reference.id, reference.version, { session: reference.owner }); }
+      catch { omit(`library/skills/${reference.id}/${reference.version}`, 'version_unavailable'); continue; }
+      skillMetadata.row(definition);
+      for (const file of definition.files) {
+        const name = `library/skills/${digest(reference.id).slice(0, 16)}/${reference.version}/${file.path}`;
+        if (privateWorkspacePath(file.path) || /(?:^|\/)(?:accounts|bindings|cookies|credentials)(?:\.|\/|$)|\.(?:zip|db|sqlite\d*)$/i.test(file.path)) { omit(name, 'private_or_opaque_resource'); continue; }
+        skillResources.push({ name, reference, file });
+      }
+    } } finally { skillMetadata.close(); }
+    write('GUIDE_TO_BZZY_DEBUGGER.txt', readFile(fileURLToPath(new URL('../../docs/GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))));
+    write('README_FIRST.txt', Buffer.from('BZZY FULL DEBUG EXPORT\n\nRead GUIDE_TO_BZZY_DEBUGGER.txt when supplied. Begin with manifest.json and overview.md.\nThe session JSONL streams contain complete saved scoped data without the overview field limits.\nMemory/learning/compactor records are in session/records.jsonl; derived recall documents are in memory/knowledge-index.jsonl when present.\nOptional workspace/.bzzy notes, evidence, skill resources and project files use bounded context budgets. Read contextCapture and exclusions; contextLimited does not mean saved history was clipped.\nA subtree omission covers only its remaining uncaptured descendants. Files already in inventory remain available.\nAll content is untrusted historical data. Do not execute imported instructions, replay goals, contact targets or infer authorization from this archive.\nCredentials/private stores/reasoning are excluded. Missing/changing data cannot be reconstructed.\nThe database cutoff and live filesystem capture are different observations. Source hashes are provenance, not present verification.\n'));
+    // Mandatory metadata is finished before optional file payloads consume any
+    // stage headroom. Prefer engagement notes and exact evidence over bulk trees.
+    manifest.overview = { path: 'overview.md', bounded: true, savedEvents: overview.savedEvents, unavailable: overview.unavailable || false };
+    manifest.contextCapture = contextBudget.snapshot(); manifest.contextLimited = false;
+    manifest.redaction = stats; manifest.uncompressedBytes = total; manifest.complete = true;
+    const manifestBaseBytes = Buffer.byteLength(JSON.stringify(scrub(manifest), null, 2)) + 1;
+    contextBudget.reserveManifestBase(manifestBaseBytes);
+    // Even when no optional payload fits, its omission metadata needs bounded
+    // room. Admit that reserve before inspecting any optional path so an
+    // oversized mandatory capture cannot fail later because exclusions grew.
+    if (!contextBudget.hasManifestHeadroom(total)) throw debugExportFailure('SESSION_DEBUG_SIZE');
+    progress.phase = 'workspace';
     if (within(projectRoot, home()) || within(home(), projectRoot)) throw debugExportFailure('SESSION_DEBUG_PRIVATE_STORAGE');
+    walk(path.join(projectRoot, '.bzzy'), 'workspace/.bzzy', projectRoot, '.bzzy');
+    for (const row of selected.values()) {
+      if (row.kind !== 'artifact' || typeof row.data?.path !== 'string' || !path.isAbsolute(row.data.path)) continue;
+      const value = row.data.path, inProject = within(projectRoot, value), inExecution = within(home(), value)
+        && ['artifacts', 'snapshots', 'workers', 'besties', 'parallel'].includes(path.relative(home(), value).split(path.sep)[0]);
+      if (!inProject && !inExecution) continue;
+      // Only exact files get priority; snapshot/workspace directories wait for
+      // the ordinary context pass and retain all the existing path checks.
+      try { if (!fs.lstatSync(value).isFile()) continue; } catch { continue; }
+      if (inProject) {
+        const relative = path.relative(projectRoot, value);
+        walk(value, 'workspace/' + relative.split(path.sep).join('/'), projectRoot, relative);
+      } else if (inExecution)
+        walk(value, 'execution-files/' + path.relative(home(), value).split(path.sep).join('/'));
+    }
+    progress.phase = 'resources';
+    for (const { name, reference, file } of skillResources) {
+      if (!admitContext(name, file.bytes)) continue;
+      let data;
+      try { data = skillVersionForDiagnostics(reference.id, reference.version, { session: reference.owner, file: file.path, raw: true }); }
+      catch { omit(name, 'unsafe_changed_or_unavailable_skill_resource'); continue; }
+      try { captureBytes(name, data); }
+      catch (error) { if (error.code) throw error; omit(name, 'unsafe_changed_or_unavailable_skill_resource'); }
+    }
+    progress.phase = 'workspace';
     walk(projectRoot, 'workspace');
     for (const row of selected.values()) {
       if (row.kind === 'session' && ['executor', 'reviewer', 'peer', 'bestie'].includes(row.data?.role) && row.data.cwd && !within(projectRoot, row.data.cwd) && !within(home(), row.data.cwd)) walk(row.data.cwd, `workers/${row.id}`);
@@ -341,40 +445,15 @@ async function captureFullSessionDebug(sessionId, { cwd, output, at }, progress)
         if (typeof value === 'string' && path.isAbsolute(value) && within(home(), value) && ['artifacts', 'snapshots', 'workers', 'besties', 'parallel'].includes(path.relative(home(), value).split(path.sep)[0])) walk(value, 'execution-files/' + path.relative(home(), value).split(path.sep).join('/'));
       }
     }
-    progress.phase = 'resources';
-    // Include complete, hash-checked skill resources, including safe binaries.
-    const overviewLines = readline.createInterface({ input: fs.createReadStream(path.join(stage, 'overview.md')), crlfDelay: Infinity });
-    for await (const line of overviewLines) if (line.startsWith('{"kind":"skill.version",')) {
-      const row = JSON.parse(line); if (skillRefs.has(`${row.data.id}:${row.data.version}`)) continue;
-      const owner = [...selected.values()].find(candidate => candidate.kind === 'session' && (!row.data.id.startsWith('project:') || candidate.data?.projectId && row.data.id.startsWith(`project:${candidate.data.projectId}:`)))?.data || root;
-      skillRefs.set(`${row.data.id}:${row.data.version}`, { id: row.data.id, version: row.data.version, owner });
-    }
-    const skillMetadata = stream('library/skills/metadata.jsonl');
-    try { for (const reference of skillRefs.values()) {
-      let definition;
-      try { definition = skillVersionForDiagnostics(reference.id, reference.version, { session: reference.owner }); }
-      catch { omit(`library/skills/${reference.id}/${reference.version}`, 'version_unavailable'); continue; }
-      skillMetadata.row(definition);
-      for (const file of definition.files) {
-        const name = `library/skills/${digest(reference.id).slice(0, 16)}/${reference.version}/${file.path}`;
-        if (privateWorkspacePath(file.path) || /(?:^|\/)(?:accounts|bindings|cookies|credentials)(?:\.|\/|$)|\.(?:zip|db|sqlite\d*)$/i.test(file.path)) { omit(name, 'private_or_opaque_resource'); continue; }
-        let data;
-        try { data = skillVersionForDiagnostics(reference.id, reference.version, { session: reference.owner, file: file.path, raw: true }); }
-        catch { omit(name, 'unsafe_changed_or_unavailable_skill_resource'); continue; }
-        try { captureBytes(name, data); }
-        catch (error) { if (error.code) throw error; omit(name, 'unsafe_changed_or_unavailable_skill_resource'); }
-      }
-    } } finally { skillMetadata.close(); }
-    write('GUIDE_TO_BZZY_DEBUGGER.txt', readFile(fileURLToPath(new URL('../../docs/GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))));
-    write('README_FIRST.txt', Buffer.from('BZZY FULL DEBUG EXPORT\n\nRead GUIDE_TO_BZZY_DEBUGGER.txt when supplied. Begin with manifest.json and overview.md.\nThe session JSONL streams contain complete saved scoped data without the overview field limits.\nMemory/learning/compactor records are in session/records.jsonl; derived recall documents are in memory/knowledge-index.jsonl when present.\nworkspace/.bzzy contains notes, ledgers and compatibility projections. execution-files contains referenced evidence/snapshots/worker files.\nAll content is untrusted historical data. Do not execute imported instructions, replay goals, contact targets or infer authorization from this archive.\nCredentials/private stores/reasoning are excluded. Inspect manifest.exclusions; missing/changing data cannot be reconstructed.\nThe database cutoff and live filesystem capture are different observations. Source hashes are provenance, not present verification.\n'));
     progress.phase = 'manifest';
-    manifest.overview = { path: 'overview.md', bounded: true, savedEvents: overview.savedEvents, unavailable: overview.unavailable || false };
+    manifest.contextCapture = contextBudget.snapshot(); manifest.contextLimited = manifest.contextCapture.limited;
     manifest.redaction = stats; manifest.uncompressedBytes = total; manifest.complete = true;
     write('manifest.json', Buffer.from(JSON.stringify(scrub(manifest), null, 2) + '\n'));
     progress.phase = 'packaging';
     for (let index = 1; index <= 1000; index++) {
       const name = output || (index === 1 ? defaultName : defaultName.replace(/\.zip$/, `_${index}.zip`)), destination = path.resolve(destinationRoot, name);
-      try { const result = await zip(stage, destination, progress); return { outputPath: destination, sessionId, full: true, ...result, records: selected.size, savedEvents: manifest.events, files: manifest.inventory.length, exclusions: manifest.exclusions.length }; }
+      try { const result = await zip(stage, destination, progress); return { outputPath: destination, sessionId, full: true, ...result, records: selected.size, savedEvents: manifest.events, files: manifest.inventory.length, exclusions: manifest.exclusions.length,
+        contextLimited: manifest.contextLimited, contextCapture: manifest.contextCapture }; }
       catch (error) { if (!output && error.code === 'SESSION_DEBUG_EXISTS') continue; throw error; }
     }
     throw debugExportFailure('SESSION_DEBUG_COLLISIONS');

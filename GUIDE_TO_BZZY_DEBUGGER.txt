@@ -263,8 +263,20 @@ Optional source files over 64 MiB are omitted before reading, with their sizes
 recorded in manifest.exclusions. Unavailable or unlistable directories are also
 omissions; a large APK or binary does not block saved-history export. Individual
 logical messages are bounded to 64 MiB; generated JSONL streams can be larger.
-The staged full export is bounded to 4 GiB. A mandatory message/stage limit fails
-the operation rather than publishing clipped diagnostic streams.
+Optional context has a 512 MiB aggregate budget, further reduced when needed
+to fit within the 4 GiB uncompressed staging limit. Scoped diagnostic streams,
+skill metadata and guides are written first. File capture prioritizes .bzzy
+notes/ledgers, referenced artifact files and checked skills before bulk project,
+worker and snapshot trees. Budget overflow omits whole files or subtrees; it
+does not clip the saved diagnostic streams or fail an otherwise valid export.
+Check contextLimited, contextCapture and manifest.exclusions. An omitted subtree
+may not have been enumerated, so do not infer its exact missing-file count.
+A manifest reserve of at least 8 MiB and bounded context metadata prevent optional
+inventory or exclusions from exhausting the remaining space. This metadata reserve
+counts toward the hard stage budget and is admitted before optional capture.
+A mandatory message/stage
+limit still fails the operation rather than publishing clipped diagnostic
+streams. Staging byte counts are not compressed ZIP sizes.
 Binary/changed/unreadable/unsafe resources can be explicitly omitted. Check the
 manifest to distinguish an intentional privacy exclusion from a capture failure.
 

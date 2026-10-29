@@ -72,24 +72,44 @@ documents are projected only if already present; export builds no memory/index
 and starts no learning work. Explicitly related learning/compaction conversations
 are included, while unrelated raw terminal histories remain outside scope.
 
-Project files include `.bzzy` notes, ledgers and compatibility projections.
+Project context includes `.bzzy` notes, ledgers and compatibility projections
+within the optional capture budget.
 Project-shared knowledge and ledgers remain labeled shared context. Referenced
-safe evidence/snapshot/worker files and complete checked skill resources,
-including safe binary resources, are captured separately. The archive is not a
+safe evidence/snapshot/worker files and checked skill resources,
+including safe binary resources, are captured separately when they fit. The archive is not a
 project-import or execution package and copies no raw runtime database.
 
 The full streams have no overview text/array/family display clipping. Optional
 source files over 64 MiB are skipped before reading and listed with their size
 in `manifest.exclusions`; an APK or browser binary cannot prevent exporting the
 saved chat. Unavailable or unlistable project directories are also recorded as
-omissions. Individual logical messages still have a 64 MiB limit, and the full
-stage has a 4 GiB limit. Reaching either mandatory limit publishes no clipped ZIP.
+omissions. Optional file capture has a separate 512 MiB budget, reduced further
+when necessary to leave space under the 4 GiB uncompressed staging limit. Core
+writes the scoped diagnostic streams, skill metadata and guides first, then
+prioritizes `.bzzy`, referenced artifact files and checked skill resources before
+bulk project, worker and snapshot trees. Source-size checks happen before reading;
+the redacted output must fit too. Files are omitted whole, never truncated to fit.
+A manifest reserve of at least 8 MiB and bounded context metadata prevent long
+omission lists from consuming the remaining diagnostic space. Required metadata
+headroom counts toward the hard staging limit and is checked before optional
+capture. Once a subtree is omitted, its
+descendants may not be enumerated; the manifest records that coverage limit rather
+than claiming an exact missing-file count.
+
+A context-budget limit produces a successful ZIP with `contextLimited: true` and
+`contextCapture` statistics in its result/manifest. Read `manifest.exclusions` to
+identify missing context. The full scoped record/event/message/index streams
+remain intact subject to their existing privacy exclusions. Individual logical
+messages still have a 64 MiB limit; mandatory streams still have the 4 GiB staging
+limit. Reaching a mandatory limit, or a real disk/write failure, publishes no
+clipped diagnostic ZIP. Staging bytes are not the compressed ZIP size.
 The overview retains
 its own earlier cutoff/limits and can be unavailable without preventing full
 streams. File capture follows the database cutoff and validates each read;
 it cannot claim an atomic snapshot of a live project filesystem.
 
-Metrics shows the number of omitted context paths after a successful full export.
+Metrics shows the number of capture-omission entries after a successful full export;
+an entry can cover a subtree rather than one file.
 If export fails, it reports a safe cause category and capture phase, distinguishing
 missing Python, unavailable paths, access, disk space, packaging and mandatory
 size limits. Raw exception text and subprocess output are not displayed. A full

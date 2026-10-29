@@ -197,6 +197,67 @@ test('large optional project files are listed as omissions while complete histor
   assert.deepEqual(fs.readFileSync(fileURLToPath(new URL('../../GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))), fs.readFileSync(fileURLToPath(new URL('../docs/GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))));
 });
 
+test('optional context exhaustion keeps memory history and prioritizes notes, artifacts and skills over bulk files', async t => {
+  const note = 'PRIORITY_NOTE', evidence = 'PRIORITY_EVIDENCE';
+  fs.writeFileSync(path.join(parent.cwd, '.bzzy', 'NOTES.md'), note);
+  const artifact = path.join(process.env.BZZY_HOME, 'artifacts', 'selected.txt'); fs.mkdirSync(path.dirname(artifact), { recursive: true }); fs.writeFileSync(artifact, evidence);
+  putRecord('artifact', 'priority', { id: 'priority', sessionId: parent.id, path: artifact, sha256: digest(evidence) });
+  let skill = createSkill({ name: 'priority-method', description: 'Inspect supplied data.', instructions: 'PRIORITY_SKILL' }, { scope: 'global' });
+  skill = setSkillEnabled(skill.name, true, skill.revision, { scope: 'global' });
+  const bulk = path.join(parent.cwd, 'aaa-bulk.txt'); fs.writeFileSync(bulk, 'x'.repeat(16384));
+  appendEvent(parent.id, 'text', { text: 'COMPLETE_HISTORY_BEFORE_CONTEXT_LIMIT' });
+  putRecord('core.session.memory.node', 'preserved-node', { sessionId: parent.id, summary: 'COMPLETE_MEMORY_BEFORE_CONTEXT_LIMIT' });
+  const opened = [], open = fs.openSync;
+  t.mock.method(fs, 'openSync', (file, ...args) => { opened.push(String(file)); return open(file, ...args); });
+  const before = state(), result = await exportFullSessionDebug(parent.id, { maxContextBytes: 4096 });
+  const files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
+  assert.equal(result.contextLimited, true); assert.equal(manifest.contextLimited, true); assert.equal(manifest.complete, true);
+  assert.equal(result.contextCapture.limitBytes, 4096); assert.ok(result.contextCapture.capturedBytes <= 4096);
+  assert.equal(files['workspace/.bzzy/NOTES.md'].toString(), note);
+  assert.equal(files['execution-files/artifacts/selected.txt'].toString(), evidence);
+  assert.ok(Object.entries(files).some(([name, data]) => name.startsWith('library/skills/') && name.endsWith('/SKILL.md') && data.toString().includes('PRIORITY_SKILL')));
+  assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'COMPLETE_HISTORY_BEFORE_CONTEXT_LIMIT'));
+  assert.ok(rows(files['session/records.jsonl']).some(row => row.kind === 'core.session.memory.node' && row.data.summary === 'COMPLETE_MEMORY_BEFORE_CONTEXT_LIMIT'));
+  assert.equal(files['workspace/aaa-bulk.txt'], undefined); assert.ok(!opened.includes(bulk), 'Over-budget source is skipped before opening its payload.');
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/aaa-bulk.txt' && row.reason === 'context_byte_budget' && row.sourceBytes === 16384));
+  assert.deepEqual(state(), before); assert.equal(fs.readFileSync(bulk).length, 16384);
+});
+
+test('redaction/formatting expansion is checked after transformation without failing the archive', async t => {
+  const source = JSON.stringify(Array(1000).fill(0)), filename = path.join(parent.cwd, 'expands.json'); fs.writeFileSync(filename, source);
+  let opened = false; const open = fs.openSync;
+  t.mock.method(fs, 'openSync', (file, ...args) => { if (file === filename) opened = true; return open(file, ...args); });
+  const result = await exportFullSessionDebug(parent.id, { maxContextBytes: 4096 }), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
+  assert.equal(opened, true); assert.equal(result.contextLimited, true); assert.equal(files['workspace/expands.json'], undefined);
+  const omitted = manifest.exclusions.find(row => row.path === 'workspace/expands.json');
+  assert.equal(omitted.reason, 'context_byte_budget'); assert.equal(omitted.sourceBytes, Buffer.byteLength(source));
+  assert.ok(omitted.exportedBytes > 4096); assert.ok(files['session/records.jsonl']);
+});
+
+test('worker forwards an empty optional budget while retaining complete scoped diagnostics and subtree omissions', async () => {
+  fs.writeFileSync(path.join(parent.cwd, 'unvisited.txt'), 'OPTIONAL_SOURCE');
+  appendEvent(parent.id, 'text', { text: 'MANDATORY_HISTORY' });
+  const result = await exportFullSessionDebugInWorker(parent.id, { maxContextBytes: 0 }), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
+  assert.equal(result.contextLimited, true); assert.equal(result.contextCapture.capturedBytes, 0);
+  assert.equal(result.contextCapture.omittedPathsComplete, false); assert.ok(result.contextCapture.omittedSubtrees > 0);
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace' && row.subtree && row.remainingDescendantsOnly));
+  assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'MANDATORY_HISTORY'));
+  assert.equal(files['workspace/unvisited.txt'], undefined); assert.ok(files['GUIDE_TO_BZZY_DEBUGGER.txt']);
+});
+
+test('many empty optional files cannot exhaust reserved manifest space or silently drop omission coverage', async () => {
+  const bulk = path.join(parent.cwd, 'bulk'); fs.mkdirSync(bulk);
+  for (let index = 0; index < 5000; index++) fs.writeFileSync(path.join(bulk, `${String(index).padStart(5, '0')}-${'a'.repeat(200)}.txt`), '');
+  appendEvent(parent.id, 'text', { text: 'HISTORY_WITH_MANY_EMPTY_CONTEXT_FILES' });
+  const result = await exportFullSessionDebug(parent.id), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
+  assert.equal(result.contextLimited, true); assert.equal(result.contextCapture.metadataBytes, result.contextCapture.metadataLimitBytes);
+  assert.equal(result.contextCapture.omittedPathsComplete, false);
+  assert.ok(manifest.exclusions.some(row => row.path === 'optional-context' && row.reason === 'context_manifest_budget' && row.subtree));
+  assert.ok(Object.keys(files).filter(name => name.startsWith('workspace/bulk/')).length < 5000);
+  assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'HISTORY_WITH_MANY_EMPTY_CONTEXT_FILES'));
+  assert.ok(Buffer.byteLength(files['manifest.json']) < result.contextCapture.manifestReserveBytes);
+});
+
 test('future events and incomplete records retain their valid JSON payloads without crashing or mutating history', async () => {
   for (const data of [null, false, 17, 'visible diagnostic', ['first', 'second']]) appendEvent(parent.id, 'custom.future.event', data);
   appendEvent(parent.id, 'backend', null); appendEvent(parent.id, 'text', null);
