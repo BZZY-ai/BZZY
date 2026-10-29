@@ -225,7 +225,7 @@ export function compactTaskState(session, input = {}, context = {}) {
   }
   if (overBudget() && result.liveAgents) {
     result.liveAgents = { ...result.liveAgents, assignments: result.liveAgents.assignments.map(item => ({ assignmentId: item.assignmentId, round: item.round,
-      state: item.state, closure: item.closure, reportArtifactId: item.reportArtifactId })),
+      state: item.state, closure: item.closure, importedHistory: item.importedHistory, reportArtifactId: item.reportArtifactId })),
       taskPreviewsOmitted: true, lookup: 'Use assignment_status for current tasks and report references.' };
   }
   if (overBudget()) {
@@ -235,7 +235,8 @@ export function compactTaskState(session, input = {}, context = {}) {
   }
   if (overBudget()) {
     // Final navigation form has deliberately bounded fields, including Unicode
-    // previews. It retains every current checkpoint category and branch IDs.
+    // previews. It retains current checkpoint categories, branch IDs, recovery
+    // uncertainty and scoped worker status even when all excerpts are omitted.
     // Full records remain revision-pinned through the section/source readers.
     const minimal = { schemaVersion: 1, revision, contextGeneration: source.contextGeneration, scope: state.scope,
       notModified: false, compacted: true, currentGoal: goal ? { id: goal.id, status: goal.status, objective: preview(goal.objective, 128) } : null,
@@ -243,6 +244,15 @@ export function compactTaskState(session, input = {}, context = {}) {
         pendingActions: preview(checkpoint.pendingActions || [], 192), unresolvedQuestions: preview(checkpoint.unresolvedQuestions || [], 192),
         completedWork: preview(checkpoint.completedWork || [], 96), detail: 'checkpoint' } : null,
       investigation: branchStubs(), programScope: { enrolled: source.programScope.enrolled, state: source.programScope.state, detail: 'programScope' },
+      recovery: recovery ? { state: short(recovery.state, 64), createdAt: short(recovery.createdAt, 40),
+        uncertainOperationCount: result.recovery.uncertainOperationCount, automaticallyReplayed: recovery.automaticallyReplayed,
+        detail: 'recovery', lookup: 'Inspect recovery details before retrying uncertain operations; this view never authorizes replay.' } : null,
+      assignments: { total: assignments.total, open: assignments.open, detail: 'assignments',
+        lookup: 'Use list_assignments and assignment_status for full current status.' },
+      liveAgents: result.liveAgents ? { revision: result.liveAgents.revision, truncated: result.liveAgents.truncated,
+        assignments: result.liveAgents.assignments.map(item => ({ assignmentId: item.assignmentId, round: item.round,
+          state: item.state, closure: item.closure, importedHistory: item.importedHistory })),
+        lookup: 'Use list_assignments and assignment_status; this partial view grants no execution or replay authority.' } : undefined,
       contract: { detail: 'contract', authority: 'Full current contract remains mandatory in execution instructions.' },
       executionBudget: { detail: 'get_execution_budget', authority: 'Existing runtime limits remain in force.' },
       knowledgeBrief: { items: [], omitted: source.knowledge.brief.omitted + source.knowledge.brief.items.length, detail: 'knowledgeBrief' },

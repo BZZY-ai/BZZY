@@ -23,8 +23,11 @@ expiry, evidence drift and changed dependency fingerprints invalidate relevant
 state. Paged section/source readers retain exact revisions and UTF-8 boundaries.
 When the capsule fills, historical excerpts shrink before current checkpoint
 decisions/questions or branch identity. Large valid state falls back to a small
-navigation view with every checkpoint category and branch references; invalid
-access and stale source revisions still fail normally.
+navigation view with every checkpoint category, branch references, recovery
+uncertainty counts, open-assignment counts and bounded worker-status stubs.
+Recovery details must be inspected before retrying uncertain operations; the
+view never authorizes replay. Invalid access and stale source revisions still
+fail normally.
 
 The normal goal handoff also includes current investigation state. Native push
 refresh remains capability- and acknowledgment-dependent; unsupported backends
