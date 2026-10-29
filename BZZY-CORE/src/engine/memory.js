@@ -7,7 +7,7 @@ import { writeProjectRecord, projectRecords, agentRecords } from './project.js';
 import { assertPublicWorkspacePath } from './private-paths.js';
 import { recordBelongsToProject } from './project-identity.js';
 import { knowledgeAccess, allowedKnowledgeSessionIds, assertKnowledgeText, indexKnowledgeRecord, searchKnowledgeIndex, scopedRecord, reverseMemorySources,
-  refreshKnowledgeRecords,canonicalKnowledgeSource,cleanKnowledgeValue,initializeMemoryLinkCoverage,memoryRelationshipCoverage } from './knowledge-index.js';
+  refreshKnowledgeRecords,canonicalKnowledgeSource,cleanKnowledgeValue,initializeMemoryLinkCoverage,memoryRelationshipCoverage,checkMemoryRelationships } from './knowledge-index.js';
 import { applyCheckpointItems } from './checkpoint-items.js';
 import { validateInvestigationBlockers } from './session-investigation.js';
 export { checkpointOperationProperties } from './checkpoint-items.js';
@@ -154,7 +154,6 @@ export function memoryFreshness(record, project, session = {}, { budget, readOnl
   const relationshipCoverage=budget?.relationshipCoverage?.get(coverageKey)
     || (access?memoryRelationshipCoverage(session,access,{readOnly}):'backfill-pending');
   if(budget) {budget.relationshipCoverage ||= new Map();budget.relationshipCoverage.set(coverageKey,relationshipCoverage);}
-  if(relationshipCoverage!=='complete') reasons.push('relationship-index-backfill-pending');
   const visible = item => item && typeof item.sessionId === 'string' && item.sessionId.trim() && recordBelongsToProject(item, project) && !getRecord('session-deletion', item.sessionId)
     && (!access?.restricted || item.sessionId === session.id);
   const sourceId = typeof record.id === 'string' && record.id.trim() ? record.id : null;
@@ -170,7 +169,8 @@ export function memoryFreshness(record, project, session = {}, { budget, readOnl
   }
   if (budgetExceeded) reasons.push('verification-budget-reached');
   return { ...record, truth: reasons.length ? 'stale' : record.truth || (semanticKind === 'observation' ? 'observed' : semanticKind === 'hypothesis' ? 'hypothesis' : 'inconclusive'),
-    stale: reasons.length > 0, staleInputs, staleReasons: [...new Set(reasons)], relationshipCoverage,supersededBy: newer?.id || null,
+    stale: reasons.length > 0, staleInputs, staleReasons: [...new Set(reasons)], relationshipCoverage,
+    freshnessStatus: reasons.length ? 'stale' : relationshipCoverage === 'complete' ? 'current' : 'unverified', supersededBy: newer?.id || null,
     contradictions, disputed: contradictions.length > 0 };
 }
 
@@ -236,11 +236,20 @@ export function reviewMemory(session, id, { truth, expectedRevision, rationale, 
   const access = knowledgeAccess(session), current = getRecord('memory', id);
   if (!explicit || access.restricted || !['confirmed', 'disproved', 'inconclusive'].includes(truth)) throw new Error('Explicit local-owner review is required for this knowledge decision.');
   if (!current || !scopedRecord(current, access, allowedKnowledgeSessionIds(session, access))) throw new Error('Knowledge belongs to another engagement.');
-  if (['confirmed', 'disproved'].includes(truth) && (!current.evidence?.length || memoryFreshness(current, access.project, session).stale)) throw new Error('Review requires current recorded evidence and matching validity conditions.');
   const reason = text(rationale, 2000);
   const record = atomic(db => {
-    const shown = getRecord('memory', id);
+    const shown = getRecord('memory', id), currentAccess = knowledgeAccess(session);
+    if (!shown || !scopedRecord(shown, currentAccess, allowedKnowledgeSessionIds(session, currentAccess))) throw new Error('Knowledge belongs to another engagement.');
     if ((shown.revision || 1) !== expectedRevision) throw new Error('Knowledge changed. Review its current revision.');
+    if (['confirmed', 'disproved'].includes(truth)) {
+      const fresh = memoryFreshness(shown, currentAccess.project, session, { readOnly: true });
+      if (!shown.evidence?.length || fresh.stale) throw new Error('Review requires current recorded evidence and matching validity conditions.');
+      if (fresh.relationshipCoverage !== 'complete') {
+        const relationships = checkMemoryRelationships(session, shown, currentAccess);
+        if (relationships.supersededBy) throw Object.assign(new Error('This memory was superseded. Review its replacement before changing truth.'), { code: 'MEMORY_SUPERSEDED' });
+        if (!relationships.complete) throw Object.assign(new Error('Relationship checking is incomplete within this review budget. Continue bounded knowledge indexing, then retry the review; recorded evidence has not been marked stale.'), { code: 'MEMORY_RELATIONSHIPS_INCOMPLETE' });
+      }
+    }
     const updated = { ...shown, truth, revision: (shown.revision || 1) + 1, verification: { source: 'explicit-owner-review', rationale: reason, recordedAt: now() } };
     putRecord('core.memory.revision', `${id}:${shown.revision || 1}`, shown, db);
     putRecord('memory', id, updated, db); putRecord('core.memory.revision', `${id}:${updated.revision}`, updated, db);
@@ -365,13 +374,17 @@ export function checkpoint(session, input, context = {}) {
     if (input.expectedRevision != null && input.expectedRevision !== checkpointRevision(previous)) throw new Error('Checkpoint changed. Refresh its revision.');
     const revision = Math.max(checkpointRevision(latest), checkpointRevision(previous)) + 1;
     if (!Number.isSafeInteger(revision)) throw new Error('Checkpoint revision limit reached.');
+    const contractConstraints = [...new Set(session.contract?.constraints || [])];
+    const contractValues = new Set([...contractConstraints, ...(previous.items || []).filter(item => item.contractOwned).map(item => item.value)]);
+    const workingConstraints = fields.constraints ?? previous.workingConstraints ?? (previous.constraints || []).filter(value => !contractValues.has(value));
     let record = { ...previous, ...fields, schemaVersion: 2, provenance: 'core-checkpoint', scope,
       project: access.project.root, projectId: access.project.id, sessionId: session.id,
       objective: scope.kind === 'goal' ? session.goal?.objective : scope.kind === 'assignment' ? session.contract?.objective : undefined,
       goalId: scope.goalId, runId: context.runId || null, assignmentId: scope.assignmentId, assignmentRound: scope.assignmentRound,
-      constraints: [...new Set([...(session.contract?.constraints || []), ...(previous.constraints || []), ...(fields.constraints || [])])],
+      constraints: [...new Set([...contractConstraints, ...workingConstraints])],
       revision, updatedAt: now() };
     record = applyCheckpointItems(previous, record, input, scope, revision, session.contract?.constraints || []);
+    record.workingConstraints = record.constraints.filter(value => !contractConstraints.includes(value));
     if (input.evidenceOperations) {
       const added = validEvidence(session, input.evidenceOperations.add || [], access), removed = list(input.evidenceOperations.remove || [], 32);
       if (removed.some(id => !(previous.evidence || []).includes(id))) throw new Error('Cannot remove evidence absent from the current checkpoint.');

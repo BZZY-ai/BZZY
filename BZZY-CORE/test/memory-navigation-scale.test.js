@@ -63,12 +63,13 @@ test('legacy relationship freshness stays unknown until bounded migration reache
   assert.equal(first.remaining,true);
   for(const source of [superseded,disputed]) {
     const fresh=memoryFreshness(source,access.project,session,{readOnly:true});
-    assert.equal(fresh.relationshipCoverage,'backfill-pending');assert.equal(fresh.stale,true);
-    assert.ok(fresh.staleReasons.includes('relationship-index-backfill-pending'));
+    assert.equal(fresh.relationshipCoverage,'backfill-pending');assert.equal(fresh.stale,false);
+    assert.equal(fresh.freshnessStatus,'unverified');assert.equal(fresh.truth,source.truth);
+    assert.deepEqual(fresh.staleReasons,[]);
   }
   const before=database().prepare('SELECT total_changes() AS n').get().n;
   const brief=taskKnowledgeBrief(session,{id:'legacy-goal',status:'active',objective:'LEGACY_RELATION_TARGET'});
-  assert.ok(brief.brief.items.every(item=>item.relationshipCoverage==='backfill-pending' && item.stale));
+  assert.ok(brief.brief.items.every(item=>item.relationshipCoverage==='backfill-pending' && item.freshnessStatus==='unverified' && !item.stale));
   assert.equal(database().prepare('SELECT total_changes() AS n').get().n,before);
   let result,round=0;do {result=refreshKnowledgeRecords(session,{limit:16});round++;}while(result.remaining && round<30);
   assert.equal(result.remaining,false);

@@ -39,7 +39,7 @@ export function projectFactsView(session, { maxBytes, limit = 8 } = {}) {
   if (!Number.isSafeInteger(cap) || cap < 512 || cap > 4096 || !Number.isSafeInteger(limit) || limit < 1 || limit > 12) fail('Use a bounded project fact view.');
   const result = { version: 1, projectId: access.project.id, revision: settings.revision, enabled: settings.enabled,
     maxBytes: cap, pinCount: settings.ids.length, items: [], omitted: [],
-    authority: 'Historical project knowledge; current contracts, permissions and source validity remain authoritative.' };
+    authority: 'Historical project knowledge; current contracts, permissions and source validity remain authoritative. Unverified relationship coverage is not a current-fact guarantee.' };
   if (!settings.enabled) return result;
   const allowed = allowedKnowledgeSessionIds(session, access), budget = knowledgeVerificationBudget();
   const automatic = database().prepare(`SELECT id FROM records WHERE kind='memory' AND json_extract(data,'$.projectId')=?
@@ -51,6 +51,7 @@ export function projectFactsView(session, { maxBytes, limit = 8 } = {}) {
     const current = memoryFreshness(memory, access.project, session, { budget });
     if (current.stale || current.disputed) { result.omitted.push({ id, reason: current.disputed ? 'contradicted' : 'stale' }); continue; }
     const item = { id, revision: current.revision || 1, statement: current.statement, truth: current.truth,
+      historical: true, freshnessStatus: current.freshnessStatus, relationshipCoverage: current.relationshipCoverage,
       pinned: settings.ids.includes(id), sourceId: current.sourceId || null, evidence: (current.evidence || []).slice(0, 8), provenance: current.provenance };
     if (result.items.length >= limit || Buffer.byteLength(JSON.stringify({ ...result, items: [...result.items, item] })) > cap - 96) {
       result.omitted.push({ id, reason: 'view-budget' }); continue;

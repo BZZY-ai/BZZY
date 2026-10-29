@@ -87,6 +87,7 @@ export function resolutionView(session, id, { budget = knowledgeVerificationBudg
   const sourceArtifactCount = (current.evidence || []).filter(id => Boolean(getRecord('artifact', id)?.source)).length;
   const unknownInputCoverage = recordedInputCount === 0 && sourceArtifactCount === 0;
   return { ...facet, truth: current.truth, stale: current.stale, staleReasons: current.staleReasons,
+    relationshipCoverage: current.relationshipCoverage, freshnessStatus: current.freshnessStatus,
     disputed: current.disputed, contradictions: current.contradictions, verification: current.verification,
     causeVerified: false, causeStatus: 'hypothesis', procedureTruth: current.truth,
     unknownInputCoverage, applicability: { recordedInputCount, sourceArtifactCount, version: facet.signature.version || null,

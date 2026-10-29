@@ -189,6 +189,60 @@ export function memoryRelationshipCoverage(session,access,{readOnly=false}={}) {
   return pending?'backfill-pending':'complete';
 }
 
+// Explicit owner review may establish a complete relationship snapshot for one
+// record before archive migration finishes. This is not used by polling or
+// ordinary retrieval: both the number of records and hydrated bytes are capped.
+// It reads canonical rows without advancing cursors or claiming project-wide
+// completeness. An interrupted/bounded check never means "no relationships".
+export function checkMemoryRelationships(session, record, access) {
+  const db = database(), ids = allowedKnowledgeSessionIds(session, access, { readOnly: true });
+  const maximumRecords = 256, maximumSourceBytes = 128 * 1024, maximumBytes = 2 * 1024 * 1024;
+  const encodedIds = JSON.stringify(ids), seen = new Set(), sources = [];
+  let bytes = 0, incomplete = false;
+  const columns = 'r.id, length(CAST(r.data AS BLOB)) AS bytes';
+  const consume = rows => {
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      if (seen.size >= maximumRecords || row.bytes > maximumSourceBytes || bytes + row.bytes > maximumBytes) { incomplete = true; break; }
+      // Fetch text only after its metadata fits the remaining total budget.
+      // Recheck length in SQL so a concurrent growth cannot bypass the cap.
+      const value = db.prepare("SELECT data FROM records WHERE kind='memory' AND id=? AND length(CAST(data AS BLOB))<=?")
+        .get(row.id, Math.min(maximumSourceBytes, maximumBytes - bytes));
+      if (!value) { incomplete = true; break; }
+      seen.add(row.id); bytes += Buffer.byteLength(value.data);
+      let source; try { source = JSON.parse(value.data); } catch { incomplete = true; break; }
+      if (source.id !== row.id || !ids.includes(source.sessionId) || getRecord('session-deletion', source.sessionId)
+          || !recordBelongsToProject(source, access.project)) continue;
+      sources.push(source);
+    }
+  };
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='knowledge_memory_links'").get()) {
+    for (const relation of ['supersedes', 'contradicts']) {
+      if (incomplete) break;
+      consume(db.prepare(`SELECT ${columns} FROM knowledge_memory_links l
+        JOIN records r ON r.kind='memory' AND r.id=l.source_id
+        WHERE l.target_id=? AND l.relation=? AND json_extract(r.data,'$.sessionId') IN (SELECT value FROM json_each(?))
+        ORDER BY l.source_id LIMIT ?`).all(record.id, relation, encodedIds, maximumRecords + 1));
+    }
+  }
+  const hasCoverage = db.prepare("SELECT 1 FROM sqlite_master WHERE name='knowledge_memory_coverage'").get();
+  const pending = db.prepare(`SELECT s.value AS id FROM json_each(?) s
+    ${hasCoverage ? 'LEFT JOIN knowledge_memory_coverage c ON c.session_id=s.value' : ''}
+    WHERE ${hasCoverage ? 'coalesce(c.complete,0)=0 AND' : ''}
+      EXISTS(SELECT 1 FROM records r WHERE r.kind='memory' AND json_extract(r.data,'$.sessionId')=s.value)
+    ORDER BY s.value LIMIT ?`).all(encodedIds, maximumRecords + 1);
+  if (pending.length > maximumRecords) incomplete = true;
+  for (const owner of pending) {
+    if (incomplete) break;
+    consume(db.prepare(`SELECT ${columns} FROM records r WHERE r.kind='memory'
+      AND json_extract(r.data,'$.sessionId')=? ORDER BY r.updated_at DESC,r.id LIMIT ?`).all(owner.id, maximumRecords + 1));
+  }
+  const supersededBy = sources.find(source => source.supersedes === record.id)?.id || null;
+  const contradictions = sources.filter(source => !source.invalidatedAt && Array.isArray(source.contradictions)
+    && source.contradictions.includes(record.id)).map(source => source.id);
+  return { complete: !incomplete, checkedRecords: seen.size, checkedBytes: bytes, supersededBy, contradictions };
+}
+
 // A typed source is always resolved from current authoritative records, never
 // from a cached payload alone. Artifact retrieval exposes metadata, not files.
 export function canonicalKnowledgeSource(access, hit, sessionIds, { maxSourceBytes, onOmitted } = {}) {

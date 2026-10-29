@@ -22,7 +22,7 @@ const publicHit = hit => cleanKnowledgeValue({ kind: hit.kind, recordKind: hit.r
   ...(hit.details ? { details: cleanKnowledgeText(hit.details, 1000) } : {}),
   truth: truth(hit.truth || (hit.kind === 'chat' ? 'historical' : 'inconclusive')), claimedTruth: hit.claimedTruth ? truth(hit.claimedTruth) : undefined,
   stale: Boolean(hit.stale), staleReasons: hit.staleReasons || [], supersededBy: hit.supersededBy || null,
-  relationshipCoverage:hit.relationshipCoverage,
+  relationshipCoverage:hit.relationshipCoverage, freshnessStatus:hit.freshnessStatus,
   contradictions: publicArray(hit.contradictions), disputed: Boolean(hit.disputed), evidence: publicArray(hit.evidence),
   verification: hit.verification ? { source: hit.verification.source, id: hit.verification.id, requirementId: hit.verification.requirementId } : null,
   revision: Number.isSafeInteger(hit.revision) && hit.revision > 0 ? hit.revision : null,

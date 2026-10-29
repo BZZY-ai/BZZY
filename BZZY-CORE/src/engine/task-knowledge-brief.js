@@ -68,7 +68,7 @@ export function taskKnowledgeBrief(session, goal) {
         statement: excerpt(statement), ...(row.kind === 'issue' ? { status: issueStatuses.has(record.status) ? record.status : 'inconclusive' }
           : { recordKind: memoryKinds.has(record.kind) ? record.kind : 'inconclusive' }),
         truth: truthStates.has(fresh.truth) ? fresh.truth : 'inconclusive', historical: true, stale: Boolean(fresh.stale), disputed: Boolean(fresh.disputed),
-        ...(fresh.relationshipCoverage!=='complete'?{relationshipCoverage:fresh.relationshipCoverage}:{}) };
+        ...(fresh.relationshipCoverage!=='complete'?{relationshipCoverage:fresh.relationshipCoverage,freshnessStatus:fresh.freshnessStatus}:{}) };
       // Keep source IDs, statuses and truth together. Never silently merge a
       // resolved finding with another record claiming the same work is blocked.
       const source = cleanKnowledgeValue({ ...item, statement, title: record.title, details: record.details, resolution: record.resolution,

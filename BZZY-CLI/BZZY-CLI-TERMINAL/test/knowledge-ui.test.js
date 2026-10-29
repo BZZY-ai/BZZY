@@ -60,6 +60,38 @@ test('Learn shows pinned inputs, staged defaults, project facts and optional ret
   } finally { ui.close(); }
 });
 
+test('knowledge views distinguish pending relationship checks from stale evidence and retain historical labels', async () => {
+  const { ui, session } = terminal();
+  const pending = { kind: 'memory', sourceId: 'legacy-memory', id: 'legacy-memory', sessionId: session.id,
+    statement: 'A previously confirmed observation.', truth: 'confirmed', stale: false,
+    relationshipCoverage: 'backfill-pending', freshnessStatus: 'unverified', revision: 1, evidence: [] };
+  const stale = { ...pending, sourceId: 'changed-memory', statement: 'An observation whose evidence changed.',
+    truth: 'inconclusive', stale: true, freshnessStatus: 'stale', staleReasons: ['evidence-unavailable-or-changed'] };
+  ui.knowledgeAPI = { request(operation) {
+    if (operation === 'search') return { items: [pending, stale] };
+    if (operation === 'facts.read') return { enabled: true, items: [{ ...pending, historical: true, pinned: true }] };
+    if (operation === 'resolutions.search') return { items: [{ ...pending, symptom: 'Earlier diagnostic observation.',
+      fixSteps: ['Inspect the original control.'], memoryId: pending.id, match: 'exact', causeStatus: 'unverified' }] };
+    throw new Error('Unexpected operation: ' + operation);
+  } };
+  try {
+    await knowledgeCommand('/memory observation', ui);
+    assert.match(rowsText(ui), /confirmed · relationship check pending/);
+    assert.match(rowsText(ui), /inconclusive · STALE · relationship check pending/);
+    await knowledgeAction('hit:0', ui);
+    assert.match(rowsText(ui), /Recorded truth is historical; the relationship check is not complete/);
+    assert.doesNotMatch(rowsText(ui), /STALE/);
+    await knowledgeAction('hit:1', ui);
+    assert.match(rowsText(ui), /STALE/); assert.match(rowsText(ui), /evidence-unavailable-or-changed/);
+    await knowledgeAction('facts', ui);
+    assert.match(rowsText(ui), /confirmed · relationship check pending · historical · owner pinned/);
+    answers(ui, ['Earlier diagnostic observation']); await knowledgeAction('resolutions', ui);
+    assert.match(rowsText(ui), /confirmed · relationship check pending/);
+    assert.match(rowsText(ui), /Historical procedures need current evidence/);
+    assert.equal(listRecords('execution').length, 0); assert.equal(listRecords('core.learning.job').length, 0);
+  } finally { ui.close(); }
+});
+
 test('reviewed skill policy updates use the displayed owner revision and preserve conversation changes', async () => {
   const { ui } = terminal(), api = new CoreKnowledge();
   try {

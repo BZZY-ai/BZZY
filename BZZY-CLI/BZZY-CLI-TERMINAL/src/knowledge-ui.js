@@ -13,6 +13,8 @@ const encode = encodeURIComponent;
 const decode = decodeURIComponent;
 const finished = state => ['completed', 'cancelled', 'failed', 'budget_limited'].includes(state);
 const list = (value, field) => Array.isArray(value) ? value : value?.[field] || [];
+const knowledgeStatus = value => `${value.truth}${value.stale ? ' · STALE' : ''}${value.relationshipCoverage === 'backfill-pending'
+  ? ' · relationship check pending' : value.freshnessStatus === 'unverified' ? ' · freshness unverified' : ''}`;
 function show(ui, view, data) { ui.knowledgeView = view; ui.knowledgeState = data; ui.knowledgeContextKey = key(ui); }
 function invalidate(ui) {
   if (!ui.tui) return;
@@ -83,7 +85,7 @@ export function knowledgeRows(ui) {
     rows.push({ text: 'Project memory & history', tone: 'accent' }, action(`Search${ui.knowledgeQuery ? ': ' + ui.knowledgeQuery : '…'}`, 'search'),
       action(ui.knowledgeIncludeStale ? 'Hide stale knowledge' : 'Include stale knowledge', 'stale'));
     for (const [index, item] of (data.items || []).entries()) {
-      rows.push(action(`${item.kind} · ${item.truth}${item.stale ? ' · STALE' : ''}`, 'hit:' + index), { text: item.statement },
+      rows.push(action(`${item.kind} · ${knowledgeStatus(item)}`, 'hit:' + index), { text: item.statement },
         muted(`Source ${item.sourceId} · ${item.evidence?.length || 0} evidence references`));
     }
     if (!data.items?.length) rows.push(muted('No matching knowledge in this engagement.'));
@@ -91,11 +93,12 @@ export function knowledgeRows(ui) {
     if (ui.knowledgeOffset) rows.push(action('Previous results', 'memory-previous'));
     if (data.nextOffset != null) rows.push(action('More results', 'memory-next'));
   } else if (view === 'hit') {
-    rows.push({ text: `${data.kind} · ${data.truth}${data.stale ? ' · STALE' : ''}`, tone: 'accent' }, { text: data.statement },
+    rows.push({ text: `${data.kind} · ${knowledgeStatus(data)}`, tone: 'accent' }, { text: data.statement },
       ...(data.rationale ? [{ text: data.rationale }] : []), ...(data.details ? [{ text: data.details }] : []),
       muted(`Source ${data.sourceId} · Session ${data.sessionId || 'project record'} · Revision ${data.revision || 1}`),
       muted(`Evidence: ${(data.evidence || []).join(', ') || 'none'}`));
     if (data.staleReasons?.length) rows.push(muted('Recheck: ' + data.staleReasons.join(', ')));
+    if (data.relationshipCoverage === 'backfill-pending') rows.push(muted('Recorded truth is historical; the relationship check is not complete.'));
     if (data.verification) rows.push(muted('Verification: ' + data.verification.source));
     if (data.whyMatched) rows.push(muted('Matched: ' + (typeof data.whyMatched === 'string' ? data.whyMatched : JSON.stringify(data.whyMatched))));
     if (data.kind === 'memory') rows.push(action('Review this knowledge decision', 'review-memory'), action('Mark stale with a reason', 'invalidate-memory'), action('Version history and restoration', 'memory-history'));
@@ -107,12 +110,12 @@ export function knowledgeRows(ui) {
     rows.push(action('Back to search results', 'memory'));
   } else if (view === 'facts') {
     rows.push({ text: 'Project facts included in prompts', tone: 'accent' }, muted(`Revision ${data.revision || 0} · ${data.enabled ? 'on' : 'off'} · ${data.maxBytes || 2500} byte budget`));
-    for (const item of data.items || []) rows.push({ text: item.statement }, muted(`${item.truth} · ${item.pinned ? 'owner pinned' : 'owner confirmed'} · ${item.id} · revision ${item.revision}`));
+    for (const item of data.items || []) rows.push({ text: item.statement }, muted(`${knowledgeStatus(item)} · historical · ${item.pinned ? 'owner pinned' : 'owner confirmed'} · ${item.id} · revision ${item.revision}`));
     for (const item of data.omitted || []) rows.push(muted(`Omitted ${short(item.id)}: ${item.reason}`));
     rows.push(action('Select existing memory IDs to pin', 'facts-pin'), action(data.enabled ? 'Disable project fact projection' : 'Enable project fact projection', 'facts-toggle'));
   } else if (view === 'resolutions') {
     rows.push({ text: 'Earlier proposed resolutions', tone: 'accent' }, muted('Historical procedures need current evidence and applicability checks.'));
-    for (const item of data.items || []) rows.push({ text: item.symptom }, { text: (item.fixSteps || []).join('\n') }, muted(`${item.truth} · ${item.match} · cause ${item.causeStatus} · memory ${item.memoryId}`));
+    for (const item of data.items || []) rows.push({ text: item.symptom }, { text: (item.fixSteps || []).join('\n') }, muted(`${knowledgeStatus(item)} · ${item.match} · cause ${item.causeStatus} · memory ${item.memoryId}`));
     if (!data.items?.length) rows.push(muted('No matching resolution in this project.'));
     rows.push(action('Search another exact error', 'resolutions'));
   } else if (view === 'episode' || view === 'packet') {
