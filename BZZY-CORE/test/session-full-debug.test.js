@@ -56,7 +56,7 @@ test('worker export reports safe real progress while the caller remains responsi
   assert.ok(updates.at(-1).packagedFiles > 0); assert.ok(updates.at(-1).packagedBytes > 0);
   assert.ok(updates.some(value => value.phase === 'history' && value.records > 0));
   assert.ok(updates.some(value => value.phase === 'packaging' && value.packagedBytes > 0));
-  const fields = new Set(['phase', 'elapsedMs', 'records', 'events', 'files', 'bytes', 'exclusions', 'packagedFiles', 'packagedBytes']);
+  const fields = new Set(['phase', 'elapsedMs', 'records', 'events', 'files', 'bytes', 'exclusions', 'packagedFiles', 'packagedBytes', 'inspectedBytes']);
   for (const update of updates) {
     assert.ok(Object.keys(update).every(key => fields.has(key)));
     for (const [key, value] of Object.entries(update)) if (key !== 'phase') assert.ok(Number.isSafeInteger(value) && value >= 0);
@@ -197,13 +197,47 @@ test('bounded capture lists oversized project files as omissions while complete 
   assert.deepEqual(fs.readFileSync(fileURLToPath(new URL('../../GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))), fs.readFileSync(fileURLToPath(new URL('../docs/GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))));
 });
 
-test('complete capture refuses an oversized atomic source instead of publishing a size-omitted archive', async () => {
-  const large = path.join(parent.cwd, 'large.txt'); fs.closeSync(fs.openSync(large, 'wx')); fs.truncateSync(large, 65 * 1024 * 1024);
-  const before = state();
-  await assert.rejects(exportFullSessionDebugInWorker(parent.id), error => error.code === 'SESSION_DEBUG_SOURCE_SIZE' && error.exportPhase === 'workspace');
-  assert.ok(!fs.readdirSync(parent.cwd).some(name => name.endsWith('.zip')));
-  assert.equal(fs.statSync(large).size, 65 * 1024 * 1024); assert.deepEqual(state(), before);
-  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+test('complete capture includes individual binary, text and JSONL values over 64 MiB without clipping', async () => {
+  const binary = path.join(parent.cwd, 'large.bin'), text = path.join(parent.cwd, 'large.txt'), ledger = path.join(parent.cwd, 'large.jsonl');
+  fs.closeSync(fs.openSync(binary, 'wx')); fs.truncateSync(binary, 65 * 1024 ** 2);
+  const block = Buffer.alloc(1024 ** 2, 120);
+  for (const [file, prefix, suffix] of [
+    [text, 'TEXT_START\n', '\npassword="PRIVATE_LARGE_TEXT"\nTEXT_END'],
+    [ledger, '{"body":"', 'JSON_END","token":"PRIVATE_LARGE_JSON","headers":[{"value":"PRIVATE_HAR_COOKIE","name":"Cookie"}]}\n'],
+  ]) {
+    const fd = fs.openSync(file, 'wx');
+    try { fs.writeSync(fd, prefix); for (let index = 0; index < 65; index++) fs.writeSync(fd, block); fs.writeSync(fd, suffix); }
+    finally { fs.closeSync(fd); }
+  }
+  const before = state(), updates = [], result = await exportFullSessionDebugInWorker(parent.id, { onProgress: value => updates.push(value) });
+  assert.equal(result.contextLimited, false); assert.ok(updates.some(row => row.inspectedBytes > 64 * 1024 ** 2));
+  const verified = spawnSync('python3', ['-c', `import sys, json, zipfile, hashlib
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    manifest = json.loads(archive.read('manifest.json'))
+    for name in ('large.bin', 'large.txt', 'large.jsonl'):
+        entry = next(row for row in manifest['inventory'] if row['path'] == 'workspace/' + name)
+        assert entry['sourceBytes'] > 64 * 1024 ** 2 and entry['capture'] == 'disk-backed'
+        digest, size, tail = hashlib.sha256(), 0, b''
+        with archive.open(entry['path']) as value:
+            while block := value.read(1024 * 1024):
+                assert b'PRIVATE_' not in tail + block
+                digest.update(block); size += len(block); tail = (tail + block)[-1024:]
+        assert size == entry['bytes'] and digest.hexdigest() == entry['sha256']
+        original = hashlib.sha256()
+        with open(sys.argv[2] + '/' + name, 'rb') as source:
+            while block := source.read(1024 * 1024): original.update(block)
+        assert original.hexdigest() == entry['sourceSha256']
+        if name == 'large.bin': assert size == 65 * 1024 ** 2 and not entry['redacted']
+        elif name == 'large.txt': assert tail.endswith(b'TEXT_END')
+        else:
+            assert b'JSON_END' in tail and b'"[redacted]"' in tail
+            with archive.open(entry['path']) as value: parsed = json.load(value)
+            assert len(parsed['body']) == 65 * 1024 ** 2 + len('JSON_END')
+            assert parsed['token'] == '[redacted]' and parsed['headers'][0]['value'] == '[redacted]'
+    assert not any('.file-capture-' in name or name.startswith('.large-capture-') for name in archive.namelist())
+print('verified')`, result.outputPath, parent.cwd], { encoding: 'utf8', maxBuffer: 4096 });
+  assert.equal(verified.status, 0, verified.stderr); assert.match(verified.stdout, /verified/);
+  assert.deepEqual(state(), before); assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
 });
 
 test('complete capture streams a ledger over 64 MiB with every record and matching provenance', async () => {
@@ -223,6 +257,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     with archive.open(entry['path']) as ledger:
         for line in ledger:
             value = json.loads(line)
+            assert value.pop('token') == '[redacted]'
             assert value == {'note': 'z' * (256 * 1024), 'type': 'note'}
             count += 1; size += len(line); digest.update(line)
     assert count == 260 and entry['bytes'] == size and entry['sha256'] == digest.hexdigest()

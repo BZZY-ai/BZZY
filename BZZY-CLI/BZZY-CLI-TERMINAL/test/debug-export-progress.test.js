@@ -28,10 +28,11 @@ test('successful context-limited export distinguishes retained diagnostics from 
 test('progress renders only trusted phases and numeric counters with truthful waiting time', () => {
   assert.equal(safeDebugExportProgress({ phase: 'toString', path: 'PRIVATE' }), null);
   const progress = safeDebugExportProgress({ phase: 'packaging', files: -1, bytes: Infinity, records: 'PRIVATE',
-    packagedFiles: 12, packagedBytes: 1024 ** 2, exclusions: 2, path: 'PRIVATE', message: 'PRIVATE' });
+    packagedFiles: 12, packagedBytes: 1024 ** 2, inspectedBytes: 5 * 1024 ** 3, exclusions: 2, path: 'PRIVATE', message: 'PRIVATE' });
   const text = debugExportProgressLines(progress, { elapsedMs: 65000, quietMs: 12000 }).join('\n');
   assert.match(text, /Packaging ZIP.*1m 05s elapsed/); assert.match(text, /12 files packaged.*1\.0 MiB processed/);
   assert.match(text, /2 capture omissions/); assert.match(text, /Last progress update 12s ago/);
+  assert.match(text, /5\.00 GiB scanned/);
   assert.doesNotMatch(text, /PRIVATE|Infinity|NaN|-1|%/);
 });
 

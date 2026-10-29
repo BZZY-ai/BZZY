@@ -4,6 +4,7 @@ import { sanitizeMissionValue } from './mission-context.js';
 
 const privateField = /^(?:token|nonce|api[_-]?keys?|access[_-]?tokens?|refresh[_-]?tokens?|auth[_-]?tokens?|ownerToken|deviceToken|passwords?|passwd|secrets?|clientSecret|secretAccessKey|accessKeyId|signingSecret|boxSecret|privateKey|cookies?|set-cookie|authorization|credentials|accountBindings?|accountId|email|environment|env|backendHomes|backendProcess|engineHome|engineThreadId|engineSessionId|runner|launcher|inputOwner|inputLease|coreGrantId|toolBindings|notifications|notificationDestinations|workflowAdmission|workflowSelection|workflowReceipt|workflowBinding|reasoning|reasoning_content|reasoningContent|thinking|analysis|chainOfThought)$/i;
 const privateSuffix = /(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS)$/i;
+export const diagnosticPrivateFieldPatterns = Object.freeze({ privateField: privateField.source, privateSuffix: privateSuffix.source });
 const pick = (value, fields) => Object.fromEntries(fields.filter(field => Object.hasOwn(value || {}, field)).map(field => [field, value[field]]));
 export { pick as diagnosticFields };
 

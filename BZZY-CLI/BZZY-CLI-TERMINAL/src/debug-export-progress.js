@@ -3,7 +3,7 @@ const phases = {
   overview: 'Writing overview', history: 'Reading saved history', workspace: 'Capturing project files',
   resources: 'Capturing evidence and resources', manifest: 'Writing manifest', packaging: 'Packaging ZIP', complete: 'ZIP ready',
 };
-const counters = ['elapsedMs', 'records', 'events', 'files', 'bytes', 'exclusions', 'packagedFiles', 'packagedBytes'];
+const counters = ['elapsedMs', 'records', 'events', 'files', 'bytes', 'exclusions', 'packagedFiles', 'packagedBytes', 'inspectedBytes'];
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const duration = milliseconds => {
   const seconds = Math.floor(Math.max(0, milliseconds) / 1000);
@@ -39,6 +39,7 @@ export function debugExportProgressLines(value, { elapsedMs = 0, quietMs = 0, ca
   const lines = [`Full debug ZIP${mode} · ${phases[progress.phase]} · ${duration(Math.max(elapsedMs, progress.elapsedMs || 0))} elapsed`];
   const details = ['records', 'events', 'files'].filter(key => count(progress[key])).map(key => `${progress[key].toLocaleString()} ${key}`);
   if (count(progress.bytes)) details.push(`${size(progress.bytes)} captured`);
+  if (progress.inspectedBytes) details.push(`${size(progress.inspectedBytes)} scanned`);
   if (details.length) lines.push(details.join(' · '));
   if (progress.phase === 'packaging' && (count(progress.packagedFiles) || count(progress.packagedBytes))) {
     lines.push([count(progress.packagedFiles) ? `${progress.packagedFiles.toLocaleString()} files packaged` : null,

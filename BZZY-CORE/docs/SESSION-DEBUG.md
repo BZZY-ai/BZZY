@@ -90,12 +90,17 @@ at a time. Large archives still require disk space for the redacted staging tree
 and output ZIP. File counts and saved record selection also consume memory, so
 this is not a promise of unlimited host resources.
 
-Redaction processes each logical value atomically: individual non-JSONL source
-files, JSONL records and assembled conversation messages have a 64 MiB processing
-limit. An oversized eligible source fails complete capture with a clear size
-error and no completed ZIP; it is never silently omitted to make the archive fit.
-JSONL files may exceed 64 MiB in total when every record fits. Unavailable,
-changing, unsafe and private sources remain explicit manifest exclusions.
+Individual project files and JSONL records can exceed 64 MiB. Large sources use
+a checked private disk snapshot, bounded copy buffers, disk-backed redaction
+spans and structural JSON/HAR/JSONL parsing. Large JSON strings are decoded and
+scrubbed on disk, including escaped credentials and private reasoning. Safe binary
+sources retain their bytes and hashes. Privacy exclusions still apply; opaque
+containers and binaries containing credential patterns are explicitly omitted.
+Scratch snapshots and databases are removed before packaging. Allow disk space
+for these redaction passes as well as the staging tree and ZIP. The scan counter
+can include multiple passes over the same source. Assembled conversation messages
+retain their separate 64 MiB buffered processing limit. Unavailable, changing and
+unsafe sources remain explicit manifest exclusions.
 
 Explicit bounded capture retains the 512 MiB optional file budget and 4 GiB
 uncompressed staging limit. It writes scoped diagnostic streams, skill metadata
@@ -240,9 +245,9 @@ the read-first guide's source-generation/routing audit checklist.
 ## Large-capture regression
 
 From `BZZY-CORE`, run `BZZY_TEST_LARGE_DEBUG=1 node --test test/session-full-debug-large.test.js`
-with Node 24+ and Python 3.9+. This opt-in fixture stages over 4 GiB of eligible
-project files, exports through the real worker and verifies every payload hash
-and ZIP CRC without loading the archive into memory. Allow at least 5 GiB of
-temporary disk space. Fixtures are removed afterwards. Repetitive input compresses
+with Node 24+ and Python 3.9+. This opt-in fixture captures a single project file
+over 4 GiB through the real worker and verifies its source/export hash and ZIP
+CRC without loading the archive into memory. Allow at least 10 GiB of temporary
+disk space. Fixtures are removed afterwards. Repetitive input compresses
 well, so this validates over 4 GiB of captured data, not a compressed ZIP over
 4 GiB. The result reports captured bytes and ZIP bytes separately.

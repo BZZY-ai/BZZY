@@ -273,12 +273,18 @@ archives require space for both redacted staging files and the output ZIP.
 Directory file counts and saved record selection still consume memory; host
 resources remain finite.
 
-Redaction processes complete logical values. Individual non-JSONL source files,
-JSONL records and assembled conversation messages have a 64 MiB processing limit.
-JSONL files can exceed that total size when each record fits. An oversized
-eligible source fails complete capture explicitly and publishes no completed ZIP;
-size is never a silent omission in this mode. Unavailable or unlistable project
-directories can still be listed as source omissions.
+Individual project files and JSONL records can exceed 64 MiB. Large sources use
+checked private disk snapshots and disk-backed text/JSON/HAR redaction or binary
+scanning. Complete logical strings are scrubbed across read boundaries, including
+escaped JSON credentials and private reasoning. Redacted private JSON values may
+be masked rather than removed. Safe binary files retain their bytes and hashes.
+Scratch snapshots and redaction databases are removed before packaging; they need
+additional disk space during capture. The scan counter can include multiple passes
+over one source. Assembled conversation messages retain their separate 64 MiB
+buffer limit. Unavailable, changing, private and unsafe sources remain exclusions.
+An inventory entry with capture=disk-backed identifies this path; its redacted
+flag and source/export hashes cover the transformation. Global redactedValues
+counts the buffered scrubber; diskBackedFiles/diskBackedRedactedFiles count files.
 
 Explicit --bounded mode retains a 512 MiB optional context budget and a 4 GiB
 uncompressed staging limit. Scoped diagnostic streams, skill metadata and guides

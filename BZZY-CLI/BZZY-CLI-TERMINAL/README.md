@@ -499,11 +499,11 @@ files, referenced evidence/snapshots and skill resources. Secrets/private stores
 remain excluded, and manifest.json lists missing/changing/unsafe files. Complete
 capture is the default: it has no 512 MiB project budget or 4 GiB staging cap,
 and supports multi-gigabyte archives using ZIP64. Manifest data and JSONL source
-files stream to disk. Individual non-JSONL source files, JSONL records and logical
-messages still have a 64 MiB atomic redaction limit; an oversized eligible source
-fails complete capture explicitly instead of silently omitting it. JSONL files
-may be larger when their individual records fit. Staging and the output ZIP need
-adequate disk space; file counts and selected saved records still consume memory.
+files stream to disk. Individual project files and JSONL records over 64 MiB use
+checked private snapshots and disk-backed text/JSON redaction or binary scanning.
+Scratch is removed before packaging. Large exports require space for these
+redaction passes, staging and the ZIP; file counts and selected saved records
+still use memory. Assembled conversation messages retain a separate 64 MiB buffer limit.
 
 Use `/full_debug_export --bounded` or `bzzy debug full "session-name" --bounded`
 for the previous size-limited capture. This mode retains a 512 MiB optional

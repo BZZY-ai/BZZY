@@ -8,7 +8,7 @@ const reasons = {
   SESSION_DEBUG_OPEN_FILES: 'The host reached its open-file limit. Close unused files and retry.',
   SESSION_DEBUG_PATH: 'The output path is too long. Choose a shorter filename.',
   SESSION_DEBUG_SIZE: 'The export reached a diagnostic size limit; no incomplete export was published.',
-  SESSION_DEBUG_SOURCE_SIZE: 'An eligible source file exceeds the 64 MiB safe redaction unit. Large JSONL files are supported when each record fits that limit. Split other large sources into inspectable files and retry; no incomplete export was published.',
+  SESSION_DEBUG_SOURCE_SIZE: 'A source exceeded the buffered capture boundary. Complete project capture supports large files using disk-backed processing.',
   SESSION_DEBUG_CAPTURE_MODE: 'Choose complete capture without a context byte budget, or bounded capture with its optional byte budget.',
   SESSION_DEBUG_PYTHON: 'Full debug ZIP requires Python 3.9 or newer on PATH.',
   SESSION_DEBUG_PACKAGE: 'The ZIP packager could not finish. Check available disk space and retry.',
