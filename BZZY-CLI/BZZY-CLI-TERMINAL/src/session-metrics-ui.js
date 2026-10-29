@@ -2,7 +2,7 @@ import { clean, cellWidth, clip, wrap } from './terminal-format.js';
 import { debugExportErrorMessage } from '@bzzy/core/engine/debug-export-errors.js';
 import { isStalledGoal } from '@bzzy/core/engine/goal-state.js';
 import { costLabel, deepseekSpendingVisible, sessionCostLines } from './session-cost-format.js';
-import { debugExportProgressLines, safeDebugExportProgress } from './debug-export-progress.js';
+import { debugExportProgressLines, safeDebugExportProgress, debugExportContextNotice } from './debug-export-progress.js';
 
 const loadRecordedMetrics = async id => (await import('@bzzy/core/engine/session-metrics.js')).sessionMetrics(id);
 const exportRecordedDebug = async id => (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug(id);
@@ -159,8 +159,10 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
   }
   if (panel.exportResult) {
     prose((panel.exportResult.full ? 'Full debug ZIP exported · ' : 'Debug exported · ') + panel.exportResult.outputPath, 'goalSuccess');
+    const contextNotice = debugExportContextNotice(panel.exportResult);
+    if (contextNotice) prose(contextNotice, 'warning');
     if (panel.exportResult.full && Number.isSafeInteger(panel.exportResult.exclusions) && panel.exportResult.exclusions > 0)
-      prose(`${panel.exportResult.exclusions.toLocaleString()} context paths omitted. Check manifest.exclusions inside the ZIP.`, 'warning');
+      prose(`${panel.exportResult.exclusions.toLocaleString()} capture omissions. Check manifest.exclusions inside the ZIP.`, 'warning');
     prose('Includes session history and skill/agent definitions. Review this private task content before sharing.', 'muted');
     put();
   }

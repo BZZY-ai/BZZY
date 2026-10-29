@@ -496,8 +496,15 @@ streams, memory/compaction/learning history, project notes and ledgers, source
 files, referenced evidence/snapshots and skill resources. Secrets/private stores
 remain excluded, and manifest.json lists missing/changing/unsafe files. Optional
 source files over 64 MiB and unreadable directories become explicit omissions,
-so large APKs or binaries do not block saved-history export. Metrics reports the
-omission count. Failures show a safe category and capture phase; a ZIP retry uses
+so large APKs or binaries do not block saved-history export. Optional file capture
+also has a 512 MiB aggregate budget, prioritizing `.bzzy`, referenced evidence
+and checked skill resources before bulk project/snapshot/worker trees. The
+mandatory diagnostic streams are written first; project files that do not fit
+are listed as omissions instead of failing the saved-history export. Metrics
+and the command-line success message identify a context-limited ZIP. The manifest
+records budget usage and whether omitted subtrees were left unenumerated. The
+4 GiB staging cap concerns uncompressed data, not the final ZIP size. Failures
+show a safe category and capture phase; a ZIP retry uses
 `bzzy debug full NAME FILE.zip` from a writable caller directory.
 Every ZIP includes the detailed [read-first guide](../../GUIDE_TO_BZZY_DEBUGGER.txt)
 for future debugging sessions; exporting neither executes its contents nor

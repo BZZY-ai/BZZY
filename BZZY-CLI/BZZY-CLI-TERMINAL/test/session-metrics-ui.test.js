@@ -256,6 +256,23 @@ test('closing Metrics clears the export timer and ignores late progress without 
   assert.equal(panel.exportResult, null); assert.equal(panel.exporting, false);
 });
 
+test('a completed ZIP with limited project context remains successful and displays its capture limits', async () => {
+  const panel = new SessionMetricsPanel({}, { load: async id => snapshot(id), exportFullDebug: async () => ({
+    full: true, outputPath: '/project/baseline.zip', exclusions: 4, contextLimited: true,
+  }) });
+  try {
+    panel.open(firstId); await settle(); await panel.activate('full-export');
+    assert.equal(panel.exportError, null); assert.equal(panel.exporting, false);
+    for (const width of [40, 100]) {
+      const layout = sessionMetricsLayout(panel, width), text = layout.lines.map(line => line.text.trim()).join(' ').replace(/\s/g, '');
+      assert.match(text, /FulldebugZIPexported/); assert.match(text, /Projectfilecapturereacheditsbudget/);
+      assert.match(text, /Savedsessionhistoryandmemorystreamsareretained/);
+      assert.match(text, /4captureomissions/); assert.match(text, /manifest\.exclusions/);
+      assert.ok(layout.lines.every(line => cellWidth(line.text) <= width));
+    }
+  } finally { panel.close(); }
+});
+
 test('export failures show safe cause categories and the matching ZIP or Markdown retry command', async () => {
   for (const [action, code, message] of [['full-export', 'SESSION_DEBUG_PYTHON', /Python/], ['full-export', 'ENOSPC', /space/],
     ['full-export', 'EACCES', /Access/], ['export', 'toString', /could not be collected safely/]]) {
@@ -273,7 +290,7 @@ test('export failures show safe cause categories and the matching ZIP or Markdow
   }
   const panel = new SessionMetricsPanel({});
   panel.exportResult = { full: true, outputPath: '/project/debug.zip', exclusions: 3 };
-  assert.match(sessionMetricsLayout(panel, 90).lines.map(line => line.text).join('\n'), /3 context paths omitted/);
+  assert.match(sessionMetricsLayout(panel, 90).lines.map(line => line.text).join('\n'), /3 capture omissions/);
 });
 
 test('the production Metrics loader refreshes real durable Core receipts without restarting stopped Core or adding model work', async () => {

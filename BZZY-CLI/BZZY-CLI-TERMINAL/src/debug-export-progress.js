@@ -18,6 +18,12 @@ export function safeDebugExportProgress(value) {
   return { phase: value.phase, ...Object.fromEntries(counters.filter(key => count(value[key])).map(key => [key, value[key]])) };
 }
 
+export function debugExportContextNotice(result) {
+  return result?.full === true && result.contextLimited === true
+    ? 'Project file capture reached its budget. Saved session history and memory streams are retained; some project or evidence files are omitted. Check manifest.exclusions inside the ZIP.'
+    : null;
+}
+
 export function debugExportProgressLines(value, { elapsedMs = 0, quietMs = 0 } = {}) {
   const progress = safeDebugExportProgress(value) || { phase: 'session' };
   const lines = [`Full debug ZIP · ${phases[progress.phase]} · ${duration(Math.max(elapsedMs, progress.elapsedMs || 0))} elapsed`];
@@ -28,7 +34,7 @@ export function debugExportProgressLines(value, { elapsedMs = 0, quietMs = 0 } =
     lines.push([count(progress.packagedFiles) ? `${progress.packagedFiles.toLocaleString()} files packaged` : null,
       count(progress.packagedBytes) ? `${size(progress.packagedBytes)} processed` : null].filter(Boolean).join(' · '));
   }
-  if (progress.exclusions) lines.push(`${progress.exclusions.toLocaleString()} paths omitted · see the ZIP manifest`);
+  if (progress.exclusions) lines.push(`${progress.exclusions.toLocaleString()} capture omissions · see the ZIP manifest`);
   if (quietMs >= 10000 && progress.phase !== 'complete') lines.push(`Last progress update ${duration(quietMs)} ago · waiting for the exporter`);
   return lines;
 }

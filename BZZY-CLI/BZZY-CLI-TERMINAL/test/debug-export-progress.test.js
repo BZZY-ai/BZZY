@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { safeDebugExportProgress, debugExportProgressLines, createDebugExportProgressReporter } from '../src/debug-export-progress.js';
+import { safeDebugExportProgress, debugExportProgressLines, createDebugExportProgressReporter, debugExportContextNotice } from '../src/debug-export-progress.js';
+
+test('successful context-limited export distinguishes retained diagnostics from omitted project files', () => {
+  const message = debugExportContextNotice({ full: true, contextLimited: true, contextBudget: { reason: 'PRIVATE_TEXT' } });
+  assert.match(message, /Project file capture reached its budget/);
+  assert.match(message, /Saved session history and memory streams are retained/);
+  assert.match(message, /project or evidence files are omitted/);
+  assert.match(message, /manifest\.exclusions/); assert.doesNotMatch(message, /PRIVATE_TEXT/);
+  for (const result of [undefined, {}, { full: true }, { full: true, contextLimited: false }, { full: true, contextLimited: 'true' }, { full: false, contextLimited: true }]) {
+    assert.equal(debugExportContextNotice(result), null);
+  }
+});
 
 test('progress renders only trusted phases and numeric counters with truthful waiting time', () => {
   assert.equal(safeDebugExportProgress({ phase: 'toString', path: 'PRIVATE' }), null);
@@ -8,7 +19,7 @@ test('progress renders only trusted phases and numeric counters with truthful wa
     packagedFiles: 12, packagedBytes: 1024 ** 2, exclusions: 2, path: 'PRIVATE', message: 'PRIVATE' });
   const text = debugExportProgressLines(progress, { elapsedMs: 65000, quietMs: 12000 }).join('\n');
   assert.match(text, /Packaging ZIP.*1m 05s elapsed/); assert.match(text, /12 files packaged.*1\.0 MiB processed/);
-  assert.match(text, /2 paths omitted/); assert.match(text, /Last progress update 12s ago/);
+  assert.match(text, /2 capture omissions/); assert.match(text, /Last progress update 12s ago/);
   assert.doesNotMatch(text, /PRIVATE|Infinity|NaN|-1|%/);
 });
 
