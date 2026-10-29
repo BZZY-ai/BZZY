@@ -17,7 +17,7 @@ import { listRecords } from '../src/engine/database.js';
 
 const core = fileURLToPath(new URL('../', import.meta.url));
 const security = fs.readFileSync(new URL('../assets/generation-security.txt', import.meta.url), 'utf8').trim();
-const kinds = ['skills', 'agents', 'workflows', 'goals'];
+const kinds = ['skills', 'agents', 'workflows', 'goals', 'extensions'];
 let directory, previousHome, project, reviews;
 test.beforeEach(() => {
   previousHome = process.env.BZZY_HOME;

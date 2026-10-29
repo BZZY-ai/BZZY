@@ -72,16 +72,16 @@ test('chat spending and account balance appear only for direct DeepSeek Solo or 
       assert.equal(/Chat ≈ \$0\.0100/.test(text), visible, `${provider}/${mode} spending`);
       assert.equal(/Balance \$12\.34/.test(text), visible, `${provider}/${mode} balance`);
       if (visible) {
-        const row = clean(ui.tui.lastFrame[1]);
+        const row = clean(ui.tui.lastFrame.find(line => clean(line).includes('Balance')) || '');
         assert.match(row, /Balance \$12\.34.*Chat ≈ \$0\.0100.*Compactor ≈ \$0\.0020.*Total ≈ \$0\.0120/);
         assert.doesNotMatch(clean(ui.tui.lastFrame[0]), /Balance|Compactor|\+ New/);
-        assert.equal(ui.tui.hitTargets.find(hit => hit.type === 'usage-balance').row, 2);
+        assert.equal(ui.tui.hitTargets.find(hit => hit.type === 'usage-balance').row, 3);
       }
     }
     ui.minimal = true;
     ui.updateSession({ session: { id: firstId, provider: 'codex', mode: 'delegate', executor: { provider: 'deepseek' }, model: 'gpt-5.6-sol', executionState: 'idle' }, spending });
     ui.tui.render();
-    assert.match(clean(ui.tui.lastFrame[1]), /Balance \$12\.34.*Chat.*Compactor.*Total/);
+    assert.match(clean(ui.tui.lastFrame.find(line => clean(line).includes('Balance')) || ''), /Balance \$12\.34.*Chat.*Compactor.*Total/);
     ui.minimal = false;
     Object.assign(ui.output, { columns: 40, rows: 32 }); ui.tui.render();
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Balance \$12\.34/);

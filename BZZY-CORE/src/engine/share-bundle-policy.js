@@ -20,10 +20,13 @@ export const SHARE_LIMITS = Object.freeze({ bytes: 256 * 1024 * 1024, fileBytes:
 
 export function sharedSecrets() {
   const found = Object.entries(process.env).filter(([key]) => /(?:API_KEY|TOKEN|SECRET|PASSWORD)$/.test(key)).map(([, value]) => value);
-  const file = path.join(home(), 'credentials.json');
-  if (fs.existsSync(file)) {
-    const values = value => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(values) : [];
-    found.push(...values(JSON.parse(fs.readFileSync(file, 'utf8'))));
+  for (const name of ['credentials.json', 'credentials.extensions.json']) {
+    const file = path.join(home(), name);
+    if (fs.existsSync(file)) {
+      const values = value => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(values) : [];
+      try { found.push(...values(JSON.parse(fs.readFileSync(file, 'utf8')))); }
+      catch { throw new Error('Private account settings are unavailable; sharing is blocked.'); }
+    }
   }
   return [...new Set(found.filter(value => typeof value === 'string' && value.length >= 12))];
 }

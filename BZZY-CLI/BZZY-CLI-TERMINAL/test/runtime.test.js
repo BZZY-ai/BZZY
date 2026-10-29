@@ -56,7 +56,11 @@ test('restoring a paged saved chat paints its latest screen once instead of scro
   ui.tui.writeFrame = frame => painted.push(frame);
   ui.event = (type, data) => { event(type, data); ui.tui.render(); };
   try {
-    await restoreConversation(session, ui);
+    const restoring = restoreConversation(session, ui);
+    assert.match(painted.join('\n'), /Loading saved chat/);
+    assert.equal(ui.tui.historyRestoreDepth, 1);
+    await restoring;
+    assert.ok(painted.some(frame => /200 history items loaded|400 history items loaded/.test(frame)));
     const historyFrames = painted.filter(frame => frame.includes('SAVED_REPLY_'));
     assert.equal(historyFrames.length, 1);
     assert.match(historyFrames[0], /SAVED_REPLY_450/);

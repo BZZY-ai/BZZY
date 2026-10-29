@@ -20,7 +20,7 @@ const bindingMatches = (a, b) => !b || a?.grantId === b.grantId && a?.resource =
 const fingerprint = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const excludedGoals = values => Array.isArray(values) && values.length <= 1024 && new Set(values).size === values.length && values.every(value =>
   typeof value === 'string' && /^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|template:[a-f0-9]{64})$/.test(value));
-const libraryKinds = ['skill', 'agent', 'workflow', 'goal'];
+const libraryKinds = ['skill', 'agent', 'workflow', 'goal', 'extension'];
 
 // Validate and detach the local owner's reviewed selection before any await.
 // These fields are inventory pins, never transport or execution permissions.
@@ -36,7 +36,7 @@ export function libraryShareSelection(input) {
   const seen = new Set(), detached = [];
   for (const entry of excludeEntries) {
     object(entry, ['kind', 'scope', 'name', 'id', 'revision', 'version']);
-    if (Object.keys(entry).length !== 6 || !['skill', 'agent', 'workflow'].includes(entry.kind) || !kinds.includes(entry.kind) || !['project', 'global'].includes(entry.scope) ||
+    if (Object.keys(entry).length !== 6 || !['skill', 'agent', 'workflow', 'extension'].includes(entry.kind) || !kinds.includes(entry.kind) || !['project', 'global'].includes(entry.scope) ||
         typeof entry.name !== 'string' || entry.name.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.name) ||
         typeof entry.id !== 'string' || !entry.id.length || entry.id.length > 240 || /[\x00-\x1f\x7f-\x9f]/u.test(entry.id) ||
         !Number.isSafeInteger(entry.revision) || entry.revision < 1 || typeof entry.version !== 'string' || !/^[a-f0-9]{64}$/.test(entry.version)) {

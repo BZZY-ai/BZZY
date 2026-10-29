@@ -1,11 +1,32 @@
 # bzzy 🐝
 
 Give another AI the installed format reference with `bzzy --help-skills`,
-`bzzy --help-agents`, `bzzy --help-workflows` or `bzzy --help-goals`.
+`bzzy --help-agents`, `bzzy --help-workflows`, `bzzy --help-goals` or `bzzy --help-extensions`.
 Each prints a detailed Markdown specification, complete native examples,
 installation/verification steps and Library export/import instructions.
 Output can be redirected to a file and needs no model, account setup, network
 or running Core service. The same flags work with standalone `bzzy-core`.
+
+**Settings → Extensions** lists loaded extensions with enable checkboxes and
+local JSON / encrypted Relay import and export. Native extension tabs occupy the
+reserved row below the main navigation and above pricing; an empty catalog leaves
+that row blank. Each tab replaces the chat body and input with native controls.
+**Chat**, immediately before **Skills**, returns from ordinary screens (including
+Settings and extensions), preserving the chat draft. F6 cycles extension tabs and
+Chat. The framework supplies text/status, inputs, masked secrets, textarea, select,
+checkbox, buttons and paged scrollable tables. Core tools let the main chat model
+read nonsecret elements and use explicitly AI-enabled actions.
+See [the framework contract](../../BZZY-CORE/docs/EXTENSIONS.md); the detailed
+`--help-extensions` output includes complete generic examples, all fields, limits,
+commands, credential boundaries, layout and model-tool arguments. No service
+extension is installed automatically.
+
+Opening a saved chat shows **Loading saved chat…**, an animated indicator,
+elapsed time and actual loaded-history count until the final assembled screen
+is ready. It does not execute old work. In the main chat, Esc opens **Exit /
+Cancel** with Cancel selected; Esc again dismisses it. Explicit Exit uses the
+existing `/exit` path. Idle Ctrl+C or empty Ctrl+D also asks before leaving;
+Ctrl+C during owned work requests pause. Inner dialogs keep their cancel behavior.
 
 Chat displays **Session .bzzy** from the selected saved session's Core project
 binding. Click it to copy the complete path, or use `/session-folder` to display

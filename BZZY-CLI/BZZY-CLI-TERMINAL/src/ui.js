@@ -1,3 +1,4 @@
+import { NativeExtensions } from './extensions-ui.js';
 import { updateCommand } from './update-checker.js';
 import { skillsCommand } from './skills-ui.js';
 import { createDefinitionCommand } from './definition-creator-ui.js';
@@ -31,6 +32,7 @@ export { clean } from './terminal-format.js';
 
 export class UI {
   constructor({ json = false, pet = true, minimal = false, cwd = process.cwd(), input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, sessionDebugExporter, sessionFullDebugExporter, updateHandoff, yolo, readOnly = false } = {}) {
+    this.extensions = new NativeExtensions(this);
     this.json = json;
     this.pet = pet;
     this.minimal = minimal;
@@ -115,6 +117,7 @@ export class UI {
 
   setSession(id, mode = 'CONTROL') {
     if (this.sessionId !== id) {
+      this.extensions.leave();
       this.invocationEntries = [];
       this.actors = new ActorProjection();
       this.tabs = null; this.activeTab = null; this.tui?.clear();
@@ -130,16 +133,19 @@ export class UI {
     else this.event('session', { sessionId: id, message: `Session: ${id} · ${mode}` });
   }
   setTabs(groupId, children, selectedId = groupId) {
+    if ((this.activeTab || this.sessionId) !== selectedId) this.extensions.leave();
     this.tui?.selectTab(this.activeTab || this.sessionId, selectedId);
     this.sessionId = groupId; this.tabs = [{ id: groupId, agent: 'Overview' }, ...children]; this.activeTab = selectedId;
     this.refreshSessionProjectLocation();
     this.renderFooter();
   }
   clearHistory() { this.tui?.clear(); this.invocationEntries = []; this.lineOpen = false; }
-  beginHistoryRestore() { return this.tui?.beginHistoryRestore(); }
+  beginHistoryRestore(session) { this.openTerminal(); return this.tui?.beginHistoryRestore(session); }
+  historyRestoreProgress(count) { this.tui?.historyRestoreProgress(count); }
   executionConnection(connected) { this.tui?.executionFeedback.connection(connected); this.tui?.schedule(); }
   redrawPrompt() { if (this.tui) this.tui.schedule(); else if (this.reader && !this.lineOpen) this.reader.prompt(true); }
   updateSession(snapshot) {
+    this.extensions.refresh();
     this.refreshSessionProjectLocation();
     if (snapshot.permissions) this.sessionPermissionStates.set(this.sessionId || snapshot.session?.id, snapshot.permissions.yolo === true);
     this.tui?.update(snapshot);
@@ -464,7 +470,8 @@ export class UI {
     this.hostMetricsMonitor?.close();
     void this.settings?.close();
     this.accountMonitor?.close();
-    this.closed = true; this.reader?.close(); this.newline();
+    this.closed = true; this.extensions.secrets = {}; this.extensions.drafts = {}; this.extensions.views.clear();
+    this.reader?.close(); this.newline();
     if (this.tui) { this.tui.close({ preserveScreen }); if (this.sessionId && !preserveScreen) this.output.write(`Session: ${this.sessionId}\nAttach: bzzy --attach ${this.sessionId}\n`); }
   }
 }

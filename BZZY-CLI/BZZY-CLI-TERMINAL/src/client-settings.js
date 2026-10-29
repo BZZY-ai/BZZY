@@ -1,3 +1,4 @@
+import { extensionSettingsRows, extensionSettingsAction } from './extensions-ui.js';
 import { notificationDeliveryStatus } from '@bzzy/core/engine/push-status.js';
 import { DefaultModels, chooseDefaultModel } from './default-models.js';
 import { settingsActions } from './settings-layout.js';
@@ -105,10 +106,10 @@ export class ClientSettings {
   }
   changed() { if (this.closed) return; if (this.ui.tui) this.ui.tui.settingsEnsureFocus = true; this.ui.tui?.schedule(); }
   get pageTitle() {
-    return { main: 'Settings', core: 'BZZY Core', keys: 'API keys', 'default-models': 'Default models', pair: 'Pair iPhone', approve: 'Confirm iPhone', 'signup-aliases': 'Signup email aliases', 'email-access': 'Gmail / email access', 'worker-budget': 'Agent execution' }[this.page] || 'Settings';
+    return { extensions: 'Extensions', main: 'Settings', core: 'BZZY Core', keys: 'API keys', 'default-models': 'Default models', pair: 'Pair iPhone', approve: 'Confirm iPhone', 'signup-aliases': 'Signup email aliases', 'email-access': 'Gmail / email access', 'worker-budget': 'Agent execution' }[this.page] || 'Settings';
   }
   get pageSubtitle() {
-    return { main: 'Your workspace, connections and defaults', core: 'Service, email, Library, updates and status',
+    return { extensions: 'Native tabs, controls and portable packages', main: 'Your workspace, connections and defaults', core: 'Service, email, Library, updates and status',
       'default-models': 'Provider, model and effort for every role · Save each group when ready',
       pair: 'Your iPhone · full access through Core', approve: 'Compare the complete fingerprint with your iPhone' }[this.page] || '';
   }
@@ -137,10 +138,11 @@ export class ClientSettings {
     if (previous === 'default-models') this.defaults.leave();
     if (previous === 'worker-budget') { this.workerBudget.leave(); this.page = 'core'; this.message = ''; this.warning = false; this.focusAction('worker-budget'); this.changed(); return true; }
     this.page = 'main'; this.qrView = false; this.message = ''; this.warning = false;
-    this.focusAction(previous === 'core' ? 'core' : previous === 'default-models' ? 'default-models' : previous === 'keys' ? 'deepseek' : 'pair'); this.changed(); return true;
+    this.focusAction(previous === 'extensions' ? 'extensions' : previous === 'core' ? 'core' : previous === 'default-models' ? 'default-models' : previous === 'keys' ? 'deepseek' : 'pair'); this.changed(); return true;
   }
   rows() {
     const rows = [], put = (text = '', tone = 'text', action) => rows.push({ text, tone, action });
+    if (this.page === 'extensions') return extensionSettingsRows();
     if (this.page === 'default-models') return [...this.defaults.rows(), { text: '← Back', action: 'back', tone: 'muted' }];
     if (this.page === 'worker-budget') return [...this.workerBudget.rows(), { text: '← Back', action: 'back', tone: 'muted' }];
     if (this.page === 'main') {
@@ -155,6 +157,7 @@ export class ClientSettings {
         detail: this.pending().length ? 'iPhone waiting for approval' : this.grants().length ? 'iPhone paired' : 'Full access · QR or code' });
       rows.push({ text: 'Default models', action: 'default-models', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Core · Validate · Delegate · Consensus & Compactor' });
       rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, email, Library transfers and updates', value: this.hostStatus ? this.hostLabel() : undefined });
+      rows.push({ text: 'Extensions', action: 'extensions', icon: '⊞', card: true, tone: 'accent', detail: 'Import · export · enable native tabs' });
       return rows;
     }
     if (this.page === 'keys') {
@@ -562,6 +565,8 @@ export class ClientSettings {
         return;
       } else if (action === 'default-models' || action === 'modes') { this.page = 'default-models'; this.defaults.open(); this.focus = 0; }
       else if (action.startsWith('defaults:')) { const message = await this.defaults.run(action); if (message) this.message = message; }
+      else if (action === 'extensions') { this.page = 'extensions'; this.focus = 0; }
+      else if (action.startsWith('extensions-')) await extensionSettingsAction(action, this.ui);
       else if (action === 'workspace-root') await this.configureWorkspace();
       else if (action === 'deepseek') { this.page = 'keys'; this.focus = 0; }
       else if (action.startsWith('key:')) await this.saveDeepseek(action.slice(4));

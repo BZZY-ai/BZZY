@@ -41,7 +41,8 @@ function client(info, sessionId, owner) {
 }
 async function replay(api, sessionId, ui, selected = () => true) {
   let cursor = ui.cursors?.get(sessionId) || 0;
-  const finish = cursor === 0 ? ui.beginHistoryRestore?.() : null;
+  const finish = cursor === 0 && !ui.cursors?.has(sessionId) ? ui.beginHistoryRestore?.() : null;
+  let restored = false;
   try {
     while (true) {
       const batch = await api('GET', `events?after=${cursor}&limit=200`);
@@ -50,14 +51,15 @@ async function replay(api, sessionId, ui, selected = () => true) {
         ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt, eventSessionId: event.sessionId || sessionId });
         cursor = event.seq;
       }
-      ui.cursors?.set(sessionId, cursor);
-      if (!batch.hasMore) { if (batch.events.length) ui.redrawPrompt?.(); return; }
+      ui.cursors?.set(sessionId, cursor); ui.historyRestoreProgress?.(batch.events.length);
+      if (!batch.hasMore) { restored = true; if (batch.events.length) ui.redrawPrompt?.(); return; }
     }
-  } finally { finish?.(); }
+  } finally { finish?.(restored); }
 }
 async function replayRoom(api, roomSessionId, ui, selected = () => true) {
   const key = `${roomSessionId}:shared-room`; let cursor = ui.cursors?.get(key) || 0;
-  const finish = cursor === 0 ? ui.beginHistoryRestore?.() : null;
+  const finish = cursor === 0 && !ui.cursors?.has(key) ? ui.beginHistoryRestore?.() : null;
+  let restored = false;
   try {
     while (true) {
       const batch = await api('GET', `events?after=${cursor}&limit=200`);
@@ -66,10 +68,10 @@ async function replayRoom(api, roomSessionId, ui, selected = () => true) {
         if (['peer.message', 'peer.review'].includes(event.type)) ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt });
         cursor = event.seq;
       }
-      ui.cursors?.set(key, cursor);
-      if (!batch.hasMore) { if (batch.events.length) ui.redrawPrompt?.(); return; }
+      ui.cursors?.set(key, cursor); ui.historyRestoreProgress?.(batch.events.length);
+      if (!batch.hasMore) { restored = true; if (batch.events.length) ui.redrawPrompt?.(); return; }
     }
-  } finally { finish?.(); }
+  } finally { finish?.(restored); }
 }
 async function editConversation(sessionId, ui, connection, choose, apply, { assert = assertModelIdle, message } = {}) {
   const info = connection?.info || await ensureRuntime(), owner = connection?.owner || randomUUID(), api = client(info, sessionId, owner);
@@ -204,17 +206,18 @@ async function watch(info, sessionId, owner, ui, options = {}) {
     if (children.length && ui.setTabs) ui.setTabs(sessionId, children, activeId);
     else { ui.tui?.selectTab(ui.activeTab || ui.sessionId, sessionId); ui.setSession?.(sessionId, options.activeControl ? 'CONTROL' : 'VIEW'); }
     ui.sessionMode = options.activeControl ? 'CONTROL' : 'VIEW';
-    ui.clearHistory?.(); ui.cursors?.set(activeId, 0);
-    if (roomSessionId) ui.cursors?.set(`${roomSessionId}:shared-room`, 0);
+    ui.clearHistory?.(); ui.cursors?.delete(activeId);
+    if (roomSessionId) ui.cursors?.delete(`${roomSessionId}:shared-room`);
     ui.updateSession?.(selected);
     await replay(client(info, activeId, owner), activeId, ui);
     if (roomApi && activeId !== roomSessionId) await replayRoom(roomApi, roomSessionId, ui);
+    options.onRestored?.();
   } else if (children.length) ui.setTabs?.(sessionId, children, activeId);
   const showTabs = () => ui.event('info', { message: tabs.map((t, i) => `${i}. ${t.agent} · ${t.id}`).join('\n') + '\nUse /tab NUMBER or /tab NAME. Tab / Shift+Tab also switches chats.' });
   const selectTab = value => {
     const selected = /^\d+$/.test(value) ? tabs[Number(value)] : tabs.find(t => t.agent === value || t.agent.startsWith(value + '-') || t.id.startsWith(value));
     if (!selected) throw new Error('Unknown chat tab. Use /tabs to list chats.');
-    activeId = selected.id; seenQuestions.clear(); ui.cursors?.set(activeId, 0); if (roomSessionId) ui.cursors?.set(`${roomSessionId}:shared-room`, 0); ui.clearHistory?.(); ui.setTabs?.(sessionId, children, activeId);
+    activeId = selected.id; seenQuestions.clear(); ui.cursors?.delete(activeId); if (roomSessionId) ui.cursors?.delete(`${roomSessionId}:shared-room`); ui.clearHistory?.(); ui.setTabs?.(sessionId, children, activeId);
     ui.reader?.setPrompt(`bzzy (${selected.agent}) › `); ui.reader?.prompt(true);
   };
   if (children.length && !ui.tui) showTabs();
@@ -516,11 +519,15 @@ export async function viewSession(session, options, ui) {
   return attachSession(selected, options, ui);
 }
 export async function restoreConversation(session, ui, connectionInfo) {
-  const info = connectionInfo || await ensureRuntime(), api = client(info, session.id, randomUUID());
-  const snapshot = await api('GET');
-  ui.tui?.selectTab(ui.activeTab || ui.sessionId, session.id);
-  ui.setSession?.(session.id); ui.clearHistory?.(); ui.cursors?.set(session.id, 0);
-  ui.updateSession?.(snapshot); await replay(api, session.id, ui);
+  const finish = ui.beginHistoryRestore?.(session);
+  let restored = false;
+  try {
+    const info = connectionInfo || await ensureRuntime(), api = client(info, session.id, randomUUID());
+    const snapshot = await api('GET');
+    ui.tui?.selectTab(ui.activeTab || ui.sessionId, session.id);
+    ui.setSession?.(session.id); ui.clearHistory?.(); ui.cursors?.delete(session.id);
+    ui.updateSession?.(snapshot); await replay(api, session.id, ui); restored = true;
+  } finally { finish?.(restored); }
 }
 export async function conversationInput(session, ui, connection) {
   let info = connection?.info;
@@ -573,20 +580,24 @@ export async function conversationInput(session, ui, connection) {
 }
 export async function attachSession(session, options, ui) {
   options = { ...options, cwd: session.cwd, mode: session.mode || 'solo', provider: session.provider, model: session.model, effort: session.selectedEffort };
-  const info = await ensureRuntime(), owner = randomUUID(), api = client(info, session.id, owner);
+  const finish = ui.beginHistoryRestore?.(session);
+  let restored = false;
+  const onRestored = () => { restored = true; finish?.(); };
+  let info; try { info = await ensureRuntime(); } catch (error) { finish?.(false); throw error; }
+  const owner = randomUUID(), api = client(info, session.id, owner);
   let result, next;
   try {
     if (!options.restoreAfterUpdate && ui.launchYolo === true) { await api('POST', 'claim', { takeover: true }); initializeLaunchYolo(ui, session.id, owner, { attached: true }); }
     result = await watch(info, session.id, owner, ui, {
       activeControl: false, allowControlOnInput: true,
-      follow: ui.interactive || options.follow, restoreInitial: true, executionOptions: options,
+      follow: ui.interactive || options.follow, restoreInitial: true, executionOptions: options, onRestored,
     });
     next = ui.nextSession; ui.nextSession = null;
   } catch (error) {
     if (error.code !== 'SESSION_DELETED') throw error;
     forgetDeletedConversation(ui, session);
     next = ui.nextSession; ui.nextSession = null;
-  } finally { await api('POST', 'release', {}).catch(() => {}); }
+  } finally { finish?.(restored); await api('POST', 'release', {}).catch(() => {}); }
   return next ? attachSession(next, options, ui) : result;
 }
 

@@ -33,7 +33,7 @@ let directory, previous;
 const providerKeys = ['DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY', 'EXPLABS_API_KEY'];
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_FIXTURE_CORE_SETTINGS_KEY', ...providerKeys];
 const terminals = [];
-const mainSettingsActions = ['deepseek', 'workspace-root', 'pair', 'default-models', 'core'];
+const mainSettingsActions = ['deepseek', 'workspace-root', 'pair', 'default-models', 'core', 'extensions'];
 test.beforeEach(() => {
   previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   directory = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/private/tmp' : os.tmpdir(), 'bzzy-settings-')));
@@ -112,7 +112,7 @@ function pairingFixture({ expiresIn = 600000, grants = [], pending = [] } = {}) 
   return { calls, module: { CoreRelayClient: Gateway, initializeRelayIdentity: () => ({ id: 'fixture-public-host' }) } };
 }
 
-test('Settings presents the five requested options and preserves the chat draft', async () => {
+test('Settings presents the requested options and preserves the chat draft', async () => {
   const { ui } = terminal(), answer = ui.ask('bzzy › '); await Promise.resolve();
   ui.tui.key('unfinished chat', {}); ui.openSettings(); ui.tui.render();
   assert.ok(ui.tui.panels().includes('settings'));
@@ -130,7 +130,7 @@ test('Settings presents the five requested options and preserves the chat draft'
   assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
 });
 
-test('Settings takes over the full screen and keeps all five choices at normal terminal heights', () => {
+test('Settings takes over the full screen and keeps all requested choices at normal terminal heights', () => {
   const { ui, output } = terminal();
   ui.updateSession({ id: ui.sessionId, provider: 'codex', model: 'fixture-model-banner', cwd: '/fixture-project-path',
     executionState: 'running', usage: { tokens: 987654, available: true } });
@@ -139,8 +139,9 @@ test('Settings takes over the full screen and keeps all five choices at normal t
     Object.assign(output, { rows, columns: 100 }); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
     for (const label of ['API keys', 'Default BZZY folder', 'Pair iPhone', 'Default models', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
-    assert.match(frame, /^\s*Settings/m); assert.doesNotMatch(frame, /◉◉|bzzy/);
-    assert.doesNotMatch(frame, /fixture-model-banner|fixture-project-path|987,654 tokens|Ask BZZY to do anything/);
+    assert.match(frame, /Settings/); assert.doesNotMatch(frame, /◉◉|bzzy/);
+    assert.match(frame, /fixture-model-banner/); assert.match(frame, /987,654 tokens/);
+    assert.doesNotMatch(frame, /fixture-project-path|Ask BZZY to do anything/);
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'settings'));
     assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'confirm'), false);
     assert.doesNotMatch(frame, /Core service/);
@@ -159,11 +160,11 @@ test('Esc leaves any Settings page for the active chat and preserves the draft',
   ui.reader.close(); assert.equal(await answer, null);
 });
 
-test('the visible Esc Chat control leaves Settings and preserves the draft', async () => {
+test('the main Chat control leaves Settings and preserves the draft', async () => {
   const { ui } = terminal(), answer = ui.ask('bzzy › '); await Promise.resolve();
   ui.tui.value = 'Visible exit draft'; ui.tui.cursor = 7;
   ui.openSettings(); ui.renderFooter(); ui.tui.render();
-  const exit = ui.tui.hitTargets.find(hit => hit.type === 'settings-exit'); assert.ok(exit);
+  const exit = ui.tui.hitTargets.find(hit => hit.type === 'top-chat'); assert.ok(exit);
   ui.tui.mouse(0, exit.left, exit.row);
   assert.equal(ui.tui.panel, 'chat');
   assert.equal(ui.tui.value, 'Visible exit draft'); assert.equal(ui.tui.cursor, 7);

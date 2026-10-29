@@ -471,3 +471,24 @@ for (const enable of [false, true, 'subset', 'automatic', 'automatic-root', 'can
   assert.deepEqual(messages.find(value => value.type === 'review').totals.skills, 1);
   assert.equal(gateway.projectShareStatus(share.shareId).state, 'complete');
 });
+
+test('native extension definitions travel over encrypted Relay Library codes without private bindings', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  const { saveExtension, saveExtensionSecrets } = await import('../src/engine/extensions.js');
+  const { createSession } = await import('../src/engine/store.js');
+  const { previewLibraryExport, buildLibraryArchive, previewLibraryImport, readDefinitionBundleFile, discardDefinitionBundleReview } = await import('../src/engine/definition-bundle.js');
+  const definition = { format: 'bzzy-extension', version: 1, id: 'relay-board', title: 'Relay Board', description: 'Offline native extension transfer fixture.', elements: [{ id: 'private-input', type: 'secret', label: 'Private credential' }, { id: 'heading', type: 'text', text: 'Reusable display' }], actions: [] };
+  const installed = saveExtension(definition), session = createSession({ id: 'codex', backend: 'codex' }, f.source);
+  saveExtensionSecrets(session, installed.id, { version: installed.version, installationId: installed.installationId, secrets: { 'private-input': 'PRIVATE_EXTENSION_BINDING_90217' } });
+  const review = previewLibraryExport({ cwd: f.source, kinds: ['extension'] }); t.after(() => discardDefinitionBundleReview(review));
+  const selection = libraryShareSelection({ kinds: ['extension'] }); assert.deepEqual(selection.kinds, ['extension']);
+  const share = await f.service.createShare({ ...f.input, ...selection, expectedDigest: review.sourceDigest, approval: 'code' }, {
+    authorize() {}, exportArchive(_session, file) { return buildLibraryArchive(file, { cwd: f.source, expectedDigest: review.sourceDigest, kinds: ['extension'] }); },
+  });
+  const result = await receive(f, share, file => {
+    const received = previewLibraryImport(file, { cwd: f.recipient });
+    try { assert.equal(received.entries[0].kind, 'extension'); const content = readDefinitionBundleFile(received, { cwd: f.recipient, entryIndex: 0, file: 'definition.json' }); assert.match(content.text, /Reusable display/); assert.doesNotMatch(content.text, /PRIVATE_EXTENSION_BINDING/); return { reviewed: true }; }
+    finally { discardDefinitionBundleReview(received); }
+  });
+  assert.equal(result.reviewed, true); assert.doesNotMatch(f.wire.join('\n'), /Reusable display|PRIVATE_EXTENSION_BINDING/);
+});

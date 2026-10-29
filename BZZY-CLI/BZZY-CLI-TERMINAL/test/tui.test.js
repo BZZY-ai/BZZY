@@ -69,7 +69,7 @@ test('DeepSeek balance appears below navigation only for the DeepSeek API-key pr
       balance: { currency: 'USD', amount: 12.34 }, checkedAt: Date.now(), source: 'provider-api' } };
     ui.tui.render();
     assert.doesNotMatch(ui.tui.lastFrame[0], /\$12\.34/);
-    assert.match(ui.tui.lastFrame[1], /Balance \$12\.34/);
+    assert.match(ui.tui.lastFrame[2], /Balance \$12\.34/);
     const balance = ui.tui.hitTargets.find(hit => hit.type === 'usage-balance'); assert.ok(balance);
     ui.tui.mouse(0, balance.left, balance.row); await ui.tui.balanceTask;
     assert.match(ui.tui.entries.at(-1).text, /DeepSeek balance: \$12\.34/);
@@ -96,7 +96,7 @@ test('minimal chat uses the full terminal and retains conversation, input, mouse
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /A minimal question/); assert.match(frame, /A visible answer/); assert.match(frame, /Unsent draft/);
       assert.doesNotMatch(frame, /BZZY|Session:|YOLO|Latest|Settings|Your next goal|CPU|Memory/);
-      assert.equal(ui.tui.textRegion.top, 4);
+      assert.equal(ui.tui.textRegion.top, 5);
       assert.match(frame, /Session \.bzzy/);
       assert.match(frame, /Core Offline.*Relay Offline/);
       const send = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(send); assert.equal(send.row, rows - 1);
@@ -342,7 +342,7 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       assert.doesNotMatch(chat[0], /bzzy|◉◉/);
       assert.match(chat[0], /(?:Open Sessions|Sessions).*Skills.*Agents.*Workflows.*Goals.*Metrics.*⚙ Settings/);
       assert.doesNotMatch(chat[0], /\+ New/);
-      assert.match(chat.slice(0, 2).join(' '), /CPU\s*12%.*4\.0\/16(?: GB|G)/);
+      assert.match(chat.slice(0, 4).join(' '), /CPU\s*12%.*4\.0\/16(?: GB|G)/);
       assert.match(chat.join('\n'), /chosen-model.*effort high/);
       assert.match(chat.join('\n'), /1,234 tokens.*\d{2}:\d{2}:\d{2}/);
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-sessions'));
@@ -359,7 +359,9 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       ui.tui.setPanel('settings'); ui.tui.render();
       const settings = ui.tui.lastFrame.map(clean);
       assert.doesNotMatch(settings[0], /bzzy|◉◉/);
-      assert.match(settings[0], /Settings.*CPU.*12.*RAM.*4\.0\/16 GB.*Esc · Chat/);
+      assert.match(settings[0], /Chat.*Skills.*Settings/);
+      assert.match(settings.join(' '), /CPU.*12.*4\.0\/16(?: GB|G)/);
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-chat'));
       assert.match(settings.join('\n'), /API key.*Default BZZY folder.*Pair iPhone.*BZZY Core/s);
       assert.doesNotMatch(settings.join('\n'), /Question in the transcript|Answer in the transcript|Ask BZZY to do anything/);
       assert.equal(ui.tui.lastFrame.length, rows);

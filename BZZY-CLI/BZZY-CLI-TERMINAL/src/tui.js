@@ -88,7 +88,7 @@ export class TerminalChat {
       const instant = performance.now(), previous = this.frame;
       this.animationTime = (instant - this.animationStarted) / 1000; this.frame = Math.floor(this.animationTime * 10);
       if (!this.copyMode && !this.outputBlocked) {
-        if (previous !== this.frame && (this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated || goalValidationIndicator(this.goal, this.goalValidation, this.frame)?.animated)) this.schedule();
+        if (previous !== this.frame && (this.historyRestoreDepth || this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated || goalValidationIndicator(this.goal, this.goalValidation, this.frame)?.animated)) this.schedule();
       }
       const interval = this.ui.pet === false ? 100 : animationInterval;
       deadline += interval;
@@ -413,6 +413,13 @@ export class TerminalChat {
     });
   }
   finishSelection(value, force = false) { const selection = this.selection; if (!selection || selection.locked && selection.loading && !force) return; this.selection = null; this.hoverTarget = null; this.ui.reader = null; selection.resolve(value); this.schedule(); }
+  openExitPrompt() {
+    if (!this.ui.sessionId || this.selection || this.hidden || this.promptDraft || this.ui.privateView || this.ui.coreLifecycleInterrupted || this.resolveInput && !/^bzzy\b/.test(this.question || '')) return false;
+    const reader = this.ui.reader;
+    this.selection = { title: 'Exit BZZY?', presentation: 'context', scope: 'exit', backgroundFrame: this.lastFrame.slice(), single: true, loading: false, focus: 1, query: '',
+      choices: [{ value: 'exit', label: 'Exit' }, { value: 'cancel', label: 'Cancel' }], resolve: action => { this.ui.reader = reader; if (action === 'exit') this.localCommand('/exit'); } };
+    this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule(); return true;
+  }
   openSessionMenu(id, x, y) {
     const parent = this.selection;
     if (this.hidden || this.promptDraft || this.ui.privateView || this.ui.coreLifecycleInterrupted || this.aliasEdit
@@ -479,7 +486,7 @@ export class TerminalChat {
   }
   canCompose() {
     if (this.selection || this.renderingPicker) return false;
-    if (!this.promptDraft && (this.panel === 'settings' || this.panel === 'metrics' || this.panel === 'agents' || this.panel === 'workflows' || this.panel === 'goals'
+    if (!this.promptDraft && (this.panel === 'extension' || this.panel === 'settings' || this.panel === 'metrics' || this.panel === 'agents' || this.panel === 'workflows' || this.panel === 'goals'
       || this.panel === 'skills' && this.ui.skillView !== 'import')) return false;
     return Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft);
   }
@@ -531,6 +538,8 @@ export class TerminalChat {
     if (panel === 'room' && !this.panels().includes('room')) { this.ui.event('info', { message: 'The shared room is available in a besties conversation. Start with bzzy --besties.' }); return; }
     if (panel === 'settings' && !this.ui.settings) { this.ui.openSettings(); return; }
     if (panel === 'sessions' && this.ui.onSessions?.() === false) return;
+    const extensionScroll = this.panel === 'extension' && panel === 'chat' ? this.ui.extensions?.chatScroll : null;
+    if (this.panel === 'extension' && panel !== 'extension') this.ui.extensions?.leave();
     if (panel !== this.panel) cancelDefinitionBundle(this.ui, this.panel);
     if (this.skillPanelDraft && panel !== 'skills') {
       if (this.panel === 'skills' && this.ui.skillView === 'import') this.ui.skillImportDraft = this.value;
@@ -556,7 +565,7 @@ export class TerminalChat {
       this.ui.sessionMetrics.open(this.ui.activeTab || this.ui.sessionId);
       this.metricsTopRequested = true;
     } else this.ui.sessionMetrics?.stop();
-    this.textSelection = null; this.panel = panel; this.scroll = 0; this.schedule();
+    this.textSelection = null; this.panel = panel; this.scroll = extensionScroll ?? 0; this.schedule();
   }
   leaveSettings() {
     if (this.ui.settings) this.ui.settings.qrView = false;
@@ -651,7 +660,7 @@ export class TerminalChat {
     finally { this.pastePending = false; }
   }
   mouse(button, x, y, released = false) {
-    if (this.copyMode) return;
+    if (this.historyRestoreDepth || this.copyMode) return;
     const originalFrame = this.textSelection?.frame;
     if (released) {
       this.scrollDrag = null;
@@ -670,6 +679,8 @@ export class TerminalChat {
       if (this.selection) {
         const choices = visibleChoices(this.selection), at = choices.findIndex(item => item.index === this.selection.focus);
         if (!this.selection.loading && choices.length) this.selection.focus = choices[Math.max(0, Math.min(choices.length - 1, at + delta))].index;
+      } else if (this.panel === 'extension' && !this.promptDraft) {
+        const extensions = this.ui.extensions; extensions.offset = Math.max(0, Math.min(extensions.maximum || 0, extensions.offset + delta));
       } else if (this.panel === 'settings' && !this.promptDraft) {
         this.settingsOffset = Math.max(0, Math.min(this.settingsMaximum || 0, (this.settingsOffset || 0) + delta)); this.settingsEnsureFocus = false;
       } else this.scroll = Math.max(0, Math.min(this.scrollbar?.maximum || 0, this.scroll - delta));
@@ -715,6 +726,7 @@ export class TerminalChat {
       else if (!this.ui.onSessions) this.localCommand('/sessions');
       return;
     }
+    if (hit?.type?.startsWith('extension-')) { this.ui.extensions.click(hit); return; }
     if (hit?.type === 'session-new') { this.localCommand('/new'); return; }
     if (hit?.type === 'session-project-path') {
       const location = this.ui.refreshSessionProjectLocation();
@@ -722,6 +734,7 @@ export class TerminalChat {
       else this.ui.showSessionProjectLocation();
       return;
     }
+    if (hit?.type === 'top-chat') { this.setPanel('chat'); return; }
     if (hit?.type === 'top-skills') { this.localCommand('/skills'); return; }
     if (hit?.type === 'top-agents') { this.localCommand('/agents'); return; }
     if (hit?.type === 'top-workflows') { this.localCommand('/workflow library'); return; }
@@ -859,9 +872,16 @@ export class TerminalChat {
       this.bodyCache = null; this.scroll = 0; this.agentTopRequested = true; this.schedule(); return true;
     }
     if (this.panel !== 'chat') { this.setPanel('chat'); return true; }
-    return false;
+    return this.openExitPrompt();
   }
   key(text, key) {
+    if (this.historyRestoreDepth) {
+      key.bzzyHandled = true;
+      if (key.sequence === '\x1b[<') this.loadingMouseReport = true;
+      else if (this.loadingMouseReport) { if (/[Mm]$/.test(text || key.sequence || '')) this.loadingMouseReport = false; }
+      else if (this.historyLoading && this.historyLoading.keys.length < 8192) this.historyLoading.keys.push([text, { ...key, bzzyHandled: false }]);
+      return;
+    }
     const escape = escapeInputKind(text, key);
     if (escape) {
       key.bzzyHandled = true;
@@ -949,6 +969,11 @@ export class TerminalChat {
     }
     if (key.ctrl && key.name === 'c' && this.selectedText()) { key.bzzyHandled = true; this.clipboardTask = this.copySelection(); return; }
     if (this.textSelection) { this.textSelection = null; this.lastFrame = []; if (key.name === 'escape') { key.bzzyHandled = true; this.schedule(); return; } }
+    if (!this.selection && !this.promptDraft && !this.hidden && key.name === 'f6') {
+      const ids = ['', ...(this.ui.extensions?.catalog || []).map(e => e.id)], at = ids.indexOf(this.ui.extensions?.id || '');
+      this.ui.extensions?.select(ids[(at + (key.shift ? ids.length - 1 : 1)) % ids.length]); key.bzzyHandled = true; return;
+    }
+    if (this.panel === 'extension' && !this.selection && !this.promptDraft) { key.bzzyHandled = true; this.ui.extensions.key(text, key); return; }
     if (key.ctrl && key.name === 'v' && !this.selection && (this.panel !== 'settings' || this.promptDraft)) { key.bzzyHandled = true; this.clipboardTask = this.pasteClipboard(); return; }
     if (key.ctrl && key.name === 's' && !this.hidden && !this.selection) { this.setCopyMode(true); return; }
     if (this.selection) {
@@ -1000,7 +1025,10 @@ export class TerminalChat {
     if (key.ctrl && key.name === 'o') { this.showTools = !this.showTools; this.schedule(); return; }
     if (key.ctrl && key.name === 'l') { this.lastFrame = []; this.paintedFrame = null; this.schedule(); return; }
     if (key.ctrl && key.name === 'c') {
-      if (!this.promptDraft && process.listenerCount('SIGINT')) process.emit('SIGINT'); else this.finish(null);
+      key.bzzyHandled = true;
+      if (this.promptDraft || this.hidden || !this.ui.sessionId) this.finish(null);
+      else if (this.busy && this.ui.sessionMode !== 'VIEW') this.localCommand('/pause');
+      else this.openExitPrompt();
       return;
     }
     if (key.name === 'escape' && this.promptDraft) { this.finish(null); return; }
@@ -1111,7 +1139,7 @@ export class TerminalChat {
       }
     }
     if (key.name === 'tab') return;
-    if (key.ctrl && key.name === 'd' && !this.value) { this.finish(null); return; }
+    if (key.ctrl && key.name === 'd' && !this.value) { key.bzzyHandled = true; if (this.promptDraft || this.hidden || !this.ui.sessionId) this.finish(null); else this.openExitPrompt(); return; }
     const chars = [...this.value];
     if (key.name === 'return' && !key.meta && !key.shift && !this.pasting) {
       if (this.panel === 'skills' && this.ui.skillView === 'import') {
@@ -1184,7 +1212,7 @@ export class TerminalChat {
       }
     } else if (this.panel === 'settings') {
       const tightMain = this.ui.settings.page === 'main' && (this.output.rows || 24) <= 24 && this.ui.settings.rows().filter(row => row.card).length > 4;
-      const layout = settingsLayout(this.ui.settings, width, this.theme, { spaced: (this.output.rows || 24) >= 18 && !tightMain });
+      const layout = settingsLayout(this.ui.settings, width, this.theme, { spaced: (this.output.rows || 24) - (this.sceneHeaderLength || 2) >= 18 && !tightMain });
       this.settingsFocusRow = layout.focusRow; this.settingsFocusedAction = layout.focusAction; this.contentHits.push(...layout.hits); lines.push(...layout.lines);
     } else if (['skills', 'agents', 'workflows', 'goals'].includes(this.panel)) {
       const rows = this.panel === 'skills' ? skillRows(this.ui) : this.panel === 'agents' ? subagentRows(this.ui)
@@ -1343,20 +1371,26 @@ export class TerminalChat {
     if (view.meta) lines.push(color(clip('    ' + view.meta, width), view.warning ? palette.warning : palette.muted));
     return lines;
   }
-  beginHistoryRestore() {
+  beginHistoryRestore(session) {
+    if (!this.historyRestoreDepth) this.historyLoading = { session, count: 0, started: Date.now(), keys: [] };
     this.historyRestoreDepth = (this.historyRestoreDepth || 0) + 1;
-    clearTimeout(this.renderTimer); this.renderTimer = null;
+    clearTimeout(this.renderTimer); this.renderTimer = null; this.render();
     let finished = false;
-    return () => {
+    return (success = true) => {
       if (finished) return;
       finished = true;
+      if (!success && this.historyLoading) this.historyLoading.failed = true;
       if (--this.historyRestoreDepth === 0) {
+        const queued = this.historyLoading?.failed ? [] : this.historyLoading?.keys || [];
+        this.historyLoading = null; this.loadingMouseReport = false; this.loadingFrameKey = null; this.paintedFrame = null; this.lastFrame = [];
         this.scroll = 0; this.bodyCache = null;
         this.render();
+        for (const [text, key] of queued) this.key(text, key);
       }
     };
   }
-  schedule() { if (!this.historyRestoreDepth && !this.renderTimer && !this.closed && !this.copyMode && !this.outputBlocked) this.renderTimer = setTimeout(() => { this.renderTimer = null; this.render(); }, animationInterval); }
+  historyRestoreProgress(count) { if (this.historyLoading) { this.historyLoading.count += count; this.schedule(); } }
+  schedule() { if (!this.renderTimer && !this.closed && !this.copyMode && !this.outputBlocked) this.renderTimer = setTimeout(() => { this.renderTimer = null; this.render(); }, animationInterval); }
   tokenLabel() {
     const partial = ['besties', 'parallel'].includes(this.mode) && this.groupUsage && !this.groupUsage.complete;
     return this.tokens != null ? (partial ? '≥' : '') + this.tokens.toLocaleString() + ' tokens' : 'tokens —';
@@ -1438,6 +1472,7 @@ export class TerminalChat {
     const selectedRelay = width >= 112 ? relayFull : relayDot;
     const selectedMetric = width >= 112 ? metric : tinyMetric;
     const actionsFull = [
+      { text: ' Chat ', tone: palette.accent, bold: true, type: 'top-chat', surface: true },
       { text: ' Skills ', tone: palette.accent, bold: true, type: 'top-skills', surface: true },
       { text: ' Agents ', tone: palette.accent, bold: true, type: 'top-agents', surface: true },
       { text: ' Workflows ', tone: palette.accent, bold: true, type: 'top-workflows', surface: true },
@@ -1446,6 +1481,7 @@ export class TerminalChat {
       { text: ' ⚙ Settings ', tone: palette.accent, bold: true, type: 'top-settings', surface: true },
     ];
     const actionsCompact = [
+      { text: 'Chat', tone: palette.accent, bold: true, type: 'top-chat' },
       { text: 'Skills', tone: palette.accent, bold: true, type: 'top-skills' },
       { text: 'Agents', tone: palette.accent, bold: true, type: 'top-agents' },
       { text: 'Workflows', tone: palette.accent, bold: true, type: 'top-workflows' },
@@ -1480,10 +1516,15 @@ export class TerminalChat {
       if (selected) break;
     }
     if (!selected) {
-      selected = width >= 20
-        ? { sessions: 'Sessions', alias: false, rightTokens: [{ text: relayDot }], rightWidth: 1, tokenGap: 1 }
-        : { sessions: 'S', alias: false, rightTokens: [{ text: relayDot }], rightWidth: 1, tokenGap: 1 };
-      this.topBarOverflow = actionsCompact;
+      const sessions = width >= 20 ? 'Sessions' : 'S', rightTokens = [{ text: relayDot }];
+      let rightWidth = 1, used = 0;
+      for (const token of actionsCompact) {
+        const next = rightWidth + 1 + cellWidth(token.text);
+        if (cellWidth(sessions) + next + 1 > width) break;
+        rightTokens.push(token); rightWidth = next; used++;
+      }
+      selected = { sessions, alias: false, rightTokens, rightWidth, tokenGap: 1 };
+      this.topBarOverflow = actionsCompact.slice(used);
     }
     this.topBarHasMetrics = selected.rightTokens.some(token => /CPU/.test(clean(token.text)));
     const tokens = [
@@ -1503,7 +1544,8 @@ export class TerminalChat {
       if (index) { right += ' '.repeat(selected.tokenGap); offset += selected.tokenGap; }
       const size = cellWidth(token.text);
       if (token.type) this.hitTargets.push({ type: token.type, row: 1, left: offset + 1, right: offset + size });
-      const active = token.type === 'top-skills' && this.panel === 'skills'
+      const active = token.type === 'top-chat' && this.panel === 'chat'
+        || token.type === 'top-skills' && this.panel === 'skills'
         || token.type === 'top-metrics' && this.panel === 'metrics'
         || token.type === 'top-agents' && this.panel === 'agents'
         || token.type === 'top-workflows' && this.panel === 'workflows'
@@ -1744,10 +1786,10 @@ export class TerminalChat {
   renderSettings(width, height) {
     const { color } = this.theme, settings = this.ui.settings;
     const subtitle = settings.pageSubtitle || '';
-    const header = [this.settingsTopBar(width)];
+    const header = this.navigationHeader(width);
     const backRow = header.length + 1;
     header.push(color('  ← Back', settings.busy ? palette.muted : palette.accent, true)
-      + (subtitle ? color(clip('  ' + subtitle, Math.max(0, width - 8)), palette.muted) : ''));
+      + color(clip('  ' + settings.pageTitle + (subtitle ? ' · ' + subtitle : ''), Math.max(0, width - 9)), palette.muted));
     this.hitTargets.push({ type: 'back', row: backRow, left: 3, right: 9 });
     if (settings.page === 'default-models') {
       const usage = this.tokenLabel() + ' · ' + this.elapsedClock();
@@ -1759,7 +1801,7 @@ export class TerminalChat {
       }
     }
     this.sceneHeaderLength = header.length;
-    const compact = height - header.length < 16;
+    const compact = height - header.length < 16 || settings.page === 'main' && height <= 28;
     if (!compact) header.push('');
     const footer = compact ? [] : [''];
     if (settings.busy) footer.push(color('  Working…', palette.muted));
@@ -1774,8 +1816,12 @@ export class TerminalChat {
       footer.push(color(clip('  ' + navigationHint, width), palette.muted));
     } else footer.push(color(clip(backLabel + '    ' + navigationHint + ' · ' + escapeHint, width), palette.muted));
     if (!compact) footer.push('');
+    if (height < 14) footer.length = 0;
     const bodyHeight = Math.max(1, height - header.length - footer.length);
     const body = this.content(width - 2), focus = this.settingsFocusRow || 0;
+    const focusKey = [settings.page, settings.focus, width, height].join(':');
+    if (this.settingsFocusKey !== focusKey) this.settingsEnsureFocus = true;
+    this.settingsFocusKey = focusKey;
     // Start at the top; follow keyboard focus only when the page needs scrolling.
     this.settingsMaximum = Math.max(0, body.length - bodyHeight);
     this.settingsOffset = Math.min(this.settingsOffset || 0, this.settingsMaximum);
@@ -1788,7 +1834,7 @@ export class TerminalChat {
     while (visible.length < bodyHeight) visible.push('');
     this.hitTargets.push(...this.contentHits.filter(hit => hit.row >= this.settingsOffset && hit.row < this.settingsOffset + bodyHeight)
       .map(hit => ({ ...hit, row: header.length + hit.row - this.settingsOffset + 1 })));
-    this.hitTargets.push({ type: 'settings-back', row: header.length + bodyHeight + exitRow + 1, left: 3, right: exit === 'chat' ? 16 : 10 });
+    if (footer.length) this.hitTargets.push({ type: 'settings-back', row: header.length + bodyHeight + exitRow + 1, left: 3, right: exit === 'chat' ? 16 : 10 });
     const lines = [...header, ...visible, ...footer];
     let frame = '\x1b[?25l';
     for (let row = 0; row < height; row++) {
@@ -1803,7 +1849,7 @@ export class TerminalChat {
     const { color } = this.theme, settings = this.ui.settings, qr = settings.qrLines();
     const qrWidth = Math.max(0, ...qr.map(line => cellWidth(line))) + 8;
     const notice = settings.warning || /copied|opened|copy request/i.test(settings.message);
-    const controls = 'C Copy code  O Open image  ← Back';
+    const controls = 'C Copy code  O Open image  Chat';
     // Two compact rows leave room for every QR module and its quiet zone at 80×24.
     const fits = qr.length && qrWidth <= width && qr.length + 6 <= height;
     const { lines: header, controlLeft } = this.compactHeader(width, { controls: fits ? controls : '' });
@@ -1818,7 +1864,7 @@ export class TerminalChat {
       const openLeft = controlLeft + cellWidth('C Copy code  ');
       this.hitTargets.push({ type: 'settings', action: 'copy-code', row: 1, left: controlLeft, right: controlLeft + cellWidth('C Copy code') - 1 },
         { type: 'settings', action: 'open-qr', row: 1, left: openLeft, right: openLeft + cellWidth('O Open image') - 1 },
-        { type: 'qr-back', row: 1, left: width - cellWidth('← Back') + 1, right: width });
+        { type: 'top-chat', row: 1, left: width - cellWidth('Chat') + 1, right: width });
     } else {
       this.hitTargets.push({ type: 'qr-back', row: lines.length + 1, left: 3, right: 9 });
       lines.push(color(clip('  ← Back  Pair iPhone', width), palette.accent, true), '');
@@ -1890,7 +1936,8 @@ export class TerminalChat {
     this.writeFrame(frame);
   }
   render({ force = false } = {}) {
-    if (this.historyRestoreDepth || this.closed || this.outputBlocked || this.copyMode && !force) return;
+    if (this.closed || this.outputBlocked || this.copyMode && !force) return;
+    if (this.historyRestoreDepth) { this.renderHistoryLoading(); return; }
     if (this.textSelection && !this.selection) { this.renderTextSelection(); return; }
     if (this.panel === 'metrics') {
       this.ui.sessionMetrics ||= new SessionMetricsPanel(this.ui, { load: this.ui.sessionMetricsLoader });
@@ -1947,6 +1994,54 @@ export class TerminalChat {
     }
     this.writeFrame(frame);
   }
+  renderHistoryLoading() {
+    const loading = this.historyLoading || { count: 0, started: Date.now() }, width = Math.max(16, (this.output.columns || 80) - 1), height = Math.max(8, this.output.rows || 24);
+    const elapsed = Math.floor((Date.now() - loading.started) / 1000), key = [width, height, this.frame, loading.count, elapsed].join(':');
+    if (this.loadingFrameKey === key) return; this.loadingFrameKey = key;
+    const { color } = this.theme, target = loading.session;
+    const lines = [this.simpleTopBar(width), '', color(clip('  ' + spinner[this.frame % spinner.length] + ' Loading saved chat…', width), palette.accent, true),
+      color(clip('  ' + (target?.alias || target?.id || 'Saved session'), width), palette.text),
+      color(clip(`  ${loading.count.toLocaleString()} history items loaded · ${elapsed}s`, width), palette.muted)];
+    if (target?.provider) lines.push(color(clip('  ' + target.provider + (target.model ? ' · ' + target.model : ''), width), palette.muted));
+    this.hitTargets = []; this.textRegion = null; this.scrollbar = null;
+    let frame = '\x1b[?25l';
+    for (let row = 0; row < height; row++) frame += `\x1b[${row + 1};1H${this.theme.background(palette.background)}\x1b[2K${lines[row] || ''}\x1b[0m`;
+    this.lastFrame = lines; this.paintedFrame = null; this.writeFrame(frame);
+  }
+  navigationHeader(width) {
+    const { color } = this.theme;
+    const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme)]
+      : [this.simpleTopBar(width)];
+    if (!this.ui.minimal && this.topBarOverflow) {
+      let line = '', column = 0;
+      for (const token of this.topBarOverflow) {
+        const size = cellWidth(token.text);
+        if (column && column + 1 + size > width) { header.push(line); line = ''; column = 0; }
+        if (column) { line += ' '; column++; }
+        this.hitTargets.push({ type: token.type, row: header.length + 1, left: column + 1, right: column + size });
+        line += color(token.text, token.tone, true); column += size;
+      }
+      if (line) header.push(line);
+    }
+    const extensionTabs = this.ui.extensions?.tabs(width, header.length + 1, this.theme);
+    header.push(extensionTabs?.line || ''); this.hitTargets.push(...(extensionTabs?.hits || []));
+    header.push(...this.spendingHeader(width, header.length + 1));
+    if (['settings', 'extension'].includes(this.panel) && this.ui.settings?.page !== 'default-models') {
+      const detail = `  ${this.model} · ${(this.effort || 'default').replace(/^effort /, '')} · ${this.tokenLabel()} · ${hostMetricsCompact(this.ui.hostMetrics)}`;
+      header.push(color(clip(detail, width), palette.muted));
+    }
+    return header;
+  }
+  renderExtensionScene(width, height, header) {
+    const available = Math.max(0, height - header.length - 2), layout = this.ui.extensions.layout(width - 1, available, this.theme);
+    this.hitTargets.push(...layout.hits.map(h => ({ ...h, row: header.length + h.row + 1 })));
+    const footer = this.actionNotice?.message || 'Tab / ↑↓ focus · Enter use · PgUp/PgDn scroll · F6 tabs · Esc chat';
+    const lines = [...header, ...layout.lines, ...Array(Math.max(0, available - layout.lines.length)).fill(''), '', this.theme.color(clip('  ' + footer, width), palette.muted)].slice(0, height);
+    this.textRegion = null; this.scrollbar = null; this.contentHits = []; this.composerRow = 0;
+    let frame = '\x1b[?25l';
+    for (let row = 0; row < height; row++) frame += `\x1b[${row + 1};1H${this.theme.background(palette.background)}\x1b[2K${lines[row] || ''}\x1b[0m`;
+    this.lastFrame = lines; this.lastBackgrounds = lines.map(() => palette.background); this.writeFrame(frame);
+  }
   renderScene({ force = false } = {}) {
     if (this.closed || this.outputBlocked || this.copyMode && !force) return;
     this.composerLeft = 0;
@@ -1971,20 +2066,7 @@ export class TerminalChat {
     const pinned = this.pinned && !['settings', 'metrics'].includes(this.panel) ? wrap(this.pinned, width - 5, maximumPinned + 1) : [];
     const sessionLabel = this.ui.sessionId ? `Session: ${this.ui.sessionId} · ${this.ui.sessionMode}` : 'Setup · no work started';
     const simpleChat = this.simpleChatLayout();
-    const header = this.ui.minimal ? [connectionStatusLabel(this.ui.connectionStatus, this.theme)]
-      : [this.simpleTopBar(width)];
-    if (!this.ui.minimal && this.topBarOverflow) {
-      let line = '', column = 0;
-      for (const token of this.topBarOverflow) {
-        const size = cellWidth(token.text);
-        if (column && column + 1 + size > width) { header.push(line); line = ''; column = 0; }
-        if (column) { line += ' '; column++; }
-        this.hitTargets.push({ type: token.type, row: header.length + 1, left: column + 1, right: column + size });
-        line += color(token.text, token.tone, true); column += size;
-      }
-      if (line) header.push(line);
-    }
-    header.push(...this.spendingHeader(width, header.length + 1));
+    const header = this.navigationHeader(width);
     if (this.ui.minimal) header.push(...this.delegateHeader(width));
     if (!this.ui.minimal && !this.topBarHasMetrics && width >= 60) {
       header.push(color(clip('  ' + hostMetricsCompact(this.ui.hostMetrics), width), palette.muted));
@@ -2026,6 +2108,7 @@ export class TerminalChat {
       header.push(color(clip('  ' + status, width), palette.accent));
     }
     this.sceneHeaderLength = header.length;
+    if (this.panel === 'extension' && !this.promptDraft) { this.renderExtensionScene(width, height, header); return; }
     let bottom = [], bottomHits = [], inputIndex = 0, composerTextLeft = 3, composerOffset = 0;
     let composerBackgroundTop = 0, composerBackgroundBottom = 0;
     if (simpleChat) {

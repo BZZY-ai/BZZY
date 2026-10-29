@@ -1,3 +1,4 @@
+import { extensionsCLI } from '@bzzy/core/engine/extensions-cli.js';
 import { saveSessionDefaultSelection, savedDefaultMessage } from './session-defaults.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,6 +62,7 @@ Usage:
   bzzy skills aliases set NAME EMAILS Set this host's explicit signup alias list
   bzzy skills aliases show NAME       Read this host's approved signup aliases
   bzzy skills aliases clear NAME      Clear this host's signup alias list
+  bzzy extensions list                Manage native extensions (see --help-extensions)
   bzzy subagents list                  List reusable specialist subagents
   bzzy subagents create FILE.json      Save a specialist definition for this project
   bzzy workflows list                 List reusable project/global goal instructions
@@ -150,6 +152,7 @@ Options:
   --agents A,B[,C]      Parallel or besties agents; optionally provider:model
   --default             Reuse this mode’s saved preset without questions or selectors
   --whoami              Print the detailed architecture, storage and integration reference
+  --help-extensions     Print the complete native extension framework reference
   --help-skills         Print the complete native skill creation and sharing guide
   --help-agents         Print the complete specialist agent creation and sharing guide
   --help-workflows      Print the complete workflow creation and sharing guide
@@ -238,6 +241,10 @@ export function parseArgs(argv) {
     if (raw === '--') { args.push(...argv.slice(i + 1)); break; }
     const equal = raw.indexOf('=');
     const flag = equal > 0 ? raw.slice(0, equal) : raw;
+    if (args[0] === 'extensions' && flag === '--revision') {
+      const value = equal > 0 ? raw.slice(equal + 1) : argv[++i];
+      if (value === undefined) throw new Error('--revision requires a value.'); args.push(flag, value); continue;
+    }
     if (args[0] === 'workflows' && ['--global', '--revision', '--workflow-revision', '--session', '--name', '--description'].includes(flag)) {
       if (flag === '--global') {
         if (equal > 0) throw new Error('--global does not take a value.');
@@ -574,7 +581,7 @@ export async function main(argv) {
   options.cwd = fs.realpathSync(options.cwd);
   if (!['debug', 'full_debug_export'].includes(args[0])) await retireTelegram();
   const launchCommand = args[0];
-  const staticCommands = new Set(['integration', 'export', 'debug', 'full_debug_export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'cost', 'subagents', 'workflows', 'library']);
+  const staticCommands = new Set(['integration', 'export', 'debug', 'full_debug_export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'cost', 'subagents', 'workflows', 'library', 'extensions']);
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
@@ -598,6 +605,7 @@ export async function main(argv) {
     if (command === 'knowledge') return knowledgeCLI(rest, options, ui);
     if (command === 'session-memory') return sessionMemoryCLI(rest, options, ui);
     if (command === 'cost') return sessionCostCLI(rest, options, ui);
+    if (command === 'extensions') return extensionsCLI(rest, options, ui);
     if (command === 'subagents') return subagentsCLI(rest, options, ui);
     if (command === 'workflows') return workflowsCLI(rest, options, ui);
     if (command === 'library') { await libraryCommand(rest.join(' '), options.cwd, ui); return 0; }

@@ -20,6 +20,17 @@ Imported Agent history is data, receives fresh identities and stays inactive.
 CLI terminals retain their existing native execution permissions and are not
 covered by this narrower Agent tool policy. See BZZY-CORE/docs/AGENT-EXECUTION.md.
 
+Native extension packages are validated declarative JSON, without executable
+callbacks. Core brokers only fixed declared public HTTPS GET endpoints, pins
+validated DNS, refuses redirects and keeps credentials in a private excluded
+store. Bindings are local to an owner terminal session, installed definition hash
+and installation identity. Ordinary owner-chat tools read public form/table state
+and invoke only explicitly AI-enabled actions; they cannot bind/read secrets or
+manage packages. Persistent Agents and workers inherit no extension accounts.
+Relay/local exports contain definitions only, and project imports cannot carry
+extension runtime authority. Extension text/tables remain untrusted input and
+cannot establish tool permissions or verified goal completion.
+
 Reusable specialist subagents are a separate Core-owned terminal worker feature.
 Owner-managed project/global definitions carry behavior and optional selection or
 narrower limits, never account bindings or permission grants. Invocations pin

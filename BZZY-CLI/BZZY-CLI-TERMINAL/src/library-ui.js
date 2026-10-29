@@ -7,15 +7,16 @@ import { wrap } from './terminal-format.js';
 const codePattern = /^BZZY-LIBRARY-[A-Za-z0-9_-]{43}$/;
 const automaticCodePattern = /^BZZY-LIBRARY-2(?:\.[A-Za-z0-9_-]{43}){4}$/;
 const fingerprint = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
-const names = { skill: 'Skill', agent: 'Specialist agent', workflow: 'Workflow', goal: 'Goal' };
-const shareTypes = { skill: 'Skills', agent: 'Agents', workflow: 'Workflows', goal: 'Goals' };
-const typeAliases = { skill: 'skill', skills: 'skill', agent: 'agent', agents: 'agent', workflow: 'workflow', workflows: 'workflow', goal: 'goal', goals: 'goal' };
+const defaultShareKinds = ['skill', 'agent', 'workflow', 'goal'];
+const names = { skill: 'Skill', agent: 'Specialist agent', workflow: 'Workflow', goal: 'Goal', extension: 'Extension' };
+const shareTypes = { skill: 'Skills', agent: 'Agents', workflow: 'Workflows', goal: 'Goals', extension: 'Extensions' };
+const typeAliases = { skill: 'skill', skills: 'skill', agent: 'agent', agents: 'agent', workflow: 'workflow', workflows: 'workflow', goal: 'goal', goals: 'goal', extension: 'extension', extensions: 'extension' };
 function shareKinds(values) {
   if (!Array.isArray(values) || !values.length || values.some(value => !Object.hasOwn(shareTypes, value))) throw new Error('Choose at least one of skills, agents, workflows or goals.');
   return [...new Set(values)].sort();
 }
 const count = value => Array.isArray(value) ? value.length : Number.isSafeInteger(value) && value >= 0 ? value : 0;
-const summary = totals => ['skills', 'agents', 'workflows', 'goals'].map(kind => `${count(totals?.[kind])} ${kind}`).join(' · ');
+const summary = totals => ['skills', 'agents', 'workflows', 'goals', ...(totals?.extensions ? ['extensions'] : [])].map(kind => `${count(totals?.[kind])} ${kind}`).join(' · ');
 const safeImportErrors = {
   LEGACY_LIBRARY_CODE: 'This is an older code. Update the sender and create a new export code.',
   WRONG_LIBRARY_KIND: 'This code contains no entries for the selected tab.',
@@ -131,7 +132,7 @@ export function libraryTransferErrorMessage(error) {
 async function transferLibrarySelection(operation, kind, cwd, ui, { loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), ...options } = {}) {
   if (operation === 'import') return importLibrary('', cwd, ui, { ...options, loadBundle, selectionKind: kind, currentCodesOnly: true });
   if (operation !== 'export') throw new Error('Choose Import or Export.');
-  const kinds = kind ? [kind] : Object.keys(shareTypes).sort();
+  const kinds = kind ? [kind] : [...defaultShareKinds].sort();
   terminal(ui); const before = context(ui, cwd), backend = await checked(ui, before, loadBundle);
   if (typeof backend.listLibraryExportChoices !== 'function' || typeof backend.previewSelectedLibraryExport !== 'function') throw new Error('Update BZZY Core and CLI together to select Library entries.');
   const catalog = await checked(ui, before, () => backend.listLibraryExportChoices({ cwd: before.root, kinds }));
@@ -197,7 +198,7 @@ async function omitBlockedEntries(ui, before, error, selectedEntries) {
     const blocked = error.blockedEntries, seen = new Set();
     for (const entry of blocked) {
       const key = entryKey(entry), selected = selectedEntries?.find(item => entryKey(item) === key);
-      if (!['skill', 'agent', 'workflow'].includes(entry.kind) || seen.has(key)
+      if (!['skill', 'agent', 'workflow', 'extension'].includes(entry.kind) || seen.has(key)
         || selectedEntries && (!selected || !samePin(entry, selected))) throw changedSelection();
       seen.add(key);
     }
@@ -266,7 +267,7 @@ export async function reviewLibrary(ui, before, backend, review, { importing = f
     const existing = new Set(conflicts.map(entry => JSON.stringify([entry.kind, entry.scope || 'global', entry.name])));
     const missing = review.entries.length - conflicts.length;
     const choice = await checked(ui, before, () => ui.chooseOne(importing ? 'Install missing Library entries' : 'Share BZZY Library', {
-      description: `${summary(review.totals)}\n${importing ? `${missing} missing entries · ${conflicts.length} entries already exist and will be skipped. Existing names and availability stay unchanged.` : `Selected types: ${(review.kinds || Object.keys(shareTypes)).map(kind => shareTypes[kind]).join(', ')}.${review.excludedEntries?.length ? ` ${review.excludedEntries.length} blocked entries explicitly omitted.` : ''}${review.excludedGoals?.length ? ` ${review.excludedGoals.length} blocked goals explicitly omitted.` : ''} Review the exact files below.`}\nProject definitions use this terminal’s directory. No credentials, chat history, permissions or verified outcomes are included.`,
+      description: `${summary(review.totals)}\n${importing ? `${missing} missing entries · ${conflicts.length} entries already exist and will be skipped. Existing names and availability stay unchanged.` : `Selected types: ${(review.kinds || [...defaultShareKinds]).map(kind => shareTypes[kind]).join(', ')}.${review.excludedEntries?.length ? ` ${review.excludedEntries.length} blocked entries explicitly omitted.` : ''}${review.excludedGoals?.length ? ` ${review.excludedGoals.length} blocked goals explicitly omitted.` : ''} Review the exact files below.`}\nProject definitions use this terminal’s directory. No credentials, chat history, permissions or verified outcomes are included.`,
       descriptionRows: 7,
       choices: [{ value: 'back', label: '← Back without changes', selected: true },
         ...(importing ? [{ value: 'enable', label: 'Install missing & enable reviewed skills/agents', description: 'No scripts, agents or models start. Workflows stay unselected; goals remain saved text.' },
@@ -288,7 +289,7 @@ export async function reviewLibrary(ui, before, backend, review, { importing = f
 export async function shareLibrary(cwd, ui, { loadBundle = () => import('@bzzy/core/engine/definition-bundle.js'), kinds, ...options } = {}) {
   terminal(ui); const before = context(ui, cwd);
   if (kinds === undefined) {
-    kinds = await checked(ui, before, () => ui.chooseMany('What do you want to share?', Object.entries(shareTypes).map(([value, label]) => ({ value, label, selected: true })),
+    kinds = await checked(ui, before, () => ui.chooseMany('What do you want to share?', defaultShareKinds.map(value => [value, shareTypes[value]]).map(([value, label]) => ({ value, label, selected: true })),
       { scope: 'library-types', hint: 'Space toggles · ↑/↓ moves · Enter reviews · Esc goes back', description: 'Only the selected Library types enter the review and expiring Relay code.' }));
     if (!kinds?.length) return null;
   }
@@ -373,7 +374,7 @@ export async function importLibrary(value, cwd, ui, { relayLoader = () => import
     check(ui, before);
     let message;
     if (automatic) {
-      const installed = result.alreadyImported ? [] : ['skill', 'agent', 'workflow', 'goal'].flatMap(kind => (result[kind + 's'] || []).map(entry => ({ kind, name: kind === 'goal' ? goalLabels.get(entry.version) || entry.name || entry.id : entry.name || entry.id })));
+      const installed = result.alreadyImported ? [] : ['skill', 'agent', 'workflow', 'goal', 'extension'].flatMap(kind => (result[kind + 's'] || []).map(entry => ({ kind, name: kind === 'goal' ? goalLabels.get(entry.version) || entry.name || entry.id : entry.name || entry.id })));
       message = installed.length ? 'Installed:\n' + [...new Set(installed.map(entry => `${names[entry.kind]} · ${entry.name}`))].join('\n') : 'Already installed. Nothing new was added.';
     } else message = `${result.alreadyImported ? 'Library already installed' : 'Library installed'}: ${summary(result)}.${result.skipped?.length ? ` Skipped ${result.skipped.length} existing entries.` : ''} No execution started.`;
     ui.event('info', { message }); onComplete?.(result, message);

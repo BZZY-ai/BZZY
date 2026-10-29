@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 
 const flags = Object.freeze({
+  '--help-extensions': 'extensions',
   '--help-skills': 'skills', '--help-agents': 'agents',
   '--help-workflows': 'workflows', '--help-goals': 'goals',
 });
 
 // This reference path deliberately imports no account, storage or runtime code.
 export function authoringGuide(kind) {
-  if (!Object.values(flags).includes(kind)) throw new TypeError('Choose skills, agents, workflows or goals.');
+  if (!Object.values(flags).includes(kind)) throw new TypeError('Choose skills, agents, workflows, goals or extensions.');
   const guide = fs.readFileSync(new URL(`../../assets/authoring/${kind}.md`, import.meta.url), 'utf8').trim();
   const security = fs.readFileSync(new URL('../../assets/generation-security.txt', import.meta.url), 'utf8').trim();
   return `# BZZY ${kind} authoring guide
@@ -42,7 +43,7 @@ export function authoringHelp(argv) {
   const requested = options.filter(value => Object.hasOwn(flags, value));
   if (!requested.length) return null;
   if (requested.length !== 1 || argv.some(value => value !== requested[0] && value !== '--json')) {
-    throw Object.assign(new Error('Run one of --help-skills, --help-agents, --help-workflows or --help-goals by itself. These references remain Markdown with --json.'),
+    throw Object.assign(new Error('Run one of --help-skills, --help-agents, --help-workflows, --help-goals or --help-extensions by itself. These references remain Markdown with --json.'),
       { code: 'AUTHORING_HELP_USAGE' });
   }
   return authoringGuide(flags[requested[0]]);

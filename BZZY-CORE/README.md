@@ -11,13 +11,19 @@ the terminal source tree. Its existing host API and encrypted Relay gateway use
 the same engine and private state.
 
 Native authoring references are available through `bzzy-core --help-skills`,
-`--help-agents`, `--help-workflows` and `--help-goals`, and the same flags on
+`--help-agents`, `--help-workflows`, `--help-goals` and `--help-extensions`, and the same flags on
 `bzzy`. Each prints a complete AI-readable guide to this build's formats,
 examples, installation, validation and Library export/import. Core owns the
 references; printing one loads no runtime/account store, creates no state and
 starts no service, model or network request.
 
 Implemented:
+
+- [Native extensions](docs/EXTENSIONS.md): validated declarative controls and
+  session-scoped form/table state, private version/installation-bound credentials,
+  fixed public HTTPS JSON GET actions, ordinary owner-chat discovery/read/interaction
+  tools, local JSON management and selected Relay Library package transfer.
+  The complete installed authoring reference is `bzzy-core --help-extensions`.
 
 - [Read-only Core Chat](docs/SESSION-ASSESSMENT-CHAT.md) assesses a fresh bounded
   inventory of saved aliased terminal/goal/execution states from the fully
