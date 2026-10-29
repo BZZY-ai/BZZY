@@ -206,13 +206,14 @@ export function indexSessionMemory(value, { throughSeq, force = false, maxParts 
   });
 }
 
-export function pendingSessionMemoryNodes({ limit = 100, sessionId, offset = 0 } = {}) {
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) fail('Invalid memory work page.');
+export function pendingSessionMemoryNodes({ limit = 100, sessionId, offset = 0, withoutFallback = false } = {}) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000 || typeof withoutFallback !== 'boolean') fail('Invalid memory work page.');
   if (sessionId !== undefined) source(sessionId);
   const rows = database().prepare(`SELECT n.data FROM records n JOIN records m ON m.kind=? AND m.id=json_extract(n.data,'$.sessionId')
     WHERE n.kind=? AND json_extract(m.data,'$.sourceVersion')=? AND json_extract(n.data,'$.state')='pending' AND json_extract(n.data,'$.generation')=json_extract(m.data,'$.generation')
     AND (? IS NULL OR json_extract(n.data,'$.sessionId')=?)
-    ORDER BY n.updated_at,n.id LIMIT ? OFFSET ?`).all(META, NODE, VERSION, sessionId ?? null, sessionId ?? null, limit, offset).map(row => JSON.parse(row.data));
+    AND (?=0 OR json_extract(n.data,'$.fallback') IS NULL)
+    ORDER BY json_extract(n.data,'$.createdAt'),n.id LIMIT ? OFFSET ?`).all(META, NODE, VERSION, sessionId ?? null, sessionId ?? null, Number(withoutFallback), limit, offset).map(row => JSON.parse(row.data));
   return rows.filter(node => { try { return Boolean(source(node.sessionId)); } catch { return false; } });
 }
 
@@ -371,10 +372,15 @@ export function expandSessionMemory(value, { id, offset = 0, limit = 8000 } = {}
 
 export function sessionMemoryStatus(value) {
   const session = source(value), meta = metaFor(session.id);
-  const counts = meta && database().prepare(`SELECT count(*) AS total, sum(json_extract(data,'$.state')='ready') AS ready FROM records
+  const counts = meta && database().prepare(`SELECT count(*) AS total, sum(json_extract(data,'$.state')='ready') AS ready,
+    sum(json_extract(data,'$.state')='pending' AND json_extract(data,'$.fallback') IS NOT NULL) AS fallback,
+    sum(json_extract(data,'$.state')='ready' AND json_extract(data,'$.summarizer.provider')='host') AS host,
+    sum(json_extract(data,'$.state')='ready' AND json_extract(data,'$.summarizer.provider')<>'host') AS model FROM records
     WHERE kind=? AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.generation')=?`).get(NODE, session.id, meta.generation);
   return { sessionId: session.id, sourceVersion: VERSION, legacyRebuildPending: Boolean(!meta && getRecord(META, session.id)), generation: meta?.generation || null, revision: meta?.revision || 0, leaves: meta?.leafCount || 0,
     nodes: counts?.total || 0, ready: counts?.ready || 0, pendingNodes: (counts?.total || 0) - (counts?.ready || 0), pendingMessages: meta?.pendingMessages || 0,
+    fallbackNodes: counts?.fallback || 0, hostSummaries: counts?.host || 0, modelSummaries: counts?.model || 0,
+    uncoveredNodes: (counts?.total || 0) - (counts?.ready || 0) - (counts?.fallback || 0),
     source: conversationSourceStatus(session),
     indexedThroughSeq: meta?.cursorSeq || 0, throughSeq: meta?.throughSeq || 0, indexingRemaining: Boolean(meta && (meta.cursorSeq < meta.throughSeq || meta.cursorOffset > 0)) };
 }

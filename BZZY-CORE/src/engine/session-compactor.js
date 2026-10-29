@@ -76,6 +76,9 @@ function updateJob(job, changes, db = database()) {
 }
 function discoverJobs(sessionId) {
   const settings = sessionCompactionSettings();
+  // Local indexing/extracts do not need placeholder paid jobs while inference
+  // is disabled. Existing jobs retain their original pause intent.
+  if (!settings.enabled || stopped()) return;
   // The tree owns dependency readiness and immutable generation/source hashes.
   let controls;
   if (sessionId) controls = [controlFor(sessionId)];
@@ -127,15 +130,18 @@ function pause(id, reason, cancelled = false) {
     const prior = controlFor(id);
     // Daemon interruption must not replace an earlier owner/source stop or
     // uncertainty reason. Only explicit resume can clear those durable states.
-    const preserveStop = reason === 'host_shutdown' && ['paused', 'cancelled'].includes(prior.state);
+    const preserveStop = ['host_shutdown', 'owner_disabled'].includes(reason) && ['paused', 'cancelled'].includes(prior.state);
     const nextState = preserveStop ? prior.state : cancelled ? 'cancelled' : 'paused';
     const nextReason = preserveStop ? prior.reasonPaused : reason;
     const control = { ...prior, state: nextState, reasonPaused: nextReason,
       revision: prior.revision + 1, updatedAt: now() };
     const unchanged = prior.state === control.state && prior.reasonPaused === nextReason;
     if (!unchanged) putRecord(CONTROL, id, control, db);
-    for (const job of listRecords(JOB, { sessionId: id, states: jobStates })) updateJob(job, {
-      state: nextState, reasonPaused: nextReason, lease: null }, db);
+    for (const job of listRecords(JOB, { sessionId: id, states: jobStates })) {
+      const retryOutcome = snapshotLegacyRetry(job, db);
+      updateJob(job, { state: nextState, reasonPaused: nextReason, lease: null,
+        ...(retryOutcome ? { retryOutcome } : {}) }, db);
+    }
     return unchanged ? prior : control;
   });
   for (const item of active.values()) if (item.sessionId === id) item.controller.abort(fail('COMPACTOR_PAUSED', 'Background compaction was paused.'));
@@ -164,7 +170,9 @@ export function controlSessionCompaction(value, action, { expectedRevision } = {
     putRecord(CONTROL, saved.id, next, db);
     for (const job of listRecords(JOB, { sessionId: saved.id }).filter(job => ['paused', 'cancelled', 'budget_limited', 'failed', 'waiting_for_configuration', 'waiting_for_auth', 'retry_wait'].includes(job.state))) {
       if (job.attempts >= 3 && !getRecord(OUTPUT, job.id)) continue;
-      updateJob(job, { state: 'queued', reasonPaused: null, error: null, nextAttemptAt: null, lease: null, runner: null,
+      const retry = knownRetry(job);
+      updateJob(job, { state: retry ? 'retry_wait' : 'queued', reasonPaused: retry && job.error === 'COMPACTOR_DAILY_BUDGET' ? 'daily_budget' : null,
+        error: retry ? job.error : null, nextAttemptAt: retry ? job.nextAttemptAt || retry.nextAttemptAt : null, lease: null, runner: null,
         budget: { tokenBudget: Math.max(job.budget.tokenBudget, settings.tokenBudget), runtimeSeconds: Math.max(job.budget.runtimeSeconds, settings.runtimeSeconds) } }, db);
     }
     return next;
@@ -254,6 +262,37 @@ function outputFor(job, material) {
 function publicationCacheValid(job) {
   try { return Boolean(outputFor(job, sessionMemoryMaterial(job.sessionId, job.nodeId))); }
   catch { return false; }
+}
+function snapshotLegacyRetry(job, db) {
+  // Older versions durably classified rejected output but did not retain that
+  // classification when pausing. Only the still-visible terminal retry state
+  // can supply this compatibility receipt; a paused/running job cannot.
+  if (job.retryOutcome || job.state !== 'retry_wait' || job.error !== 'COMPACTOR_OUTPUT' || job.dispatched !== true
+      || job.usageSettled !== true || !Number.isSafeInteger(job.attempts) || job.attempts < 1 || job.attempts >= 3
+      || !Number.isFinite(Date.parse(job.nextAttemptAt))) return null;
+  const reservation = job.reservationId && getRecord(RESERVATION, job.reservationId);
+  if (!reservation || reservation.jobId !== job.id || reservation.state !== 'settled' || reservation.conservative !== false
+      || !Number.isSafeInteger(reservation.tokensUsed) || reservation.tokensUsed < 0) return null;
+  let material;
+  try { material = sessionMemoryMaterial(job.sessionId, job.nodeId); } catch { return null; }
+  if (material.generation !== job.generation) return null;
+  const outcome = { state: 'retry_wait', error: 'COMPACTOR_OUTPUT', attempt: job.attempts,
+    reservationId: job.reservationId, generation: material.generation, sourceHash: material.sourceHash, nextAttemptAt: job.nextAttemptAt };
+  if (reservation.terminalOutcome && digest(reservation.terminalOutcome) !== digest(outcome)) return null;
+  putRecord(RESERVATION, reservation.id, { ...reservation, terminalOutcome: outcome }, db);
+  return outcome;
+}
+function knownRetry(job) {
+  const outcome = job.retryOutcome, reservation = job.reservationId && getRecord(RESERVATION, job.reservationId);
+  if (!outcome || outcome.state !== 'retry_wait' || outcome.error !== 'COMPACTOR_OUTPUT' || outcome.attempt !== job.attempts
+      || outcome.reservationId !== job.reservationId || outcome.generation !== job.generation
+      || !Number.isFinite(Date.parse(outcome.nextAttemptAt)) || reservation?.jobId !== job.id || reservation.state !== 'settled' || reservation.conservative !== false
+      || !Number.isSafeInteger(reservation.tokensUsed) || reservation.tokensUsed < 0
+      || !reservation.terminalOutcome || digest(outcome) !== digest(reservation.terminalOutcome)) return null;
+  try {
+    const material = sessionMemoryMaterial(job.sessionId, job.nodeId);
+    return material.generation === outcome.generation && material.sourceHash === outcome.sourceHash ? outcome : null;
+  } catch { return null; }
 }
 function validSummary(text) {
   if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text.trim()) > 2048 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text) || sanitizeLearningText(text).trim() !== text.trim()) throw fail('COMPACTOR_OUTPUT', 'The compactor returned an invalid summary.');
@@ -352,7 +391,8 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
     }
     putRecord(RESERVATION, reservationId, { id: reservationId, jobId: prior.id, day: usage.day, tokens: available, state: 'reserved', createdAt: now() }, db);
     putRecord(USAGE, usage.day, { day: usage.day, tokensUsed: usage.tokensUsed, reservedTokens: usage.reservedTokens + available }, db);
-    return updateJob(prior, { state: 'running', scheduleReason: null, runner: processIdentity(), lease: randomUUID(), startedAt: now(), dispatched: false,
+    return updateJob(prior, { state: 'running', scheduleReason: null, error: null, retryOutcome: null,
+      runner: processIdentity(), lease: randomUUID(), startedAt: now(), dispatched: false,
       reservationId, usageSettled: false, attemptBudget: { tokenBudget: available, runtimeSeconds: remainingMs / 1000 } }, db);
   });
   if (!job || job.state !== 'running') return job;
@@ -399,9 +439,22 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
     const uncertain = dispatched && measured === undefined, budgetLimited = !uncertain && ['COMPACTOR_BUDGET', 'DOCUMENT_BUDGET'].includes(error.code);
     const retriable = !uncertain && error.code === 'COMPACTOR_OUTPUT' && current.attempts < 3;
     const reason = uncertain ? 'uncertain_request' : budgetLimited ? 'job_budget' : error.code === 'COMPACTOR_OUTPUT' ? null : error.code === 'COMPACTOR_SCOPE' || error.code?.startsWith('SESSION_') ? 'source_changed' : 'source_paused';
-    const next = updateJob(current, { state: retriable ? 'retry_wait' : budgetLimited ? 'budget_limited' : uncertain || reason ? 'paused' : 'failed', reasonPaused: reason,
-      error: uncertain ? 'COMPACTOR_UNCERTAIN' : error.code === 'COMPACTOR_OUTPUT' ? 'COMPACTOR_OUTPUT' : budgetLimited ? 'COMPACTOR_BUDGET' : 'COMPACTOR_PAUSED',
-      nextAttemptAt: retriable ? new Date(Date.now() + 1000 * 2 ** current.attempts).toISOString() : null, runner: null, lease: null });
+    const nextAttemptAt = retriable ? new Date(Date.now() + 1000 * 2 ** current.attempts).toISOString() : null;
+    const next = atomic(db => {
+      // A terminal, usage-settled rejection is different from an in-flight
+      // request. Pin the retry disposition to this exact attempt before a
+      // shutdown can replace its scheduler state with a pause.
+      const retryOutcome = retriable ? { state: 'retry_wait', error: 'COMPACTOR_OUTPUT', attempt: current.attempts,
+        reservationId: current.reservationId, generation: material.generation, sourceHash: material.sourceHash, nextAttemptAt } : null;
+      if (retryOutcome) {
+        const reservation = getRecord(RESERVATION, current.reservationId);
+        if (!reservation || reservation.state !== 'settled' || reservation.conservative) throw fail('COMPACTOR_UNCERTAIN', 'Retry outcome has no known settled request.');
+        putRecord(RESERVATION, reservation.id, { ...reservation, terminalOutcome: retryOutcome }, db);
+      }
+      return updateJob(current, { state: retriable ? 'retry_wait' : budgetLimited ? 'budget_limited' : uncertain || reason ? 'paused' : 'failed', reasonPaused: reason,
+        error: uncertain ? 'COMPACTOR_UNCERTAIN' : error.code === 'COMPACTOR_OUTPUT' ? 'COMPACTOR_OUTPUT' : budgetLimited ? 'COMPACTOR_BUDGET' : 'COMPACTOR_PAUSED',
+        retryOutcome, nextAttemptAt, runner: null, lease: null }, db);
+    });
     if (uncertain) pauseSessionCompaction(job.sessionId, 'uncertain_request');
     return publicJob(getRecord(JOB, id) || next);
   } finally {
@@ -421,7 +474,7 @@ function maintenanceControls(cursorId, condition = '1', limit = 20) {
     AND id ${operator} ? ORDER BY id LIMIT ?`).all(CONTROL, cursor, count).map(row => JSON.parse(row.data));
   const controls = page('>', limit);
   if (controls.length < limit) controls.push(...page('<=', limit - controls.length));
-  if (controls.length) putRecord(DISCOVERY, cursorId, { after: controls.at(-1).sessionId });
+  if (controls.length && controls.at(-1).sessionId !== cursor) putRecord(DISCOVERY, cursorId, { after: controls.at(-1).sessionId });
   return controls;
 }
 
@@ -435,12 +488,16 @@ export async function processSessionCompactions({ runModel = runRestrictedDocume
     }
   }
   if (stopped()) { pauseAllSessionCompactions('host_stopped'); return []; }
-  if (!sessionCompactionSettings().enabled || active.size || !canRun()) return [];
+  if (!canRun()) return [];
+  // A paid-inference setting is not a stop on local source derivation. Explicit
+  // session/owner/operator pauses still exclude both indexing and extraction.
+  const localControls = `(json_extract(data,'$.state')='enabled' OR
+    (json_extract(data,'$.state')='paused' AND json_extract(data,'$.reasonPaused')='owner_disabled'))`;
   // Backfill only previously queued source sessions, in bounded source pages.
   for (const control of maintenanceControls('backfill-controls', `json_extract(data,'$.queued')=1
-    AND json_extract(data,'$.indexingRemaining')=1 AND json_extract(data,'$.state')='enabled'`)) {
+    AND json_extract(data,'$.indexingRemaining')=1 AND ${localControls}`)) {
     const saved = loadSession(control.sessionId);
-    if (!saved || !sessionMemoryEligible(saved)) continue;
+    if (!saved || sessionDeleted(saved.id) || !sessionMemoryEligible(saved) || ['paused', 'cancelled'].includes(saved.executionState)) continue;
     try {
       const indexed = indexSessionMemory(saved, { ...(control.throughSeq !== undefined ? { throughSeq: control.throughSeq } : {}), force: control.force || false });
       const current = controlFor(saved.id);
@@ -449,6 +506,18 @@ export async function processSessionCompactions({ runModel = runRestrictedDocume
     }
     catch { pauseSessionCompaction(control.sessionId, 'source_changed'); }
   }
+  let extracted = 0;
+  for (const control of maintenanceControls('fallback-controls', `json_extract(data,'$.queued')=1 AND ${localControls}`)) {
+    const saved = loadSession(control.sessionId);
+    if (!saved || sessionDeleted(saved.id) || !sessionMemoryEligible(saved) || ['paused', 'cancelled'].includes(saved.executionState)) continue;
+    try {
+      for (const node of pendingSessionMemoryNodes({ sessionId: saved.id, limit: 1, withoutFallback: true })) {
+        publishSessionMemoryFallback(saved, node.id); extracted++;
+      }
+    } catch { pauseSessionCompaction(saved.id, 'source_changed'); }
+    if (extracted >= 4) break;
+  }
+  if (!sessionCompactionSettings().enabled || active.size) return [];
   discoverJobs();
   const cursor = getRecord(DISCOVERY, 'scheduler-jobs')?.after || '';
   const candidatePage = (operator, count) => database().prepare(`SELECT j.data FROM records j
@@ -503,14 +572,18 @@ export function recoverSessionCompactions() {
       || current.state === 'paused' && current.reasonPaused !== 'host_shutdown';
     const cached = getRecord(OUTPUT, job.id), hostOnly = publicationOnly(job) || Boolean(cached);
     const neverDispatched = job.dispatched === false || job.dispatched === undefined && !(job.attempts > 0) && !job.reservationId && job.state !== 'running';
-    const safe = hostOnly ? publicationCacheValid(job) : neverDispatched;
+    const retry = knownRetry(job);
+    const safe = hostOnly ? publicationCacheValid(job) : neverDispatched || Boolean(retry);
     const allowed = saved && !sessionDeleted(saved.id) && !['paused', 'cancelled'].includes(saved.executionState)
       && !stopped() && sessionCompactionSettings().enabled;
     if (current.state === 'cancelled' || ownerStopped) updateJob(current, { runner: null, lease: null });
     else if (safe && allowed && !documentBackends(job).length) {
       updateControl(job.sessionId, { state: 'enabled', reasonPaused: null });
-      updateJob(current, { state: 'queued', reasonPaused: null, error: null, scheduleReason: null, runner: null, lease: null,
-        recovery: { mode: hostOnly ? 'cached-publication' : 'never-dispatched',
+      updateJob(current, { state: retry && !hostOnly ? 'retry_wait' : 'queued',
+        reasonPaused: retry && !hostOnly && job.error === 'COMPACTOR_DAILY_BUDGET' ? 'daily_budget' : null,
+        error: retry && !hostOnly ? job.error : null, scheduleReason: null, runner: null, lease: null,
+        ...(retry && !hostOnly ? { nextAttemptAt: job.nextAttemptAt || retry.nextAttemptAt } : {}),
+        recovery: { mode: hostOnly ? 'cached-publication' : retry ? 'known-retry' : 'never-dispatched',
           ...(hostOnly ? { publicationOnly: true, outputHash: job.recovery?.outputHash || digest(cached) } : {}), recoveredAt: now() } });
     } else {
       updateJob(current, { state: 'paused', reasonPaused: 'recovery_required', error: job.dispatched ? 'COMPACTOR_UNCERTAIN' : null, runner: null, lease: null,
@@ -522,7 +595,9 @@ export function recoverSessionCompactions() {
   for (const control of listRecords(CONTROL, { state: 'paused' })) {
     const saved = loadSession(control.sessionId);
     if (control.reasonPaused === 'host_shutdown' && saved && !sessionDeleted(saved.id)
-        && !['paused', 'cancelled'].includes(saved.executionState) && !stopped() && sessionCompactionSettings().enabled) {
+        && !['paused', 'cancelled'].includes(saved.executionState) && !stopped()) {
+      // Restore local maintenance even with inference disabled. The paid
+      // settings gate and each job's independent recovery state still apply.
       updateControl(control.sessionId, { state: 'enabled', reasonPaused: null });
     }
   }

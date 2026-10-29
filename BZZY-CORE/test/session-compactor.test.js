@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { CoreAssistant } from '../src/assistant.js';
 import { CoreKnowledge } from '../src/knowledge.js';
-import { appendEvent, getRecord, putRecord, listRecords, events, removeRecord, digest } from '../src/engine/database.js';
+import { appendEvent, getRecord, putRecord, listRecords, events, removeRecord, digest, database } from '../src/engine/database.js';
 import { createSession, loadSession, saveSession, setSessionAlias } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
 import { deleteTerminalConversation } from '../src/engine/session-deletion.js';
@@ -247,6 +247,122 @@ test('invalid model summaries retry with backoff at most three times', async () 
     else assert.equal(result.state, 'failed');
   }
   await processSessionCompactions({ runModel }); assert.equal(calls, 3); assert.equal(sessionCompactionUsage().tokensUsed, 150);
+});
+
+test('known rejected summaries retain their settled retry and backoff across repeated shutdowns', async () => {
+  queue(); let calls = 0;
+  const [rejected] = await processSessionCompactions({ runModel: async () => { calls++; return { text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }; } });
+  const nextAttemptAt = rejected.nextAttemptAt, reservationId = rejected.reservationId;
+  assert.equal(rejected.state, 'retry_wait'); assert.ok(Date.parse(nextAttemptAt) > Date.now());
+  assert.equal(getRecord('core.session.compactor.reservation', reservationId).terminalOutcome.error, 'COMPACTOR_OUTPUT');
+  for (let cycle = 0; cycle < 3; cycle++) {
+    pauseAllSessionCompactions('host_shutdown'); recoverSessionCompactions();
+    const current = job(); assert.equal(current.state, 'retry_wait'); assert.equal(current.recovery.mode, 'known-retry');
+    assert.equal(current.error, 'COMPACTOR_OUTPUT'); assert.equal(current.nextAttemptAt, nextAttemptAt);
+    assert.equal(current.reservationId, reservationId);
+    await processSessionCompactions({ runModel: () => assert.fail('A restart cannot discard the recorded retry backoff.') });
+  }
+  assert.equal(calls, 1); assert.equal(listRecords('core.session.compactor.reservation').length, 1);
+  assert.equal(sessionCompactionUsage().tokensUsed, 50); assert.equal(sessionCompactionUsage().reservedTokens, 0);
+  putRecord(JOB, rejected.id, { ...job(), nextAttemptAt: '2000-01-01T00:00:00.000Z' });
+  const [completed] = await processSessionCompactions({ runModel: async () => { calls++; return summary(); } });
+  assert.equal(completed.state, 'completed'); assert.equal(calls, 2); assert.equal(sessionCompactionUsage().tokensUsed, 150);
+});
+
+test('an earlier known rejection cannot authorize replay of the next uncertain attempt', async () => {
+  queue(); let calls = 0;
+  await processSessionCompactions({ runModel: async () => { calls++; return { text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }; } });
+  const first = job(); putRecord(JOB, first.id, { ...first, nextAttemptAt: '2000-01-01T00:00:00.000Z' });
+  await processSessionCompactions({ runModel: async () => {
+    calls++; assert.equal(job().retryOutcome, null);
+    pauseAllSessionCompactions('host_shutdown'); throw new Error('Synthetic lost response.');
+  } });
+  putRecord(JOB, first.id, { ...job(), runner: null }); // The old host process ended.
+  recoverSessionCompactions();
+  assert.equal(job().state, 'paused'); assert.equal(job().error, 'COMPACTOR_UNCERTAIN');
+  assert.equal(getRecord('core.session.compactor.reservation', job().reservationId).conservative, true);
+  await processSessionCompactions({ runModel: () => assert.fail('The known prior attempt is not a receipt for this uncertain request.') });
+  assert.equal(calls, 2);
+});
+
+for (const priorState of ['retry_wait', 'paused', 'running']) test(`legacy ${priorState} output records only receive a retry receipt while their terminal state is still visible`, async () => {
+  queue(); await processSessionCompactions({ runModel: async () => ({ text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }) });
+  const completedAttempt = job(), reservation = getRecord('core.session.compactor.reservation', completedAttempt.reservationId);
+  const { terminalOutcome: _outcome, ...legacyReservation } = reservation;
+  putRecord('core.session.compactor.reservation', reservation.id, legacyReservation);
+  const { retryOutcome: _retry, ...legacyJob } = completedAttempt;
+  putRecord(JOB, completedAttempt.id, { ...legacyJob, state: priorState, runner: null,
+    ...(priorState === 'paused' ? { reasonPaused: 'host_shutdown' } : {}) });
+  pauseAllSessionCompactions('host_shutdown'); recoverSessionCompactions();
+  if (priorState === 'retry_wait') {
+    assert.equal(job().state, 'retry_wait'); assert.equal(job().recovery.mode, 'known-retry');
+    assert.equal(job().nextAttemptAt, completedAttempt.nextAttemptAt);
+    assert.deepEqual(job().retryOutcome, getRecord('core.session.compactor.reservation', reservation.id).terminalOutcome);
+  } else {
+    assert.equal(job().state, 'paused'); assert.equal(job().error, 'COMPACTOR_UNCERTAIN');
+    assert.equal(getRecord('core.session.compactor.reservation', reservation.id).terminalOutcome, undefined);
+  }
+  await processSessionCompactions({ runModel: () => assert.fail('No immediate model replay during compatibility recovery.') });
+  assert.equal(listRecords('core.session.compactor.reservation').length, 1); assert.equal(sessionCompactionUsage().tokensUsed, 50);
+});
+
+test('a known retry still honors owner pause and preserves backoff after explicit resume', async () => {
+  queue(); await processSessionCompactions({ runModel: async () => ({ text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }) });
+  const nextAttemptAt = job().nextAttemptAt;
+  pauseSessionCompaction(session.id, 'owner_pause'); pauseAllSessionCompactions('host_shutdown'); recoverSessionCompactions();
+  assert.equal(job().reasonPaused, 'owner_pause'); assert.equal(sessionCompactionStatus(session).control.reasonPaused, 'owner_pause');
+  resume(); assert.equal(job().state, 'retry_wait'); assert.equal(job().nextAttemptAt, nextAttemptAt);
+  await processSessionCompactions({ runModel: () => assert.fail('Explicit resume retains a known retry backoff.') });
+});
+
+test('disabled paid compaction still derives bounded extracts without creating paid jobs or reservations', async () => {
+  configureSessionCompaction({ enabled: false }, { expectedRevision: 0 });
+  queue(session, { count: 16 }); const originalGoal = loadSession(session.id).goal;
+  assert.equal(listRecords(JOB).length, 0);
+  session.executionState = 'running'; saveSession(session);
+  const originalEvents = events(session.id, 0, 100);
+  assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Paid compaction is disabled.') }), []);
+  let status = sessionMemoryStatus(session);
+  assert.equal(status.fallbackNodes, 1); assert.equal(status.uncoveredNodes, 1); assert.equal(status.ready, 0);
+  pauseAllSessionCompactions('host_shutdown'); recoverSessionCompactions();
+  assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Restart cannot enable paid inference.') }), []);
+  status = sessionMemoryStatus(session);
+  assert.equal(status.fallbackNodes, 2); assert.equal(status.uncoveredNodes, 0);
+  assert.equal(status.modelSummaries, 0); assert.equal(status.hostSummaries, 0); assert.equal(status.ready, 0);
+  assert.equal(listRecords(JOB).length, 0); assert.equal(listRecords('core.session.compactor.reservation').length, 0);
+  assert.equal(sessionCompactionSettings().enabled, false); assert.equal(sessionCompactionUsage().tokensUsed, 0);
+  assert.deepEqual(events(session.id, 0, 100), originalEvents); assert.deepEqual(loadSession(session.id).goal, originalGoal);
+  const changes = database().prepare('SELECT total_changes() AS count').get().count;
+  for (let tick = 0; tick < 5; tick++) await processSessionCompactions({ runModel: () => assert.fail('No paid work.') });
+  assert.equal(database().prepare('SELECT total_changes() AS count').get().count, changes, 'Covered idle derivation must not rewrite its discovery/control records.');
+});
+
+test('disabling paid work preserves earlier owner pauses while local extracts leave paused jobs unchanged', async () => {
+  queue(); pauseSessionCompaction(session.id, 'owner_pause');
+  configureSessionCompaction({ enabled: false }, { expectedRevision: 0 });
+  assert.equal(sessionCompactionStatus(session).control.reasonPaused, 'owner_pause');
+  await processSessionCompactions({ runModel: () => assert.fail('No paid work.') });
+  assert.equal(sessionMemoryStatus(session).fallbackNodes, 0);
+  const other = createSession(getProvider('codex'), session.cwd, 'other');
+  configureSessionCompaction({ enabled: true }, { expectedRevision: 1 }); queue(other);
+  configureSessionCompaction({ enabled: false }, { expectedRevision: 2 });
+  const priorJob = job(other);
+  assert.equal(sessionCompactionStatus(other).control.reasonPaused, 'owner_disabled');
+  await processSessionCompactions({ runModel: () => assert.fail('No paid work.') });
+  assert.equal(sessionMemoryStatus(other).fallbackNodes, 1); assert.deepEqual(job(other), priorJob);
+  assert.equal(sessionMemoryStatus(session).fallbackNodes, 0);
+});
+
+for (const stop of ['owner_pause', 'owner_cancel', 'source_paused', 'operator_stop']) test(`disabled paid inference does not bypass ${stop} for local derivation`, async () => {
+  configureSessionCompaction({ enabled: false }, { expectedRevision: 0 }); queue();
+  if (stop === 'owner_cancel') controlSessionCompaction(session, 'cancel', { expectedRevision: sessionCompactionStatus(session).control.revision });
+  else if (stop === 'source_paused') { session.executionState = 'paused'; saveSession(session); }
+  else if (stop === 'operator_stop') {
+    const directory = path.join(root, 'private', 'runtime'); fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'operator-stop.json'), JSON.stringify({ stopped: true }));
+  } else pauseSessionCompaction(session.id, stop);
+  await processSessionCompactions({ runModel: () => assert.fail('No paid work.') });
+  assert.equal(sessionMemoryStatus(session).fallbackNodes, 0); assert.equal(listRecords(JOB).length, 0);
 });
 
 test('dispatched failure is charged conservatively and requires explicit resume, without provider error leakage', async () => {
