@@ -96,7 +96,7 @@ test('minimal chat uses the full terminal and retains conversation, input, mouse
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /A minimal question/); assert.match(frame, /A visible answer/); assert.match(frame, /Unsent draft/);
       assert.doesNotMatch(frame, /BZZY|Session:|YOLO|Latest|Settings|Your next goal|CPU|Memory/);
-      assert.equal(ui.tui.textRegion.top, 3);
+      assert.equal(ui.tui.textRegion.top, 4);
       assert.match(frame, /Session \.bzzy/);
       assert.match(frame, /Core Offline.*Relay Offline/);
       const send = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(send); assert.equal(send.row, rows - 1);

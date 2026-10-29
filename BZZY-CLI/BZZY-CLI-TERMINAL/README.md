@@ -12,6 +12,8 @@ binding. Click it to copy the complete path, or use `/session-folder` to display
 the full location and availability. It follows attachment and selected worker
 tabs, including legacy project roots that differ from cwd. Missing directories
 are marked without recreating them or changing the chat.
+A blank row separates the session path from chat, matching the space above the
+input in layouts with room for composer spacing.
 
 For explicit root execution on a dedicated Linux host, install from a fresh
 root-owned checkout with `./install.sh --allow-root`.

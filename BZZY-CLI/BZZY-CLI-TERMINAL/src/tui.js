@@ -1538,10 +1538,6 @@ export class TerminalChat {
       }
     }
     if (column > 2) lines.push(line);
-    if (spending && !spending.total?.complete) {
-      const message = spending.bounded ? 'Partial estimate · linked-session limit reached' : 'Partial estimate · pending or unpriced usage';
-      for (const part of wrap(message, Math.max(1, width - 4))) lines.push(this.theme.color('  ' + part, palette.warning));
-    }
     return lines;
   }
   settingsTopBar(width) {
@@ -2000,6 +1996,7 @@ export class TerminalChat {
       const text = `  ${label}${status}: ${location?.path || 'unknown'}${location?.path ? ' · click to copy' : ''}`;
       this.hitTargets.push({ type: 'session-project-path', row: header.length + 1, left: 3, right: width });
       header.push(color(clip(text, width), location?.status === 'exists' ? palette.muted : palette.warning));
+      if (this.panel === 'chat' && height >= 18) header.push('');
     }
     if (this.panel !== 'chat' && this.panel !== 'settings' && !this.promptDraft) {
       this.hitTargets.push({ type: 'back', row: header.length + 1, left: 3, right: 9 });
