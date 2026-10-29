@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { database, digest, getRecord, putRecord, appendEvent, now, transaction } from './database.js';
-import { knowledgeAccess, assertKnowledgeText, cleanKnowledgeText, cleanKnowledgeValue } from './knowledge-index.js';
+import { knowledgeAccess, assertKnowledgeText, cleanKnowledgeText, cleanKnowledgeValue, canonicalKnowledgeSource } from './knowledge-index.js';
 import { home, readJson } from './files.js';
 import { programScopeCapsule } from './program-scope.js';
 
@@ -60,10 +60,62 @@ function ownUnit(session, id, scope, current = true) {
   } else fail('Investigation branch is unavailable.');
   return unit;
 }
+function unitSelection(session, scope, includeHistory = false) {
+  const current = `((json_extract(data,'$.version')=2
+    AND json_extract(data,'$.scope.goalId') IS ? AND json_extract(data,'$.scope.runId') IS ?
+    AND json_extract(data,'$.scope.assignmentId') IS ? AND json_extract(data,'$.scope.assignmentRound') IS ?)
+    OR (json_extract(data,'$.version')=1 AND json_extract(data,'$.goalId') IS ? AND ? IS NULL))`;
+  return { where: `kind=? AND json_extract(data,'$.sessionId')=?${includeHistory ? '' : ` AND ${current}`}`,
+    parameters: [UNIT, session.id, ...(includeHistory ? [] : [scope.goalId, scope.runId, scope.assignmentId, scope.assignmentRound, scope.goalId, scope.assignmentId])] };
+}
+function branchStub(unit, blockerLimit = 32) {
+  const active = (unit.blockers || []).filter(blocker => blocker.state === 'open');
+  return { id: unit.id, revision: unit.revision || 1, state: unit.state, openBlockerCount: active.length,
+    blockers: active.slice(0, blockerLimit).map(blocker => ({ id: blocker.id, revision: blocker.revision })),
+    omittedBlockers: Math.max(0, active.length - blockerLimit), detail: 'read_investigation' };
+}
+function branchIndexRevision(session, scope, selection) {
+  const summary = database().prepare(`SELECT count(*) AS total,coalesce(sum(coalesce(json_extract(data,'$.revision'),1)),0) AS versions,
+    coalesce(sum(json_extract(data,'$.state')='closed'),0) AS closed,max(updated_at) AS updatedAt FROM records WHERE ${selection.where}`).get(...selection.parameters);
+  const event = database().prepare("SELECT max(seq) AS seq FROM events WHERE session_id=? AND (type GLOB 'investigation.*' OR type GLOB 'workflow.routing.*')").get(session.id);
+  return { total: summary.total, revision: digest([session.id, scope, selection.where, summary, event.seq]) };
+}
+
+// Separate navigation from the tiny capsule. Keyset pages are bound to the
+// session/scope and index revision; exact branch contents keep their own pin.
+export function investigationBranchPage(session, input = {}, context = {}) {
+  if (!exact(input, ['cursor', 'limit', 'includeHistory']) || input.includeHistory != null && typeof input.includeHistory !== 'boolean') fail('Use a bounded investigation index request.');
+  const limit = input.limit ?? 16;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 32) fail('Investigation index pages contain 1–32 branches.');
+  const saved = savedSource(session), scope = investigationScope(saved, context), selection = unitSelection(saved, scope, input.includeHistory === true);
+  const index = branchIndexRevision(saved, scope, selection); let after = '';
+  if (input.cursor != null) {
+    if (typeof input.cursor !== 'string' || input.cursor.length > 512 || !/^[A-Za-z0-9_-]+$/.test(input.cursor)) fail('Invalid investigation cursor.');
+    let cursor; try { cursor = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8')); } catch { fail('Invalid investigation cursor.'); }
+    if (!exact(cursor, ['after', 'revision']) || !/^[a-f0-9]{64}$/.test(cursor.after || '') || cursor.revision !== index.revision) fail('Investigation index changed. Restart its list from the first page.');
+    after = cursor.after;
+  }
+  const rows = database().prepare(`SELECT id,data FROM records WHERE ${selection.where} AND id>? ORDER BY id LIMIT ?`)
+    .all(...selection.parameters, after, limit + 1);
+  const result = { scope, revision: index.revision, branches: [], totalCandidates: index.total, includeHistory: input.includeHistory === true,
+    nextCursor: null, authority: 'Session branch navigation only. Read a branch by ID/revision for complete blockers; history never establishes current progress.' };
+  let visited = after, more = rows.length > limit;
+  for (const row of rows.slice(0, limit)) {
+    let unit;
+    try { unit = ownUnit(saved, row.id, scope, input.includeHistory !== true); } catch { visited = row.id; continue; }
+    const item = { ...branchStub(unit), hypothesis: cleanKnowledgeText(unit.hypothesis, 160),
+      currentScope: unit.version === 2 ? digest(unit.scope) === digest(scope) : unit.goalId === scope.goalId };
+    result.branches.push(item);
+    if (Buffer.byteLength(JSON.stringify(result)) > 7600) { result.branches.pop(); more = true; break; }
+    visited = row.id;
+  }
+  if (more && visited !== after) result.nextCursor = Buffer.from(JSON.stringify({ after: visited, revision: index.revision })).toString('base64url');
+  return result;
+}
 function dependencies(session, inputs = []) {
   if (!Array.isArray(inputs) || inputs.length > 8) fail('Use at most eight investigation dependencies.');
   return inputs.map(input => {
-    if (!exact(input, ['kind', 'id']) || !['execution_policy', 'session_input', 'artifact', 'work_unit'].includes(input.kind)
+    if (!exact(input, ['kind', 'id']) || !['execution_policy', 'session_input', 'artifact', 'work_unit', 'tool_outcome'].includes(input.kind)
         || input.id != null && !identifier(input.id)) fail('Invalid investigation dependency.');
     let value, id = input.id || input.kind;
     if (input.kind === 'execution_policy') {
@@ -75,38 +127,90 @@ function dependencies(session, inputs = []) {
       const item = getRecord('artifact', id);
       if (!item || item.sessionId !== session.id && !(session.allowedArtifactIds || []).includes(id)) fail('Dependency artifact is outside this session.');
       value = { sha256: item.sha256, sourceSha256: item.sourceSha256 || null, revision: item.revision || 1 };
+    } else if (input.kind === 'tool_outcome') {
+      const unit = ownUnit(session, id, {}, false), scope = unit.scope || { goalId: unit.goalId, assignmentId: null, assignmentRound: null, runId: null };
+      const row = database().prepare(`SELECT id FROM records WHERE kind='core.episode.observation'
+        AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.workUnitId')=?
+        AND json_extract(data,'$.goalId') IS ? AND json_extract(data,'$.assignmentId') IS ? AND json_extract(data,'$.assignmentRound') IS ?
+        AND (? IS NOT NULL OR ? IS NOT NULL OR json_extract(data,'$.runId') IS ?) AND json_extract(data,'$.outcome')='succeeded'
+        AND ((json_extract(data,'$.kind')='command' AND json_extract(data,'$.operationFingerprint') IS NOT NULL)
+          OR (json_extract(data,'$.kind')='file_change' AND json_array_length(json_extract(data,'$.changedFiles'))>0))
+        AND coalesce(json_extract(data,'$.omittedPrivate'),0)=0
+        AND coalesce(json_extract(data,'$.importedUntrusted'),0)=0 AND json_extract(data,'$.importProvenance') IS NULL
+        ORDER BY json_extract(data,'$.sourceSeq') DESC LIMIT 1`)
+        .get(session.id, unit.id, scope.goalId, scope.assignmentId, scope.assignmentRound, scope.goalId, scope.assignmentId, scope.runId);
+      const access = knowledgeAccess(session, { readOnly: true });
+      const observation = row && canonicalKnowledgeSource(access, { kind: 'attempt', sourceId: row.id, sessionId: session.id }, [session.id], { maxSourceBytes: 256 * 1024 });
+      if (row && (!observation || observation.importedUntrusted)) fail('The recorded tool outcome is unavailable or failed integrity checks.');
+      value = observation ? { sourceId: observation.id, sourceSeq: observation.sourceSeq, sha256: observation.sha256, outcome: observation.outcome } : null;
     } else {
       const item = ownUnit(session, id, {}, false);
       value = { revision: item.revision || 1, state: item.state, outcome: item.outcome || null };
     }
-    return { kind: input.kind, id, fingerprint: digest(value) };
+    return { kind: input.kind, id, fingerprint: digest(value), ...(input.kind === 'tool_outcome' ? { sourceSeq: value?.sourceSeq || 0 } : {}) };
   });
 }
 function dependencyState(session, unit) {
   const values = dependencies(session, (unit.dependencies || []).map(({ kind, id }) => ({ kind, id })));
   return { dependencies: values, dependencyFingerprint: digest(values) };
 }
+function blockerDependencies(unit, blocker) {
+  const kinds = new Set((unit.dependencies || []).map(item => item.kind));
+  if (!kinds.size) fail('Record dependencies with set_dependencies before blocking this branch.');
+  if (blocker.kind === 'technical' && [...kinds].every(kind => kind === 'artifact')) fail('Artifact records are immutable. Add tool_outcome for this branch or another mutable dependency before blocking.');
+  const valid = blocker.kind === 'technical' ? blocker.resolver === 'agent' && [...kinds].some(kind => kind !== 'artifact')
+    : blocker.kind === 'owner_input' ? blocker.resolver === 'owner' && kinds.has('session_input')
+      : blocker.kind === 'scope' ? blocker.resolver === 'owner' && kinds.has('execution_policy')
+        : blocker.kind === 'external' && blocker.resolver === 'external' && kinds.has('session_input');
+  if (!valid) fail('Blocker kind, resolver and recorded dependencies do not agree. Technical work belongs to the agent; owner/external input needs session_input and scope changes need execution_policy.');
+  if ((unit.dependencies || []).some(item => item.kind === 'work_unit' && item.id === unit.id)) fail('A branch cannot use itself as a blocker dependency.');
+  if ((unit.dependencies || []).some(item => item.kind === 'tool_outcome' && item.id !== unit.id)) fail('Technical tool outcomes must belong to this branch.');
+}
+const relevantDependencyKinds = blocker => blocker.kind === 'scope' ? ['execution_policy']
+  : ['owner_input', 'external'].includes(blocker.kind) ? ['session_input'] : null;
+function blockerObservation(session, unit, blocker, { adopt = false } = {}) {
+  const kinds = adopt ? relevantDependencyKinds(blocker) : blocker.dependencyKinds;
+  const observed = dependencyState(session, unit).dependencies;
+  const selected = kinds ? observed.filter(item => kinds.includes(item.kind)) : observed;
+  return { dependencyKinds: kinds || [...new Set(observed.map(item => item.kind))], dependencyFingerprint: digest(selected),
+    toolOutcomeSources: selected.filter(item => item.kind === 'tool_outcome').map(item => ({ workUnitId: item.id, sourceSeq: item.sourceSeq })) };
+}
+function goalStopBlockers(session, unit) {
+  return (unit.blockers || []).filter(blocker => {
+    if (blocker.state !== 'open' || blocker.kind === 'technical' || blocker.resolver === 'agent') return false;
+    try {
+      blockerDependencies(unit, blocker);
+      const expected = relevantDependencyKinds(blocker);
+      if (!blocker.dependencyKinds && unit.dependencies.some(item => !expected.includes(item.kind))) return false;
+      return blocker.dependencyFingerprint === blockerObservation(session, unit, blocker).dependencyFingerprint;
+    } catch { return false; }
+  });
+}
 const publicBlocker = (blocker, observed) => ({ id: blocker.id, key: blocker.key, kind: blocker.kind,
   description: cleanKnowledgeText(blocker.description, 320), state: blocker.state, revision: blocker.revision,
   resolver: blocker.resolver || 'unavailable', affectedWork: cleanKnowledgeText(blocker.affectedWork, 240), neededChange: cleanKnowledgeText(blocker.neededChange, 240),
   dependencyFingerprint: blocker.dependencyFingerprint,
+  dependencyKinds: blocker.dependencyKinds || null,
   dependencyChanged: observed != null && observed !== blocker.dependencyFingerprint,
+  ...(blocker.dependencyBaselineRebased ? { dependencyBaselineRebased: cleanKnowledgeValue(blocker.dependencyBaselineRebased) } : {}),
   ...(blocker.resolution ? { resolution: cleanKnowledgeValue(blocker.resolution) } : {}) });
 function publicUnit(session, unit) {
-  let observed;
-  try { observed = dependencyState(session, unit).dependencyFingerprint; } catch { /* Missing dependencies remain blocked, never resolved. */ }
   return { id: unit.id, sessionId: unit.sessionId, scope: unit.scope || { goalId: unit.goalId, runId: null, assignmentId: null, assignmentRound: null },
     revision: unit.revision || 1, hypothesis: cleanKnowledgeText(unit.hypothesis, 320), state: unit.state, outcome: unit.outcome || null,
     routing: unit.version === 1, dependencyFingerprint: unit.dependencyFingerprint || null,
     applicability: { sourcePinsAvailable: Boolean(unit.sourcePins), policyChanged: unit.sourcePins ? unit.sourcePins.policyFingerprint !== digest(session.policy || null) : null,
       instructionsChanged: unit.sourcePins?.instructionFingerprint ? unit.sourcePins.instructionFingerprint !== digest(session.contract || null) : null,
       programScopeChanged: unit.sourcePins?.programScope ? digest(unit.sourcePins.programScope) !== digest(currentScopePin(session)) : null },
-    blockers: (unit.blockers || []).map(blocker => publicBlocker(blocker, observed)), historical: true, authority };
+    blockers: (unit.blockers || []).map(blocker => {
+      let observed; try { observed = blockerObservation(session, unit, blocker).dependencyFingerprint; } catch { /* Missing dependencies stay blocked. */ }
+      return publicBlocker(blocker, observed);
+    }),
+    ...(unit.dependencyUpdate ? { dependencyUpdate: cleanKnowledgeValue(unit.dependencyUpdate) } : {}), historical: true, authority };
 }
 
 export function updateInvestigation(session, input, context = {}) {
-  if (!exact(input, ['action', 'requestId', 'id', 'expectedRevision', 'hypothesis', 'dependencies', 'blocker', 'blockerId', 'expectedBlockerRevision', 'resolution', 'outcome', 'blockGoal'])
-      || !['declare', 'select', 'block', 'resolve', 'close'].includes(input.action) || !identifier(input.requestId)) fail('Use a valid investigation action and stable requestId.');
+  if (!exact(input, ['action', 'requestId', 'id', 'expectedRevision', 'hypothesis', 'dependencies', 'rationale', 'blocker', 'blockerId', 'expectedBlockerRevision', 'resolution', 'outcome', 'blockGoal'])
+      || !['declare', 'select', 'set_dependencies', 'block', 'resolve', 'close'].includes(input.action) || !identifier(input.requestId)) fail('Use a valid investigation action and stable requestId.');
   if (input.blockGoal != null && (typeof input.blockGoal !== 'boolean' || input.action !== 'block')) fail('Goal blocking is an explicit blocker action.');
   if (input.expectedRevision != null && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1)) fail('Use the displayed branch revision.');
   const initial = live(session, context), requestKey = digest([session.id, initial.scope, input.requestId]), inputHash = digest(input);
@@ -122,7 +226,8 @@ export function updateInvestigation(session, input, context = {}) {
     }
     let unit;
     if (input.action === 'declare') {
-      const count = db.prepare("SELECT count(*) AS n FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.state')='open'").get(UNIT, saved.id).n;
+      const selection = unitSelection(saved, scope);
+      const count = db.prepare(`SELECT count(*) AS n FROM records WHERE ${selection.where} AND json_extract(data,'$.state')='open'`).get(...selection.parameters).n;
       if (count >= 256) fail('Close existing branches before opening more than 256 active branches.');
       const hypothesis = assertKnowledgeText(input.hypothesis, 2000), material = dependencies(saved, input.dependencies || []);
       const id = digest([saved.id, scope, input.requestId]);
@@ -136,26 +241,44 @@ export function updateInvestigation(session, input, context = {}) {
       if (input.expectedRevision != null && input.expectedRevision !== (unit.revision || 1)) fail('Investigation branch changed.');
       if (unit.state !== 'open') fail('Closed branches cannot restart work. Declare a new branch with current dependencies.');
       if (input.action !== 'select' && unit.version === 1) fail('Use workflow routing tools to change a routed work unit.');
-      if (input.action === 'block') {
+      if (input.action === 'set_dependencies') {
+        if (input.expectedRevision == null) fail('Dependency changes require the displayed branch revision.');
+        const values = dependencies(saved, input.dependencies), rationale = assertKnowledgeText(input.rationale, 2000);
+        if (!values.length || values.some(item => item.kind === 'work_unit' && item.id === unit.id)) fail('Record nonempty dependencies outside the branch itself.');
+        const fingerprint = digest(values), previousFingerprint = unit.dependencyFingerprint;
+        if (fingerprint === previousFingerprint) fail('The recorded dependencies are unchanged.');
+        const dependencyUpdate = { previousFingerprint, observedFingerprint: fingerprint, rationale,
+          sourceRunId: context.runId, recordedAt: now(), authority: 'New observation baseline only; changing dependencies never resolves a blocker.' };
+        unit = { ...unit, dependencies: values, dependencyFingerprint: fingerprint, dependencyUpdate };
+        unit.blockers = unit.blockers.map(blocker => blocker.state === 'open' ? { ...blocker, revision: blocker.revision + 1,
+          ...blockerObservation(saved, unit, blocker, { adopt: true }), dependencyBaselineRebased: dependencyUpdate } : blocker);
+      } else if (input.action === 'block') {
         const value = input.blocker;
         if (!exact(value, ['key', 'kind', 'description', 'resolver', 'affectedWork', 'neededChange']) || !identifier(value.key) || !['owner_input', 'scope', 'external', 'technical'].includes(value.kind)
             || !['owner', 'agent', 'external'].includes(value.resolver)) fail('Use a stable blocker key, kind and responsible resolver.');
+        blockerDependencies(unit, value);
         const description = assertKnowledgeText(value.description, 2000), blockers = [...unit.blockers], index = blockers.findIndex(item => item.key === value.key);
         if (index < 0 && blockers.length >= 32) fail('A branch supports at most 32 explicit blockers.');
         if (index >= 0 && blockers[index].state === 'resolved') fail('A resolved blocker needs a new distinct blocker key to recur.');
         const blocker = { ...(index >= 0 ? blockers[index] : {}), id: digest([unit.id, value.key]), key: value.key, kind: value.kind,
           description, state: 'open', revision: (index >= 0 ? blockers[index].revision : 0) + 1,
           resolver: value.resolver, affectedWork: assertKnowledgeText(value.affectedWork, 1000), neededChange: assertKnowledgeText(value.neededChange, 1000),
-          dependencyFingerprint: dependencyState(saved, unit).dependencyFingerprint, recordedAt: now() };
+          ...blockerObservation(saved, unit, value, { adopt: true }), recordedAt: now() };
         if (index >= 0) blockers[index] = blocker; else blockers.push(blocker);
         unit = { ...unit, blockers };
       } else if (input.action === 'resolve') {
         const blockers = [...unit.blockers], index = blockers.findIndex(item => item.id === input.blockerId), blocker = blockers[index];
         if (!blocker || blocker.state !== 'open' || blocker.revision !== input.expectedBlockerRevision) fail('Refresh the open blocker and its revision.');
-        const observed = dependencyState(saved, unit), statement = assertKnowledgeText(input.resolution, 2000);
-        if (observed.dependencyFingerprint === blocker.dependencyFingerprint) fail('The recorded dependency has not changed. A restated plan cannot resolve this blocker.');
+        if (!unit.dependencies?.length) fail('This legacy blocker has no dependencies. Use set_dependencies to establish an observed baseline before resolving it.');
+        blockerDependencies(unit, blocker);
+        const relevant = relevantDependencyKinds(blocker);
+        if (!blocker.dependencyKinds && relevant && unit.dependencies.some(item => !relevant.includes(item.kind))) fail('This legacy blocker needs set_dependencies to establish its relevant observation baseline.');
+        const observed = dependencyState(saved, unit), blockerObserved = blockerObservation(saved, unit, blocker), statement = assertKnowledgeText(input.resolution, 2000);
+        if (blockerObserved.dependencyFingerprint === blocker.dependencyFingerprint) fail('The recorded dependency has not changed. A restated plan cannot resolve this blocker.');
+        if (blocker.toolOutcomeSources?.length && !blocker.toolOutcomeSources.some(before => blockerObserved.toolOutcomeSources
+          .some(after => after.workUnitId === before.workUnitId && after.sourceSeq > before.sourceSeq))) fail('Resolution requires a newer successful host-observed command or file change, not a missing or older result.');
         blockers[index] = { ...blocker, state: 'resolved', revision: blocker.revision + 1, resolution: { statement,
-          previousFingerprint: blocker.dependencyFingerprint, observedFingerprint: observed.dependencyFingerprint, observedChange: true,
+          previousFingerprint: blocker.dependencyFingerprint, observedFingerprint: blockerObserved.dependencyFingerprint, observedChange: true,
           recordedAt: now(), sourceRunId: context.runId, authority: 'Agent-declared resolution after a host-observed dependency change; not proof or authorization.' } };
         unit = { ...unit, blockers, ...observed };
       } else if (input.action === 'close') {
@@ -173,11 +296,12 @@ export function updateInvestigation(session, input, context = {}) {
     const result = publicUnit(saved, unit);
     if (input.blockGoal) {
       if (!scope.goalId || saved.parentSessionId || saved.role || saved.assignmentId) fail('Only the current root goal can report all remaining work blocked.');
-      const open = db.prepare("SELECT data FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.state')='open' LIMIT 257").all(UNIT, saved.id)
+      const selection = unitSelection(saved, scope);
+      const open = db.prepare(`SELECT data FROM records WHERE ${selection.where} AND json_extract(data,'$.state')='open' LIMIT 257`).all(...selection.parameters)
         .map(row => JSON.parse(row.data)).filter(candidate => { try { ownUnit(saved, candidate.id, scope); return true; } catch { return false; } });
-      if (!open.length || open.length > 256 || open.some(candidate => !(candidate.blockers || []).some(blocker => blocker.state === 'open'))) fail('Other current branches remain available; this blocker cannot stop the whole goal.');
+      if (!open.length || open.length > 256 || open.some(candidate => !goalStopBlockers(saved, candidate).length)) fail('Other current branches remain available or need agent investigation. Only unchanged owner/external dependencies covering every branch can stop the whole goal.');
       if (db.prepare("SELECT 1 FROM records WHERE kind='assignment' AND json_extract(data,'$.parentSessionId')=? AND json_extract(data,'$.goalId')=? AND json_extract(data,'$.closure')='open' LIMIT 1").get(saved.id, scope.goalId)) fail('Review or stop outstanding assignments before declaring the whole goal blocked.');
-      const blockers = open.flatMap(candidate => candidate.blockers.filter(blocker => blocker.state === 'open'));
+      const blockers = open.flatMap(candidate => goalStopBlockers(saved, candidate));
       result.goalBlocker = { status: 'blocked', reason: cleanKnowledgeText(blockers.map(blocker => `${blocker.description} Needed: ${blocker.neededChange}`).join('\n'), 2000),
         blockerIds: blockers.map(blocker => blocker.id).slice(0, 32), scope, coverage: 'all-declared-current-branches',
         requiresExecutionStop: true, authority: 'Explicit all-remaining-work claim checked against declared branches; not exhaustive semantic coverage or authorization.' };
@@ -200,7 +324,10 @@ export function currentInvestigationAttribution(session, context = {}) {
 export function validateInvestigationBlockers(session, ids, context = {}) {
   if (!Array.isArray(ids) || ids.length > 32 || ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))) fail('Use at most 32 current blocker IDs.');
   const saved = savedSource(session), scope = investigationScope(saved, context);
-  const rows = database().prepare("SELECT data FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.version')=2 ORDER BY updated_at DESC LIMIT 257").all(UNIT, saved.id);
+  const selection = unitSelection(saved, scope);
+  const rows = database().prepare(`SELECT data FROM records WHERE ${selection.where} AND json_extract(data,'$.version')=2
+    AND EXISTS (SELECT 1 FROM json_each(records.data,'$.blockers') blocker
+      WHERE json_extract(blocker.value,'$.id') IN (SELECT value FROM json_each(?))) LIMIT 33`).all(...selection.parameters, JSON.stringify(ids));
   const allowed = new Set();
   for (const row of rows) {
     const item = JSON.parse(row.data);
@@ -212,17 +339,24 @@ export function validateInvestigationBlockers(session, ids, context = {}) {
 export function investigationCapsule(session, context = {}, { maxBytes = 2200 } = {}) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 800 || maxBytes > 8192) fail('Use a bounded investigation capsule budget.');
   const saved = savedSource(session), scope = investigationScope(saved, context);
-  const candidates = database().prepare("SELECT data FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=? ORDER BY updated_at DESC,id LIMIT 129").all(UNIT, saved.id);
-  const current = [], historical = [];
-  for (const row of candidates.slice(0, 128)) {
+  const selection = unitSelection(saved, scope), db = database();
+  const currentCount = db.prepare(`SELECT count(*) AS total FROM (SELECT 1 FROM records WHERE ${selection.where} LIMIT 257)`).get(...selection.parameters).total;
+  const historicalCount = db.prepare(`SELECT count(*) AS total FROM (SELECT 1 FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=?
+    AND NOT (${selection.where}) LIMIT 129)`).get(UNIT, saved.id, ...selection.parameters).total;
+  // Scope filtering precedes the small window: old goals cannot evict the live
+  // branches that the model needs to rediscover after compaction.
+  const candidates = db.prepare(`SELECT data FROM records WHERE ${selection.where}
+    ORDER BY (json_extract(data,'$.state')='open') DESC,updated_at DESC,id LIMIT 4`).all(...selection.parameters);
+  const current = [];
+  for (const row of candidates) {
     const unit = JSON.parse(row.data);
     try { ownUnit(saved, unit.id, scope); current.push(unit); }
-    catch { historical.push(unit.id); }
+    catch { /* Invalid or imported sources never become current branches. */ }
   }
   current.sort((a, b) => Number(b.state === 'open') - Number(a.state === 'open'));
   const branches = current.slice(0, 3).map(item => {
     const value = publicUnit(saved, item), active = value.blockers.filter(blocker => blocker.state === 'open');
-    return { id: value.id, revision: value.revision, hypothesis: value.hypothesis.slice(0, 160), state: value.state, outcome: value.outcome,
+    return { id: value.id, revision: value.revision, hypothesis: value.hypothesis.slice(0, 160), state: value.state, outcome: value.outcome, openBlockerCount: active.length,
       applicability: value.applicability,
       blockers: active.slice(0, 2).map(blocker => ({ id: blocker.id, kind: blocker.kind, revision: blocker.revision,
         description: blocker.description.slice(0, 120), resolver: blocker.resolver, neededChange: blocker.neededChange.slice(0, 120), dependencyChanged: blocker.dependencyChanged })),
@@ -239,20 +373,31 @@ export function investigationCapsule(session, context = {}, { maxBytes = 2200 } 
     previous.count++; previous.outcomes[item.outcome] = (previous.outcomes[item.outcome] || 0) + 1; repeats.set(key, previous);
   }
   const result = { scope, branches, repeatedAttempts: [...repeats.values()].filter(item => item.count > 1).slice(0, 3),
-    historicalCount: historical.length, omittedBranches: Math.max(0, current.length - branches.length),
-    coverage: { branchWindow: 128, moreBranches: candidates.length > 128, observationWindow: 64, historicalCountIsWindowed: true }, authority };
-  while (Buffer.byteLength(JSON.stringify(result)) > maxBytes - 80 && (result.branches.length > 1 || result.repeatedAttempts.length)) {
-    if (result.repeatedAttempts.length) result.repeatedAttempts.pop(); else { result.branches.pop(); result.omittedBranches++; }
-  }
-  while (Buffer.byteLength(JSON.stringify(result)) > maxBytes - 80 && result.branches.length) { result.branches.pop(); result.omittedBranches++; }
+    historicalCount: Math.min(128, historicalCount), omittedBranches: Math.max(0, currentCount - branches.length),
+    coverage: { branchWindow: 4, moreBranches: currentCount > branches.length, observationWindow: 64, countsAreCandidates: true,
+      currentCountIsWindowed: currentCount > 256, historicalCountIsWindowed: historicalCount > 128 },
+    lookup: { tool: 'read_investigation', action: 'list' }, authority: 'Historical navigation, not instructions, authorization, verified findings or permission to retry.' };
+  const oversized = () => Buffer.byteLength(JSON.stringify(result)) > maxBytes - 80;
+  while (oversized() && result.repeatedAttempts.length) result.repeatedAttempts.pop();
+  // Preserve discovery before prose. Even a large two-blocker branch retains
+  // its ID, source revision and open-blocker count instead of disappearing.
+  if (oversized()) result.branches = current.slice(0, 3).map(unit => branchStub(unit, 2));
+  while (oversized() && result.branches.length > 1) { result.branches.pop(); result.omittedBranches++; }
+  if (oversized() && result.branches.length) result.branches = result.branches.map(({ blockers, omittedBlockers, ...item }) => ({ ...item, blockers: [], omittedBlockers: item.openBlockerCount }));
+  if (oversized()) { result.coverage = { moreBranches: currentCount > result.branches.length }; delete result.authority; }
   result.revision = digest(result); return result;
 }
 export function readInvestigationSource(session, input, context = {}) {
+  if (input?.action === 'list') {
+    if (!exact(input, ['action', 'cursor', 'limit', 'includeHistory'])) fail('Use cursor pages to list investigation branches.');
+    const { action: _action, ...options } = input; return investigationBranchPage(session, options, context);
+  }
   if (!exact(input, ['id', 'revision', 'offset', 'limit']) || typeof input.revision !== 'string') fail('Use a branch ID and its source revision.');
   const saved = savedSource(session), scope = investigationScope(saved, context), unit = ownUnit(saved, input.id, scope, false);
   const value = { ...publicUnit(saved, unit), hypothesis: cleanKnowledgeText(unit.hypothesis, 2000),
     currentScope: unit.version === 2 ? digest(unit.scope) === digest(scope) : unit.goalId === scope.goalId,
-    blockers: (unit.blockers || []).map(item => ({ ...publicBlocker(item), description: cleanKnowledgeText(item.description, 2000) })) };
+    blockers: (unit.blockers || []).map(item => ({ ...publicBlocker(item), description: cleanKnowledgeText(item.description, 2000),
+      affectedWork: cleanKnowledgeText(item.affectedWork, 1000), neededChange: cleanKnowledgeText(item.neededChange, 1000) })) };
   const sourceRevision = digest(value);
   if (input.revision !== String(unit.revision || 1) && input.revision !== sourceRevision) fail('Investigation source changed. Refresh the branch revision.');
   const buffer = Buffer.from(JSON.stringify(value)), offset = input.offset ?? 0, limit = input.limit ?? 4096;
@@ -265,18 +410,19 @@ export function readInvestigationSource(session, input, context = {}) {
 }
 export function investigationToolSpecs() {
   const string = { type: 'string' }, dependency = { type: 'object', additionalProperties: false,
-    properties: { kind: { type: 'string', enum: ['execution_policy', 'session_input', 'artifact', 'work_unit'] }, id: string }, required: ['kind'] };
-  return [{ name: 'update_investigation', description: 'Track an explicit branch, select it for observed attempts, or record/resolve a stable blocker. Resolution requires changed recorded dependencies. No action executes work, grants scope or verifies a finding. Routed units must use their existing routing tools.',
+    properties: { kind: { type: 'string', enum: ['execution_policy', 'session_input', 'artifact', 'work_unit', 'tool_outcome'] }, id: string }, required: ['kind'] };
+  return [{ name: 'update_investigation', description: 'Track/select a branch and its observed dependencies. Before blocking, use set_dependencies if needed: owner/external input requires session_input; scope requires execution_policy; technical blockers belong to the agent. For technical work, declare a branch, then set_dependencies with tool_outcome and that branch ID, record its blocker, and perform the authorized check. Only a later successful host-observed command/file-change advances it; metadata tools and failed retries do not. An artifact alone is immutable. set_dependencies establishes a baseline and never resolves blockers. No action executes work, grants scope or verifies a finding. Routed units use routing tools.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {
-      action: { type: 'string', enum: ['declare', 'select', 'block', 'resolve', 'close'] }, requestId: string, id: string,
-      expectedRevision: { type: 'integer', minimum: 1 }, hypothesis: string, dependencies: { type: 'array', maxItems: 8, items: dependency },
+      action: { type: 'string', enum: ['declare', 'select', 'set_dependencies', 'block', 'resolve', 'close'] }, requestId: string, id: string,
+      expectedRevision: { type: 'integer', minimum: 1 }, hypothesis: string, dependencies: { type: 'array', maxItems: 8, items: dependency }, rationale: string,
       blocker: { type: 'object', additionalProperties: false, properties: { key: string, kind: { type: 'string', enum: ['owner_input', 'scope', 'external', 'technical'] }, description: string,
         resolver: { type: 'string', enum: ['owner', 'agent', 'external'] }, affectedWork: string, neededChange: string }, required: ['key', 'kind', 'description', 'resolver', 'affectedWork', 'neededChange'] },
-      blockGoal: { type: 'boolean', description: 'Explicitly assert all remaining goal work is blocked. Rejected while another declared current branch or outstanding assignment can proceed. Stops work without replay.' },
+      blockGoal: { type: 'boolean', description: 'Explicitly assert every declared current branch awaits unchanged owner/external input or owner scope change, with no outstanding assignment. Agent-resolvable technical blockers never stop the whole goal. Stops work without replay.' },
       blockerId: string, expectedBlockerRevision: { type: 'integer', minimum: 1 }, resolution: string,
       outcome: { type: 'string', enum: ['inconclusive', 'disproved', 'investigated', 'abandoned'] } }, required: ['action', 'requestId'] } },
-  { name: 'read_investigation', description: 'Read exact sanitized branch/blocker history in this session without resuming work. Keep the returned source revision for subsequent UTF-8 pages.',
-    inputSchema: { type: 'object', additionalProperties: false, properties: { id: string, revision: string, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 8192 } }, required: ['id', 'revision'] } }];
+  { name: 'read_investigation', description: 'List branches with action=list (optional cursor, limit 1–32, includeHistory); restart the list if its revision changes. Omit action and supply id/revision to read full sanitized blockers in UTF-8 byte pages (limit 1–8192); keep the returned source revision. Reading never resumes work.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { action: { type: 'string', enum: ['list'] }, cursor: { type: 'string', maxLength: 512 }, includeHistory: { type: 'boolean' },
+      id: string, revision: string, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 8192 } } } }];
 }
 
 export function sanitizedNativeBlocker(value) {

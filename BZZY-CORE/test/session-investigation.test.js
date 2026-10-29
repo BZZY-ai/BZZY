@@ -6,13 +6,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createSession, saveSession } from '../src/engine/store.js';
 import { BUILTINS } from '../src/engine/providers.js';
-import { appendEvent, getRecord, putRecord, listRecords } from '../src/engine/database.js';
+import { appendEvent, database, digest, getRecord, putRecord, listRecords } from '../src/engine/database.js';
 import { initializeProject, issue } from '../src/engine/project.js';
 import { artifact } from '../src/engine/evidence.js';
 import { checkpoint, checkpointState, memoryFreshness } from '../src/engine/memory.js';
 import { knowledgeAccess } from '../src/engine/knowledge-index.js';
 import { recordWorkObservation, captureEpisode } from '../src/engine/episode.js';
-import { investigationCapsule, investigationScope, currentInvestigationAttribution, validateInvestigationBlockers,
+import { investigationCapsule, investigationBranchPage, investigationScope, currentInvestigationAttribution, validateInvestigationBlockers,
   updateInvestigation, readInvestigationSource, sanitizedNativeBlocker } from '../src/engine/session-investigation.js';
 import { CodexEngine } from '../src/engine/engines/codex.js';
 
@@ -108,6 +108,7 @@ test('tombstoned sessions cannot read, change or attribute retained investigatio
   const calls = [
     () => investigationScope(session, context),
     () => investigationCapsule(session, context),
+    () => investigationBranchPage(session, {}, context),
     () => currentInvestigationAttribution(session, context),
     () => validateInvestigationBlockers(session, [branch.blockers[0].id], context),
     () => readInvestigationSource(session, { id: branch.id, revision: String(branch.revision) }, context),
@@ -207,6 +208,166 @@ test('capsules and source pages remain bounded and source changes reject continu
   assert.equal(JSON.parse(text).blockers[0].neededChange, 'Supply the permitted offline fixture.');
   updateInvestigation(session, { action: 'close', requestId: 'abandon', id: branch.id, expectedRevision: branch.revision, outcome: 'abandoned' }, context);
   assert.throws(() => readInvestigationSource(session, { id: branch.id, revision, offset: 113, limit: 113 }, context), /changed/);
+});
+
+test('large Unicode blockers retain discovery stubs and exact paged contents after capsule compression', () => {
+  let branch = declare('large-unicode');
+  const descriptions = ['先に必要な所有者の入力🙂'.repeat(35), '別の外部入力が必要です🙂'.repeat(35)];
+  const needed = '許可された資料を提供してください🙂'.repeat(15);
+  for (let index = 0; index < 2; index++) branch = blocker(branch, { requestId: `unicode-block-${index}`,
+    blocker: { key: `input-${index}`, kind: 'owner_input', description: descriptions[index], resolver: 'owner',
+      affectedWork: '現在の調査分岐🙂'.repeat(20), neededChange: needed } });
+  for (const maxBytes of [800, 1800]) {
+    const capsule = investigationCapsule(session, context, { maxBytes });
+    assert.ok(Buffer.byteLength(JSON.stringify(capsule)) <= maxBytes);
+    assert.equal(capsule.branches[0].id, branch.id); assert.equal(capsule.branches[0].openBlockerCount, 2);
+    assert.deepEqual(capsule.lookup, { tool: 'read_investigation', action: 'list' });
+  }
+  const before = database().prepare('SELECT total_changes() AS count').get().count;
+  const index = readInvestigationSource(session, { action: 'list' }, context);
+  assert.deepEqual(index.branches[0].blockers.map(item => item.id), branch.blockers.map(item => item.id));
+  let offset = 0, revision = String(index.branches[0].revision), text = '';
+  do {
+    const page = readInvestigationSource(session, { id: branch.id, revision, offset, limit: 113 }, context);
+    text += page.text; offset = page.nextOffset; revision = page.revision;
+  } while (offset !== null);
+  const full = JSON.parse(text);
+  assert.deepEqual(full.blockers.map(item => item.description), descriptions);
+  assert.ok(full.blockers.every(item => item.neededChange === needed));
+  assert.equal(database().prepare('SELECT total_changes() AS count').get().count, before, 'Discovery and expansion never write or execute.');
+});
+
+test('current branches remain discoverable behind 150 newer historical branches and list cursors are scope/revision pinned', () => {
+  const current = blocker(declare('current-oldest')), goal = { ...session.goal };
+  for (let index = 0; index < 150; index++) {
+    session.goal = { ...goal, id: randomUUID() }; saveSession(session);
+    declare(`historical-${index}`);
+  }
+  session.goal = goal; saveSession(session);
+  const capsule = investigationCapsule(session, context, { maxBytes: 1800 });
+  assert.equal(capsule.branches[0].id, current.id); assert.equal(capsule.coverage.historicalCountIsWindowed, true);
+  assert.deepEqual(validateInvestigationBlockers(session, [current.blockers[0].id], context), [current.blockers[0].id]);
+  assert.deepEqual(investigationBranchPage(session, {}, context).branches.map(item => item.id), [current.id]);
+  const discovered = new Set(); let cursor;
+  do {
+    const page = readInvestigationSource(session, { action: 'list', includeHistory: true, limit: 16, ...(cursor ? { cursor } : {}) }, context);
+    assert.ok(Buffer.byteLength(JSON.stringify(page)) <= 8192);
+    for (const item of page.branches) { assert.equal(discovered.has(item.id), false); discovered.add(item.id); }
+    cursor = page.nextCursor;
+  } while (cursor);
+  assert.equal(discovered.size, 151);
+  const pinned = investigationBranchPage(session, { includeHistory: true, limit: 1 }, context);
+  assert.ok(pinned.nextCursor);
+  const other = createSession(BUILTINS.codex, session.cwd, 'offline-fixture'); initializeProject(other); saveSession(other);
+  assert.throws(() => investigationBranchPage(other, { includeHistory: true, cursor: pinned.nextCursor }), /index changed/);
+  declare('new-current');
+  assert.throws(() => investigationBranchPage(session, { includeHistory: true, cursor: pinned.nextCursor }, context), /index changed/);
+});
+
+test('index pages preserve discovery for a branch with the maximum number of blockers', () => {
+  let branch = declare('many-blockers');
+  for (let index = 0; index < 32; index++) branch = blocker(branch, { requestId: `many-blocker-${index}`,
+    blocker: { key: `input-${index}`, kind: 'owner_input', resolver: 'owner', description: 'The owner must supply another permitted input.',
+      affectedWork: 'This branch.', neededChange: 'Supply the permitted input.' } });
+  const page = investigationBranchPage(session, {}, context);
+  assert.equal(page.branches.length, 1); assert.equal(page.branches[0].openBlockerCount, 32);
+  assert.equal(page.branches[0].blockers.length, 32); assert.ok(Buffer.byteLength(JSON.stringify(page)) <= 8192);
+});
+
+test('technical blockers remain branch work and cannot be relabeled external without matching dependency ownership', () => {
+  const branch = declare('technical');
+  const technical = { key: 'parser', kind: 'technical', resolver: 'agent', description: 'The local parser needs a code fix.',
+    affectedWork: 'The parser test.', neededChange: 'Repair the local fixture parser.' };
+  assert.throws(() => blocker(branch, { requestId: 'technical-stop', blocker: technical, blockGoal: true }), /need agent investigation/);
+  const blocked = blocker(branch, { blocker: technical });
+  assert.equal(blocked.goalBlocker, undefined); assert.equal(getRecord('session', session.id).goal.status, 'active');
+  assert.throws(() => blocker(blocked, { requestId: 'wrong-resolver', blocker: { ...technical, resolver: 'external' } }), /do not agree/);
+  const dependent = declare('local-dependency', [{ kind: 'work_unit', id: branch.id }]);
+  assert.throws(() => blocker(dependent, { requestId: 'fake-external', blocker: { ...technical, kind: 'external', resolver: 'external' } }), /do not agree/);
+  assert.throws(() => blocker(dependent, { requestId: 'fake-scope', blocker: { ...technical, kind: 'scope', resolver: 'owner' } }), /do not agree/);
+});
+
+test('only relevant owner changes resolve an input blocker; changed dependencies and outstanding work prevent a whole-goal stop', () => {
+  const dependency = declare('local-work');
+  updateInvestigation(session, { action: 'close', requestId: 'close-local', id: dependency.id, outcome: 'investigated' }, context);
+  let branch = declare('owner-and-local', [{ kind: 'session_input' }, { kind: 'work_unit', id: dependency.id }]);
+  branch = blocker(branch);
+  const record = getRecord('core.workflow.work-unit', dependency.id);
+  putRecord('core.workflow.work-unit', record.id, { ...record, revision: record.revision + 1 });
+  const resolution = { action: 'resolve', requestId: 'owner-resolve', id: branch.id, expectedRevision: branch.revision,
+    blockerId: branch.blockers[0].id, expectedBlockerRevision: branch.blockers[0].revision, resolution: 'The missing owner input is available.' };
+  assert.throws(() => updateInvestigation(session, resolution, context), /dependency has not changed/);
+  appendEvent(session.id, 'message.user', { text: 'The requested fixture is available.' });
+  const second = declare('other-owner');
+  assert.throws(() => blocker(second, { blockGoal: true }), /need agent investigation/);
+  const resolved = updateInvestigation(session, resolution, context);
+  assert.equal(resolved.blockers[0].state, 'resolved');
+  updateInvestigation(session, { action: 'close', requestId: 'close-owner', id: resolved.id, outcome: 'investigated' }, context);
+  const assignmentId = randomUUID();
+  putRecord('assignment', assignmentId, { id: assignmentId, parentSessionId: session.id, goalId: session.goal.id, closure: 'open' });
+  assert.throws(() => blocker(second, { blockGoal: true }), /outstanding assignments/);
+  putRecord('assignment', assignmentId, { ...getRecord('assignment', assignmentId), closure: 'closed' });
+  assert.ok(blocker(second, { blockGoal: true }).goalBlocker);
+});
+
+test('dependency-free new and legacy blockers can establish a baseline without manufacturing resolution', () => {
+  const branch = declare('no-dependencies', []);
+  assert.throws(() => blocker(branch), /set_dependencies before blocking/);
+  const stored = getRecord('core.workflow.work-unit', branch.id), legacyBlocker = { id: digest([branch.id, 'legacy']), key: 'legacy',
+    kind: 'owner_input', resolver: 'owner', description: 'Legacy missing input.', affectedWork: 'This branch.', neededChange: 'Supply input.',
+    state: 'open', revision: 1, dependencyFingerprint: digest([]) };
+  putRecord('core.workflow.work-unit', branch.id, { ...stored, blockers: [legacyBlocker], revision: 2 });
+  const input = { action: 'set_dependencies', requestId: 'adopt-dependencies', id: branch.id, expectedRevision: 2,
+    dependencies: [{ kind: 'session_input' }], rationale: 'Track the owner reply that can unblock this legacy branch.' };
+  const adopted = updateInvestigation(session, input, context);
+  assert.deepEqual(updateInvestigation(session, input, context), adopted);
+  assert.equal(adopted.blockers[0].state, 'open'); assert.equal(adopted.blockers[0].dependencyChanged, false);
+  assert.equal(adopted.dependencyUpdate.sourceRunId, context.runId);
+  const resolve = { action: 'resolve', requestId: 'resolve-legacy', id: branch.id, expectedRevision: adopted.revision,
+    blockerId: legacyBlocker.id, expectedBlockerRevision: adopted.blockers[0].revision, resolution: 'The owner supplied the input.' };
+  assert.throws(() => updateInvestigation(session, resolve, context), /dependency has not changed/);
+  appendEvent(session.id, 'message.user', { text: 'The requested input is now provided.' });
+  assert.equal(updateInvestigation(session, resolve, context).blockers[0].state, 'resolved');
+  assert.equal(listRecords('execution').length, 0);
+});
+
+test('a technical branch can resolve from a later successful recorded check without owner input', () => {
+  let branch = declare('technical-outcome', []);
+  const evidence = artifact(session, 'Immutable original failure', 'fixture failed');
+  branch = updateInvestigation(session, { action: 'set_dependencies', requestId: 'immutable-only', id: branch.id,
+    expectedRevision: branch.revision, dependencies: [{ kind: 'artifact', id: evidence.id }], rationale: 'Retain the original failure evidence.' }, context);
+  const technical = { key: 'parse', kind: 'technical', resolver: 'agent', description: 'The local fixture parser fails.',
+    affectedWork: 'The parser branch.', neededChange: 'Repair and rerun the authorized local parser check.' };
+  assert.throws(() => blocker(branch, { requestId: 'artifact-only', blocker: technical }), /Artifact records are immutable/);
+  branch = updateInvestigation(session, { action: 'set_dependencies', requestId: 'capture-check', id: branch.id, expectedRevision: branch.revision,
+    dependencies: [{ kind: 'artifact', id: evidence.id }, { kind: 'tool_outcome', id: branch.id }], rationale: 'Observe a successful local recheck after the repair.' }, context);
+  branch = blocker(branch, { blocker: technical });
+  const resolve = { action: 'resolve', requestId: 'resolved-parser', id: branch.id, expectedRevision: branch.revision,
+    blockerId: branch.blockers[0].id, expectedBlockerRevision: branch.blockers[0].revision, resolution: 'The authorized parser check now executes successfully; the finding remains unverified.' };
+  observe('failed-again');
+  observe('metadata-only', { kind: 'tool', name: 'update_investigation', command: '', exitCode: 0 });
+  assert.throws(() => updateInvestigation(session, resolve, context), /dependency has not changed/);
+  const success = observe('successful-check', { exitCode: 0, output: 'Fixture check passed.' });
+  const resolved = updateInvestigation(session, resolve, context);
+  assert.equal(resolved.blockers[0].state, 'resolved'); assert.equal(resolved.blockers[0].resolution.observedChange, true);
+  assert.equal(resolved.goalBlocker, undefined); assert.equal(getRecord('session', session.id).goal.status, 'active');
+  assert.equal(success.workUnitId, branch.id); assert.equal(listRecords('execution').length, 0);
+  const again = blocker(resolved, { requestId: 'new-technical-block', blocker: { ...technical, key: 'different-parser' } });
+  database().prepare("DELETE FROM records WHERE kind='core.episode.observation' AND id=?").run(success.id);
+  assert.throws(() => updateInvestigation(session, { ...resolve, requestId: 'missing-result-is-not-repair', expectedRevision: again.revision,
+    blockerId: again.blockers[1].id, expectedBlockerRevision: again.blockers[1].revision }, context), /newer successful host-observed/);
+});
+
+test('scope and external stoppers require their corresponding immutable dependency classifications', () => {
+  const branch = declare('scope-stop', [{ kind: 'execution_policy' }]);
+  const scope = blocker(branch, { requestId: 'scope-stopper', blockGoal: true, blocker: {
+    key: 'scope', kind: 'scope', resolver: 'owner', description: 'No approved target covers this branch.', affectedWork: 'This branch.', neededChange: 'The owner must review the permitted target scope.' } });
+  assert.ok(scope.goalBlocker);
+  session.goal = { ...session.goal, id: randomUUID() }; saveSession(session);
+  const outside = declare('external-stop');
+  const external = blocker(outside, { requestId: 'external-stopper', blockGoal: true, blocker: {
+    key: 'external', kind: 'external', resolver: 'external', description: 'A program response is still pending.', affectedWork: 'This branch.', neededChange: 'Receive the externally supplied program response.' } });
+  assert.ok(external.goalBlocker); assert.equal(external.goalBlocker.blockerIds.length, 1);
 });
 
 test('native blocked reasons are sanitized and unavailable reasons stay explicit', () => {

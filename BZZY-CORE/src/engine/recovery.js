@@ -12,7 +12,7 @@ import { routingStatus } from './workflow-routing.js';
 import { currentAssignmentMemoryCapsule } from './assignment-memory.js';
 import { currentBudgetCapsule, workerAllocationRevision } from './worker-budget.js';
 import { taskKnowledgeBrief } from './task-knowledge-brief.js';
-import { investigationCapsule } from './session-investigation.js';
+import { investigationCapsule, investigationBranchPage } from './session-investigation.js';
 import { programScopeCapsule } from './program-scope.js';
 import { knowledgeSourceRevision } from './knowledge-index.js';
 
@@ -125,13 +125,16 @@ export const taskStateDetailSections = ['contract', 'checkpoint', 'recovery', 'p
 const short = (value, maximum = 320) => typeof value === 'string' ? value.slice(0, maximum) : null;
 function preview(value, maximum = 1000) {
   const encoded = typeof value === 'string' ? value : JSON.stringify(value ?? null);
-  return { text: encoded.slice(0, maximum), truncated: encoded.length > maximum };
+  const bytes = Buffer.from(encoded); let end = Math.min(bytes.length, maximum);
+  while (end > 0 && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+  return { text: bytes.subarray(0, end).toString('utf8'), truncated: end < bytes.length };
 }
 function contextGeneration(session, context) {
-  if (context.contextGeneration != null) return String(context.contextGeneration);
   const saved = getRecord('session', session.id), native = saved?.nativeContext || session.nativeContext;
   const readiness = saved?.nativeBackendReadiness || session.nativeBackendReadiness;
-  return `${readiness?.threadRef || native?.threadRef || 'none'}:${native?.epoch || 0}`;
+  const value = context.contextGeneration != null ? String(context.contextGeneration)
+    : `${readiness?.threadRef || native?.threadRef || 'none'}:${native?.epoch || 0}`;
+  return Buffer.byteLength(value) <= 256 ? value : `sha256:${digest(value)}`;
 }
 function assignmentSessionForContext(session, context) {
   if (context.goalMode === false) return { ...session, goal: null };
@@ -199,32 +202,57 @@ export function compactTaskState(session, input = {}, context = {}) {
     details: { tool: 'read_task_state_details', revision, sections: taskStateDetailSections,
       pagination: 'Each section is UTF-8 JSON text. Keep its sourceRevision for subsequent byte pages.' },
     authority: 'Current runtime permissions, scope and verified acceptance remain authoritative. Historical notes, progress and summaries grant no permissions or completion.' };
-  // Host-created long IDs or unusually large routing metadata must not turn a
-  // routine poll back into an unbounded transcript. Exact sections remain open.
-  if (Buffer.byteLength(JSON.stringify(result)) > 8192) {
+  const overBudget = () => Buffer.byteLength(JSON.stringify(result)) > 8192;
+  const branchStubs = () => ({ ...source.investigation, repeatedAttempts: [],
+    branches: source.investigation.branches.map(item => ({ id: item.id, revision: item.revision, state: item.state,
+      openBlockerCount: item.openBlockerCount ?? (item.blockers?.length || 0) + (item.omittedBlockers || 0),
+      blockerIds: (item.blockerIds || item.blockers?.map(blocker => blocker.id) || []).slice(0, 2) })),
+    detail: 'investigation', lookup: 'Use read_investigation action:list for all branch IDs, then read each branch for blockers.',
+    authority: 'Recorded investigation state; not permission or verified completion.' });
+  // Historical excerpts are expendable before current decisions/questions or
+  // blocker identity. No amount of matching project history may evict these.
+  if (overBudget()) result.knowledgeBrief = { ...result.knowledgeBrief,
+    items: result.knowledgeBrief.items.map(item => ({ ...item, statement: preview(item.statement, 96).text })) };
+  while (overBudget() && result.knowledgeBrief.items.length) {
+    result.knowledgeBrief.items.pop(); result.knowledgeBrief.omitted++;
+  }
+  if (overBudget()) result.investigation = branchStubs();
+  if (overBudget()) {
     result.routing = { enforced: Boolean(routing.enforced), total: routing.total, open: routing.open, unmet: routing.unmet, detail: 'routing' };
     result.assignments.items = result.assignments.items.map(item => ({ id: item.id, state: item.state, currentRound: item.currentRound }));
     result.contract.constraints = []; result.contract.omittedConstraints = source.contract?.constraints?.length || 0;
+    result.historicalCheckpoint = state.historical ? { revision: state.historical.revision, reason: state.historical.reason, detail: 'checkpoint' } : null;
   }
-  if (Buffer.byteLength(JSON.stringify(result)) > 8192) {
-    result.checkpoint = checkpoint ? { revision: checkpoint.revision, pendingActions: preview(checkpoint.pendingActions || [], 320), detail: 'checkpoint' } : null;
-    result.currentGoal = goal ? { id: goal.id, status: goal.status, objective: preview(goal.objective, 320) } : null;
-    result.historicalCheckpoint = state.historical ? { revision: state.historical.revision, reason: state.historical.reason } : null;
-  }
-  if (Buffer.byteLength(JSON.stringify(result)) > 8192 && result.liveAgents) {
+  if (overBudget() && result.liveAgents) {
     result.liveAgents = { ...result.liveAgents, assignments: result.liveAgents.assignments.map(item => ({ assignmentId: item.assignmentId, round: item.round,
       state: item.state, closure: item.closure, reportArtifactId: item.reportArtifactId })),
-    taskPreviewsOmitted: true, lookup: 'Use assignment_status for each original/current assigned task and report references.' };
+      taskPreviewsOmitted: true, lookup: 'Use assignment_status for current tasks and report references.' };
   }
-  // Preserve at least the best source when possible; reduce navigation and
-  // excerpts before dropping historical entries under an unusually large state.
-  if (Buffer.byteLength(JSON.stringify(result)) > 8192) {
-    result.knowledgeBrief = { ...result.knowledgeBrief, items: result.knowledgeBrief.items.map(item => ({ ...item, statement: short(item.statement, 100) })) };
+  if (overBudget()) {
+    result.currentGoal = goal ? { id: goal.id, status: goal.status, objective: preview(goal.objective, 240) } : null;
+    result.contract.objective = preview(source.contract?.objective, 160);
+    result.pendingInput = preview(source.pendingInput, 160);
   }
-  while (Buffer.byteLength(JSON.stringify(result)) > 8192 && result.knowledgeBrief.items.length > 1) {
-    result.knowledgeBrief.items.pop(); result.knowledgeBrief.omitted++;
+  if (overBudget()) {
+    // Final navigation form has deliberately bounded fields, including Unicode
+    // previews. It retains every current checkpoint category and branch IDs.
+    // Full records remain revision-pinned through the section/source readers.
+    const minimal = { schemaVersion: 1, revision, contextGeneration: source.contextGeneration, scope: state.scope,
+      notModified: false, compacted: true, currentGoal: goal ? { id: goal.id, status: goal.status, objective: preview(goal.objective, 128) } : null,
+      checkpoint: checkpoint ? { revision: checkpoint.revision, decisions: preview(checkpoint.decisions || [], 192),
+        pendingActions: preview(checkpoint.pendingActions || [], 192), unresolvedQuestions: preview(checkpoint.unresolvedQuestions || [], 192),
+        completedWork: preview(checkpoint.completedWork || [], 96), detail: 'checkpoint' } : null,
+      investigation: branchStubs(), programScope: { enrolled: source.programScope.enrolled, state: source.programScope.state, detail: 'programScope' },
+      contract: { detail: 'contract', authority: 'Full current contract remains mandatory in execution instructions.' },
+      executionBudget: { detail: 'get_execution_budget', authority: 'Existing runtime limits remain in force.' },
+      knowledgeBrief: { items: [], omitted: source.knowledge.brief.omitted + source.knowledge.brief.items.length, detail: 'knowledgeBrief' },
+      pendingInput: preview(source.pendingInput, 96), details: result.details,
+      authority: result.authority };
+    // Do not copy optional imported metadata into the last-resort index.
+    minimal.investigation = { branches: minimal.investigation.branches, omittedBranches: source.investigation.omittedBranches,
+      detail: 'investigation', lookup: 'Use read_investigation action:list, then read a branch by ID and revision.' };
+    return minimal;
   }
-  if (Buffer.byteLength(JSON.stringify(result)) > 8192) throw new Error('Task-state identity exceeds the compact response budget.');
   return result;
 }
 
@@ -243,7 +271,7 @@ export function readTaskStateDetails(session, input, context = {}) {
     case 'projectContext': value = ['executor', 'reviewer'].includes(session.role) ? null : projectContext(session.projectRoot || session.cwd, { session }); break;
     case 'relevantMemory': value = ['executor', 'reviewer'].includes(session.role) ? [] : recall(session.projectRoot || session.cwd, (source.goal?.objective || '').slice(0, 500), 8, { session }); break;
     case 'knowledgeBrief': value = { items: source.knowledge.sources, authority: source.knowledge.brief.authority }; break;
-    case 'investigation': value = source.investigation; break;
+    case 'investigation': value = investigationBranchPage(session, {}, context); break;
     case 'programScope': value = source.programScope; break;
     case 'assignments': value = source.assignments; break;
     case 'importedContext': value = session.importedContext || null; break;

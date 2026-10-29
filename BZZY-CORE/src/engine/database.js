@@ -20,6 +20,13 @@ export function database() {
   connection.exec(`PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
     CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind,id));
+    CREATE INDEX IF NOT EXISTS records_work_unit_scope_v2 ON records(json_extract(data,'$.sessionId'),json_extract(data,'$.version'),
+      json_extract(data,'$.scope.goalId'),json_extract(data,'$.scope.runId'),json_extract(data,'$.scope.assignmentId'),json_extract(data,'$.scope.assignmentRound'),id)
+      WHERE kind='core.workflow.work-unit';
+    CREATE INDEX IF NOT EXISTS records_work_unit_scope_v1 ON records(json_extract(data,'$.sessionId'),json_extract(data,'$.version'),json_extract(data,'$.goalId'),id)
+      WHERE kind='core.workflow.work-unit';
+    CREATE INDEX IF NOT EXISTS records_branch_observations ON records(json_extract(data,'$.sessionId'),json_extract(data,'$.workUnitId'),json_extract(data,'$.sourceSeq') DESC)
+      WHERE kind='core.episode.observation';
     CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS session_events ON events(session_id,seq);
     CREATE INDEX IF NOT EXISTS session_event_types ON events(session_id,type,seq);
