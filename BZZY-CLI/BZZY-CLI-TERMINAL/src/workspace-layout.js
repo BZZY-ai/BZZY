@@ -1,25 +1,25 @@
-import fs from 'node:fs';
+import { canControlSession } from './session-controls.js';
 import { clean, cellWidth, clip } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
-import { fillSurface, sliceCells } from './terminal-surface.js';
-import { mascotCells, mascotLine } from './mascot.js';
-import { hostMetricsCompact } from './host-metrics.js';
+import { fillSurface } from './terminal-surface.js';
 import { namedTerminalSessions } from './session-browser.js';
 import { costLabel, deepseekSpendingVisible } from './session-cost-format.js';
+import { hostMetricsRows } from './host-metrics.js';
 import { accountStatusLabels } from './account-status.js';
+import { workspaceHeader, workspaceNavigation, sectionHeading, outlinedRow, padSurface } from './workspace-header.js';
 
-const version = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
-const navigation = [['Chat', 'chat'], ['Agents', 'agents'], ['Skills', 'skills'], ['Workflows', 'workflows'], ['Goals', 'goals'], ['Metrics', 'metrics'], ['Settings', 'settings']];
 export function workspaceGeometry(width, height, options = {}) {
-  if (width < 110 || height < 22) return null;
-  const left = options.hideLeft ? 0 : Math.max(23, Math.min(36, options.left || 27));
-  const right = options.hideRight || width < (left ? 150 : 110) ? 0 : Math.max(28, Math.min(60, options.right || 36, width - left - 54));
-  return { width, height, left, right, center: width - left - right - (left ? 1 : 0) - (right ? 1 : 0), x: left ? left + 1 : 0, y: 2, bodyHeight: height - 2 };
+  const minimumCenter = Math.min(46, width);
+  const compact = options.minimal || options.chromeOnly || height < 22;
+  let left = options.hideLeft === true || compact || width < 78 ? 0 : Math.max(20, Math.min(32, options.left || Math.floor(width * .23)));
+  let right = !options.chromeOnly && options.hideRight !== true && (options.showRight || !compact && width >= 116 && height >= 26)
+    ? Math.max(26, Math.min(54, options.right || Math.floor(width * .25))) : 0;
+  if (right && width - right - 1 < minimumCenter) right = 0;
+  if (left && right && width - left - right - 2 < minimumCenter) { if (options.showRight) left = 0; else right = 0; }
+  if (left && width - left - 1 < minimumCenter) left = 0;
+  return { width, height, left, right, center: width - left - right - (left ? 1 : 0) - (right ? 1 : 0), x: left ? left + 1 : 0, y: 2, bodyHeight: Math.max(1, height - 2) };
 }
-const fit = (text, width, theme, surface = palette.background) => {
-  const clipped = sliceCells(text, 0, width);
-  return theme.background(surface) + clipped + ' '.repeat(Math.max(0, width - cellWidth(clipped))) + theme.background(palette.background);
-};
+const fit = padSurface;
 const smallTokens = value => Number.isFinite(value) ? Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value) : '—';
 const sessionTime = value => {
   const date = new Date(value); if (!Number.isFinite(date.getTime())) return '';
@@ -27,38 +27,27 @@ const sessionTime = value => {
 };
 export function workspaceChrome(tui, geometry) {
   const { width, height, left, right, bodyHeight, x } = geometry, theme = tui.theme, c = theme.color, hits = [], regions = [];
-  const eyes = mascotCells(0, { columns: 12, rows: 2, compact: true }).map(cells => mascotLine(cells, theme));
-  const controls = [[' Nav ', 'left'], [' Live ', 'right']];
-  let top = eyes[0] + c(` BZZY ${version} `, palette.accent, true);
-  for (const [label, side] of controls) {
-    const start = cellWidth(top); top += c(label, palette.accent);
-    hits.push({ type: 'workspace-toggle', side, row: 1, left: start + 1, right: start + cellWidth(label) });
-  }
-  const relayOn = tui.ui.connectionStatus?.core === true && tui.ui.connectionStatus?.relay === true;
-  const status = c('●', tui.ui.connectionStatus?.core === true ? palette.success : palette.danger) + c(' BZZY Core  ', palette.muted) + c('●', relayOn ? palette.success : palette.danger) + c(' BZZY Relay', palette.muted) + c('  ' + hostMetricsCompact(tui.ui.hostMetrics), palette.muted);
-  top += ' '.repeat(Math.max(1, width - cellWidth(top) - cellWidth(status))) + status;
-  const meta = ` ${tui.model} · ${(tui.effort || 'default').replace(/^effort /, '')} · ${tui.tokenLabel()} · ${tui.elapsedClock()}`;
-  const second = eyes[1] + c(clip(meta, Math.max(1, width - 12)), palette.muted);
-  const header = [fit(top, width, theme), fit(second, width, theme)];
+  const chrome = workspaceHeader(tui, width), header = chrome.lines; hits.push(...chrome.hits);
   const sidebar = [];
   if (left) {
     const put = (text = '', tone = palette.text, bold = false, hit) => {
       if (hit) hits.push({ ...hit, row: sidebar.length + 3, left: 2, right: left - 1 });
-      sidebar.push(fillSurface(clip(text, left), left, theme, palette.surface, tone, bold));
+      sidebar.push(outlinedRow(text, left, theme, { tone }));
     };
-    put(' NAVIGATION', palette.muted);
-    for (const [label, panel] of navigation) {
+    sidebar.push(sectionHeading('NAVIGATION', left, theme));
+    for (const [label, panel] of workspaceNavigation) {
       const selected = tui.panel === panel;
       const row = sidebar.length + 3;
-      sidebar.push(fillSurface(` ${selected ? '▸' : ' '} ${label}`, left, theme, selected ? palette.selection : palette.surface, selected ? palette.accent : palette.text, selected));
+      sidebar.push(outlinedRow(` ${selected ? '›' : ' '} ${label}`, left, theme, { selected }));
       hits.push({ type: `top-${panel}`, row, left: 1, right: left });
     }
-    put('─'.repeat(left), palette.border);
-    put(' MODEL · configure ▾', palette.agent, true, { type: 'model-control', command: '/providers', disabled: tui.busy || tui.ui.sessionMode === 'VIEW' });
-    put(' ◇ Saved combinations ▾', palette.main, true, { type: 'model-control', command: '/providers @saved', disabled: tui.busy || tui.ui.sessionMode === 'VIEW' });
-    const modelDisabled = tui.busy || tui.ui.sessionMode === 'VIEW';
+    sidebar.push(sectionHeading('MODEL', left, theme, palette.agent));
+    const savedRow = sidebar.length + 3;
+    sidebar.push(outlinedRow(' ' + clip(tui.modelSelectionRequired ? 'Select / save model ▾' : tui.model + ' ▾', left - 3), left, theme, { tone: palette.main }));
+    hits.push({ type: 'model-control', command: '/providers @saved', disabled: tui.busy || !canControlSession(tui.ui), row: savedRow, left: 2, right: left - 1 });
+    const modelDisabled = tui.busy || !canControlSession(tui.ui);
     put(` Provider  ${tui.provider || 'Select'} ▾`, palette.agent, false, { type: 'model-control', command: '/providers @provider', disabled: modelDisabled });
-    put(` Model     ${tui.model} ▾`, palette.main, true, { type: 'model-control', command: '/models', disabled: modelDisabled });
+    if (bodyHeight >= 24) put(` Model     ${tui.model} ▾`, palette.main, true, { type: 'model-control', command: '/models', disabled: modelDisabled });
     put(` Effort    ${(tui.effort || 'default').replace(/^effort /, '')} ▾`, palette.agent, false, { type: 'model-control', command: '/effort', disabled: modelDisabled || tui.modelSelectionRequired });
     if (bodyHeight >= 29) {
       const cap = tui.modelCapabilities || {};
@@ -67,34 +56,41 @@ export function workspaceChrome(tui, geometry) {
       const price = cap.pricing || {};
       put(` In / Out  ${price.input != null ? price.input : '—'} / ${price.output != null ? price.output : '—'}`, palette.muted);
     }
-    put('─'.repeat(left), palette.border);
-    put(' USAGE · session ↗', palette.accent, true, { type: 'top-metrics' });
-    put(` ${tui.tokenLabel()}`, palette.text, true, { type: 'top-metrics' });
+    const usageRow = sidebar.length + 3; sidebar.push(sectionHeading('USAGE', left, theme, palette.accent, '↗'));
+    hits.push({ type: 'top-metrics', row: usageRow, left: 1, right: left });
+    put(` ${tui.tokenLabel()}`, palette.success, true, { type: 'top-metrics' });
+    const usage = tui.compactorUsage;
+    const compactor = usage?.available && Number.isSafeInteger(usage.tokens) && usage.tokens >= 0 ? (usage.complete ? '' : '≥') + usage.tokens.toLocaleString() : '—';
+    put(` Compactor  ${compactor}`, palette.agent, false, { type: 'top-metrics' });
     if (deepseekSpendingVisible(tui)) {
       if (bodyHeight >= 27) put(` Estimate ≈ ${costLabel(tui.spending?.total?.estimatedUsd)}`, palette.muted, false, { type: 'top-metrics' });
       const balance = accountStatusLabels(tui.ui.accountStatus).find(item => item.label === 'DeepSeek');
       if (balance && bodyHeight >= 24) put(` Balance ${balance.value} · provider`, palette.muted, false, { type: 'usage-balance' });
     }
     const sessionHeader = sidebar.length + 3;
-    put('─'.repeat(left), palette.border);
-    put(' SESSIONS' + ' '.repeat(Math.max(0, left - 12)) + ' + ', palette.accent, true, { type: 'top-sessions' });
-    hits.push({ type: 'session-new', row: sessionHeader + 1, left: left - 4, right: left });
+    sidebar.push(sectionHeading('SESSIONS', left, theme, palette.accent, '+'));
+    hits.push({ type: 'top-sessions', row: sessionHeader, left: 1, right: left - 4 }, { type: 'session-new', row: sessionHeader, left: left - 4, right: left });
     if (!tui.recentCache || Date.now() - tui.recentCache.at > 2000) tui.recentCache = { at: Date.now(), sessions: namedTerminalSessions() };
-    const saved = tui.recentCache.sessions, visible = Math.max(0, bodyHeight - sidebar.length - 1);
+    const saved = tui.recentCache.sessions, footerRows = 3, visible = Math.max(0, bodyHeight - sidebar.length - footerRows - (bodyHeight >= 22 ? 1 : 0));
     tui.sidebarMaximum = Math.max(0, saved.length - visible); tui.sidebarOffset = Math.min(tui.sidebarMaximum, tui.sidebarOffset || 0);
     const regionTop = sidebar.length + 3;
     for (const session of saved.slice(tui.sidebarOffset, tui.sidebarOffset + visible)) {
       const selected = session.id === tui.ui.sessionId, stamp = sessionTime(session.updatedAt || session.createdAt), active = session.id === tui.ui.sessionId && tui.busy || ['running', 'waiting_for_input', 'verifying'].includes(session.executionState);
-      const label = ` ${active ? '●' : '·'} ` + clip(session.alias, Math.max(1, left - stamp.length - 5));
-      const row = label + ' '.repeat(Math.max(1, left - cellWidth(label) - stamp.length - 1)) + stamp;
+      const label = ` ${active ? '●' : '·'} ` + clip(session.alias, Math.max(1, left - stamp.length - 6));
+      const row = label + ' '.repeat(Math.max(1, left - cellWidth(label) - stamp.length - 2)) + stamp;
       hits.push({ type: 'saved-session', id: session.id, row: sidebar.length + 3, left: 1, right: left });
-      sidebar.push(fillSurface(row, left, theme, selected ? palette.selection : palette.surface, selected ? palette.accent : active ? palette.success : palette.text, selected));
+      sidebar.push(outlinedRow(row, left, theme, { selected, tone: active ? palette.success : palette.text }));
     }
     if (!saved.length && visible) put(' Name a chat with /alias', palette.muted);
-    while (sidebar.length < bodyHeight - 1) put();
-    if (sidebar.length < bodyHeight) put(` ${saved.length} saved · scroll ↕`, palette.muted);
-    regions.push({ kind: 'sessions', left: 1, right: left, top: regionTop, bottom: height });
+    while (sidebar.length < bodyHeight - footerRows - 1) put();
+    if (sidebar.length < bodyHeight - footerRows) put(` ${saved.length} saved · scroll ↕`, palette.muted);
+    regions.push({ kind: 'sessions', left: 1, right: left, top: regionTop, bottom: bodyHeight - footerRows + 2 });
+    const hostRow = sidebar.length + 3;
+    sidebar.push(sectionHeading('HOST USAGE', left, theme, palette.accent, '↗'));
+    hits.push({ type: 'top-metrics', row: hostRow, left: 1, right: left });
+    for (const row of hostMetricsRows(tui.ui.hostMetrics, left - 2)) put(' ' + row, palette.success, false, { type: 'top-metrics' });
   }
+  for (let i = hits.length - 1; i >= 0; i--) if (hits[i].row > height) hits.splice(i, 1);
   const activity = [], monitor = tui.monitor;
   if (right) {
     const monitorLeft = width - right + 1;
@@ -105,34 +101,35 @@ export function workspaceChrome(tui, geometry) {
     const heights = kinds.map((kind, index) => 2 + (monitor.collapsed.has(kind) ? 0 : Math.floor(extra * weights[index] / (sum || 1))));
     if (open) heights[kinds.findLastIndex(kind => !monitor.collapsed.has(kind))] += bodyHeight - heights.reduce((a, b) => a + b, 0);
     for (const [index, kind] of kinds.entries()) {
-      const size = heights[index], top = activity.length + 3, collapsed = monitor.collapsed.has(kind), title = kind === 'agents' ? 'AGENTS' : kind === 'http' ? 'HTTP PROBE' : 'CODE';
+      const size = heights[index], top = activity.length + 3, collapsed = monitor.collapsed.has(kind), title = kind === 'agents' ? 'AGENTS / SKILLS' : kind === 'http' ? 'HTTP PROBE' : 'CODE';
       const contentWidth = right - 2;
       let label = `${collapsed ? '▸' : '▾'} ${title}`;
       if (kind === 'http') label += ` · ${monitor.requests(tui.traffic).length}`;
-      if (kind === 'agents') label += monitor.agentFilter ? ' · filtered' : ` · ${tui.activeAgentCount()} active`;
+
       const headerText = c(clip(label, right - 4), kind === 'agents' ? palette.agent : palette.tool, true);
-      activity.push(fit(headerText + ' '.repeat(Math.max(0, right - 2 - cellWidth(headerText))) + c('↗ ', palette.accent), right, theme, palette.surface));
+      activity.push(sectionHeading(clean(headerText), right, theme, kind === 'agents' ? palette.agent : palette.accent, '↗'));
       hits.push({ type: 'monitor-toggle', kind, row: top, left: monitorLeft, right: width - 3 }, { type: 'monitor-expand', kind, row: top, left: width - 2, right: width });
-      if (collapsed) { activity.push(fit(c('─'.repeat(right), palette.border), right, theme)); continue; }
-      let sub = kind === 'agents' ? monitor.agentFilter ? 'All agents · click to reset' : 'Chronological activity · All'
+      if (collapsed) { activity.push(c('└' + '─'.repeat(right - 2) + '┘', palette.border)); continue; }
+      let sub = kind === 'agents' ? 'TIME  AGENT / SKILL'
         : kind === 'http' ? `METHOD STATUS · ${monitor.httpFilter || 'all'} ▾`
           : monitor.files.get(monitor.activeFile)?.path || 'Recent files ▾';
-      activity.push(fit(c(clip(sub, right - 1), kind === 'code' ? palette.accent : palette.muted), right, theme));
+      activity.push(outlinedRow(' ' + sub, right, theme, { tone: kind === 'code' ? palette.accent : palette.muted }));
       hits.push({ type: 'monitor-menu', kind, row: top + 1, left: monitorLeft, right: width });
       const file = kind === 'code' && monitor.files.get(monitor.activeFile);
-      if (file && size >= 5) activity.push(fit(c(clip(`${tui.actors.for(file.actorSessionId, tui.ui.sessionId).name} · ${file.language || 'source'} · ${file.phase}`, right), palette.muted), right, theme));
+      if (file && size >= 5) activity.push(outlinedRow(' ' + `${tui.actors.for(file.actorSessionId, tui.ui.sessionId).name} · ${file.language || 'source'} · ${file.phase}`, right, theme, { tone: palette.muted }));
       const metadataRows = file && size >= 5 ? 1 : 0;
       const layout = monitor.rows(kind, contentWidth, tui), rows = Math.max(0, size - 3 - metadataRows);
       const maximum = Math.max(0, layout.lines.length - rows); monitor.maxima[kind] = maximum;
       monitor.offsets[kind] = Math.min(maximum, monitor.offsets[kind]);
-      const start = Math.max(0, layout.lines.length - rows - monitor.offsets[kind]);
+      const start = kind === 'agents' ? monitor.offsets[kind] : Math.max(0, layout.lines.length - rows - monitor.offsets[kind]);
       for (let i = 0; i < rows; i++) {
         const line = layout.lines[start + i] || '', mark = maximum ? i === Math.round((rows - 1) * start / maximum) ? '┃' : '│' : ' ';
-        activity.push(fit(line, right - 1, theme) + c(mark, palette.border));
+        activity.push(c('│', palette.border) + fit(line, right - 2, theme) + c(mark === ' ' ? '│' : mark, palette.border));
       }
-      for (const hit of layout.hits) if (hit.row >= start && hit.row < start + rows) hits.push({ ...hit, row: top + 2 + metadataRows + hit.row - start, left: monitorLeft + hit.left - 1, right: Math.min(width, monitorLeft + hit.right - 1) });
-      const footer = monitor.offsets[kind] ? '↓ Latest · scroll ↕' : kind === 'code' ? `[Follow ${monitor.followCode ? 'ON' : 'OFF'}] · ↓ Latest` : 'Live · scroll ↕';
-      activity.push(fit(c(clip(footer, right - 1), monitor.offsets[kind] ? palette.accent : palette.muted), right, theme));
+      for (const hit of layout.hits) if (hit.row >= start && hit.row < start + rows) hits.push({ ...hit, row: top + 2 + metadataRows + hit.row - start, left: monitorLeft + hit.left, right: Math.min(width - 1, monitorLeft + hit.right) });
+      const footer = kind === 'agents' ? 'Newest first · scroll ↕' : monitor.offsets[kind] ? '↓ Latest · scroll ↕' : kind === 'code' ? `[Follow ${monitor.followCode ? 'ON' : 'OFF'}] · ↓ Latest` : 'Live · scroll ↕';
+      const tail = clip(' ' + footer + ' ', right - 4);
+      activity.push(c('└─', palette.border) + c(tail, monitor.offsets[kind] ? palette.accent : palette.muted) + c('─'.repeat(Math.max(0, right - cellWidth(tail) - 3)) + '┘', palette.border));
       hits.push({ type: 'monitor-latest', kind, row: top + size - 1, left: monitorLeft, right: width - 2 });
       if (kind === 'code') hits.push({ type: 'monitor-follow', kind, row: top + size - 1, left: monitorLeft, right: monitorLeft + 11 });
       regions.push({ kind, left: monitorLeft, right: width, top: top + 1, bottom: top + size - 1 });

@@ -122,12 +122,12 @@ test('empty first chat exposes bottom model/effort controls and preserves unsent
   for (const columns of [80, 120]) {
    output.columns = columns; ui.tui.render();
    const controls = ui.tui.hitTargets.filter(hit => hit.type === 'model-control');
-   for (const command of ['/providers', '/effort']) assert.ok(controls.some(hit => hit.command === command));
+   for (const command of ['/providers @saved', '/effort']) assert.ok(controls.some(hit => hit.command === command));
    assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) <= columns - 1));
   }
   const answer = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.key('unsent draft', {}); ui.tui.render();
-  const target = ui.tui.hitTargets.find(hit => hit.command === '/providers'); ui.tui.mouse(0, target.left, target.row);
-  assert.equal(await answer, '/providers'); assert.equal(ui.tui.value, 'unsent draft');
+  const target = ui.tui.hitTargets.find(hit => hit.command === '/providers @saved'); ui.tui.mouse(0, target.left, target.row);
+  assert.equal(await answer, '/providers @saved'); assert.equal(ui.tui.value, 'unsent draft');
   assert.equal(listRecords('execution').length, 0);
  } finally { ui.close(); }
 });
@@ -150,7 +150,7 @@ test('the shared skills view reads instructions and explicitly enables a disable
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /SKILLS.*Import.*Export/s);
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /THIS CHAT \/ PROJECT.*BZZY CORE \/ GLOBAL/s);
   await ui.settingsCommand('/skills view:' + skill.name); ui.tui.render();
-  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Back to library[\s\S]*Inspect the layout[\s\S]*Skill · Esc goes back/);
+  assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Back to library[\s\S]*Inspect the layout[\s\S]*Actions/);
   assert.equal(skillRows(ui)[0].action, 'library');
   input.write('\x1b'); await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(ui.skillPreview, null); assert.equal(ui.tui.panel, 'skills');

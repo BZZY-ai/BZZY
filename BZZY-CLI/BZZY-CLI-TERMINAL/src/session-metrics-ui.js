@@ -225,6 +225,12 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
   if (Object.hasOwn(usage, 'subagentFollowups')) metric('Specialist follow-ups', usage.subagentFollowups);
   metric('Worker assignments', usage.workerAssignments);
   if (Object.hasOwn(usage, 'workerFollowups')) metric('Worker follow-ups', usage.workerFollowups);
+  if (compactor) {
+    const measured = Number.isSafeInteger(compactor.reportedTokens) && compactor.reportedTokens >= 0;
+    const partial = compactor.incompleteAttempts > 0 || compactor.legacyAttempts > 0;
+    const tokens = measured && (compactor.reportedTokens > 0 || !partial) ? `${partial ? '≥' : ''}${recordedCount(compactor.reportedTokens)}` : '—';
+    put('  Compactor tokens · whole chat: ' + tokens, partial ? 'warning' : 'text');
+  }
   const health = data.health;
   if (health?.available && (!panel.selectedGoalId || panel.selectedGoalId === data.currentGoalId)) {
     put(); put('  BZZY execution health · current session', 'accent', true);

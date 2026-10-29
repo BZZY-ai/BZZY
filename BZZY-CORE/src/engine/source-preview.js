@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { privateWorkspacePath } from './private-paths.js';
 import { diagnosticRedactor } from './diagnostic-redaction.js';
+import { safeCommandSource } from './source-stream.js';
 
 const sourceExtensions = /\.(?:[cm]?[jt]sx?|py|rb|go|rs|c|cc|cpp|h|hpp|java|kt|swift|sh|bash|zsh|ps1|sql|html?|css|scss|sass|vue|svelte|xml|ya?ml|toml|json|md|txt)$/i;
 const inside = (root, target) => target !== root && !path.relative(root, target).startsWith('..' + path.sep) && path.relative(root, target) !== '..' && !path.isAbsolute(path.relative(root, target));
@@ -36,10 +37,21 @@ export function sourcePreview(session, filename, { phase = 'completed', failed =
 }
 
 export function createSourceObserver(session, emit) {
-  const pending = new Map();
+  const pending = new Map(), commands = new Map();
   return data => {
     const params = data.params || {}, item = params.item;
     let changes = [], phase, callId, failed = false;
+    const nativeCommand = ['item/started', 'item/completed'].includes(data.method) && item?.type === 'commandExecution';
+    if (nativeCommand || data.method === 'tool.started' && params.name === 'Bash' || data.method === 'tool.completed' && commands.has(params.id)) {
+      const id = nativeCommand ? item.id : params.id;
+      const command = nativeCommand ? item.command : data.method === 'tool.started' ? params.input?.command : commands.get(id);
+      const done = nativeCommand ? data.method === 'item/completed' : data.method === 'tool.completed';
+      const failed = nativeCommand ? item.status === 'failed' || Number.isInteger(item.exitCode) && item.exitCode !== 0 : params.failed;
+      const preview = safeCommandSource(session, command, { callId: id, phase: failed ? 'failed' : done ? 'completed' : 'started' });
+      if (preview) emit('source.changed', preview);
+      if (!done) { if (commands.size >= 64) commands.delete(commands.keys().next().value); commands.set(id, command); } else commands.delete(id);
+      return;
+    }
     if (['item/started', 'item/completed'].includes(data.method) && item?.type === 'fileChange') {
       changes = item.changes || []; callId = item.id; phase = data.method === 'item/started' ? 'started' : 'completed'; failed = item.status === 'failed';
     } else if (data.method === 'tool.started' && /^(?:Write|Edit|MultiEdit)$/.test(params.name || '')) {

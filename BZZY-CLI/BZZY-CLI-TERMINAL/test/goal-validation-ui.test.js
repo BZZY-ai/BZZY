@@ -17,7 +17,7 @@ function terminal(t, minimal = false) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-validation-ui-')), previous = process.env.BZZY_HOME;
   process.env.BZZY_HOME = directory;
   const input = new PassThrough(); Object.assign(input, { isTTY: true, setRawMode() {} });
-  const output = new PassThrough(); Object.assign(output, { isTTY: true, columns: 80, rows: 24 }); output.resume();
+  const output = new PassThrough({ highWaterMark: 16 * 1024 * 1024 }); Object.assign(output, { isTTY: true, columns: 80, rows: 24 }); output.resume();
   const ui = new UI({ input, output, error: output, minimal, pet: false }), session = { id: randomUUID(), alias: 'Validated goal', cwd: directory,
     provider: 'codex', model: 'Active chat model', selectedEffort: 'high', goal };
   ui.setSession(session.id); ui.tui.theme = createTerminalTheme(output, { FORCE_COLOR: '3' });

@@ -84,7 +84,7 @@ test('attached approval clicks reclaim control after lease expiry or a genuine t
     const own = () => getRecord('input-owner', session.id), notices = () => seen.filter(item => item.type === 'info' && /Another client controls input/.test(item.data.message));
     assert.equal(own(), null, 'Opening the chat must not claim input'); assert.equal(ui.sessionMode, 'VIEW');
     ui.tui.render(); assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'confirm'));
-    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Send a message to continue here/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Type a message/);
     ui.tui.value = 'Keep this unsent draft'; ui.tui.cursor = ui.tui.value.length;
     for (const [state, answer] of [['unclaimed', 'yes'], ['expired', 'no'], ['transferred', 'yes']]) {
       const question = pending();
@@ -150,7 +150,7 @@ test('goal colors follow authoritative lifecycle states and animated dots fit co
     for (const [columns, rows] of [[80, 24], [140, 40]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /YOLO OFF/); assert.match(frame, status === 'complete' ? /Goal achieved/ : ['active', 'verifying'].includes(status) ? /goal\.\.\./ : /Goal stalled/);
+      assert.match(frame, /auto-approve: off/); assert.match(frame, status === 'complete' ? /Goal achieved/ : ['active', 'verifying'].includes(status) ? /goal\.\.\./ : /Goal stalled/);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
     }
   }

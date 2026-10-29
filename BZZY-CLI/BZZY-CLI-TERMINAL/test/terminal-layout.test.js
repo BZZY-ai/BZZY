@@ -14,22 +14,31 @@ function terminal() {
   return { ui, output, get written() { return written; } };
 }
 
-test('terminal chat retains branding, menus, history and composer across compact and wide sizes without native character images', () => {
+test('terminal chat retains branding, menus, history and composer across compact and wide sizes without native character images', async () => {
   const screen = terminal(), { ui, output } = screen;
   try {
     ui.event('message.user', { text: 'Original user request' }); ui.event('text', { text: 'Preserved assistant answer.' });
     for (const [columns, rows] of [[150, 42], [100, 32], [72, 24], [60, 24], [40, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.value = 'Keep this unsent draft'; ui.tui.cursor = 9; ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /bzzy/);
+      assert.match(frame, /BZZY/);
       if (columns >= 72) assert.match(frame, /terminal-fixture/);
       assert.match(frame, /Original user request/); assert.match(frame, /Preserved assistant answer/); assert.match(frame, /Keep this unsent draft/);
       for (const type of ['top-sessions', 'top-skills', 'top-agents', 'top-workflows', 'top-goals', 'top-settings', 'model-control', 'confirm']) {
-        assert.ok(ui.tui.hitTargets.some(hit => hit.type === type), `${type} remains accessible at ${columns} columns`);
+        assert.ok(ui.tui.hitTargets.some(hit => hit.type === type) || type.startsWith('top-') && ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'), `${type} remains accessible directly or through Nav at ${columns} columns`);
       }
       const dispatched = [], originalDispatch = ui.tui.localCommand;
       ui.tui.localCommand = command => dispatched.push(command);
-      for (const type of ['top-workflows', 'top-goals']) { const hit = ui.tui.hitTargets.find(row => row.type === type); ui.tui.mouse(0, hit.left, hit.row); }
+      for (const [type, value] of [['top-workflows', ':workflows'], ['top-goals', ':goals']]) {
+        const hit = ui.tui.hitTargets.find(row => row.type === type);
+        if (hit) ui.tui.mouse(0, hit.left, hit.row);
+        else {
+          const nav = ui.tui.hitTargets.find(hit => hit.type === 'workspace-toggle' && hit.side === 'left');
+          ui.tui.mouse(0, nav.left, nav.row); await Promise.resolve();
+          assert.ok(ui.tui.selection.choices.some(choice => choice.value === value));
+          ui.tui.finishSelection(value); await ui.tui.menuTask; ui.tui.render();
+        }
+      }
       ui.tui.localCommand = originalDispatch;
       assert.deepEqual(dispatched, ['/workflow library', '/saved-goals']);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
@@ -38,8 +47,8 @@ test('terminal chat retains branding, menus, history and composer across compact
     for (const panel of ['activity', 'http', 'room']) {
       ui.tui.setPanel(panel); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.doesNotMatch(frame, /[\u2800-\u28ff]|CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save|bzzy\s+\/\s+/u);
-      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-skills'), 'Every normal panel keeps the current terminal bar');
+      assert.doesNotMatch(frame, /CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save|bzzy\s+\/\s+/u);
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'), 'Every normal panel keeps the current terminal bar');
     }
     assert.doesNotMatch(screen.written, /\x1b_G/, 'The terminal uses text and brand eyes without native image transport');
   } finally { ui.close(); }
@@ -60,9 +69,9 @@ test('private Import and generated-code screens keep a compact header at every s
         ui.privateView = { title, lines: ['Sender fingerprint: ' + fingerprint, code], qr: [] };
         const answer = ui.ask(title + ' · Esc goes back'); await Promise.resolve();
         ui.tui.render(); const frame = clean(written);
-        assert.match(frame, /bzzy/); assert.match(frame, /Core.*Relay/);
+        assert.match(frame, /BZZY/); assert.match(frame, columns < 56 ? /●C.*●R/ : /Core.*Relay/);
         assert.match(frame, /transfer-model/); assert.ok(frame.includes(title)); assert.ok(frame.includes(code.slice(0, 25)));
-        assert.doesNotMatch(frame, /[\u2800-\u28ff]|CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save|bzzy\s+\/\s+/u);
+        assert.doesNotMatch(frame, /CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save|bzzy\s+\/\s+/u);
         if (columns >= 80) { assert.match(frame, /1,234 tokens/); assert.match(frame, /CPU 12%/); }
         assert.equal(ui.tui.lastFrame.length, 0); assert.equal(ui.tui.textRegion, null);
         assert.ok(!JSON.stringify(ui.tui.entries).includes(code)); assert.ok(!JSON.stringify(ui.tui.history).includes(code));

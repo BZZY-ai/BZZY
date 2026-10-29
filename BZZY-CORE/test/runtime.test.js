@@ -56,6 +56,7 @@ test('Core and a trusted host client discover the same daemon without exposing i
   assert.ok((await core.sessions()).some(item => item.id === session.id));
   const fromCLI = await runtimeRequest(host, 'GET', `/v1/sessions/${session.id}`);
   assert.equal(fromCLI.session.id, session.id);
+  assert.equal(fromCLI.compactorUsage.sessionId, session.id); assert.equal(fromCLI.compactorUsage.tokens, 0); assert.equal(fromCLI.compactorUsage.complete, true);
   assert.equal(fromCLI.observation.executionId, null); assert.equal(fromCLI.observation.runnerAlive, null);
   assert.ok(Number.isFinite(Date.parse(fromCLI.observation.observedAt)));
 });
@@ -95,6 +96,7 @@ test('observer subscriptions replay the same events, fail control and stop after
   const grant = await core.grantSession({ sessionId: session.id, expiresInSeconds: 60 });
   const observer = new BzzyClient({ url: `${runtimeInfo().url}/v1`, token: grant.token });
   assert.notEqual(grant.token, runtimeInfo().token);
+  assert.equal(Object.hasOwn(await observer.session(session.id), 'compactorUsage'), false, 'scoped observers receive no new owner accounting surface');
   await assert.rejects(observer.claim(session.id, randomUUID()), { status: 403 });
   await assert.rejects(observer.session(other.id), { status: 403 });
   const expected = appendEvent(session.id, 'future.unknown', { value: 1 }), abort = new AbortController();

@@ -96,12 +96,15 @@ test('Send, top Settings and Back controls react to actual SGR clicks', async t 
   assert.equal(await answer, 'an unsent draft'); tui.render();
   assert.ok(tui.pressedTarget, 'a clicked action retains a brief pressed state');
   const next = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
-  click(tui.hitTargets.find(hit => hit.type === 'top-settings'));
+  const settingsHit = tui.hitTargets.find(hit => hit.type === 'top-settings');
+  if (settingsHit) click(settingsHit);
+  else { click(tui.hitTargets.find(hit => hit.type === 'workspace-toggle' && hit.side === 'left')); await Promise.resolve(); tui.finishSelection(':settings'); await tui.menuTask; }
   assert.equal(await next, '/settings');
   ui.openSettings(); tui.render();
   click(tui.hitTargets.find(hit => hit.type === 'settings-back')); assert.equal(tui.panel, 'chat');
   const help = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
-  click(tui.hitTargets.find(hit => hit.type === 'model-control' && hit.command === '/help'));
+  click(tui.hitTargets.find(hit => hit.type === 'workspace-actions')); await Promise.resolve();
+  assert.ok(tui.selection.choices.some(choice => choice.value === '/help')); tui.finishSelection('/help'); await tui.menuTask;
   assert.equal(await help, '/help');
 });
 
@@ -182,7 +185,7 @@ test('inline rename has mouse Save/Cancel controls and does not consume the chat
 test('mouse cancellation keeps hidden input and private transfers outside durable chat and frame caches', async t => {
   const { ui, tui, input } = terminal(t);
   const secret = ui.secret('Private key input'); await Promise.resolve(); input.write('fixture-only-value'); tui.render();
-  const cancel = tui.hitTargets.find(hit => hit.type === 'cancel'); input.write(`\x1b[<0;${cancel.left};${cancel.row}M`);
+  const cancel = tui.hitTargets.find(hit => ['back', 'cancel'].includes(hit.type)); input.write(`\x1b[<0;${cancel.left};${cancel.row}M`);
   assert.equal(await secret, null); assert.equal(tui.value, 'an unsent draft');
   let cancelled = false; ui.privateView = { title: 'Share', lines: ['temporary-private-fixture'], onCancel: () => { cancelled = true; } }; tui.render();
   const control = tui.hitTargets.find(hit => hit.type === 'private-cancel'); input.write(`\x1b[<0;${control.left};${control.row}M`);

@@ -1,3 +1,4 @@
+import { canControlSession } from './session-controls.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -99,7 +100,7 @@ async function sharePortable(session, ui, { relayLoader = () => import('@bzzy/co
   assertContext();
   const label = library ? compact && library.kinds?.length === 1
     ? { skill: 'skills', agent: 'agents', workflow: 'workflows', goal: 'goals', extension: 'extensions' }[library.kinds[0]] || 'Library' : 'Library' : 'terminal';
-  if (ui.sessionMode === 'VIEW') throw new Error('Attach with control before sharing this terminal.');
+  if (!canControlSession(ui)) throw new Error('Attach with control before sharing this terminal.');
   if ((!library && !session?.id) || !path.isAbsolute(session.cwd || '')) throw new Error('Choose an existing terminal project before sharing.');
   let service, share, state, cancelled = false;
   try {

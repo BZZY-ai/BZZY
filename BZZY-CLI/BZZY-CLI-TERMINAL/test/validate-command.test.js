@@ -149,7 +149,7 @@ def started():
     linked = links()
     return linked and db.execute("SELECT 1 FROM records WHERE kind='execution' AND json_extract(data,'$.sessionId')=? LIMIT 1", (linked[-1]['sessionId'],)).fetchone()
 try:
-    until(lambda: 'fixture-validate-command' in visible() and any(label in visible() for label in ('Read-only session', 'Ask BZZY to do anything', 'Send a message to continue here')))
+    until(lambda: 'fixture-validate-command' in visible() and any(label in visible() for label in ('Read-only session', 'Type a message')))
     os.write(master, b'/validate\r')
     if sys.argv[5] == 'started':
         until(started)
@@ -160,7 +160,10 @@ try:
         deadline = time.monotonic() + 4.25
         while time.monotonic() < deadline: drain()
         frame = visible()
-        prose = re.sub(r'\s+', ' ', frame.replace('│', '').replace('┃', ''))
+        # Reflow only the actual chat column; sidebars are independent surfaces.
+        header = next(line for line in frame.splitlines() if '┌ ●' in line)
+        left, right = header.index('┌ ●'), header.index('┐', header.index('┌ ●')) + 1
+        prose = re.sub(r'\s+', ' ', ' '.join(line[left:right].replace('│', '').replace('┃', '') for line in frame.splitlines()))
         assert 'Validation could not start' in frame, frame
         assert 'Restore the original files' in prose, frame
         assert 'Saved artifact copies were kept' in prose, frame

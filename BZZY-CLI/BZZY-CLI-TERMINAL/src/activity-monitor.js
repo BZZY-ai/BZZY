@@ -37,12 +37,17 @@ export class ActivityMonitor {
   scrub(value) { this.redactor ||= diagnosticRedactor({ maxString: 4096, maxItems: 32 }); return this.redactor.scrub(value); }
   event(type, data, actors, sessionId) {
     if (data.seq != null) { const key = `${data.eventSessionId || sessionId}:${data.seq}`; if (this.seen.has(key)) return; this.seen.add(key); if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value); }
-    if (type === 'source.changed' && typeof data.path === 'string') {
-      const key = `${data.actorSessionId || sessionId}:${data.path}`, previous = this.files.get(key);
+    if (['source.changed', 'source.delta'].includes(type) && typeof data.path === 'string') {
+      const key = `${data.actorSessionId || sessionId}:${data.sourceId || data.path}`, previous = this.files.get(key);
+      if (type === 'source.delta') {
+        const prior = previous?.sourceText || '';
+        if (!Number.isSafeInteger(data.revision) || data.revision <= 0 || !Number.isSafeInteger(data.replaceFrom) || data.replaceFrom < 0 || data.replaceFrom > prior.length || typeof data.text !== 'string' || previous?.streamRevision >= data.revision) return;
+        data = { ...data, content: prior.slice(0, data.replaceFrom) + data.text, streamRevision: data.revision };
+      }
       const lines = typeof data.content === 'string' ? clean(data.content).split('\n').slice(0, 5000) : previous?.lines || [];
       const changed = new Set();
       if (typeof data.content === 'string' && previous?.lines) for (let i = 0; i < lines.length; i++) if (lines[i] !== previous.lines[i]) changed.add(i);
-      const file = { ...previous, ...data, key, lines, changed, clipped: typeof data.content === 'string' && data.content.split('\n').length > 5000 };
+      const file = { ...previous, ...data, key, sourceText: typeof data.content === 'string' ? data.content.slice(0, 256 * 1024) : previous?.sourceText, lines, changed, clipped: typeof data.content === 'string' && data.content.split('\n').length > 5000 };
       delete file.content;
       this.files.delete(key); this.files.set(key, file);
       if (this.files.size > 24) this.files.delete(this.files.keys().next().value);
@@ -50,19 +55,17 @@ export class ActivityMonitor {
       else if (this.activeFile === key && previous) this.offsets.code = Math.max(0, this.offsets.code + lines.length - previous.lines.length);
       this.revision++; return;
     }
-    const actorId = data.workerSessionId || data.childSessionId || data.actorSessionId || data.sessionId;
-    const actor = actors.for(actorId, sessionId);
-    if (actor.role === 'main') return;
-    let summary;
-    if (type === 'activity') summary = data.summary;
-    else if (type === 'worker.tool') summary = `${data.label || data.name || 'Tool'} ${data.detail || ''} · ${data.phase || 'reported'}`;
-    else if (type === 'worker.progress') summary = data.message || data.name || data.status;
-    else if (type.startsWith('assignment.')) summary = `${type.slice(11)} · ${data.name || data.status || ''}`;
-    if (!summary) return;
-    const safe = this.scrub(String(summary));
-    this.feed.push({ actorId, summary: clean(safe), at: data.occurredAt || data.createdAt || data.startedAt || data.updatedAt, type, phase: data.phase || data.status });
-    if (this.feed.length > 1500) this.feed.splice(0, this.feed.length - 1500);
-    if (this.offsets.agents > 0) this.offsets.agents++;
+  }
+  invocation(entry, data = {}) {
+    if (!entry || entry.kind !== 'invocation') return;
+    const id = entry.invocationId || entry.assignmentId;
+    if (!id) return;
+    const previous = this.feed.find(row => row.id === id);
+    if (previous) { previous.entry = entry; previous.summary = entry.name; return; }
+    this.feed.unshift({ id, entry, actorId: entry.actorSessionId, kind: entry.invocationType,
+      summary: entry.name, at: data.occurredAt || data.createdAt || entry.createdAt, type: entry.invocationType === 'skill' ? 'skill.loaded' : 'agent.invoked' });
+    if (this.feed.length > 1500) this.feed.length = 1500;
+    if (this.offsets.agents) this.offsets.agents++;
     this.revision++;
   }
   requests(traffic) {
@@ -95,6 +98,8 @@ export class ActivityMonitor {
         if (typeof row.responsePreview === 'string') for (const line of wrap(this.scrub(row.responsePreview), width)) put(line, palette.text);
         if (row.responseBytes != null) put(`${row.responseBytes} response bytes`);
         if (row.message) put(this.scrub(row.message), palette.warning);
+      } else if (detail.row.entry) {
+        return tui.entryLayout(detail.row.entry, width);
       } else {
         put(tui.actors.for(detail.row.actorId, tui.ui.sessionId).label, palette.agent);
         for (const line of wrap(detail.row.summary, width)) put(line, detail.row.type === 'source.changed' ? line.startsWith('+') ? palette.success : line.startsWith('-') ? palette.danger : line.startsWith('@@') ? palette.accent : palette.text : palette.text);
@@ -103,15 +108,13 @@ export class ActivityMonitor {
       return { lines, hits };
     }
     if (kind === 'agents') {
-      const rows = this.feed.filter(row => !this.agentFilter || row.actorId === this.agentFilter);
-      for (const row of rows) {
-        const actor = tui.actors.for(row.actorId, tui.ui.activeTab || tui.ui.sessionId), stamp = time(row.at), name = clip(actor.name, Math.min(16, Math.floor(width / 3)));
-        const prefix = stamp + ' ' + name + ' ';
-        hits.push({ type: 'monitor-agent', actorId: row.actorId, row: lines.length, left: 6, right: 6 + cellWidth(name) },
-          { type: 'monitor-detail', kind, item: row, row: lines.length, left: 7 + cellWidth(name), right: width });
-        lines.push(c(stamp + ' ', palette.muted) + c(name + ' ', actorColor(actor)) + c(clip(row.summary, Math.max(1, width - cellWidth(prefix))), row.phase === 'failed' ? palette.danger : palette.text));
+      for (const row of this.feed) {
+        const tone = row.kind === 'skill' ? palette.agent : actorColor({ role: 'subagent', name: row.summary });
+        const stamp = time(row.at), label = (row.kind === 'skill' ? '✧ ' : '◇ ') + row.summary;
+        hits.push({ type: 'monitor-detail', kind, item: row, row: lines.length, left: 1, right: width });
+        lines.push(c(stamp + ' ', palette.muted) + c(clip(label, Math.max(1, width - stamp.length - 1)), tone));
       }
-      if (!lines.length) { put(this.agentFilter ? 'No activity for this agent.' : 'Waiting for subagent activity.'); put('Only recorded execution events appear.'); }
+      if (!lines.length) { put('No agent or skill invocations yet.'); put('Newest invocations appear here first.'); }
     } else if (kind === 'http') {
       for (const row of this.requests(tui.traffic)) {
         let endpoint; try { const url = new URL(redactedUrl(row.url)); endpoint = (width >= 60 ? url.host : '') + url.pathname + url.search; } catch { endpoint = '[invalid URL]'; }
@@ -121,7 +124,7 @@ export class ActivityMonitor {
       if (!lines.length) { put('No observed HTTP requests.'); put('http_request records automatically.'); put('--capture-network captures proxy clients.'); }
     } else {
       const file = this.files.get(this.activeFile);
-      if (!file) { put('Waiting for native file edits.'); put('Actual source appears after each write.'); return { lines, hits }; }
+      if (!file) { put('Waiting for code or file edits.'); put('Native input and saved source appear here.'); return { lines, hits }; }
       if (file.unavailable) put(file.unavailable, palette.warning);
       if (!file.lines.length) put(file.phase === 'started' ? 'Edit started · waiting for file contents.' : 'No readable source available.');
       const digits = Math.max(3, String(file.lines.length).length);
@@ -136,7 +139,7 @@ export class ActivityMonitor {
     return { lines, hits };
   }
   scroll(kind, delta) {
-    this.offsets[kind] = Math.max(0, Math.min(this.maxima[kind] || 0, this.offsets[kind] - delta));
+    this.offsets[kind] = Math.max(0, Math.min(this.maxima[kind] || 0, this.offsets[kind] + (kind === 'agents' ? delta : -delta)));
     if (kind === 'code') this.followCode = this.offsets.code === 0;
   }
 }

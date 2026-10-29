@@ -31,7 +31,7 @@ export class RunnerUI {
     if (type === 'backend') {
       try { this.sourceObserver?.(data); } catch { /* Preview failures cannot affect execution. */ }
     }
-    if (this.options.parentSessionId && type === 'source.changed') appendEvent(this.options.parentSessionId, type, data);
+    if (this.options.parentSessionId && ['source.changed', 'source.delta'].includes(type)) appendEvent(this.options.parentSessionId, type, data);
     if (this.options.parentSessionId) {
       try {
         const action = this.toolActivity(type, data);

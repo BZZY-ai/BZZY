@@ -166,7 +166,7 @@ test('saved main and same-model named worker activity retains attribution across
   try {
     replay();
     const content = ui.tui.content(100).map(clean).join('\n');
-    assert.match(content, /MAIN · bzzy/); assert.match(content, /AGENT · scope-reviewer/);
+    assert.match(content, /BZZY · Main/); assert.match(content, /AGENT · scope-reviewer/);
     assert.match(content, /Main · Reviewing the target scope/); assert.match(content, /Agent · http-analyst · Comparing/);
     assert.match(content, /Main · Tool calls/); assert.match(content, /worker\.md/);
     assert.match(content, /By Agent · http-analyst/); assert.match(content, /By Main/);

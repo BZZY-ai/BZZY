@@ -1,3 +1,4 @@
+import { canControlSession } from './session-controls.js';
 import { NativeExtensions } from './extensions-ui.js';
 import { updateCommand } from './update-checker.js';
 import { skillsCommand } from './skills-ui.js';
@@ -101,7 +102,7 @@ export class UI {
     finally { this.permissionSubmitting = false; tui.schedule(); }
   }
   canSubmitInput() {
-    return this.sessionMode !== 'VIEW' || Boolean(this.permissionConnection?.acquire);
+    return canControlSession(this);
   }
   canAnswerApproval() {
     return Boolean(this.onAnswerApproval && this.canSubmitInput());

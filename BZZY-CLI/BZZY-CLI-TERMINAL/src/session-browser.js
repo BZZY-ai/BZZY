@@ -1,3 +1,4 @@
+import { canControlSession } from './session-controls.js';
 import { BzzyCore, terminalSession } from '@bzzy/core';
 import { randomUUID } from 'node:crypto';
 import { newConversation } from '@bzzy/core/engine/host-commands.js';
@@ -30,6 +31,21 @@ export function queueSessionBrowser(ui) {
     if (!tui.inputQueue.some(item => item.sessionId === sessionId && item.text === '/sessions')) tui.inputQueue.push({ sessionId, text: '/sessions' });
   }
   return true;
+}
+
+// Preview only saved identity/location. The history reader, input lease and
+// original working directory are untouched until the user explicitly opens it.
+export async function confirmSavedSessionOpen(ui, id) {
+  const source = namedTerminalSessions().find(item => item.id === id);
+  if (!source) return false;
+  const origin = ui.activeTab || ui.sessionId;
+  const choose = ui.tui?.localChoice ? ui.tui.localChoice.bind(ui.tui) : ui.chooseOne.bind(ui);
+  const selected = await choose('Open session?', {
+    description: `${source.alias}\n${source.cwd}`,
+    descriptionRows: 2,
+    choices: [{ value: 'open', label: 'Open' }, { value: 'cancel', label: 'Cancel', selected: true }],
+  }, { presentation: 'context', scope: 'session-open' });
+  return selected === 'open' && (ui.activeTab || ui.sessionId) === origin;
 }
 
 export async function chooseSavedSession(ui, { excludeId } = {}) {
@@ -65,6 +81,7 @@ export async function chooseSavedSession(ui, { excludeId } = {}) {
         if (ui.nextSession) return null;
         continue;
       }
+      if (!await confirmSavedSessionOpen(ui, id)) continue;
       return { session, action: 'attach' };
     }
   } finally {
@@ -77,7 +94,7 @@ export async function chooseSavedSession(ui, { excludeId } = {}) {
 }
 
 export async function renameSavedSession(ui, id) {
-  if (ui.sessionMode === 'VIEW') throw new Error('Attach with control before renaming a terminal.');
+  if (!canControlSession(ui)) throw new Error('Attach with control before renaming a terminal.');
   const source = loadSession(id);
   if (!source || !namedTerminalSessions([source]).length) throw new Error('Choose an existing named terminal.');
   const alias = await ui.ask('Rename saved terminal · Esc cancels', { initialValue: source.alias });
@@ -149,7 +166,7 @@ export function forgetDeletedConversation(ui, source, ids = [source.id], {
 // A host-only client action. Loading context for sharing never attaches to a
 // session, takes its input lease or replays model work.
 export async function shareSavedSession(ui, id, { share = shareTerminal } = {}) {
-  if (ui.sessionMode === 'VIEW') throw new Error('Attach with control before sharing a terminal.');
+  if (!canControlSession(ui)) throw new Error('Attach with control before sharing a terminal.');
   const session = loadSession(id);
   if (!session || !namedTerminalSessions([session]).length) throw new Error('Choose an existing named terminal.');
   return share(session, ui);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { HostMetricsMonitor, hostMetricsLabel } from '../src/host-metrics.js';
+import { HostMetricsMonitor, hostMetricsLabel, hostMetricsRows } from '../src/host-metrics.js';
 import { UI } from '../src/ui.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 
@@ -19,12 +19,12 @@ test('Core telemetry is rendered as host CPU/RAM and never confused with a goal 
     ui.setSession('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
     await new Promise(resolve => setTimeout(resolve, 10)); ui.tui.render();
     assert.equal(reads, 1);
-    assert.match(ui.tui.lastFrame[0], /CPU\s*19%.*12\.5\/32(?: GB|G)/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /CPU\s*19%.*12\.5\/32(?: GB|G)/);
     assert.equal(ui.tui.entries.length, 0, 'telemetry does not become transcript/history');
     for (const columns of [48, 22]) {
       output.columns = columns; ui.tui.render();
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) <= columns));
-      if (columns >= 60) assert.match(ui.tui.lastFrame.map(clean).join('\n'), /CPU 19%/);
+      if (columns >= 40) assert.match(ui.tui.lastFrame.map(clean).join('\n'), /CPU\s*19%/);
       else assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /RAM/);
     }
   } finally { ui.close(); }

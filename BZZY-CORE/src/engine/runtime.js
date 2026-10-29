@@ -1,3 +1,4 @@
+import { sessionCompactorUsage } from './compaction-cost.js';
 import { coreUpdates } from './updates.js';
 import { guardedInterval } from './interval.js';
 import http from 'node:http';
@@ -262,7 +263,7 @@ export async function serveRuntime() {
         else if (['parallel', 'besties'].includes(session.mode)) children.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         const questionSessions = new Set([id, ...children.map(s => s.id)]);
         const spending = rootToken && deepseekSpendingVisible(session) ? sessionSpending(id, sessionMetricsFamily(id)) : undefined;
-        send(response, 200, { session, spending, invocations: sessionInvocations(id), observation: observeExecution(jobs[0]), permissions: { yolo: terminalYolo(id) ?? Boolean(['queued', 'launching', 'running'].includes(jobs[0]?.state) && jobs[0]?.options?.yolo) }, run: getRecord('run', id), execution: jobs[0] || null,
+        send(response, 200, { session, spending, ...(rootToken ? { compactorUsage: sessionCompactorUsage(id) } : {}), invocations: sessionInvocations(id), observation: observeExecution(jobs[0]), permissions: { yolo: terminalYolo(id) ?? Boolean(['queued', 'launching', 'running'].includes(jobs[0]?.state) && jobs[0]?.options?.yolo) }, run: getRecord('run', id), execution: jobs[0] || null,
           questions: listRecords('question', { sessionIds: [...questionSessions], state: 'pending' }), inputOwner: effectiveInputOwner(id),
           children: children.map(s => ({ id: s.id, provider: s.provider, model: s.model, agent: s.agentNamespace || s.provider, executionState: s.executionState, goalStatus: s.goal?.status || null })),
           capabilities: { activeSteering: session.backend === 'codex' && !['parallel', 'debate', 'besties'].includes(session.mode), durableEvents: true, chatTabs: ['parallel', 'besties'].includes(session.mode) } }); return;

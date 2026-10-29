@@ -33,7 +33,7 @@ export function navigateSettings(rows, focus, key, { shift = false, column = 0 }
 export function settingsLayout(settings, width, theme, { spaced = true } = {}) {
   const rows = settings.rows(), actions = settingsActions(rows), lines = [], hits = [];
   settings.focus = Math.max(0, Math.min(settings.focus, actions.length - 1));
-  let actionIndex = 0, focusRow = 0;
+  let actionIndex = 0, focusRow = 0, focusRange;
   const size = Math.max(12, width - 4), margin = '  ';
   const tableWide = width >= 74, payload = size - 9;
   const columns = [Math.min(22, Math.max(12, Math.floor(payload * 0.25))), Math.min(20, Math.max(12, Math.floor(payload * 0.2))), 0, size >= 110 ? 14 : 10];
@@ -61,12 +61,13 @@ export function settingsLayout(settings, width, theme, { spaced = true } = {}) {
       continue;
     }
     if (row.modelTable) {
-      const fields = row.modelTable.cells, label = row.modelTable.label || row.text;
+      const fields = row.modelTable.cells, label = row.modelTable.label || row.text, groupTop = lines.length;
       if (!tableWide) lines.push(margin + theme.color(clip(label, size), palette.text, true));
       const role = clip(label, columns[0]);
       let line = margin + theme.color(role + ' '.repeat(Math.max(0, columns[0] - cellWidth(role))), palette.text), left = 3 + columns[0];
       for (const [at, cell] of fields.entries()) {
         const focused = cell.action && actionIndex === settings.focus;
+        if (focused) focusRange = { top: groupTop, bottom: groupTop + (tableWide ? 0 : fields.length) };
         const span = tableWide ? columns[at + 1] : size;
         if (tableWide) { line += theme.color(' │ ', palette.border); left += 3; }
         const caption = (tableWide ? '' : ['Provider', 'Model', 'Effort'][at] + ' · ') + cell.text;
@@ -104,12 +105,12 @@ export function settingsLayout(settings, width, theme, { spaced = true } = {}) {
     if (row.card) {
       const background = focused ? palette.selection : palette.surface;
       const title = clip(`${focused ? '›' : ' '} ${row.icon || '◇'}  ${row.text}  ▸`, size);
-      const detail = clip(row.value ? row.detail + ' · ' + row.value : row.detail || '', size - 3);
+      const detail = row.value ? row.detail + ' · ' + row.value : row.detail || '';
       addHit(row, 3, size + 2, actionIndex);
       lines.push(margin + fillSurface(title, size, theme, background, focused ? palette.accent : palette.text, true));
-      if (detail) {
+      for (const part of detail ? wrap(detail, size - 3) : []) {
         addHit(row, 3, size + 2, actionIndex);
-        lines.push(margin + theme.color('   ' + detail, palette.muted));
+        lines.push(margin + theme.color('   ' + part, palette.muted));
       }
       actionIndex++; addGap(); continue;
     }
@@ -132,5 +133,5 @@ export function settingsLayout(settings, width, theme, { spaced = true } = {}) {
     } else if (lines.length && lines.at(-1) !== '') lines.push('');
   }
   while (lines.at(-1) === '') lines.pop();
-  return { lines, hits, focusRow, focusAction: actions[settings.focus]?.action };
+  return { lines, hits, focusRow, focusRange, focusAction: actions[settings.focus]?.action };
 }

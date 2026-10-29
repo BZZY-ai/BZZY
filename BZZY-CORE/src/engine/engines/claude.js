@@ -1,3 +1,4 @@
+import { createStreamingSourceObserver } from '../source-stream.js';
 import path from 'node:path';
 import readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
@@ -145,9 +146,13 @@ export class ClaudeEngine {
       child.once('close', code => resolve(code));
     });
     const observedTools = new Map();
+    const observeSourceInput = createStreamingSourceObserver(this.session, (type, data) => this.ui.event(type, data));
     lines.on('line', line => {
       try {
         const event = JSON.parse(line);
+        if (event.type === 'stream_event' && !event.parent_tool_use_id) {
+          try { observeSourceInput(event.event || {}); } catch { /* Optional source display never changes native dispatch. */ }
+        }
         if (event.type === 'control_response' && event.response?.request_id === initializeId) {
           clearTimeout(initializeTimeout);
           if (event.response.subtype === 'success') {

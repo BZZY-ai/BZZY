@@ -41,3 +41,18 @@ export function hostMetricsCompact(sample) {
   const total = (memory.totalBytes / 1024 ** 3).toFixed(memory.totalBytes >= 10 * 1024 ** 3 ? 0 : 1);
   return `CPU ${cpu === null ? '—' : `${cpu.toFixed(0)}%`} · RAM ${used}/${total} GB`;
 }
+
+// Sidebar meters use the same Core sample as the persistent header.
+export function hostMetricsRows(sample, width = 24) {
+  const cpu = sample?.host?.cpuPercent, memory = sample?.host?.memory;
+  const validCPU = Number.isFinite(cpu) && cpu >= 0 && cpu <= 100;
+  const validRAM = memory && Number.isFinite(memory.totalBytes) && memory.totalBytes > 0 &&
+    Number.isFinite(memory.usedBytes) && memory.usedBytes >= 0 && memory.usedBytes <= memory.totalBytes;
+  const meter = (label, value, ratio) => {
+    const size = Math.max(0, width - label.length - value.length - 3);
+    const filled = ratio == null ? 0 : Math.round(size * ratio);
+    return label + ' ' + (size ? '━'.repeat(filled) + '─'.repeat(size - filled) + ' ' : '') + value;
+  };
+  return [meter('CPU', validCPU ? Math.round(cpu) + '%' : '—', validCPU ? cpu / 100 : null),
+    meter('RAM', validRAM ? (memory.usedBytes / 1024 ** 3).toFixed(1) + '/' + (memory.totalBytes / 1024 ** 3).toFixed(0) + 'G' : '—', validRAM ? memory.usedBytes / memory.totalBytes : null)];
+}

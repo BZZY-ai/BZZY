@@ -59,6 +59,14 @@ Implemented:
   Existing native events remain intact; older workers have only their previously
   recorded detail. This adds no model-memory or compactor behavior.
 
+- Owner terminal source previews use actual native file edits and shell inputs.
+  Claude tool-input chunks emit redacted, revisioned display patches; complete
+  native commands and atomic file writes appear immediately. Proposed input is
+  labelled separately from completed source and never grants execution rights.
+  Owner session snapshots include measured background-compactor token usage,
+  independently of pricing; scoped observers gain no new accounting surface.
+  See [terminal telemetry coverage](../BZZY-CLI/BZZY-CLI-TERMINAL/docs/TUI.md).
+
 - Workspace snapshots default to 1 GiB per file, 8 GiB total and 100,000 files,
   with size/count preflight before payload hashing. Explicit owner limits remain
   authoritative. Runtime caches, including `.cache/ms-playwright`, are excluded

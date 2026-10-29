@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { createSession, saveSession, loadSession, sessions, findSession, setSessionAlias, sessionPath } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
 import { chooseSavedSession, namedTerminalSessions, promptSessionAlias, queueSessionBrowser, shareSavedSession } from '../src/session-browser.js';
-import { attachSession, viewSession, watchRegistry } from '../src/runtime-client.js';
+import { attachSession, viewSession, watchRegistry, changeSessionProvider } from '../src/runtime-client.js';
 import { UI } from '../src/ui.js';
 import { parseArgs } from '../src/cli.js';
 import { appendEvent, events, listRecords } from '../src/database.js';
@@ -124,6 +124,7 @@ test('session picker shows only aliases, excludes unnamed/internal sessions and 
   const agent = createSession(BUILTINS.codex, work, null, 'Hidden Agent'); agent.purpose = 'agent'; saveSession(agent);
   let answer = session.id;
   const ui = { event() {}, async chooseOne(title, picker) {
+    if (title === 'Open session?') return 'open';
     assert.equal(title, 'Sessions'); assert.deepEqual(picker.choices, [{ value: session.id, label: 'trabajo_01' }]);
     assert.equal(picker.shortcuts, undefined); return answer;
   } };
@@ -132,6 +133,7 @@ test('session picker shows only aliases, excludes unnamed/internal sessions and 
   answer = null; assert.equal(await chooseSavedSession(ui), null);
   const duplicate = createSession(BUILTINS.codex, elsewhere, null, 'trabajo_01');
   ui.chooseOne = async (_title, picker) => {
+    if (_title === 'Open session?') return 'open';
     assert.ok(picker.choices.every(item => item.label === 'trabajo_01'));
     assert.deepEqual(new Set(picker.choices.map(item => item.description)), new Set([work, elsewhere]));
     return duplicate.id;
@@ -156,6 +158,38 @@ function terminal() {
   return ui;
 }
 
+test('a restored chat changes provider through the visible control and real Core lease without replaying work', { timeout: 15000 }, async () => {
+  const saved = createSession(BUILTINS.codex, work, 'fixture-restored', 'Restored controls');
+  appendEvent(saved.id, 'text', { itemId: 'saved', text: 'Retain this saved answer' });
+  const ui = terminal(); let providerCalled = false, watching;
+  const until = async check => {
+    const deadline = Date.now() + 8000;
+    while (!check() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(check(), 'restored-session control flow completed');
+  };
+  ui.onProvider = async (id, argument, connection) => {
+    assert.equal(id, saved.id); assert.equal(argument, '@provider');
+    assert.equal(ui.sessionMode, 'CONTROL', 'the normal input loop obtains Core ownership before mutation');
+    const changed = await changeSessionProvider(loadSession(id), BUILTINS.claude,
+      { model: 'fixture-provider-model', effort: 'default' }, ui, connection);
+    providerCalled = true; return changed;
+  };
+  try {
+    watching = attachSession(saved, { cwd: elsewhere }, ui);
+    await until(() => ui.permissionConnection?.acquire && ui.tui.entries.some(entry => entry.text === 'Retain this saved answer') && ui.tui.resolveInput);
+    assert.equal(ui.sessionMode, 'VIEW', 'opening alone leaves the input lease unclaimed');
+    ui.tui.render();
+    const provider = ui.tui.hitTargets.find(hit => hit.command === '/providers @provider');
+    assert.ok(provider && !provider.disabled); ui.tui.mouse(0, provider.left, provider.row);
+    await until(() => providerCalled);
+    assert.equal(loadSession(saved.id).provider, 'claude'); assert.equal(loadSession(saved.id).cwd, work);
+    assert.equal(loadSession(saved.id).model, 'fixture-provider-model');
+    assert.equal(listRecords('execution').length, 0); assert.equal(fs.existsSync(process.env.BZZY_TEST_LOG), false);
+    assert.ok(events(saved.id).some(event => event.data.text === 'Retain this saved answer'));
+    ui.tui.localCommand('/exit'); assert.equal(await watching, 0);
+  } finally { ui.reader?.close(); ui.close(); await watching; }
+});
+
 test('real arrow keys and Enter open the chosen alias without leaking directories into the picker', async () => {
   const original = createSession(BUILTINS.codex, work, null, 'First alias');
   const latest = createSession(BUILTINS.codex, elsewhere, null, 'Latest alias');
@@ -165,6 +199,9 @@ test('real arrow keys and Enter open the chosen alias without leaking directorie
     assert.deepEqual(ui.tui.selection.choices.map(item => item.label), namedTerminalSessions().map(item => item.alias));
     assert.ok(ui.tui.selection.choices.every(item => !item.description));
     ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'return' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(ui.tui.selection.scope, 'session-open'); assert.equal(ui.tui.selection.choices[ui.tui.selection.focus].value, 'cancel');
+    ui.tui.finishSelection('open');
     const selected = await picking;
     assert.equal(selected.session.id, namedTerminalSessions()[1].id);
     assert.equal(selected.session.cwd, selected.session.id === original.id ? work : elsewhere);
@@ -255,7 +292,7 @@ for (const mode of ['solo', 'parallel']) test(`/sessions opens existing ${mode} 
     setSession(id) { this.sessionId = id; selected.push(id); }, updateSession() {},
     clearHistory() { history = []; histories.push(history); },
     async ask() { assert.ok(inputs.length, 'unexpected chat/model prompt'); return inputs.shift(); },
-    async chooseOne() { return target.id; }, async settingsCommand() { return false; } };
+    async chooseOne(title) { return title === 'Open session?' ? 'open' : target.id; }, async settingsCommand() { return false; } };
   assert.equal(await attachSession(source, { cwd: elsewhere, mode: 'solo' }, ui), 0);
   assert.equal(ui.sessionId, target.id); assert.ok(selected.includes(source.id));
   assert.ok(history.some(item => item.type === 'message.user' && item.text === 'Original saved question'));
@@ -273,7 +310,7 @@ for (const mode of ['view', 'activity']) test(`Sessions opens the selected chat 
   const ui = { interactive: true, cursors: new Map(), event(type, data) { rendered.push({ type, ...data }); },
     setSession(id) { this.sessionId = id; }, updateSession() {}, clearHistory() { rendered.length = 0; },
     async ask() { assert.ok(inputs.length, 'unexpected input'); return inputs.shift(); },
-    async chooseOne() { return target.id; }, async settingsCommand() { return false; } };
+    async chooseOne(title) { return title === 'Open session?' ? 'open' : target.id; }, async settingsCommand() { return false; } };
   assert.equal(await (mode === 'view' ? viewSession(source, {}, ui) : watchRegistry(source, {}, ui, 'activity')), 0);
   assert.equal(ui.sessionId, target.id); assert.ok(rendered.some(item => item.text === 'Selected history'));
   assert.equal(listRecords('execution').length, 0); assert.equal(sessions().length, 2);
@@ -298,7 +335,7 @@ for (const reopening of [false, true]) test(`opening a saved parallel target ${r
     if (!reopening) ui.tui.drafts.set(expected.id, { value: 'Saved child draft', cursor: 4 });
     ui.event('text', { text: 'Old visible history must be cleared', itemId: 'old-answer' });
     children.forEach(child => ui.cursors.set(child.id, 999));
-    ui.chooseOne = async () => group.id;
+    ui.chooseOne = async title => title === 'Open session?' ? 'open' : group.id;
     const selected = await chooseSavedSession(ui); assert.equal(selected.session.id, group.id);
     ui.ask = async () => {
       assert.equal(ui.sessionId, group.id); assert.equal(ui.activeTab, expected.id);
@@ -365,6 +402,8 @@ for (const action of ['attach', 'view', 'new']) {
         if (action === 'attach') {
           await until(() => output.includes('Sessions') && output.includes('another-session') && output.includes('trabajo_01'));
           child.stdin.write('\x1b[B\r');
+          await until(() => output.includes('Open session?'));
+          child.stdin.write('\x1b[A\r');
         }
         await until(() => output.includes('saved-history-marker'));
         assert.ok(!output.includes('other-history-marker'));

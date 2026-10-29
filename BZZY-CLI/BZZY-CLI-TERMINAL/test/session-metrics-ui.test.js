@@ -55,7 +55,7 @@ test('compactor estimate stays scoped to the whole chat and exposes old unpriced
 });
 
 test('chat spending and account balance appear only for direct DeepSeek Solo or either Delegate role', async () => {
-  const { ui } = terminal(undefined, { columns: 80, rows: 24 });
+  const { ui } = terminal(undefined, { columns: 140, rows: 40 });
   ui.openTerminal();
   const spending = { sessionId: firstId, chat: { estimatedUsd: { min: 0.01, max: 0.01 } },
     compactor: { estimatedUsd: { min: 0.002, max: 0.002 } }, total: { estimatedUsd: { min: 0.012, max: 0.012 }, complete: true } };
@@ -69,23 +69,23 @@ test('chat spending and account balance appear only for direct DeepSeek Solo or 
     ]) {
       ui.updateSession({ session: { id: firstId, provider, mode, executor, model: 'deepseek-flash', executionState: 'idle' }, spending });
       ui.tui.render(); const text = ui.tui.lastFrame.map(clean).join('\n');
-      assert.equal(/Chat ≈ \$0\.0100/.test(text), visible, `${provider}/${mode} spending`);
+      assert.equal(/Estimate ≈ \$0\.0120/.test(text), visible, `${provider}/${mode} spending`);
       assert.equal(/Balance \$12\.34/.test(text), visible, `${provider}/${mode} balance`);
       if (visible) {
-        const row = clean(ui.tui.lastFrame.find(line => clean(line).includes('Balance')) || '');
-        assert.match(row, /Balance \$12\.34.*Chat ≈ \$0\.0100.*Compactor ≈ \$0\.0020.*Total ≈ \$0\.0120/);
+        assert.equal(ui.tui.spending.chat.estimatedUsd.min, 0.01); assert.equal(ui.tui.spending.compactor.estimatedUsd.min, 0.002);
+        assert.match(text, /provider/); assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'usage-balance'));
         assert.doesNotMatch(clean(ui.tui.lastFrame[0]), /Balance|Compactor|\+ New/);
-        assert.equal(ui.tui.hitTargets.find(hit => hit.type === 'usage-balance').row, 3);
       }
     }
     ui.minimal = true;
     ui.updateSession({ session: { id: firstId, provider: 'codex', mode: 'delegate', executor: { provider: 'deepseek' }, model: 'gpt-5.6-sol', executionState: 'idle' }, spending });
     ui.tui.render();
-    assert.match(clean(ui.tui.lastFrame.find(line => clean(line).includes('Balance')) || ''), /Balance \$12\.34.*Chat.*Compactor.*Total/);
+    assert.equal(ui.tui.workspace.left, 0); assert.equal(ui.tui.spending.total.estimatedUsd.min, 0.012);
+    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'));
     ui.minimal = false;
     Object.assign(ui.output, { columns: 40, rows: 32 }); ui.tui.render();
-    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Balance \$12\.34/);
-    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Total ≈ \$0\.0120/);
+    assert.equal(ui.tui.spending.chat.estimatedUsd.min, 0.01);
+    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workspace-actions'));
     assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < 40));
   } finally { ui.close(); }
 });
@@ -100,7 +100,7 @@ test('execution health separates routing blockers and native readiness from invo
   const text = sessionMetricsLayout(panel, 100).lines.map(line => clean(line.text)).join('\n');
   assert.match(text, /1 covered.*1 open.*1 blocked/); assert.match(text, /unknown for this retained native thread/);
   assert.match(text, /Workflow tools missing from native thread/); assert.match(text, /declare_work_unit/);
-  assert.match(text, /indexed through event 123/); assert.match(text, /Skill model loads\s+3/);
+  assert.match(text, /indexed through event 123/); assert.match(text, /Skill model loads:?\s+3/);
   panel.selectedGoalId = 'previous-goal';
   assert.doesNotMatch(sessionMetricsLayout(panel, 100).lines.map(line => clean(line.text)).join('\n'), /BZZY execution health/);
 });
@@ -114,14 +114,14 @@ test('Metrics scopes use Core counters and real input/clicks preserve the chat d
     const hit = ui.tui.hitTargets.find(item => item.type === 'top-metrics'); assert.ok(hit);
     ui.tui.mouse(0, hit.left, hit.row); await settle(); ui.tui.render();
     assert.equal(ui.tui.panel, 'metrics'); assert.match(frame(), /Current goal.*Achieved ✓/);
-    assert.match(frame(), /Check the recorded HTTP responses/); assert.match(frame(), /Skill model loads\s+3/);
-    assert.match(frame(), /Specialist agents invoked\s+2/); assert.match(frame(), /Worker assignments\s+4/);
-    assert.match(frame(), /recorded-model/); assert.match(frame().split('\n')[0], /Metrics.*Settings/);
+    assert.match(frame(), /Check the recorded HTTP responses/); assert.match(frame(), /Skill model loads:?\s+3/);
+    assert.match(frame(), /Specialist agents invoked:?\s+2/); assert.match(frame(), /Worker assignments:?\s+4/);
+    assert.match(frame(), /recorded-model/); assert.match(frame().split('\n')[0], /Nav/);
     assert.doesNotMatch(frame(), /Unsent private draft/); assert.equal(ui.tui.value, 'Unsent private draft');
     input.write('\x1b[C\r'); await settle(); ui.tui.render();
-    assert.equal(ui.sessionMetrics.scope, 'session'); assert.match(frame(), /Whole chat/); assert.match(frame(), /Skill model loads\s+12/);
+    assert.equal(ui.sessionMetrics.scope, 'session'); assert.match(frame(), /Whole chat/); assert.match(frame(), /Skill model loads:?\s+12/);
     clickAction(ui, 'chat'); await settle(); ui.tui.render();
-    assert.match(frame(), /Outside goals/); assert.match(frame(), /Skill model loads\s+2/);
+    assert.match(frame(), /Outside goals/); assert.match(frame(), /Skill model loads:?\s+2/);
     assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < output.columns));
     input.write('\x1b'); await new Promise(resolve => setTimeout(resolve, 50));
     assert.equal(ui.tui.panel, 'chat'); assert.equal(ui.tui.value, 'Unsent private draft'); assert.equal(ui.tui.cursor, 6);
@@ -144,7 +144,7 @@ test('recorded-goal picker cancels innermost on Back, restores the live reader, 
     assert.equal(ui.sessionMetrics.selectedGoalId, null); assert.equal(ui.tui.value, 'Keep draft');
     clickAction(ui, 'history'); await settle();
     ui.tui.selection.focus = 1; ui.tui.key('', { name: 'return' }); await ui.tui.metricsTask; ui.tui.render();
-    assert.match(frame(), /Earlier goal.*Paused/); assert.match(frame(), /Skill model loads\s+7/);
+    assert.match(frame(), /Earlier goal.*Paused/); assert.match(frame(), /Skill model loads:?\s+7/);
     assert.doesNotMatch(frame(), /Current goal · Achieved/);
     const panelBack = ui.tui.hitTargets.find(item => item.type === 'back'); assert.ok(panelBack);
     ui.tui.mouse(0, panelBack.left, panelBack.row);
@@ -325,11 +325,11 @@ test('the production Metrics loader refreshes real durable Core receipts without
     ui.sessionMetricsLoader = undefined; ui.setSession(session.id); ui.updateSession(session);
     await ui.settingsCommand('/metrics');
     for (let attempts = 0; !ui.sessionMetrics.data && attempts < 100; attempts++) await new Promise(resolve => setTimeout(resolve, 5));
-    ui.tui.render(); assert.match(frame(), /Skill model loads\s+1/);
+    ui.tui.render(); assert.match(frame(), /Skill model loads:?\s+1/);
     assert.match(ui.tui.content(98).map(clean).join('\n'), /This project · version aaaaaaaa/);
     recordUse(); const eventCount = events(session.id).length;
     await ui.sessionMetrics.refresh(); ui.tui.render();
-    assert.match(frame(), /Skill model loads\s+2/);
+    assert.match(frame(), /Skill model loads:?\s+2/);
     assert.equal(events(session.id).length, eventCount, 'Opening and refreshing metrics creates no events');
     assert.equal(runtimeInfo(), null); assert.equal(operatorStopRequested(), true);
     assert.equal(ui.tui.entries.length, 0); assert.equal(ui.permissionConnection, undefined);
@@ -368,8 +368,8 @@ test('Metrics separates follow-ups, distinguishes same-name skill scopes and ver
   try {
     panel.open(firstId); await settle(); await panel.activate('session');
     const text = sessionMetricsLayout(panel, 78).lines.map(line => line.text).join('\n');
-    assert.match(text, /Specialist agents invoked\s+7/); assert.match(text, /Specialist follow-ups\s+2/);
-    assert.match(text, /Worker assignments\s+10/); assert.match(text, /Worker follow-ups\s+1/);
+    assert.match(text, /Specialist agents invoked:?\s+7/); assert.match(text, /Specialist follow-ups\s+2/);
+    assert.match(text, /Worker assignments:?\s+10/); assert.match(text, /Worker follow-ups\s+1/);
     assert.match(text, /Response analyst\s+7 · 2 follow-ups/); assert.match(text, /Reviewer\s+10 · 1 follow-up/);
     assert.match(text, /This project · version aaaaaaaa/); assert.match(text, /BZZY Core \/ global · version bbbbbbbb/);
     await panel.activate('goal');

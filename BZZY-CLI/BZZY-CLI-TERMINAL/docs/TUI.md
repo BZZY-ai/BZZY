@@ -5,19 +5,22 @@ reusable specialist Agents, Skills, Workflows, Goals, Metrics, Settings, native
 extensions and their detail/import/export screens. Persistent iPhone Agents
 remain owned by Core and managed on iPhone.
 
-At 150 usable columns and 22 rows, navigation, chat and live activity appear
-side by side. At 110–149 columns the live column starts hidden. **Live** can
-reopen it by collapsing navigation. **Nav / Live** always remain visible in the
-workspace header. A green/red dot beside **BZZY Core** reflects a fresh Core
-response, independently of Relay. **Working dir** and **Session .bzzy** remain
-visible above every ordinary panel and copy their complete paths when clicked;
-both use the selected saved session, including its original cwd and legacy memory
-binding. Below 18 rows a visible **Paths** menu retains both copy actions while
-preserving pairing controls. Smaller terminals and minimal mode keep the compact renderer;
-its **Live** navigation opens the same expanded inspectors. Private transfer,
-secret-entry and pairing QR screens retain the established full-width renderer,
-with matching colors and full QR quiet zones. Terminal-native mouse support,
-true color, 256/basic colors and NO_COLOR remain supported.
+Navigation is visible from 78 usable columns and 22 rows. The live column
+starts open from 116 columns and 26 rows, when chat retains at least 46 columns.
+**Nav / Live** controls collapse or reveal the sidebars; small terminals use
+visible menus and expanded inspectors. Every size, minimal mode, restored-chat
+loading screen and submenu uses the same modern frame. Private transfer,
+secret-entry and pairing QR screens use its full-width variant and preserve
+complete QR quiet zones. Terminal-native mouse support, true color, 256/basic
+colors and NO_COLOR remain supported.
+
+A green/red dot beside **BZZY Core** reflects a fresh Core response,
+independently of Relay. **Working dir** and **Session .bzzy** copy their complete
+paths when clicked; both use the selected saved session, including its original
+cwd and legacy memory binding. Below 18 rows **Session folders** in Nav/Actions
+retains both copy actions. The header retains host measurements, and a compact
+**HOST USAGE** footer below Sessions shows Core's real CPU and RAM sample. The
+session list scrolls without moving those meters.
 
 ## Controls
 
@@ -30,15 +33,18 @@ true color, 256/basic colors and NO_COLOR remain supported.
   the mouse. Chat stops following when scrolled up; **↓ Latest** follows again.
   Source has an explicit **Follow ON/OFF** control. Expanded source lines copy
   individually; the filename menu selects recent files or copies all source.
-- Click an agent name to filter its feed; **All agents** resets the filter.
-  Expanded Agents exposes the existing **Pause session / Cancel session**
+- **AGENTS / SKILLS** shows only invocation time and name, newest first. Click
+  a row for its recorded status/details; ongoing tool logs stay in their existing
+  chat trees. Expanded Agents exposes the existing **Pause session / Cancel session**
   commands while working. These affect the selected session. Existing Core
   permissions and control ownership still apply.
 - **HTTP PROBE** rows open redacted headers, status, duration, originating actor
   and a response preview when capture supplies one. Its menu filters by method
   or errors, sorts by status/time, and opens existing HTTP history, which also
   retains backend-reported web visits.
-- Click a saved session to reopen the actual chat in its original cwd. Only
+- Click a saved session, then explicitly choose **Open** or **Cancel** before
+  history loads. Cancel preserves the active reader, transcript, draft and scroll.
+  Opening returns to the actual chat in its original cwd. Only
   nonblank aliases appear, newest saved activity first. **＋** creates an idle
   chat through `/new`; right-click exposes Open, Rename, Share and Delete.
   Core still confirms deletion and rejects live work. No archive capability is
@@ -50,8 +56,10 @@ true color, 256/basic colors and NO_COLOR remain supported.
   capabilities for that provider, validates supported effort, and uses existing
   ownership/idle checks. Saved tuples contain no account credentials and do not
   change Core's independent assistant model or any mode defaults.
-- **USAGE** initially displays the current session's reported tokens. Click it
-  for existing Metrics. Available DeepSeek spending remains an estimate, with
+- **USAGE** separates session tokens from measured background **Compactor**
+  input/output tokens. `≥` means known partial usage; `—` means unavailable.
+  Conservative reservations never count as measured tokens. Click for Metrics,
+  which includes the whole-chat compactor count. Available DeepSeek spending remains an estimate, with
   provider-reported account balance identified separately. Missing accounting,
   prices or context metadata appear unavailable; the UI invents no billing data.
 - The response **[ ⋯ ]** menu copies replies or code blocks and opens HTTP(S)
@@ -67,9 +75,10 @@ uses encrypted Relay QR/expiring codes and its existing authorization flow.
 
 ## Real execution telemetry
 
-AGENTS consumes attributed activity, assignment and worker-tool events. Stable
-actor identities drive the feed and chat colors; model prose cannot create an
-execution identity. The center starts tool trees collapsed when the live column
+AGENTS / SKILLS consumes actual specialist-assignment and confirmed skill-load
+receipts. Updating an existing invocation changes its details without creating
+another row. Stable identities drive feed/chat colors; model prose cannot create
+an execution identity. The center starts tool trees collapsed when the live column
 is present; clicking expands their recorded details. Activity is bounded to 1,500
 recent feed rows, and HTTP uses the existing 1,000-record client window. Durable
 history remains in Core. A status row never establishes goal completion.
@@ -83,13 +92,17 @@ retains body hashes and counts, not body text. `http_request` can additionally
 supply a redacted textual response preview (8 KiB); full evidence retains its
 existing access rules. Request bodies are not newly collected by the viewer.
 
-CODE consumes Core's `source.changed` events. Managed Codex native `fileChange`
-and Claude `Write/Edit/MultiEdit` metadata identify changed files. Core reads the
-actual regular file after completion and emits its resulting source immediately;
-there is no typing animation or inference from assistant prose/shell commands.
-Started/failed edits carry metadata without proposed source. Uninstrumented shell
-writes, external editors and direct diagnostic backend runs do not gain automatic
-file attribution. Updating/reopening a frontend cannot recover missing historical
+CODE consumes Core's `source.changed` and revisioned `source.delta` events.
+Managed Codex native `fileChange` and Claude `Write/Edit/MultiEdit` metadata
+identify changed files. Core reads the actual regular file after completion and
+emits its resulting source immediately. Actual shell command inputs also appear,
+including source passed in interpreter heredocs, labelled **shell input** rather
+than inventing a file path. Claude's native tool-input chunks update the preview
+as received, with **preparing / prepared** distinguishing proposed tool input
+from a completed file. Codex currently supplies whole command inputs, so these
+appear immediately; stdout is never mistaken for source. No timer fabricates
+letter-by-letter typing. Uninstrumented shell file writes, external editors and
+direct diagnostic backend runs do not gain automatic file attribution. Updating/reopening a frontend cannot recover missing historical
 previews or patch an already running runner.
 
 Core bounds previews to 256 KiB, 16 files per native edit event and recognized

@@ -121,3 +121,13 @@ export function sessionCompactionCost(sessionId, db = database(), sessionIds = [
     pricingSource: source, pricingVerifiedAt: '2026-10-28',
     meaning: 'Estimated direct background-summary cost from reported usage. Native context compaction, chat, workers and possible future savings are separate. Unpriced or interrupted attempts are not zero. Peak/holiday and missing-cache uncertainty use a price range.' };
 }
+
+// Measured usage is independent of pricing. Unknown/conservative reservations
+// never become token consumption in a terminal status row.
+export function sessionCompactorUsage(sessionId) {
+  const cost = sessionCompactionCost(sessionId);
+  const complete = cost.incompleteAttempts === 0 && cost.legacyAttempts === 0;
+  return { version: 1, sessionId, scope: 'session-background-compactor', tokens: cost.reportedTokens,
+    available: cost.attempts === 0 || cost.reportedTokens > 0 || complete, complete,
+    attempts: cost.attempts, incompleteAttempts: cost.incompleteAttempts, legacyAttempts: cost.legacyAttempts };
+}

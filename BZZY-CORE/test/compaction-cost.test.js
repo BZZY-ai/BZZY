@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { database, getRecord, putRecord } from '../src/engine/database.js';
 import { beginCompactionCost, observeCompactionCost, finishCompactionCost, sessionCompactionCost,
-  normalizeCompactionTokens } from '../src/engine/compaction-cost.js';
+  normalizeCompactionTokens, sessionCompactorUsage } from '../src/engine/compaction-cost.js';
 
 const KIND = 'core.session.compactor.cost', JOB = 'core.session.compactor.job';
 let directory, previous;
@@ -97,4 +97,15 @@ test('a proven pre-request failure is zero; a changed resolved model is never pr
   const changed = draft('changed'); usage(changed); changed.resolvedModel = 'unknown-future-model';
   finishCompactionCost(changed, { completed: true });
   assert.equal(sessionCompactionCost('changed').estimatedUsd, null);
+});
+test('terminal compactor tokens use measured usage across providers and flag missing historical receipts', () => {
+  assert.deepEqual(sessionCompactorUsage('source'), { version: 1, sessionId: 'source', scope: 'session-background-compactor', tokens: 0, available: true, complete: true, attempts: 0, incompleteAttempts: 0, legacyAttempts: 0 });
+  const value = draft('source', 'codex', 'unpriced-fixture'); usage(value); usage(value); finishCompactionCost(value, { completed: true });
+  let measured = sessionCompactorUsage('source');
+  assert.equal(measured.tokens, 11000); assert.equal(measured.complete, true); assert.equal(measured.available, true);
+  assert.equal(sessionCompactionCost('source').complete, false, 'missing prices do not make measured tokens incomplete');
+  putRecord(JOB, 'legacy', { id: 'legacy', sessionId: 'source', attempts: 1, totalTokensUsed: 50000, selection: { provider: 'codex', model: 'old' } });
+  measured = sessionCompactorUsage('source'); assert.equal(measured.tokens, 11000); assert.equal(measured.complete, false);
+  const pending = draft('unknown'); finishCompactionCost(pending);
+  assert.equal(sessionCompactorUsage('unknown').available, false); assert.equal(sessionCompactorUsage('unknown').complete, false);
 });

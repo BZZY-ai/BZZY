@@ -34,7 +34,7 @@ test('responsive workspace preserves readable chat, visible navigation and sourc
     }
     Object.assign(output, { columns: 180, rows: 48 }); tui.render();
     const text = tui.lastFrame.map(clean).join('\n');
-    for (const label of ['NAVIGATION', 'AGENTS', 'HTTP PROBE', 'CODE', 'No observed HTTP', 'Waiting for native']) assert.ok(text.includes(label), label);
+    for (const label of ['NAVIGATION', 'AGENTS', 'HTTP PROBE', 'CODE', 'No observed HTTP', 'Waiting for code']) assert.ok(text.includes(label), label);
     assert.equal(tui.monitor.feed.length, 0); assert.equal(tui.monitor.files.size, 0);
     for (const panel of ['chat', 'agents', 'skills', 'workflows', 'goals', 'metrics', 'settings']) assert.ok(tui.hitTargets.some(hit => hit.type === 'top-' + panel));
     const send = tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(send);
@@ -53,7 +53,8 @@ test('HTTP rows merge actual capture phases, redact details and exclude backend 
   const { ui, tui } = terminal();
   try {
     const actor = { actorSessionId: 'worker-1', actorRole: 'subagent', actorName: 'agent-idor' };
-    ui.event('worker.tool', { ...actor, workerSessionId: 'worker-1', callId: 'call', name: 'inspect', label: 'Inspecting API', phase: 'started', occurredAt: '2026-10-29T10:00:00Z' });
+    ui.event('assignment.created', { id: 'assignment-1', parentSessionId: ui.sessionId, subagentDefinition: { name: 'agent-idor' }, selection: { provider: 'codex', model: 'fixture' }, occurredAt: '2026-10-29T10:00:00Z' });
+    ui.event('core.usage', { id: 'skill-receipt', kind: 'skill', sessionId: ui.sessionId, rootSessionId: ui.sessionId, name: 'api-recon', scope: 'project', createdAt: '2026-10-29T10:01:00Z' });
     ui.event('network.backend', { id: 'visit', url: 'https://example.test/native', provenance: 'backend-reported' });
     ui.event('network.request', { ...actor, id: 'http-1', method: 'GET', url: 'https://example.test/api?token=fixture-private-value', provenance: 'host-observed' });
     ui.event('network.response', { ...actor, id: 'http-1', method: 'GET', url: 'https://example.test/api?token=fixture-private-value', status: 200, durationMs: 32, provenance: 'host-observed', requestHeaders: { Authorization: 'Bearer fixture-private-value' } });
@@ -62,19 +63,19 @@ test('HTTP rows merge actual capture phases, redact details and exclude backend 
     tui.render();
     assert.equal(tui.monitor.requests(tui.traffic).length, 1);
     assert.equal(tui.monitor.files.size, 1); assert.ok(tui.monitor.files.values().next().value.changed.has(0));
-    assert.equal(tui.monitor.feed[0].actorId, 'worker-1');
+    assert.equal(tui.monitor.feed[0].summary, 'api-recon'); assert.equal(tui.monitor.feed[1].summary, 'agent-idor');
     click(tui, 'monitor-detail', hit => hit.kind === 'http');
     const text = tui.lastFrame.map(clean).join('\n'); assert.match(text, /32 ms/); assert.match(text, /redacted/); assert.doesNotMatch(text, /fixture-private-value/);
     click(tui, 'monitor-close');
-    click(tui, 'monitor-agent'); assert.equal(tui.monitor.agentFilter, 'worker-1');
+    click(tui, 'monitor-detail', hit => hit.kind === 'agents'); assert.equal(tui.monitor.detail.row.summary, 'api-recon');
     assert.equal(tui.entries.some(entry => entry.kind === 'source.changed'), false);
   } finally { ui.close(); }
 });
-test('workspace geometry always preserves a dominant center and collapses to existing compact rendering', () => {
-  assert.equal(workspaceGeometry(80, 24), null);
+test('workspace geometry uses the modern frame at every size and preserves a dominant center', () => {
+  assert.ok(workspaceGeometry(80, 24).center >= 46); assert.equal(workspaceGeometry(40, 18).left, 0);
   for (let width = 110; width <= 240; width++) {
     const geo = workspaceGeometry(width, 40, { left: 36, right: 60 });
-    assert.ok(geo.center >= 52); assert.ok(geo.center > geo.left);
+    assert.ok(geo.center >= 46); assert.ok(geo.center > geo.left);
   }
 });
 test('saved combinations reuse Core private configuration and preserve unrelated model defaults', async () => {

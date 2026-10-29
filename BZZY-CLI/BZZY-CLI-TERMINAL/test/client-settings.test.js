@@ -653,8 +653,9 @@ test('Default models has independent clickable provider/model/effort fields and 
     Object.assign(output, { columns, rows }); ui.settings.focusAction('defaults:model:validate:0'); ui.tui.settingsEnsureFocus = true; ui.tui.render();
     const provider = ui.tui.hitTargets.find(hit => hit.action === 'defaults:provider:validate:0');
     const model = ui.tui.hitTargets.find(hit => hit.action === 'defaults:model:validate:0'), effort = ui.tui.hitTargets.find(hit => hit.action === 'defaults:effort:validate:0');
-    assert.ok(provider && model && effort); assert.equal(provider.row, model.row); assert.equal(model.row, effort.row);
-    assert.ok(provider.right < model.left); assert.ok(model.right < effort.left);
+    assert.ok(provider && model && effort);
+    if (provider.row === model.row) { assert.equal(model.row, effort.row); assert.ok(provider.right < model.left); assert.ok(model.right < effort.left); }
+    else { assert.ok(provider.row < model.row && model.row < effort.row, 'narrow fields stack and remain clickable'); }
     assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
   }
   ui.settings.back(); assert.equal(ui.settings.page, 'main');
@@ -842,12 +843,12 @@ test('a compact pairing QR renders completely inside an 80 by 24 TUI', async () 
   ui.hostMetrics = { host: { cpuPercent: 12, memory: { totalBytes: 16 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 } } };
   assert.equal(ui.settings.qrLines().length, 18);
   const start = term.written.length; ui.tui.render(); const frame = term.written.slice(start);
-  assert.match(clean(frame), /bzzy.*qr-model/); assert.match(clean(frame), /1,234 tokens.*CPU.*RAM/); assert.match(frame, /\x1b\[47m/);
-  assert.doesNotMatch(clean(frame), /[\u2800-\u28ff]|CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save/u, 'pairing never restores the obsolete dashboard');
-  assert.match(clean(frame), /bzzy/);
+  assert.match(clean(frame), /BZZY.*qr-model/); assert.match(clean(frame), /1,234 tokens.*CPU.*RAM/); assert.match(frame, /\x1b\[47m/);
+  assert.doesNotMatch(clean(frame), /CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save/u, 'pairing never restores the obsolete dashboard');
+  assert.match(clean(frame), /BZZY/);
   assert.doesNotMatch(clean(frame), /Open the QR image to scan|QR needs|\d+ columns/);
   assert.equal([...frame.matchAll(/\x1b\[\d+;1H/g)].length, 24);
-  assert.match(clean(frame), /C Copy code/); assert.equal(ui.tui.lastFrame.length, 0);
+  assert.match(clean(frame), /Copy code/); assert.equal(ui.tui.lastFrame.length, 0);
   const rows = [...frame.matchAll(/\x1b\[(\d+);1H([^]*?)(?=\x1b\[\d+;1H|$)/g)];
   assert.equal(rows.length, 24);
   assert.ok(rows.every(row => cellWidth(row[2]) <= 79), 'the header and complete QR stay within the terminal width');

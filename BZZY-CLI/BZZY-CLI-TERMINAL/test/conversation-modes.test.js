@@ -213,7 +213,7 @@ try:
     until(lambda: b'DeepSeek API key' in output and b'Pair iPhone' in output)
     output = b''
     os.write(master, b'\x1b')
-    until(lambda: b'fixture-terminal' in output and b'Ask BZZY to do anything' in output)
+    until(lambda: b'fixture-terminal' in output and b'Type a message' in output)
     assert b'Right-click / F10' not in output and b'\x1b_G' not in output
     os.write(master, b'/exit\r')
     until(lambda: child.poll() is not None)

@@ -37,7 +37,12 @@ test('native observers correlate edit completion and return atomic writes immedi
     observer({ method: 'tool.completed', params: { id: 'tool-1' } }); assert.equal(emitted.at(-1).data.content, 'print("actual file")');
     observer({ method: 'item/completed', params: { item: { id: 'edit-1', type: 'fileChange', status: 'completed', changes: [{ path: 'main.py', diff: '+print("actual file")' }] } } });
     assert.equal(emitted.at(-1).data.provenance, 'native-file-edit'); assert.match(emitted.at(-1).data.diff, /actual file/);
-    const count = emitted.length; observer({ method: 'item/completed', params: { item: { type: 'commandExecution', command: 'echo secret > other.js' } } }); assert.equal(emitted.length, count);
+    const count = emitted.length;
+    observer({ method: 'item/completed', params: { item: { id: 'shell-1', type: 'commandExecution', command: 'echo example > other.js' } } });
+    assert.equal(emitted.length, count + 1);
+    assert.equal(emitted.at(-1).data.sourceKind, 'command');
+    assert.equal(emitted.at(-1).data.content, 'echo example > other.js');
+    assert.equal(fs.existsSync(path.join(cwd, 'other.js')), false, 'observing command input never executes it');
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 });
 test('managed runners durably mirror safe source previews with their worker identity', async () => {

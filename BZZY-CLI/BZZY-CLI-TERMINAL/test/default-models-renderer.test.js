@@ -87,7 +87,7 @@ test('actual keys and clicks select the intended default cell without changing t
     assert.ok(tui.hitTargets.some(hit => hit.type === 'back' && hit.row <= tui.sceneHeaderLength), 'Back stays above the scrolling table');
   }
   output.columns = 80; tui.render(); const frame = tui.lastFrame.map(clean).join('\n');
-  assert.match(frame, /Active chat model/); assert.match(frame, /tokens.*00:00:00/); assert.match(frame, /CPU/);
+  assert.match(frame, /Active chat model/); assert.match(frame, /tokens/); assert.match(frame, /CPU/);
 });
 
 test('main Settings keeps all four rows visible at 80 by 24', t => {

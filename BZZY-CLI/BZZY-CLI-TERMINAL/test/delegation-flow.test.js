@@ -85,8 +85,8 @@ test('delegate handoffs and attributed activity stay readable without exposing r
     for (const [columns, rows] of [[100, 32], [80, 24]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /Supervisor reviewing/); assert.match(frame, /Ask BZZY to do anything/);
-      assert.match(frame, /YOU\s+│ \/goal Solve this CTF/); assert.match(frame, /strong-model.*effort high/);
+      assert.match(frame, /Supervisor reviewing/); assert.match(frame, /Type a message/);
+      assert.match(frame, /❯ \/goal Solve this CTF/); assert.match(frame, /strong-model.*effort high/);
     }
   } finally { ui.close(); }
 });
@@ -148,10 +148,10 @@ test('terminal navigation keeps top session actions, model controls and composer
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       for (const type of ['top-sessions', 'top-settings']) assert.ok(ui.tui.hitTargets.some(hit => hit.type === type));
-      assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'session-new'), false);
-      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'model-control' && hit.command === '/providers'));
+      assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'session-new'), Boolean(ui.tui.workspace.left));
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'model-control' && hit.command === '/providers @saved'));
       assert.doesNotMatch(frame, /TELEGRAM/);
-      assert.match(frame, /Ask BZZY to do anything/); assert.match(frame, /fixture-brain.*effort default/);
+      assert.match(frame, /Type a message/); assert.match(frame, /fixture-brain.*effort default/);
       assert.doesNotMatch(frame, /Ctrl\+S|Wheel\/PgUp|COPY/);
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'copy'), false);
     }

@@ -4,7 +4,7 @@ The terminal now uses a black neon workspace with clickable navigation and model
 controls, a dominant chat, and independently scrolling **AGENTS**, **HTTP PROBE**
 and **CODE** feeds. Drag column separators to resize; use **Nav / Live** to
 collapse or reopen them. The same frame and palette surround Library, Metrics,
-Settings and their submenus. Smaller terminals use the compact renderer; private
+Settings and their submenus. Smaller terminals and minimal mode use the same modern frame; private
 QR screens retain their full width and quiet zone.
 See [terminal workspace controls and telemetry coverage](docs/TUI.md).
 
@@ -396,11 +396,12 @@ with `build`, and control background work with `pause`, `resume` or `cancel`.
 DeepSeek API provider, or Delegate with either Brain or Hands using that provider.
 Only direct DeepSeek calls add dollars, including Hands under a Codex/Claude
 Brain; DeepSeek models from OrcaRouter/Experiential Labs do not qualify. The
-**Balance $…** remains account-wide. It appears beside **Chat**, **Compactor** and
-**Total** as matching styled badges in a dedicated row directly below navigation. Balance
-opens account details; the cost badges open Metrics. The row wraps in narrower
-terminals. These displays hide outside the eligible selections while retaining
-saved amounts.
+**Balance $…** remains provider-reported and account-wide. When the sidebar
+has room, USAGE shows it separately from the estimated total. Click Usage for
+Metrics and the full chat/compactor/total breakdown. Compact/minimal layouts
+retain Metrics through the visible navigation menu. Session tokens and measured
+background compactor tokens have separate counters; unknown historical usage is
+marked unavailable or partial. CPU/RAM meters stay below the Sessions list.
 **Metrics → DeepSeek spending · whole chat** and `bzzy cost NAME` inspect the same
 lifetime estimate; `bzzy session-memory cost NAME` gives compactor details.
 Existing chats work, with old missing usage and interrupted calls visibly partial.
@@ -411,18 +412,17 @@ conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
-`bzzy` opens a Codex-style terminal chat with three fixed sections: a responsive
-top bar for Open Sessions, Skills, Agents, Workflows, Goals, Metrics
-and Settings, with host CPU/RAM on a compact second row when necessary; the live chat transcript; and a compact composer with the current model, effort, token count,
-`HH:MM:SS` runtime and color-coded goal state. User turns and agent replies use
-separate labeled rails, and the latest user request stays pinned directly below
-the top bar while a long reply streams. Open Sessions deploys an anchored
-dropdown of aliased terminals. A green or red Relay dot is always available in
-the status treatment. The gear opens a full-screen Settings view in place of the
-transcript and composer, while preserving the chat draft. Esc returns from any
-Settings page to chat. Esc also closes other menu screens; when a prompt,
-picker or skill preview is open, it cancels that view first and preserves the
-unsent chat draft.
+`bzzy` opens a black neon terminal workspace with clickable navigation, a chat
+column and compact live **AGENTS / SKILLS**, **HTTP PROBE**, and **CODE** views.
+The header keeps branding, current model, usage, host measurements and Core/Relay
+dots visible above every view. Thin column separators can be dragged; compact
+and minimal layouts use the same frame with visible navigation menus. Settings
+and Library screens replace the center transcript while preserving its draft.
+Esc closes the innermost prompt or picker first. Saved sessions require an
+**Open / Cancel** choice before history loads, then restore the actual saved
+chat in its original cwd without replaying work. Normal attached chats can claim
+control through existing Core APIs when changing models; explicit read-only
+views remain locked. See [workspace behavior and telemetry limits](docs/TUI.md).
 
 Chat keeps its **Cooking…**, Pursuing, Verifying and Validating badges and adds
 an animated activity row beside the current action: waiting for model output,
