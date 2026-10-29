@@ -6,6 +6,7 @@ import { config } from './providers.js';
 import { NotificationHub } from './notifications.js';
 import { terminalYolo, approvePendingWithYolo } from './terminal-permissions.js';
 import { createToolActivityProjector } from './tool-activity.js';
+import { createSourceObserver } from './source-preview.js';
 
 export class RunnerUI {
   constructor(sessionId, options = {}) {
@@ -18,6 +19,7 @@ export class RunnerUI {
     this.actorName = options.agent || saved?.subagentDefinition?.name || (saved?.role === 'reviewer' ? 'Reviewer' : saved?.parentSessionId ? 'Executor' : 'BZZY');
     this.actorRole = options.peer ? 'peer' : saved?.subagentDefinition || options.parentSessionId && options.agent ? 'subagent' : saved?.role === 'reviewer' ? 'reviewer' : saved?.parentSessionId || options.parentSessionId ? 'worker' : 'main';
     this.toolActivity = createToolActivityProjector({ sessionId, runId: this.peerStreamId });
+    this.sourceObserver = saved && createSourceObserver(saved, (type, data) => this.event(type, data));
   }
   event(type, data = {}) {
     data = { ...data, actorSessionId: this.sessionId, actorRole: this.actorRole, actorName: this.actorName };
@@ -26,6 +28,10 @@ export class RunnerUI {
       this.peerNativeTurn = data.params?.turn?.id || data.params?.turnId; this.peerTurn++; this.peerReply = 0;
     }
     this.beforeOutput?.(); appendEvent(this.sessionId, type, data);
+    if (type === 'backend') {
+      try { this.sourceObserver?.(data); } catch { /* Preview failures cannot affect execution. */ }
+    }
+    if (this.options.parentSessionId && type === 'source.changed') appendEvent(this.options.parentSessionId, type, data);
     if (this.options.parentSessionId) {
       try {
         const action = this.toolActivity(type, data);

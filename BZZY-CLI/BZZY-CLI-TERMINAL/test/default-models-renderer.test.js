@@ -84,15 +84,15 @@ test('actual keys and clicks select the intended default cell without changing t
   assert.equal(tui.model, 'Active chat model'); assert.equal(tui.inputQueue.length, 0);
   for (const columns of [40, 80, 120]) {
     output.columns = columns; tui.render(); assert.ok(tui.lastFrame.every(line => cellWidth(line) <= columns - 1));
-    assert.ok(tui.hitTargets.some(hit => hit.type === 'back' && hit.row <= 4), 'Back stays above the scrolling table');
+    assert.ok(tui.hitTargets.some(hit => hit.type === 'back' && hit.row <= tui.sceneHeaderLength), 'Back stays above the scrolling table');
   }
   output.columns = 80; tui.render(); const frame = tui.lastFrame.map(clean).join('\n');
   assert.match(frame, /Active chat model/); assert.match(frame, /tokens.*00:00:00/); assert.match(frame, /CPU/);
 });
 
-test('main Settings keeps all five cards visible at 80 by 24', t => {
+test('main Settings keeps all four rows visible at 80 by 24', t => {
   const { ui, tui } = terminal(t); ui.openSettings(); tui.render();
-  for (const action of ['deepseek', 'workspace-root', 'pair', 'default-models', 'core'])
+  for (const action of ['deepseek', 'workspace-root', 'pair', 'core'])
     assert.ok(tui.hitTargets.some(hit => hit.type === 'settings' && hit.action === action && hit.row <= 24), action);
-  assert.match(tui.lastFrame.map(clean).join('\n'), /Default models/);
+  assert.match(tui.lastFrame.map(clean).join('\n'), /DeepSeek API key/);
 });

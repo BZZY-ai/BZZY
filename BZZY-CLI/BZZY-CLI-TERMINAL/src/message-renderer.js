@@ -140,9 +140,9 @@ function blockLines(node, context) {
     if (context.width < 4) return textLines(node, context, { code: true });
     const language = node.attributes.language || 'code';
     const title = wrap(language, Math.max(1, context.width - 3))[0];
-    return [styled('╭─ ' + title, 'muted', context),
+    return [styled('┌─ ' + title, 'muted', context),
       ...wrapRuns(inlineRuns(node, { code: true }), context.width - 2).map(line => styled('│ ', 'muted', context) + styleText(line, context)),
-      styled('╰' + '─'.repeat(Math.max(1, Math.min(context.width - 1, cellWidth(title) + 2))), 'muted', context)];
+      styled('└' + '─'.repeat(Math.max(1, Math.min(context.width - 1, cellWidth(title) + 2))), 'muted', context)];
   }
   if (node.tag === 'table') return tableLines(node, context);
   return [];

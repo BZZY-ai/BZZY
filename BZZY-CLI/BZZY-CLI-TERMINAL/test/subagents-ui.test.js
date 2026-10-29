@@ -57,7 +57,7 @@ test('top Agents action opens a keyboard-accessible library and preserves the un
       output.columns = columns; ui.tui.render();
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-agents'), `Agents missing at ${columns}`);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) <= columns - 1));
-      assert.match(ui.tui.lastFrame.slice(0, 4).map(clean).join(' '), /CPU.*5\.4\/32(?: GB|G)/);
+      assert.match(ui.tui.lastFrame.slice(0, ui.tui.sceneHeaderLength).map(clean).join(' '), /CPU.*5\.4\/32(?: GB|G)/);
     }
     const input = ui.ask('bzzy › '); await Promise.resolve();
     const target = ui.tui.hitTargets.find(hit => hit.type === 'top-agents');

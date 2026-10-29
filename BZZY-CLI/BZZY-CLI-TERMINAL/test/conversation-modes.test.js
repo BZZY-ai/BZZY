@@ -210,7 +210,7 @@ def until(check):
 try:
     until(lambda: b'fixture-terminal' in output and b'Skills' in output and b'Agents' in output)
     os.write(master, b'/settings\r')
-    until(lambda: b'Default models' in output and b'Pair iPhone' in output)
+    until(lambda: b'DeepSeek API key' in output and b'Pair iPhone' in output)
     output = b''
     os.write(master, b'\x1b')
     until(lambda: b'fixture-terminal' in output and b'Ask BZZY to do anything' in output)

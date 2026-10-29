@@ -62,9 +62,12 @@ for (const minimal of [false, true]) test(`the selected session path stays visib
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
       const hit = ui.tui.hitTargets.find(item => item.type === 'session-project-path');
       assert.ok(hit); assert.ok(hit.row < ui.tui.composerRow);
+      assert.equal(ui.tui.hitTargets.find(item => item.type === 'working-directory')?.path, session.cwd);
     }
     let copied;
     ui.clipboard = { async copyText(value) { copied = value; return { copied: true, method: 'native' }; } };
+    const cwdHit = ui.tui.hitTargets.find(item => item.type === 'working-directory');
+    ui.tui.mouse(0, cwdHit.left, cwdHit.row); await ui.tui.clipboardTask; assert.equal(copied, session.cwd);
     const hit = ui.tui.hitTargets.find(item => item.type === 'session-project-path');
     ui.tui.mouse(0, hit.left, hit.row); await ui.tui.clipboardTask;
     assert.equal(copied, path.join(session.projectRoot, '.bzzy'));

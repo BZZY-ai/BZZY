@@ -3,6 +3,13 @@ import path from 'node:path';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { projectDirectory } from '@bzzy/core/engine/project.js';
 
+export function sessionWorkingDirectory(sessionId) {
+  try {
+    const cwd = sessionId && loadSession(sessionId)?.cwd;
+    return typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : null;
+  } catch { return null; }
+}
+
 // Read the selected saved chat, never the shell cwd or a previous tab's view.
 // This projection creates no project metadata or identity records.
 export function sessionProjectLocation(sessionId) {

@@ -50,12 +50,13 @@ test('connection indicators remain independent of busy model work and preserve t
     ui.tui.value = 'Keep typing'; ui.tui.cursor = 4; ui.tui.busy = true; ui.tui.state = 'responding';
     ui.connectionStatus = { core: true, relay: false }; ui.tui.render();
     const connected = ui.tui.lastFrame.map(clean).join('\n');
-    assert.match(connected, /● BZZY Relay.*CPU/); assert.match(connected, /Core ON.*Relay OFF/);
-    assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.foreground(palette.danger)));
+    assert.match(connected, /● BZZY Relay.*CPU/); assert.match(connected, /● BZZY Core.*● BZZY Relay/);
+    assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.color('●', palette.success)));
+    assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.color('●', palette.danger)));
     ui.connectionStatus = { core: true, relay: true }; ui.tui.render();
     assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.foreground(palette.goalSuccess)));
     ui.connectionStatus = null; ui.tui.render();
-    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Core OFF.*Relay OFF/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /● BZZY Core.*● BZZY Relay/);
     assert.equal(ui.tui.value, 'Keep typing'); assert.equal(ui.tui.cursor, 4);
     assert.equal(ui.tui.entries.length, 0, 'connection checks never become conversation events');
   } finally { ui.close(); }
@@ -69,7 +70,7 @@ test('DeepSeek balance appears below navigation only for the DeepSeek API-key pr
       balance: { currency: 'USD', amount: 12.34 }, checkedAt: Date.now(), source: 'provider-api' } };
     ui.tui.render();
     assert.doesNotMatch(ui.tui.lastFrame[0], /\$12\.34/);
-    assert.match(ui.tui.lastFrame[2], /Balance \$12\.34/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Balance \$12\.34/);
     const balance = ui.tui.hitTargets.find(hit => hit.type === 'usage-balance'); assert.ok(balance);
     ui.tui.mouse(0, balance.left, balance.row); await ui.tui.balanceTask;
     assert.match(ui.tui.entries.at(-1).text, /DeepSeek balance: \$12\.34/);
@@ -98,7 +99,7 @@ test('minimal chat uses the full terminal and retains conversation, input, mouse
       assert.doesNotMatch(frame, /BZZY|Session:|YOLO|Latest|Settings|Your next goal|CPU|Memory/);
       assert.equal(ui.tui.textRegion.top, 5);
       assert.match(frame, /Session \.bzzy/);
-      assert.match(frame, /Core Offline.*Relay Offline/);
+      assert.match(frame, /● Core.*● Relay/);
       const send = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(send); assert.equal(send.row, rows - 1);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
     }
@@ -342,7 +343,7 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       assert.doesNotMatch(chat[0], /bzzy|◉◉/);
       assert.match(chat[0], /(?:Open Sessions|Sessions).*Skills.*Agents.*Workflows.*Goals.*Metrics.*⚙ Settings/);
       assert.doesNotMatch(chat[0], /\+ New/);
-      assert.match(chat.slice(0, 4).join(' '), /CPU\s*12%.*4\.0\/16(?: GB|G)/);
+      assert.match(chat.slice(0, ui.tui.sceneHeaderLength).join(' '), /CPU\s*12%.*4\.0\/16(?: GB|G)/);
       assert.match(chat.join('\n'), /chosen-model.*effort high/);
       assert.match(chat.join('\n'), /1,234 tokens.*\d{2}:\d{2}:\d{2}/);
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-sessions'));

@@ -130,7 +130,7 @@ test('compact invocation layouts preserve Unicode geometry, sanitize controls an
   record(entries, 'assignment.created', assignment('two', { subagentDefinition: { name: 'other-analyst' } }));
   record(entries, 'core.usage', receipt({ id: 'unicode', name: '响应-review🙂' }));
   const theme = createTerminalTheme({ isTTY: true }, { FORCE_COLOR: '3' });
-  assert.notEqual(invocationEntryLayout(entries[0], 80, theme).lines[0], invocationEntryLayout({ ...entries[0], agentSlot: 1 }, 80, theme).lines[0]);
+  assert.equal(invocationEntryLayout(entries[0], 80, theme).lines[0], invocationEntryLayout({ ...entries[0], agentSlot: 1 }, 80, theme).lines[0], 'actor colors remain stable when list order changes');
   for (const width of [1, 8, 20, 40, 80, 140]) for (const entry of entries) {
     const { lines } = invocationEntryLayout(entry, width, theme);
     assert.ok(lines.every(line => cellWidth(line) <= width), `${width}: ${lines.map(clean).join(' ')}`);

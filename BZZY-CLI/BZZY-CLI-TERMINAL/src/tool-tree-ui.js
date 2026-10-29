@@ -72,14 +72,14 @@ export function toolTreeLayout(group, width, theme, { nested = false } = {}) {
   const lines = [], hits = [], indent = nested ? '    ' : '  ';
   const put = (value, tone = palette.muted, bold = false) => lines.push(theme.color(clip(value, width), tone, bold));
   const total = group.calls.length + group.dropped;
-  put(`${indent}${group.expanded ? '▾' : '▸'} ${nested ? '' : group.agent + ' · '}Tool calls (${total})`, palette.warning, true);
+  put(`${indent}${group.expanded ? '▾' : '▸'} ${nested ? '' : group.agent + ' · '}Tool calls (${total})`, palette.tool, true);
   hits.push({ type: 'tool-tree-toggle', group, row: 0, left: cellWidth(indent), right: width - 1 });
   if (group.expanded) {
     const first = Math.min(group.page * pageSize, Math.max(0, group.calls.length - 1)), rows = group.calls.slice(first, first + pageSize);
     if (group.dropped) put(`${indent}  ${group.dropped} older calls retained in saved events`);
     for (const [index, call] of rows.entries()) {
       const glyph = call.phase === 'started' ? '●' : call.phase === 'completed' ? '✓' : call.phase === 'failed' ? '✕' : '○';
-      const tone = call.phase === 'failed' ? palette.danger : call.phase === 'started' ? palette.warning : palette.muted;
+      const tone = call.phase === 'failed' ? palette.danger : call.phase === 'started' ? palette.tool : call.phase === 'completed' ? palette.success : palette.muted;
       const label = safe(call.label || 'Tool'), detail = safe(call.detail);
       const status = call.phase === 'completed' ? 'returned' : call.phase === 'failed' ? 'failed' : call.phase === 'stopped' ? 'stopped · result unknown' : 'running';
       const suffix = ` · ${status}${call.durationMs != null ? ' · ' + elapsed(call.durationMs) : ''}${call.exitCode != null ? ' · exit ' + call.exitCode : ''}`;

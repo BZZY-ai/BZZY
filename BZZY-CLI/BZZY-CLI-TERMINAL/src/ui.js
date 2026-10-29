@@ -22,10 +22,10 @@ import { renderMessageContent } from './message-renderer.js';
 import { createTerminalTheme, palettes } from './terminal-theme.js';
 import { HostMetricsMonitor } from './host-metrics.js';
 import { ConnectionStatusMonitor } from './connection-status.js';
-import { shareSavedSession, deleteSavedSession } from './session-browser.js';
+import { shareSavedSession, deleteSavedSession, renameSavedSession } from './session-browser.js';
 import { changeTerminalYolo, terminalYolo } from './permission-controls.js';
 import { cancelDefinitionBundle } from './definition-bundle-ui.js';
-import { sessionProjectLocation, sessionProjectDetails } from './session-project-path.js';
+import { sessionProjectLocation, sessionProjectDetails, sessionWorkingDirectory } from './session-project-path.js';
 import { recordInvocationEvent, reconcileInvocationEntries, attributeInvocationActors, invocationEntryLayout } from './invocation-ui.js';
 import { ActorProjection } from './actor-ui.js';
 export { clean } from './terminal-format.js';
@@ -147,6 +147,8 @@ export class UI {
   updateSession(snapshot) {
     this.extensions.refresh();
     this.refreshSessionProjectLocation();
+    const current = snapshot.session || snapshot;
+    if (!this.sessionWorkingDirectory && current.id === (this.activeTab || this.sessionId)) this.sessionWorkingDirectory = current.cwd || null;
     if (snapshot.permissions) this.sessionPermissionStates.set(this.sessionId || snapshot.session?.id, snapshot.permissions.yolo === true);
     this.tui?.update(snapshot);
     if (!this.tui && !this.json) {
@@ -164,6 +166,7 @@ export class UI {
   }
   refreshSessionProjectLocation() {
     this.sessionProjectLocation = sessionProjectLocation(this.activeTab || this.sessionId);
+    this.sessionWorkingDirectory = sessionWorkingDirectory(this.activeTab || this.sessionId);
     return this.sessionProjectLocation;
   }
   showSessionProjectLocation() {
@@ -207,10 +210,11 @@ export class UI {
       }); return true;
     }
     if (/^\/session-action(?:\s|$)/.test(input)) {
-      const match = /^\/session-action (share|delete) ([a-f0-9-]{36})$/.exec(input.trim());
+      const match = /^\/session-action (share|delete|rename) ([a-f0-9-]{36})$/.exec(input.trim());
       try {
         if (!match) throw new Error('Choose an action from a terminal’s menu.');
-        if (match[1] === 'delete') await deleteSavedSession(this, match[2]);
+        if (match[1] === 'rename') await renameSavedSession(this, match[2]);
+        else if (match[1] === 'delete') await deleteSavedSession(this, match[2]);
         else await shareSavedSession(this, match[2]);
       } catch (error) { this.event('error', { message: error.message }); }
       return true;

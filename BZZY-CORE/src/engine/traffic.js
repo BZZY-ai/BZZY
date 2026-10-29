@@ -10,6 +10,7 @@ import { home, privateDir } from './files.js';
 import { digest, putRecord, appendEvent, now } from './database.js';
 import { artifact } from './evidence.js';
 import { assertScopeOperation } from './program-scope.js';
+import { diagnosticRedactor } from './diagnostic-redaction.js';
 
 const sensitive = /authorization|cookie|password|passwd|secret|token|api[-_]?key/i;
 export function redactedHeaders(headers) { return Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, sensitive.test(k) ? '[redacted]' : v])); }
@@ -141,6 +142,10 @@ function targetAllowed(url, scope) {
   return Boolean(scope.allowedTargets?.some(match) && !scope.excludedTargets?.some(match));
 }
 export async function observedRequest(session, input, ui) {
+  const emit = (type, data) => {
+    ui.event(type, data);
+    if (session.parentSessionId) appendEvent(session.parentSessionId, type, { ...data, actorSessionId: session.id, agent: session.agentNamespace || session.provider });
+  };
   let url = new URL(input.url); const scope = session.contract?.scope || {};
   const method = (input.method || 'GET').toUpperCase();
   assertScopeOperation(session, { url: url.href, method });
@@ -151,12 +156,15 @@ export async function observedRequest(session, input, ui) {
   if (input.body && typeof input.body !== 'string') throw new Error('HTTP body must be a string.');
   if ((input.body?.length || 0) > 1024 * 1024) throw new Error('HTTP body exceeds 1 MiB.');
   const id = randomUUID(), started = Date.now(), entry = { id, sessionId: session.id, method, url: redactedUrl(url.href), requestHeaders: redactedHeaders(input.headers || {}), startedAt: now(), provenance: 'host-observed' };
-  putRecord('traffic', id, entry); ui.event('network.request', entry);
+  putRecord('traffic', id, entry); emit('network.request', entry);
   const response = await fetch(url, { method, headers: input.headers || {}, body: input.body, redirect: 'manual', signal: AbortSignal.timeout(Math.min(input.timeoutSeconds || 30, 120) * 1000) });
   const chunks = []; let bytes = 0, truncated = false;
   for await (const chunk of response.body || []) { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) { truncated = true; break; } chunks.push(chunk); }
   const content = Buffer.concat(chunks), evidence = artifact(session, content, `http-response:${id}`, response.headers.get('content-type') || 'application/octet-stream');
-  const result = { ...entry, status: response.status, responseHeaders: redactedHeaders(Object.fromEntries(response.headers)), durationMs: Date.now() - started, responseBytes: content.length, truncated, evidence: evidence.id, completedAt: now(), redirectFollowed: false };
-  putRecord('traffic', id, result); ui.event('network.response', result);
+  const textual = /(?:text\/|json|xml|javascript|x-www-form-urlencoded)/i.test(response.headers.get('content-type') || '');
+  const responsePreview = textual ? diagnosticRedactor({ maxString: 8192 }).scrub(content.toString('utf8')) : undefined;
+  const result = { ...entry, status: response.status, responseHeaders: redactedHeaders(Object.fromEntries(response.headers)), durationMs: Date.now() - started, responseBytes: content.length, truncated, evidence: evidence.id, completedAt: now(), redirectFollowed: false,
+    ...(responsePreview !== undefined ? { responsePreview, previewRedacted: true } : {}) };
+  putRecord('traffic', id, result); emit('network.response', result);
   return { ...result, preview: content.subarray(0, 8192).toString('utf8'), next: 'Use read_artifact for the recorded response. Redirects require a separate in-scope request.' };
 }

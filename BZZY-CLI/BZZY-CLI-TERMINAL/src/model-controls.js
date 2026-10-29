@@ -1,5 +1,50 @@
-import { providers, getProvider, providerEffortPolicy, providerEffortCapabilities } from './providers.js';
+import { providers, getProvider, providerEffortPolicy, providerEffortCapabilities, config, updateConfig, selectionFromSession } from './providers.js';
 import { availableModels, normalizeModel, modelEffortCapabilities } from './models.js';
+
+export function savedModelCombinations() {
+  const entries = config().terminalModelCombinations;
+  return (Array.isArray(entries) ? entries : []).filter(item => item && typeof item.name === 'string' && item.name.length <= 80
+    && typeof item.provider === 'string' && Object.hasOwn(providers(), item.provider)
+    && (item.model == null || typeof item.model === 'string' && item.model.length <= 200 && !/[\s\x00-\x1f]/u.test(item.model))
+    && typeof item.effort === 'string' && /^[a-z][a-z0-9_-]{0,23}$/.test(item.effort)).slice(0, 50);
+}
+
+// Uses Core's locked private configuration writer. Presets contain selection
+// identifiers only; account bindings and credentials never enter this list.
+export async function chooseSavedModel(current, ui) {
+  while (true) {
+    const saved = savedModelCombinations();
+    const selected = await ui.chooseOne('Saved model combinations', [
+      ...saved.map((item, index) => ({ value: String(index), label: item.name, description: `${item.provider} · ${item.model || 'Provider default'} · ${item.effort}` })),
+      { value: '@save', label: '＋ Save current combination', disabled: current.modelSelectionRequired, description: 'Give this provider, model and effort a reusable name.' },
+      { value: '@configure', label: 'Choose another provider / model…' },
+      ...(saved.length ? [{ value: '@remove', label: 'Remove saved combination…' }] : []),
+    ], { presentation: 'dropdown', kind: 'model', scope: 'chat' });
+    if (selected == null) return null;
+    if (selected === '@configure') return chooseUnifiedModel(current, ui);
+    if (selected === '@save') {
+      const label = await ui.ask('Save combination as · Esc cancels', { initialValue: `${current.provider} ${current.model || 'default'} ${current.selectedEffort || 'default'}` });
+      if (label == null) continue;
+      const name = label.trim();
+      if (!name || name.length > 80 || /[\x00-\x1f\x7f-\x9f]/u.test(name)) throw new Error('Use a name of 1–80 printable characters.');
+      const { provider, model, effort } = selectionFromSession(current);
+      updateConfig(value => {
+        const rows = Array.isArray(value.terminalModelCombinations) ? value.terminalModelCombinations : [];
+        if (rows.some(item => item.name === name)) throw new Error('A combination already has that name. Remove it first or choose another name.');
+        if (rows.length >= 50) throw new Error('Remove a saved combination before adding another.');
+        value.terminalModelCombinations = [...rows, { name, provider, model, effort }]; return value;
+      });
+      continue;
+    }
+    if (selected === '@remove') {
+      const name = await ui.chooseOne('Remove saved combination', saved.map(item => ({ value: item.name, label: item.name })), { presentation: 'dropdown' });
+      if (name) updateConfig(value => { value.terminalModelCombinations = (value.terminalModelCombinations || []).filter(item => item.name !== name); return value; });
+      continue;
+    }
+    const item = saved[Number(selected)];
+    if (item && String(Number(selected)) === selected) return { provider: item.provider, model: item.model, effort: item.effort, capabilities: null };
+  }
+}
 
 // Catalogs belong to Core. No model/provider list is hardcoded into the TUI.
 export async function chooseUnifiedModel(current, ui, { title = 'Choose model', scope = 'chat', anchor } = {}) {

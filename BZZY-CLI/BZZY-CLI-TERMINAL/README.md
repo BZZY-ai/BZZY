@@ -1,5 +1,13 @@
 # bzzy 🐝
 
+The terminal now uses a black neon workspace with clickable navigation and model
+controls, a dominant chat, and independently scrolling **AGENTS**, **HTTP PROBE**
+and **CODE** feeds. Drag column separators to resize; use **Nav / Live** to
+collapse or reopen them. The same frame and palette surround Library, Metrics,
+Settings and their submenus. Smaller terminals use the compact renderer; private
+QR screens retain their full width and quiet zone.
+See [terminal workspace controls and telemetry coverage](docs/TUI.md).
+
 Keep a [permanent program session](../../BZZY-CORE/docs/PERMANENT-SESSIONS.md)
 with `bzzy --attach fake-program-session`. Reopening starts no work. Core retains
 branches, blockers, attempts and prior findings across goals and compactions.
@@ -15,7 +23,7 @@ installation/verification steps and Library export/import instructions.
 Output can be redirected to a file and needs no model, account setup, network
 or running Core service. The same flags work with standalone `bzzy-core`.
 
-**Settings → Extensions** lists loaded extensions with enable checkboxes and
+**Settings → BZZY Core → Extensions** lists loaded extensions with enable checkboxes and
 local JSON / encrypted Relay import and export. Native extension tabs occupy the
 reserved row below the main navigation and above pricing; an empty catalog leaves
 that row blank. Each tab replaces the chat body and input with native controls.
@@ -856,7 +864,9 @@ Open **Settings** from the top-right gear, use `/settings`, run `bzzy settings`,
 or launch `bzzy --settings` directly. It includes hidden API-key save/replacement
 for Core's API-key providers, including Experiential Labs, and device
 pairing using the bundled Core Relay gateway. The main menu includes
-**API keys**, **Default BZZY folder**, **Pair iPhone**, **Default models** and **BZZY Core**.
+**DeepSeek API key**, **Default BZZY folder**, **Pair iPhone** and **BZZY Core**.
+The API-key entry opens Core’s configured API providers. **Default models** and
+**Extensions** live inside BZZY Core.
 Open BZZY Core for status, Start, Stop, Restart, **Agent execution**, **Gmail / email access** and **Export Library / Import Library**.
 Stop leaves Settings usable. The BZZY Core page also provides **Update
 BZZY CLI + Core**, which uses the same checked updater and reloads this terminal
@@ -875,8 +885,9 @@ The daemon keeps the gateway connected after CLI closes. Native local full-line
 tests validate iOS interoperability; public host enrollment, real-device checks
 and unattended boot/logout behavior remain deployment checks.
 
-The terminal uses the same sky-blue/celeste accent and dark surfaces as BZZY iOS.
-True-color terminals show the exact palette, with 256/basic-color fallbacks and
+The default terminal theme uses pure black, cyan controls, pink BZZY replies,
+purple specialists and orange tools. True-color terminals show the exact palette,
+with 256/basic-color fallbacks and
 `NO_COLOR` support. QR display keeps black/white contrast and its quiet zone;
 small terminals show the required dimensions and retain the manual-code option.
 Environment API keys take priority until you explicitly choose the saved key
@@ -956,7 +967,7 @@ For runtime troubleshooting, run `BZZY_DIRECT=1 bzzy run "Reply only BZZY_OK wit
 The [review assessment](docs/REVIEW-2026-10.md) records which external recommendations were implemented, qualified or deferred.
 
 The top status cluster shows a green or red **BZZY Relay** dot, and the bottom
-status row spells out separate **Core** and **Relay** states. Green requires a
+status row retains separate **Core** and **Relay** dots. Green requires a
 fresh Core response and, for Relay, a verified heartbeat on Core's authenticated
 socket. Stale or failed checks turn red; busy model work and cached state do not
 establish connectivity. The compact pairing header retains both indicators

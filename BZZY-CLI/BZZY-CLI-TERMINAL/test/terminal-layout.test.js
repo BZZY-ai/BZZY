@@ -60,7 +60,7 @@ test('private Import and generated-code screens keep a compact header at every s
         ui.privateView = { title, lines: ['Sender fingerprint: ' + fingerprint, code], qr: [] };
         const answer = ui.ask(title + ' · Esc goes back'); await Promise.resolve();
         ui.tui.render(); const frame = clean(written);
-        assert.match(frame, /bzzy/); assert.match(frame, /Core ON.*Relay ON/);
+        assert.match(frame, /bzzy/); assert.match(frame, /Core.*Relay/);
         assert.match(frame, /transfer-model/); assert.ok(frame.includes(title)); assert.ok(frame.includes(code.slice(0, 25)));
         assert.doesNotMatch(frame, /[\u2800-\u28ff]|CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save|bzzy\s+\/\s+/u);
         if (columns >= 80) { assert.match(frame, /1,234 tokens/); assert.match(frame, /CPU 12%/); }

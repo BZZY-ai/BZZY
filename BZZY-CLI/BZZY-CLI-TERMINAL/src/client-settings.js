@@ -137,7 +137,7 @@ export class ClientSettings {
     const previous = this.page;
     if (previous === 'default-models') this.defaults.leave();
     if (previous === 'worker-budget') { this.workerBudget.leave(); this.page = 'core'; this.message = ''; this.warning = false; this.focusAction('worker-budget'); this.changed(); return true; }
-    this.page = 'main'; this.qrView = false; this.message = ''; this.warning = false;
+    this.page = previous === 'default-models' ? this.defaultModelsParent || 'main' : previous === 'extensions' ? this.extensionsParent || 'main' : 'main'; this.qrView = false; this.message = ''; this.warning = false;
     this.focusAction(previous === 'extensions' ? 'extensions' : previous === 'core' ? 'core' : previous === 'default-models' ? 'default-models' : previous === 'keys' ? 'deepseek' : 'pair'); this.changed(); return true;
   }
   rows() {
@@ -148,16 +148,14 @@ export class ClientSettings {
     if (this.page === 'main') {
       const keyProviders = this.keyProviders(), statuses = keyProviders?.map(provider => this.keyStatus(provider.id));
       const configured = statuses?.filter(status => status.saved || status.environment).length;
-      rows.push({ text: 'API keys', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
+      rows.push({ text: 'DeepSeek API key', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
         detail: !keyProviders ? 'Provider catalog unavailable' : keyProviders.map(provider => provider.name).join(' · ') + ' · ' +
           (statuses.some(status => status.unavailable) ? 'Key status unavailable' : configured ? `${configured}/${keyProviders.length} configured · replace securely` : 'Add your key securely') });
       let folder; try { folder = this.workspaces.settings().root?.path || 'Choose a folder'; } catch { folder = 'Unavailable'; }
       rows.push({ text: 'Default BZZY folder', action: 'workspace-root', icon: '▱', card: true, tone: 'accent', detail: folder });
       rows.push({ text: 'Pair iPhone', action: 'pair', icon: '⌁', card: true, tone: 'accent',
         detail: this.pending().length ? 'iPhone waiting for approval' : this.grants().length ? 'iPhone paired' : 'Full access · QR or code' });
-      rows.push({ text: 'Default models', action: 'default-models', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Core · Validate · Delegate · Consensus & Compactor' });
       rows.push({ text: 'BZZY Core', action: 'core', icon: '◈', card: true, tone: 'accent', detail: 'Service, email, Library transfers and updates', value: this.hostStatus ? this.hostLabel() : undefined });
-      rows.push({ text: 'Extensions', action: 'extensions', icon: '⊞', card: true, tone: 'accent', detail: 'Import · export · enable native tabs' });
       return rows;
     }
     if (this.page === 'keys') {
@@ -190,6 +188,8 @@ export class ClientSettings {
         detail: 'Initial allocations and optional ceilings · new goals only unless explicitly applied' });
       rows.push({ text: 'Update BZZY CLI + Core', action: 'update-bzzy', icon: '↻', card: true, tone: 'accent',
         detail: 'Check the official release and update both products · this terminal reloads' });
+      rows.push({ text: 'Extensions', action: 'extensions', icon: '⊞', card: true, tone: 'accent', detail: 'Import · export · enable native tabs' });
+      rows.push({ text: 'Default models', action: 'default-models', icon: '◎', card: true, tone: 'accent', detail: 'Solo · Core · Validate · Delegate · Consensus & Compactor' });
       put(); put('Stop pauses work. Start keeps it paused until you resume.', 'muted');
       const push = notificationDeliveryStatus();
       put(); put(!push.configured ? 'iPhone push alerts · Apple setup needed' : push.message, 'muted');
@@ -556,16 +556,16 @@ export class ClientSettings {
   }
   async run(action) {
     if (!this.ui.interactive || !this.ui.tui || this.ui.closed || this.closed || this.busy) return;
-    if (action !== 'modes' && !settingsActions(this.rows()).some(row => row.action === action)) return;
+    if (!['modes', 'default-models', 'extensions'].includes(action) && !settingsActions(this.rows()).some(row => row.action === action)) return;
     this.busy = true; this.message = ''; this.warning = false; this.changed();
     try {
       if (action === 'update-bzzy') {
         this.busy = false; this.changed();
         await this.updater(this.ui);
         return;
-      } else if (action === 'default-models' || action === 'modes') { this.page = 'default-models'; this.defaults.open(); this.focus = 0; }
+      } else if (action === 'default-models' || action === 'modes') { this.defaultModelsParent = this.page === 'core' ? 'core' : 'main'; this.page = 'default-models'; this.defaults.open(); this.focus = 0; }
       else if (action.startsWith('defaults:')) { const message = await this.defaults.run(action); if (message) this.message = message; }
-      else if (action === 'extensions') { this.page = 'extensions'; this.focus = 0; }
+      else if (action === 'extensions') { this.extensionsParent = this.page === 'core' ? 'core' : 'main'; this.page = 'extensions'; this.focus = 0; }
       else if (action.startsWith('extensions-')) await extensionSettingsAction(action, this.ui);
       else if (action === 'workspace-root') await this.configureWorkspace();
       else if (action === 'deepseek') { this.page = 'keys'; this.focus = 0; }

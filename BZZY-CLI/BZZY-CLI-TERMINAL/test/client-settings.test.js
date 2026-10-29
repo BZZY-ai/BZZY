@@ -33,7 +33,7 @@ let directory, previous;
 const providerKeys = ['DEEPSEEK_API_KEY', 'ABLITERATION_API_KEY', 'ORCAROUTER_API_KEY', 'EXPLABS_API_KEY'];
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_FIXTURE_CORE_SETTINGS_KEY', ...providerKeys];
 const terminals = [];
-const mainSettingsActions = ['deepseek', 'workspace-root', 'pair', 'default-models', 'core', 'extensions'];
+const mainSettingsActions = ['deepseek', 'workspace-root', 'pair', 'core'];
 test.beforeEach(() => {
   previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   directory = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/private/tmp' : os.tmpdir(), 'bzzy-settings-')));
@@ -119,7 +119,7 @@ test('Settings presents the requested options and preserves the chat draft', asy
   assert.equal(ui.settings.page, 'main');
   assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), mainSettingsActions);
   const frame = ui.tui.lastFrame.map(clean).join('\n');
-  assert.match(frame, /API keys/); assert.match(frame, /BZZY folder/); assert.match(frame, /Pair iPhone/);
+  assert.match(frame, /DeepSeek API key/); assert.match(frame, /BZZY folder/); assert.match(frame, /Pair iPhone/);
   assert.doesNotMatch(frame, /Core coordinator|Prepare host identity|Copy public host certificate|Restart Core|Stop Core/);
   assert.equal(ui.tui.value, '');
   ui.settings.focusAction('deepseek');
@@ -138,10 +138,10 @@ test('Settings takes over the full screen and keeps all requested choices at nor
   for (const rows of [24, 32]) {
     Object.assign(output, { rows, columns: 100 }); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
-    for (const label of ['API keys', 'Default BZZY folder', 'Pair iPhone', 'Default models', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
-    assert.match(frame, /Settings/); assert.doesNotMatch(frame, /◉◉|bzzy/);
+    for (const label of ['DeepSeek API key', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
+    assert.match(frame, /Settings/); assert.doesNotMatch(frame, /◉◉/);
     assert.match(frame, /fixture-model-banner/); assert.match(frame, /987,654 tokens/);
-    assert.doesNotMatch(frame, /fixture-project-path|Ask BZZY to do anything/);
+    assert.ok(frame.includes(ui.sessionWorkingDirectory)); assert.doesNotMatch(frame, /Ask BZZY to do anything/);
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'settings'));
     assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'confirm'), false);
     assert.doesNotMatch(frame, /Core service/);
@@ -710,7 +710,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'email-access', 'worker-budget', 'update-bzzy', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'email-access', 'worker-budget', 'update-bzzy', 'extensions', 'default-models', 'back']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');
@@ -1077,11 +1077,11 @@ test('Settings pairs through the real Core/Relay adapter, requires phone confirm
   assert.ok(ui.settings.qrLines().length === 0);
 });
 
-test('the iOS palette uses exact RGB where supported and readable terminal fallbacks', () => {
+test('the neon palette uses exact RGB where supported and readable terminal fallbacks', () => {
   const output = { isTTY: true };
   const rgb = createTerminalTheme(output, { COLORTERM: 'truecolor' });
-  assert.equal(rgb.background(palette.background), '\x1b[48;2;3;9;15m');
-  assert.equal(rgb.foreground(palette.accent), '\x1b[38;2;36;223;255m');
+  assert.equal(rgb.background(palette.background), '\x1b[48;2;0;0;0m');
+  assert.equal(rgb.foreground(palette.accent), '\x1b[38;2;0;217;255m');
   for (const env of [{ TERM: 'xterm-256color' }, { TERM: 'linux' }, { NO_COLOR: '1' }, { TERM: 'dumb' }]) {
     const theme = createTerminalTheme(output, env), line = theme.color('Text 世界', palette.text);
     assert.equal(clean(line), 'Text 世界'); assert.equal(cellWidth(line), 9);
@@ -1121,11 +1121,11 @@ for (const id of ['abliteration', 'orcarouter', 'experiential']) test(`${id} Set
   assert.ok(!JSON.stringify([ui.tui.entries, ui.tui.history, listRecords('outbox')]).includes(secret));
 });
 
-test('Settings title, description and border hover as one card', () => {
+test('Settings title and description share hover feedback', () => {
   const { ui } = terminal(); ui.openSettings();
   ui.tui.theme = createTerminalTheme(ui.output, { FORCE_COLOR: '3' }); ui.tui.render();
   const card = ui.tui.hitTargets.filter(hit => hit.type === 'settings' && hit.action === 'core');
-  assert.equal(card.length, 3);
+  assert.equal(card.length, 2);
   const rows = card.map(hit => hit.row);
   for (const hit of card) {
     ui.tui.mouse(32, hit.left + 2, hit.row); ui.tui.render();

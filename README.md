@@ -44,7 +44,7 @@ verification and portable export/import. These commands work offline without
 starting Core or reading account settings. Standalone `bzzy-core` exposes the
 same flags.
 
-CLI **Settings → Extensions** imports/exports native extension definitions from
+CLI **Settings → BZZY Core → Extensions** imports/exports native extension definitions from
 local JSON files or encrypted Relay Library codes and lists enabled checkboxes.
 Enabled extensions add tabs below the main navigation, above pricing; **Chat**,
 immediately before Skills, returns to the conversation from ordinary panels.
@@ -200,9 +200,9 @@ On an owner-selected Linux test server, a fresh root-owned checkout can use
 This prepares root's own system service and direct launchers, keeping each launch
 cwd and existing non-root state separate. See [root installation](BZZY-CORE/docs/HOST-SERVICE.md#explicit-linux-root-installation).
 
-CLI **Settings → Default models** brings Solo, Core, Validate, Delegate,
+CLI **Settings → BZZY Core → Default models** brings Solo, Core, Validate, Delegate,
 Parallel, Besties and the shared Consensus & Compactor selection into one table.
-Settings also contains API keys, the default BZZY folder, Pair iPhone and BZZY Core.
+The four main Settings entries are DeepSeek API key, Default BZZY folder, Pair iPhone and BZZY Core; the API-key screen discovers all configured API providers.
 iPhone Settings → Models and defaults edits independent solo CLI, Core assistant,
 Besties, Parallel, Validate and Delegate presets. Mode flags reuse their saved setup
 automatically; a missing preset opens setup. Terminal projects keep their original working directory. Use `/alias NAME` to

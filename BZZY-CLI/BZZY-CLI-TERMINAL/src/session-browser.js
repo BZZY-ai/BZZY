@@ -57,6 +57,7 @@ export async function chooseSavedSession(ui, { excludeId } = {}) {
       const id = typeof selected === 'object' ? selected.value : selected;
       const session = saved.some(item => item.id === id) && loadSession(id);
       if (!session || !namedTerminalSessions([session]).length) { ui.event('info', { message: 'This named terminal is no longer available. Open Sessions to refresh.' }); return null; }
+      if (selected.action === 'rename') { await renameSavedSession(ui, id); continue; }
       if (selected.action === 'share') { await shareSavedSession(ui, id); return null; }
       if (selected.action === 'delete') {
         try { await deleteSavedSession(ui, id); }
@@ -73,6 +74,17 @@ export async function chooseSavedSession(ui, { excludeId } = {}) {
     ui.sessionBrowserDrafts?.delete(sessionId);
     if (draft && ui.tui) Object.assign(ui.tui, { value: draft.value, cursor: draft.cursor });
   }
+}
+
+export async function renameSavedSession(ui, id) {
+  if (ui.sessionMode === 'VIEW') throw new Error('Attach with control before renaming a terminal.');
+  const source = loadSession(id);
+  if (!source || !namedTerminalSessions([source]).length) throw new Error('Choose an existing named terminal.');
+  const alias = await ui.ask('Rename saved terminal · Esc cancels', { initialValue: source.alias });
+  if (alias == null || !alias.trim()) return;
+  const updated = setSessionAlias(id, alias);
+  if (id === ui.sessionId) ui.updateSession?.(updated);
+  if (ui.tui) { ui.tui.recentCache = null; ui.tui.schedule(); }
 }
 
 // This local frontend action never removes files itself. Core owns the durable

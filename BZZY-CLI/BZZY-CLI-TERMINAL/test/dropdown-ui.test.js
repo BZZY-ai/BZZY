@@ -105,11 +105,11 @@ test('Send, top Settings and Back controls react to actual SGR clicks', async t 
   assert.equal(await help, '/help');
 });
 
-test('top navigation hides New Session without submitting or clearing the current draft', async t => {
+test('sidebar exposes New Session without submitting or clearing the current draft', async t => {
   const { ui, tui } = terminal(t);
   const next = ui.ask('bzzy › '); await Promise.resolve();
   tui.value = 'draft survives'; tui.cursor = 14; tui.render();
-  assert.equal(tui.hitTargets.some(hit => hit.type === 'session-new'), false);
+  assert.equal(tui.hitTargets.some(hit => hit.type === 'session-new'), Boolean(tui.workspace?.left));
   assert.doesNotMatch(clean(tui.lastFrame[0]), /\+ New/);
   ui.reader.close(); assert.equal(await next, null);
   assert.equal(tui.value, 'draft survives');

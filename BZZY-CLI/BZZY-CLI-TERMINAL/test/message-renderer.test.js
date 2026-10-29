@@ -18,7 +18,7 @@ test('rich terminal blocks preserve semantic structure and inherited inline styl
   const text = plain(rendered).join('\n'), styled = rendered.lines.join('\n');
   assert.match(text, /^Report\n\nDetails\n\nNote Ready now/);
   assert.match(text, /• One\n• Two/); assert.match(text, /1\. First\n2\. Second/);
-  assert.match(text, /│ Quoted evidence/); assert.match(text, /╭─ swift\n│ if count < 3 \{\n│     print\("Safe"\)/);
+  assert.match(text, /│ Quoted evidence/); assert.match(text, /┌─ swift\n│ if count < 3 \{\n│     print\("Safe"\)/);
   assert.match(styled, /\x1b\[1m/); assert.match(styled, /\x1b\[2m/);
   assert.match(styled, /\x1b\[3m/); assert.match(styled, /\x1b\[4m/);
   assert.match(styled, /\x1b\[38;2;0;229;203m/);
@@ -75,7 +75,7 @@ test('monochrome keeps code, tables, lists and headings readable without any ANS
   const rendered = renderMessageBody(body, { width: 32, theme: theme(0) });
   const text = rendered.lines.join('\n');
   assert.doesNotMatch(text, /\x1b/); assert.match(text, /Title/); assert.match(text, /• Review/);
-  assert.match(text, /\*\*literal\*\*/); assert.match(text, /╭─ sh/);
+  assert.match(text, /\*\*literal\*\*/); assert.match(text, /┌─ sh/);
 });
 
 test('terminal controls from plain, invalid markup and escaped external content stay inert', () => {

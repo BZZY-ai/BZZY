@@ -26,6 +26,6 @@ export class ConnectionStatusMonitor {
 
 export function connectionStatusLabel(sample, theme, compact = false) {
   const badge = (label, online) => theme.color('●', online ? palette.goalSuccess : palette.danger, true)
-    + theme.color(` ${label} ${online ? compact ? 'ON' : 'Online' : compact ? 'OFF' : 'Offline'}`, palette.muted);
-  return badge('Core', sample?.core === true) + '  ' + badge('Relay', sample?.core === true && sample?.relay === true);
+    + theme.color(` ${label}`, palette.muted);
+  return badge(compact ? 'Core' : 'BZZY Core', sample?.core === true) + '  ' + badge('Relay', sample?.core === true && sample?.relay === true);
 }

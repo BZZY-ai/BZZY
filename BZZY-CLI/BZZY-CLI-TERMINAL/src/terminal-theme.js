@@ -1,18 +1,19 @@
-// Keep the terminal and local session viewer aligned with BZZY iOS.
+// Shared semantic colors keep every terminal screen on the same neon theme.
 export const palette = Object.freeze({
-  background: '#03090F', surface: '#0A151F', accent: '#24DFFF',
-  text: '#EDF5F2', muted: '#94ADB8', border: '#1A4354', warning: '#E4BD7C',
-  selection: '#0B3444', hover: '#12475A',
-  elevated: '#102331', user: '#58DFC7', userSurface: '#0B302E', userText: '#DCFFF6',
-  agent: '#B9B6FF', agentSurface: '#101B2C', success: '#7DDFAD',
-  goalActive: '#5385FF', goalSuccess: '#16E09A', danger: '#FF526C', yolo: '#FF5BBF',
+  background: '#000000', surface: '#050508', accent: '#00D9FF',
+  text: '#E2EEFF', muted: '#8297B3', border: '#18354A', warning: '#FFBF00',
+  selection: '#082432', hover: '#102536',
+  elevated: '#0B101A', user: '#00D9FF', userSurface: '#000001', userText: '#E2EEFF',
+  agent: '#B45CFF', agentSurface: '#050509', success: '#00FF9C',
+  main: '#FF1493', tool: '#FF9500',
+  goalActive: '#00D9FF', goalSuccess: '#00FF9C', danger: '#FF365E', yolo: '#FF1493',
 });
 
 // Existing call sites pass semantic blue tokens. Resolve those tokens within
 // each theme instance, keeping separate UI instances and rich-body colors safe.
 export const palettes = Object.freeze({
   blue: palette,
-  black: Object.freeze({
+  black: Object.freeze({ ...palette,
     background: '#000000', surface: '#111111', elevated: '#1C1C1C',
     text: '#F2F2F2', muted: '#A3A3A3', border: '#414141', accent: '#E5E5E5',
     selection: '#292929', hover: '#383838', warning: '#E8B86B',
@@ -20,7 +21,7 @@ export const palettes = Object.freeze({
     agent: '#C6BEEC', agentSurface: '#18151F', success: '#8DD5AD',
     goalActive: '#B4C4FF', goalSuccess: '#7CDEA6', danger: '#FF8490', yolo: '#EAA2CE',
   }),
-  white: Object.freeze({
+  white: Object.freeze({ ...palette,
     background: '#FFFFFF', surface: '#F3F4F5', elevated: '#E8EBEE',
     text: '#17212B', muted: '#52606D', border: '#8996A3', accent: '#176378',
     selection: '#DCE9EF', hover: '#C9DDE7', warning: '#805000',
@@ -49,7 +50,8 @@ const basic = new Map([[palette.background, 0], [palette.surface, 0], [palette.t
 basic.set(palette.user, 14); basic.set(palette.userText, 15); basic.set(palette.agent, 13);
 for (const tone of [palette.elevated, palette.userSurface, palette.agentSurface]) basic.set(tone, 0);
 basic.set(palette.success, 10);
-basic.set(palette.goalActive, 12); basic.set(palette.goalSuccess, 10); basic.set(palette.danger, 9); basic.set(palette.yolo, 13);
+basic.set(palette.goalActive, 14); basic.set(palette.goalSuccess, 10); basic.set(palette.danger, 9); basic.set(palette.yolo, 13);
+basic.set(palette.main, 13); basic.set(palette.tool, 11);
 
 export function createTerminalTheme(output = process.stdout, env = process.env, name = 'blue') {
   if (!Object.hasOwn(palettes, name)) throw new Error('Choose /color blue, /color black or /color white.');
@@ -57,7 +59,7 @@ export function createTerminalTheme(output = process.stdout, env = process.env, 
   const tokens = new Map(Object.entries(palette).map(([key, tone]) => [tone, selected[key]]));
   const lightBasic = { background: 15, surface: 15, elevated: 7, text: 0, muted: 8, border: 8, accent: 6,
     selection: 7, hover: 7, warning: 3, user: 2, userSurface: 15, userText: 0, agent: 5, agentSurface: 15,
-    success: 2, goalActive: 4, goalSuccess: 2, danger: 1, yolo: 5 };
+    success: 2, goalActive: 4, goalSuccess: 2, danger: 1, yolo: 5, main: 5, tool: 3 };
   const basicTones = name === 'white' ? new Map(Object.entries(lightBasic).map(([key, index]) => [palette[key], index]))
     : name === 'black' ? new Map([...basic, [palette.accent, 15], [palette.border, 8], [palette.user, 10]]) : basic;
   const level = colorLevel(output, env), cache = new Map();

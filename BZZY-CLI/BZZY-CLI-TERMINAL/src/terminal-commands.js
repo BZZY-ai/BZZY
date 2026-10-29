@@ -47,6 +47,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 bzzy settings      Open Settings directly without starting a conversation.
 bzzy doctor        Check both installed backends; add --live to test actual replies.
 
+/providers @saved  Save or choose a named provider/model/effort combination.
 /models · /effort · /providers · /usage · /pause · /cancel · /exit
 Option+Delete / Alt+Backspace · Ctrl+W delete the previous word at the cursor.
 Tab / Shift+Tab switch agent chats. bzzy --help lists options; bzzy --whoami explains the full system.`;

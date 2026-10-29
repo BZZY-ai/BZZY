@@ -88,3 +88,20 @@ test('host-observed HTTP requires declared scope, does not follow redirects and 
   assert.equal(result.status, 302); assert.equal(result.redirectFollowed, false); assert.equal(requests, 1); assert.ok(result.evidence);
   session.policy.mode = 'read-only'; await assert.rejects(observedRequest(session, { url, method: 'POST' }, ui()), /mutating/);
 });
+test('observed textual response previews redact bindings before persistence and mirror a worker request to its parent', async () => {
+  const port = await listen(http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json', 'set-cookie': 'session=fixture-cookie-value' });
+    response.end('{"token":"fixture-secret-response", "message":"safe fixture"}');
+  }));
+  const parent = createSession(BUILTINS.codex, dir);
+  session.parentSessionId = parent.id;
+  session.contract.scope.allowedTargets = [`http://127.0.0.1:${port}`];
+  const result = await observedRequest(session, { url: `http://127.0.0.1:${port}/response` }, ui());
+  assert.equal(result.status, 200); assert.match(result.responsePreview, /safe fixture/);
+  assert.doesNotMatch(result.responsePreview, /fixture-secret-response/);
+  assert.equal(result.responseHeaders['set-cookie'], '[redacted]');
+  const stored = listRecords('traffic').find(row => row.id === result.id); assert.doesNotMatch(stored.responsePreview, /fixture-secret-response/);
+  const { events } = await import('../src/database.js');
+  const mirrored = events(parent.id).filter(row => row.type === 'network.response');
+  assert.equal(mirrored.length, 1); assert.equal(mirrored[0].data.actorSessionId, session.id); assert.equal(mirrored[0].data.id, result.id);
+});

@@ -25,7 +25,7 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   const offset = Math.max(0, Math.min(position - Math.floor(rows / 2), filtered.length - rows));
   const lines = [], hits = [], edge = text => theme.color(text, palette.border);
   const put = (text = '', tone = palette.text, bold = false, background = palette.surface) => lines.push(edge('│') + fillSurface(clip(text, inner), inner, theme, background, tone, bold) + edge('│'));
-  lines.push(edge('╭' + '─'.repeat(inner) + '╮'));
+  lines.push(edge('┌' + '─'.repeat(inner) + '┐'));
   const locked = picker.locked && picker.loading;
   const close = locked ? '   ' : ' ← Back ', title = ' ' + clip(picker.title, Math.max(1, inner - cellWidth(close) - 2));
   put(title + ' '.repeat(Math.max(0, inner - cellWidth(title) - cellWidth(close))) + close, palette.accent, true);
@@ -63,7 +63,7 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
     hits.push({ type: 'confirm', row: lines.length - 1, left: 2, right: cellWidth(confirm) },
       { type: 'cancel', back: true, row: lines.length - 1, left: cancelLeft, right: cancelLeft + 10 });
   }
-  lines.push(edge('╰' + '─'.repeat(inner) + '╯'));
+  lines.push(edge('└' + '─'.repeat(inner) + '┘'));
   // Keep a dropdown attached to its control, including on small terminals and
   // near the bottom of Settings. Other choices use a centered dialog.
   const left = Math.max(1, Math.min(width - size, dropdown && anchor ? anchor.left - 1 : Math.floor((width - size) / 2)));

@@ -1,7 +1,7 @@
 import { clean, clip, cellWidth, wrap } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
+import { actorColor } from './activity-monitor.js';
 
-const tones = [palette.agent, palette.goalSuccess, palette.warning, palette.accent, palette.goalActive, palette.yolo];
 const labels = { loaded: 'Loaded', starting: 'Starting', running: 'Running', awaiting_review: 'Awaiting review',
   needs_context: 'Needs context', awaiting_followup: 'Ready for follow-up', paused: 'Paused', interrupted: 'Interrupted',
   cancelled: 'Cancelled', failed: 'Failed', accepted: 'Accepted', inconclusive: 'Inconclusive', abandoned: 'Abandoned',
@@ -151,7 +151,7 @@ export function reconcileInvocationEntries(entries, snapshot, { sessionId } = {}
 export function invocationEntryLayout(entry, width, theme) {
   width = Math.max(1, Math.floor(width));
   const agent = entry.invocationType === 'agent', state = status(entry);
-  const tone = agent ? tones[(entry.agentSlot || 0) % tones.length] : palette.accent;
+  const tone = agent ? actorColor({ role: 'subagent', name: entry.name }) : palette.agent;
   const icon = agent ? activeStates.has(entry.state) ? '●' : entry.state === 'failed' || entry.state === 'rejected' ? '✕' : '◇' : '◆';
   const prefix = `  ${icon} ${agent ? 'Agent' : 'Skill'} · `;
   const details = state + (agent && entry.round > 1 ? ` · round ${entry.round}` : '');
