@@ -2,6 +2,16 @@ import { database, getRecord } from './database.js';
 import { routingStatus } from './workflow-routing.js';
 import { sessionMemoryEligible, sessionMemoryStatus } from './session-memory.js';
 
+function jobHealth(kind, sessionId) {
+  return database().prepare(`SELECT json_extract(data,'$.state') AS state,
+    json_extract(data,'$.scheduleReason') AS scheduleReason,
+    json_extract(data,'$.reasonPaused') AS reasonPaused,count(*) AS count
+    FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=?
+    GROUP BY state,scheduleReason,reasonPaused`).all(kind, sessionId).map(row => ({ ...row,
+    reason: ['paused', 'cancelled'].includes(row.state)
+      ? row.reasonPaused ?? row.scheduleReason : row.scheduleReason ?? row.reasonPaused }));
+}
+
 // Read projection only: opening Metrics or exporting never schedules work.
 export function sessionHealth(id) {
   const session = getRecord('session', typeof id === 'string' ? id : id?.id);
@@ -10,12 +20,8 @@ export function sessionHealth(id) {
   if (sessionMemoryEligible(session)) {
     try { memory = sessionMemoryStatus(session); } catch { memory = { unavailable: true }; }
   }
-  const learning = database().prepare(`SELECT json_extract(data,'$.state') AS state,
-    coalesce(json_extract(data,'$.scheduleReason'),json_extract(data,'$.reasonPaused')) AS reason,count(*) AS count
-    FROM records WHERE kind='core.learning.job' AND json_extract(data,'$.sessionId')=? GROUP BY state,reason`).all(session.id);
-  const compaction = database().prepare(`SELECT json_extract(data,'$.state') AS state,
-    coalesce(json_extract(data,'$.scheduleReason'),json_extract(data,'$.reasonPaused')) AS reason,count(*) AS count
-    FROM records WHERE kind='core.session.compactor.job' AND json_extract(data,'$.sessionId')=? GROUP BY state,reason`).all(session.id);
+  const learning = jobHealth('core.learning.job', session.id);
+  const compaction = jobHealth('core.session.compactor.job', session.id);
   const routing = routingStatus(session, { limit: 5 }), nativeTools = session.nativeBackendReadiness?.tools;
   const missingRoutingTools = routing.enforced && Array.isArray(nativeTools?.names)
     ? ['declare_work_unit', 'close_work_unit'].filter(name => !nativeTools.names.includes(name)) : [];

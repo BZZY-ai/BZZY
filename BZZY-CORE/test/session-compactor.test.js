@@ -89,6 +89,20 @@ test('completed source queues stable jobs, selects the compactor, and leaves ori
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Stable nodes must not submit twice') }), []);
 });
 
+test('unchanged queueing preserves control revisions while new finalized sources advance them', () => {
+  queue();
+  const before = sessionCompactionStatus(session).control;
+  queueSessionCompaction(session, { force: true });
+  assert.deepEqual(sessionCompactionStatus(session).control, before);
+  appendEvent(session.id, 'message.user', { text: 'A new finalized request.' });
+  queueSessionCompaction(session, { force: true });
+  const advanced = sessionCompactionStatus(session).control;
+  assert.equal(advanced.revision, before.revision + 1);
+  assert.ok(advanced.throughSeq > before.throughSeq);
+  queueSessionCompaction(session, { force: true });
+  assert.deepEqual(sessionCompactionStatus(session).control, advanced);
+});
+
 test('small sanitized material is published by the host without a model or key', async () => {
   delete process.env.DEEPSEEK_API_KEY;
   queue(session, { text: 'Keep uncertainty explicit; password=fixture-private-password', count: 1 });
@@ -194,6 +208,18 @@ test('large history continues bounded indexing until its pinned finalized cursor
   assert.equal(sessionCompactionStatus(session).control.indexingRemaining, false);
 });
 
+test('backfill advances its index without revising unchanged compactor controls', async () => {
+  for (let index = 0; index < 260; index++) appendEvent(session.id, 'message.user', { text: `Observation ${index}: ${'Keep unresolved evidence explicit. '.repeat(10)}` });
+  queueSessionCompaction(session, { force: true, maxParts: 1 });
+  putRecord('execution', 'foreground', { id: 'foreground', sessionId: session.id, state: 'queued' });
+  const before = sessionCompactionStatus(session).control, indexed = sessionMemoryStatus(session).indexedThroughSeq;
+  assert.equal(before.indexingRemaining, true);
+  assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Foreground keeps paid jobs deferred') }), []);
+  assert.ok(sessionMemoryStatus(session).indexedThroughSeq > indexed);
+  assert.equal(sessionMemoryStatus(session).indexingRemaining, true);
+  assert.deepEqual(sessionCompactionStatus(session).control, before);
+});
+
 test('discovery pages past old assigned pending nodes so later work cannot starve', async () => {
   for (let index = 0; index < 808; index++) appendEvent(session.id, index % 2 ? 'text' : 'message.user', { text: `Observation ${index}: ${'Keep uncertain evidence unresolved. '.repeat(10)}` });
   let indexed;
@@ -226,6 +252,10 @@ test('dispatched failure is charged conservatively and requires explicit resume,
   queue(); const [result] = await processSessionCompactions({ runModel: async () => { throw Error('Bearer private-error-token'); } });
   assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'uncertain_request'); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
   assert.doesNotMatch(JSON.stringify(result), /private-error-token/);
+  const stopped = sessionCompactionStatus(session).control;
+  pauseAllSessionCompactions('host_shutdown');
+  assert.deepEqual(sessionCompactionStatus(session).control, stopped);
+  assert.equal(job().reasonPaused, 'uncertain_request'); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
   queueSessionCompaction(session, { force: true });
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('A new turn is not consent to repeat an uncertain call') }), []);
   configureSessionCompaction({ tokenBudget: 40000 }, { expectedRevision: 0 }); resume();
@@ -250,6 +280,37 @@ test('owner stop and disabled settings pause queued work without automatic resum
   assert.throws(() => resume(), { code: 'COMPACTOR_PAUSED' });
   configureSessionCompaction({ enabled: true }, { expectedRevision: 1 });
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Enabled does not mean resumed') }), []);
+});
+
+for (const reason of ['owner_pause', 'owner_cancel', 'user_pause', 'source_paused', 'uncertain_request']) {
+  test(`daemon shutdown and later queueing preserve ${reason}`, async () => {
+    queue();
+    if (reason === 'owner_cancel') controlSessionCompaction(session, 'cancel', { expectedRevision: sessionCompactionStatus(session).control.revision });
+    else pauseSessionCompaction(session.id, reason);
+    const before = sessionCompactionStatus(session).control, priorJob = job();
+    pauseAllSessionCompactions('host_shutdown');
+    assert.deepEqual(sessionCompactionStatus(session).control, before);
+    assert.deepEqual(job(), priorJob);
+    session.executionState = 'paused'; saveSession(session);
+    queueSessionCompaction(session, { force: true });
+    assert.equal(sessionCompactionStatus(session).control.state, before.state);
+    assert.equal(sessionCompactionStatus(session).control.reasonPaused, reason);
+    session.executionState = 'idle'; saveSession(session);
+    queueSessionCompaction(session, { force: true });
+    assert.equal(sessionCompactionStatus(session).control.state, before.state);
+    assert.equal(sessionCompactionStatus(session).control.reasonPaused, reason);
+    assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Shutdown or queueing cannot resume stopped work') }), []);
+    assert.deepEqual(job(), priorJob);
+  });
+}
+
+test('shutdown still pauses previously enabled queued compaction without automatic resume', async () => {
+  queue(); pauseAllSessionCompactions('host_shutdown');
+  assert.equal(sessionCompactionStatus(session).control.state, 'paused');
+  assert.equal(sessionCompactionStatus(session).control.reasonPaused, 'host_shutdown');
+  assert.equal(job().state, 'paused'); assert.equal(job().reasonPaused, 'host_shutdown');
+  queueSessionCompaction(session, { force: true });
+  assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('No new restart policy') }), []);
 });
 
 test('deletion or a rebuilt generation rejects in-flight output', async () => {

@@ -63,6 +63,12 @@ function source(value) {
   return saved;
 }
 const controlFor = id => ({ sessionId: id, state: 'enabled', revision: 0, ...getRecord(CONTROL, id) });
+function updateControl(id, changes, db = database()) {
+  const prior = controlFor(id);
+  if (Object.entries(changes).every(([key, value]) => prior[key] === value)) return prior;
+  const value = { ...prior, ...changes, revision: prior.revision + 1, updatedAt: now() };
+  putRecord(CONTROL, id, value, db); return value;
+}
 function updateJob(job, changes, db = database()) {
   const value = { ...job, ...changes, revision: job.revision + 1, updatedAt: now() };
   putRecord(JOB, job.id, value, db); return value;
@@ -104,26 +110,31 @@ function discoverJobs(sessionId) {
 // history/status never queues model requests or advances the source cursor.
 export function queueSessionCompaction(value, { throughSeq, force = false, maxParts } = {}) {
   const saved = source(value), previous = controlFor(saved.id);
-  if (['paused', 'cancelled'].includes(saved.executionState)) pauseSessionCompaction(saved.id, 'source_paused');
+  if (previous.state === 'enabled' && ['paused', 'cancelled'].includes(saved.executionState)) pauseSessionCompaction(saved.id, 'source_paused');
   const indexed = indexSessionMemory(saved, { throughSeq, force, ...(maxParts === undefined ? {} : { maxParts }) });
   const current = controlFor(saved.id);
   const finalizedThroughSeq = throughSeq ?? indexed.throughSeq ?? database().prepare('SELECT coalesce(max(seq),0) AS seq FROM events WHERE session_id=?').get(saved.id).seq;
-  putRecord(CONTROL, saved.id, { ...current, queued: true, indexingRemaining: indexed.deferred || indexed.indexingRemaining || false,
+  updateControl(saved.id, { queued: true, indexingRemaining: indexed.deferred || indexed.indexingRemaining || false,
     force: Boolean(indexed.deferred || indexed.indexingRemaining) && (current.force || force),
-    throughSeq: Math.max(current.throughSeq || 0, finalizedThroughSeq),
-    revision: current.revision + 1, updatedAt: now() });
+    throughSeq: Math.max(current.throughSeq || 0, finalizedThroughSeq) });
   discoverJobs(saved.id);
   return { sessionId: saved.id, indexed, control: controlFor(saved.id), previouslyPaused: previous.state !== 'enabled' };
 }
 
 function pause(id, reason, cancelled = false) {
   const result = atomic(db => {
-    const prior = controlFor(id), control = { ...prior, state: cancelled ? 'cancelled' : 'paused', reasonPaused: reason,
+    const prior = controlFor(id);
+    // Daemon interruption must not replace an earlier owner/source stop or
+    // uncertainty reason. Only explicit resume can clear those durable states.
+    const preserveStop = reason === 'host_shutdown' && ['paused', 'cancelled'].includes(prior.state);
+    const nextState = preserveStop ? prior.state : cancelled ? 'cancelled' : 'paused';
+    const nextReason = preserveStop ? prior.reasonPaused : reason;
+    const control = { ...prior, state: nextState, reasonPaused: nextReason,
       revision: prior.revision + 1, updatedAt: now() };
-    const unchanged = prior.state === control.state && prior.reasonPaused === reason;
+    const unchanged = prior.state === control.state && prior.reasonPaused === nextReason;
     if (!unchanged) putRecord(CONTROL, id, control, db);
     for (const job of listRecords(JOB, { sessionId: id, states: jobStates })) updateJob(job, {
-      state: cancelled ? 'cancelled' : 'paused', reasonPaused: reason, lease: null }, db);
+      state: nextState, reasonPaused: nextReason, lease: null }, db);
     return unchanged ? prior : control;
   });
   for (const item of active.values()) if (item.sessionId === id) item.controller.abort(fail('COMPACTOR_PAUSED', 'Background compaction was paused.'));
@@ -420,8 +431,8 @@ export async function processSessionCompactions({ runModel = runRestrictedDocume
     try {
       const indexed = indexSessionMemory(saved, { ...(control.throughSeq !== undefined ? { throughSeq: control.throughSeq } : {}), force: control.force || false });
       const current = controlFor(saved.id);
-      putRecord(CONTROL, saved.id, { ...current, indexingRemaining: Boolean(indexed.indexingRemaining),
-        force: Boolean(indexed.indexingRemaining) && current.force, revision: current.revision + 1, updatedAt: now() });
+      updateControl(saved.id, { indexingRemaining: Boolean(indexed.indexingRemaining),
+        force: Boolean(indexed.indexingRemaining) && current.force });
     }
     catch { pauseSessionCompaction(control.sessionId, 'source_changed'); }
   }

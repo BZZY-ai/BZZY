@@ -11,6 +11,7 @@ import { peerCollaborationState } from './peer-collaboration.js';
 import { routingStatus } from './workflow-routing.js';
 import { currentAssignmentMemoryCapsule } from './assignment-memory.js';
 import { currentBudgetCapsule, workerAllocationRevision } from './worker-budget.js';
+import { taskKnowledgeBrief } from './task-knowledge-brief.js';
 
 export { processIdentity, identityAlive, signalProcess } from './process-identity.js';
 
@@ -113,7 +114,7 @@ export function contextFor(session, context = {}) {
       lookup: 'Use assignment_status with an assignment ID. Full report and evidence remain durable artifacts, opened with read_artifact.' } });
 }
 
-export const taskStateDetailSections = ['contract', 'checkpoint', 'recovery', 'projectContext', 'relevantMemory', 'assignments', 'importedContext', 'acceptance', 'mission', 'collaboration', 'routing'];
+export const taskStateDetailSections = ['contract', 'checkpoint', 'recovery', 'projectContext', 'relevantMemory', 'knowledgeBrief', 'assignments', 'importedContext', 'acceptance', 'mission', 'collaboration', 'routing'];
 const short = (value, maximum = 320) => typeof value === 'string' ? value.slice(0, maximum) : null;
 function preview(value, maximum = 1000) {
   const encoded = typeof value === 'string' ? value : JSON.stringify(value ?? null);
@@ -147,11 +148,12 @@ function taskStateSources(session, context) {
   const pendingInput = session.pendingInput || [], contract = state.scope.kind === 'chat'
     ? { constraints: session.contract?.constraints || [], scope: session.contract?.scope || {}, policy: session.policy || null }
     : session.contract || null;
+  const knowledge = taskKnowledgeBrief(session, goal);
   const revision = digest({ scope: state.scope, goal, contract, checkpoint: state.current, historical: state.historical,
     recovery, assignments, routing, pendingInput, acceptance: session.acceptance || null, importedContext: session.importedContext || null,
     mission: session.missionContext || null, assignmentContext: session.assignmentContext || null, knowledgeVersion,
-    allocationRevision: workerAllocationRevision(assignmentSession) });
-  return { state, goal, assignments, recovery, routing, pendingInput, contract, revision, contextGeneration: contextGeneration(session, context) };
+    allocationRevision: workerAllocationRevision(assignmentSession), knowledge: knowledge.revision });
+  return { state, goal, assignments, recovery, routing, pendingInput, contract, knowledge, revision, contextGeneration: contextGeneration(session, context) };
 }
 
 // The execution preprompt above retains the full pinned contract. This separate
@@ -174,6 +176,7 @@ export function compactTaskState(session, input = {}, context = {}) {
       pendingActions: preview(checkpoint.pendingActions || [], 700), unresolvedQuestions: preview(checkpoint.unresolvedQuestions || [], 450),
       evidenceCount: checkpoint.evidence?.length || 0, detail: 'checkpoint', authority: 'Agent progress claims; never verified completion.' } : null,
     historicalCheckpoint: state.historical,
+    knowledgeBrief: source.knowledge.brief,
     liveAgents: !session.parentSessionId && !session.role && !session.agentId ? currentAssignmentMemoryCapsule(session, { ...context, limit: 3 }) : undefined,
     recovery: recovery ? { state: recovery.state, createdAt: recovery.createdAt, automaticallyReplayed: recovery.automaticallyReplayed,
       workspaceChangeCount: recovery.workspaceChanges?.length || 0, uncertainOperationCount: recovery.uncertainOperations?.length || 0,
@@ -204,6 +207,14 @@ export function compactTaskState(session, input = {}, context = {}) {
       state: item.state, closure: item.closure, reportArtifactId: item.reportArtifactId })),
     taskPreviewsOmitted: true, lookup: 'Use assignment_status for each original/current assigned task and report references.' };
   }
+  // Preserve at least the best source when possible; reduce navigation and
+  // excerpts before dropping historical entries under an unusually large state.
+  if (Buffer.byteLength(JSON.stringify(result)) > 8192) {
+    result.knowledgeBrief = { ...result.knowledgeBrief, items: result.knowledgeBrief.items.map(item => ({ ...item, statement: short(item.statement, 100) })) };
+  }
+  while (Buffer.byteLength(JSON.stringify(result)) > 8192 && result.knowledgeBrief.items.length > 1) {
+    result.knowledgeBrief.items.pop(); result.knowledgeBrief.omitted++;
+  }
   if (Buffer.byteLength(JSON.stringify(result)) > 8192) throw new Error('Task-state identity exceeds the compact response budget.');
   return result;
 }
@@ -222,6 +233,7 @@ export function readTaskStateDetails(session, input, context = {}) {
     case 'recovery': value = source.recovery; break;
     case 'projectContext': value = ['executor', 'reviewer'].includes(session.role) ? null : projectContext(session.projectRoot || session.cwd, { session }); break;
     case 'relevantMemory': value = ['executor', 'reviewer'].includes(session.role) ? [] : recall(session.projectRoot || session.cwd, (source.goal?.objective || '').slice(0, 500), 8, { session }); break;
+    case 'knowledgeBrief': value = { items: source.knowledge.sources, authority: source.knowledge.brief.authority }; break;
     case 'assignments': value = source.assignments; break;
     case 'importedContext': value = session.importedContext || null; break;
     case 'acceptance': value = session.acceptance || null; break;

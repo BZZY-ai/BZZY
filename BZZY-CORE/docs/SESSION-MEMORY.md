@@ -121,6 +121,13 @@ Session pause/cancel, Core stop, deletion and shutdown stop background work.
 An already dispatched summary can finish against immutable sources during an
 ordinary foreground turn. Paused compaction requires explicit resume.
 
+Health diagnostics expose `scheduleReason` and `reasonPaused` separately; their
+compatibility `reason` prefers the actual pause reason for stopped jobs. A daemon
+shutdown preserves an existing compactor pause/cancellation reason, including
+owner/session stops and uncertain requests. Repeated queue and backfill calls
+do not revise unchanged control fields. These repairs do not resume old jobs or
+enable foreground inference automatically.
+
 Completed native messages now advance deterministic indexing while the overall
 goal continues. Source generation 4 retains whole-message masking and the
 unfinished-tail boundary, adds typed assignment receipts and keeps task previews

@@ -41,7 +41,7 @@ export function assertKnowledgeText(value, maximum = 12000) {
   return value.trim();
 }
 
-export function knowledgeAccess(session) {
+export function knowledgeAccess(session, { readOnly = false } = {}) {
   if (!session?.id || !session.cwd) throw new Error('A saved session is required for knowledge access.');
   const saved = getRecord('session', session.id);
   if (getRecord('session-deletion', session.id)) throw new Error('Deleted sessions cannot read project knowledge.');
@@ -49,7 +49,7 @@ export function knowledgeAccess(session) {
     if (saved && (saved[key] ?? null) !== (session[key] ?? null)) throw new Error('Knowledge session identity changed. Refresh the saved session.');
   }
   if (saved?.projectRoot && saved.projectRoot !== session.projectRoot) throw new Error('Knowledge project scope changed.');
-  const agent = agentExecutionScope(session), project = projectIdentityForSession(session);
+  const agent = agentExecutionScope(session), project = projectIdentityForSession(session, { readOnly });
   if (agent && agent.projectRoot !== project.root) throw new Error('Persistent Agent knowledge must stay in its registered project.');
   const restricted = Boolean(agent || ['executor', 'reviewer'].includes(session.role));
   return { project, restricted, agent, disabled: disabledRoles.has(session.role),
@@ -90,7 +90,7 @@ export function indexKnowledgeRecord(project, kind, sourceId, sessionId, text, p
     key, project.id, sessionId, kind, sourceId, body, encoded, payload.updatedAt || payload.createdAt || now());
 }
 
-export function allowedKnowledgeSessionIds(session, access = knowledgeAccess(session)) {
+export function allowedKnowledgeSessionIds(session, access = knowledgeAccess(session), { readOnly = false } = {}) {
   if (access.disabled) return [];
   if (access.sessionIds) return access.sessionIds;
   // SQL narrows candidates to this engagement before paths/registry checks. A
@@ -99,7 +99,7 @@ export function allowedKnowledgeSessionIds(session, access = knowledgeAccess(ses
     (json_extract(data,'$.projectId')=? OR COALESCE(json_extract(data,'$.projectRoot'),json_extract(data,'$.cwd')) IN (SELECT value FROM json_each(?))
      OR json_extract(data,'$.cwd') LIKE ? ESCAPE '\\') LIMIT 10000`).all(access.project.id, JSON.stringify(access.project.aliases), access.project.root.replace(/[\\%_]/g, '\\$&') + '/%');
   const ids = rows.filter(row => !getRecord('session-deletion', row.id)).map(row => JSON.parse(row.data))
-    .filter(candidate => sessionBelongsToProject(candidate, access.project)).map(candidate => candidate.id);
+    .filter(candidate => sessionBelongsToProject(candidate, access.project, { readOnly })).map(candidate => candidate.id);
   if (!ids.includes(session.id)) ids.push(session.id);
   return ids;
 }

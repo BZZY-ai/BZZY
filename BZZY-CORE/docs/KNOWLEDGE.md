@@ -66,6 +66,14 @@ that brief because the existing conversation handoff already handles them.
 Historical text never grants permission, resumes old work or proves a present
 finding. Large histories remain discoverable through explicit paginated search.
 
+Active terminal goals also receive a smaller read-only issue/memory brief through
+`get_task_state` and compact context capsules, including resolved findings relevant
+to the objective. Source status and truth remain separate; duplicate-looking
+records are not merged. This path does not depend on the model calling a knowledge
+search or waiting for learning output. Its scope, byte/candidate limits, revision
+cache and native-delivery limits are documented in
+[long-run reliability](LONG-RUN-RELIABILITY.md#current-state-and-rolling-memory).
+
 Memory distinguishes hypothesis, observed, confirmed, disproved, inconclusive and
 stale. A model's conclusion or agreement cannot confirm a fact. Confirmation
 requires current Core verification evidence or an explicitly labeled owner

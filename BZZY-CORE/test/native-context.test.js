@@ -16,6 +16,7 @@ import { newGoal } from '../src/engine/goals.js';
 import { recordDiagnosticTool } from '../src/engine/session-diagnostics.js';
 import { saveWorkflow, selectWorkflow, preflightGoalWorkflow } from '../src/engine/workflows.js';
 import { normalizeContract } from '../src/engine/contracts.js';
+import { issue } from '../src/engine/project.js';
 
 const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_CLAUDE_HOME', 'BZZY_CLAUDE_BIN', 'BZZY_TEST_LOG', 'BZZY_TEST_SCENARIO', 'BZZY_ENV_ALLOW', 'EXPLABS_API_KEY'];
 let directory, saved, session, engine, observed;
@@ -184,11 +185,14 @@ test('an ongoing native goal retains explicit pending refresh when backend capab
 
 test('an explicitly capable native fixture acknowledges one bounded refresh and later compactions respect cooldown', async () => {
   process.env.BZZY_TEST_SCENARIO = 'context-refresh';
+  const prior = issue(session, { title: 'Synthetic local fixture prior finding', status: 'blocked', details: 'Historical claim awaiting an offline control.' });
   createEngine(); const running = engine.run('Fixture', { goal: true }); running.catch(() => {});
   await until(() => session.nativeContext?.refresh?.state === 'acknowledged');
   const steers = calls().filter(call => call.method === 'turn/steer');
   assert.equal(steers.length, 1); assert.equal(steers[0].params.expectedTurnId, 't1');
   assert.ok(Buffer.byteLength(steers[0].params.input[0].text) <= 12288);
+  assert.ok(steers[0].params.input[0].text.includes(prior.id), 'An acknowledged refresh includes the same source-linked project brief as task-state pulls');
+  assert.match(steers[0].params.input[0].text, /inconclusive/);
   assert.equal(session.sessionMemoryRefresh, false);
   engine.notification('item/completed', { threadId: 'native-thread', turnId: 't1', item: { id: 'compact-2', type: 'contextCompaction' } });
   await until(() => session.nativeContext.refresh.reason === 'native-refresh-cooldown');

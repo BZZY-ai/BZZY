@@ -56,6 +56,31 @@ memory and routing details remain available through `read_task_state_details`.
 Keep structural and source revisions when paging; offsets are UTF-8 bytes. The
 full pinned workflow still enters execution instructions without clipping.
 
+For active ordinary terminal goals, the capsule includes a project knowledge
+brief of at most 2,200 UTF-8 bytes inside the existing 8 KiB limit. It selects
+goal-related Core issue and memory records, including resolved findings, without
+requiring a separate knowledge search. Distinct records retain separate source
+IDs, revisions, status and truth even when their titles overlap. Current decisions
+and questions stay in the goal-scoped checkpoint; older completion claims never
+become current progress. Workers, restricted Agents, ordinary chat and inactive
+goals receive no project brief.
+
+Selection ranks lexical matches against the current objective and considers at
+most 32 matching records for the brief. Coverage/omissions are explicit; this is
+not an exhaustive project search or semantic relevance guarantee. Project-file-only
+notes and oversized records remain available through explicit knowledge search.
+Reads do not index conversations or create memory, learning or model jobs. Evidence
+freshness checks share a 4 MiB/16-file budget; unavailable or unchecked proof is
+marked stale, never upgraded. `read_task_state_details` with `knowledgeBrief`
+opens bounded pages of the selected sanitized source fields.
+
+The brief and its source/freshness changes participate in the task-state revision.
+Supplying both `knownRevision` and `contextGeneration` returns `notModified` when
+unchanged; a new context generation receives the brief again. Compact prepared
+prompts and supported refresh capsules use the same projection. For a native
+backend without acknowledged host refresh, delivery during an ongoing goal still
+depends on `get_task_state`; saved knowledge is not proof of model attention.
+
 Checkpoints carry trusted goal/chat/assignment-round ownership. Identical goal
 text does not establish identity. Legacy/imported checkpoints are historical,
 unattributed references. Optional revision checks and request IDs protect saves.

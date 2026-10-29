@@ -96,12 +96,12 @@ export function recordBelongsToProject(record, project) {
   return !record.projectId || record.projectId === project.id;
 }
 
-export function sessionBelongsToProject(session, project) {
+export function sessionBelongsToProject(session, project, { readOnly = false } = {}) {
   if (!session || ['skill-writer', 'learning-review', 'knowledge-review'].includes(session.role)) return false;
   if (recordBelongsToProject(session, project)) return true;
   if (session.projectRoot || session.projectId) return false;
   try {
-    const own = resolveProjectIdentity(session.cwd);
+    const own = resolveProjectIdentity(session.cwd, { readOnly });
     return own.id === project.id && inside(project.root, own.root);
   } catch { return false; }
 }

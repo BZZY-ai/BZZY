@@ -127,7 +127,7 @@ export function remember(session, input, { learningJobId, sourceIds = [] } = {})
   return record;
 }
 
-export function memoryFreshness(record, project, session = {}, { budget } = {}) {
+export function memoryFreshness(record, project, session = {}, { budget, readOnly = false } = {}) {
   const semanticKind = record.recordKind || record.kind;
   let budgetExceeded = false;
   const staleInputs = (record.inputs || []).filter(input => { try { return inputInfo(project.root, input.path, budget).sha256 !== input.sha256; } catch (error) { budgetExceeded ||= /budget/.test(error.message); return true; } }).map(input => input.path);
@@ -138,7 +138,7 @@ export function memoryFreshness(record, project, session = {}, { budget } = {}) 
   if (record.freshness?.expiresAt && Date.parse(record.freshness.expiresAt) <= Date.now()) reasons.push('expired');
   if (record.freshness?.environment && record.freshness.environment !== session.environmentFingerprint) reasons.push('environment-unconfirmed-or-changed');
   if (record.freshness?.version && record.freshness.version !== session.projectVersion) reasons.push('version-unconfirmed-or-changed');
-  const access = session?.id && session?.cwd ? knowledgeAccess(session) : null;
+  const access = session?.id && session?.cwd ? knowledgeAccess(session, { readOnly }) : null;
   const visible = item => item && typeof item.sessionId === 'string' && item.sessionId.trim() && recordBelongsToProject(item, project) && !getRecord('session-deletion', item.sessionId)
     && (!access?.restricted || item.sessionId === session.id);
   const sourceId = typeof record.id === 'string' && record.id.trim() ? record.id : null;
@@ -273,7 +273,7 @@ function assertCheckpointScope(session, scope) {
   if (scope.kind === 'assignment' && saved && (saved.assignmentId !== scope.assignmentId || (saved.assignmentRound ?? null) !== scope.assignmentRound)) throw new Error('Checkpoint assignment changed. Refresh the current task.');
 }
 export function checkpointState(session, context = {}) {
-  knowledgeAccess(session);
+  knowledgeAccess(session, { readOnly: true });
   const scope = checkpointScope(session, context), latest = getRecord('checkpoint', session.id);
   assertCheckpointScope(session, scope);
   const selected = getRecord('core.checkpoint.scope', checkpointScopeId(scope));
