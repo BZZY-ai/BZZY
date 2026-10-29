@@ -7,6 +7,7 @@ import { CodexEngine } from './engines/codex.js';
 import { ClaudeEngine } from './engines/claude.js';
 import { learningWorkingDirectory } from './learning-backend.js';
 import { backendStartupFailure } from './backend-startup.js';
+import { beginCompactionCost, observeCompactionCost, finishCompactionCost } from './compaction-cost.js';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const finalizationFailures = new WeakMap();
@@ -51,10 +52,11 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
     modelCapabilities: chosen.capabilities, backendHomes: saved.backendHomes,
     documentSourceSessionId: saved.id, ...(task ? { documentTaskKind: task.kind, documentTaskId: task.id } : {}), executionState: 'running' });
   saveSession(draft);
+  beginCompactionCost(draft, chosen);
   const cleanupPaths = { workdir: path.join(home(), 'runtime', 'learning', draft.id),
     backend_home: path.join(home(), 'runtime', 'agent-backends', draft.id),
     catalog: path.join(home(), 'runtime', `${draft.id}-models.json`) };
-  let text = '', engine, closing, deadline, monitor, primaryFailure = false;
+  let text = '', engine, closing, deadline, monitor, primaryFailure = false, completed = false, noInference = false;
   const close = () => closing ||= Promise.resolve().then(() => engine?.close());
   const abort = reason => {
     if (controller.signal.aborted) return;
@@ -64,6 +66,7 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
   };
   const externalAbort = () => abort(signal.reason);
   const ui = { interactive: false, newline() {}, async approve() { return false; }, async ask() { return null; }, event(type, data) {
+    if (type === 'usage.updated') observeCompactionCost(draft, data);
     if (type !== 'text' || controller.signal.aborted) return;
     text += data.text || '';
     if (Buffer.byteLength(text) > 32768) abort(fail('DOCUMENT_BUDGET', 'Document output limit reached.'));
@@ -91,6 +94,7 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
     }), aborted]);
     if (controller.signal.aborted) throw controller.signal.reason;
     if (engine.interrupted || result?.interrupted) throw fail('DOCUMENT_CANCELLED', 'Document generation was interrupted.');
+    completed = true;
     const tokens = draft.usage?.tokens || result?.tokens || 0;
     const usageAvailable = Number.isSafeInteger(tokens) && tokens >= 0 && (draft.usage?.available === true || Number.isSafeInteger(result?.tokens));
     if (tokens > tokenBudget) throw Object.assign(fail('DOCUMENT_BUDGET', 'Document generation token limit reached.'),
@@ -99,7 +103,7 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
   } catch (error) {
     primaryFailure = true;
     const failure = backendStartupFailure(error);
-    if (failure) draft.backendFailure = failure;
+    if (failure) { draft.backendFailure = failure; noInference = failure.modelRequestStarted === false; }
     throw error;
   } finally {
     clearTimeout(deadline); clearInterval(monitor);
@@ -109,6 +113,7 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
       try { await operation(); } catch { cleanupPhase ||= phase; }
     };
     await cleanup('close', close);
+    await cleanup('accounting', () => finishCompactionCost(draft, { completed, noInference }));
     await cleanup('state', () => {
       draft.executionState = 'idle'; draft.backendProcess = null;
       if (!sessionDeleted(draft.id)) saveSession(draft);

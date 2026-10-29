@@ -41,7 +41,7 @@ import { retireTelegram } from './migrations.js';
 import { backendCommand } from '@bzzy/core/engine/entry.js';
 import { activateCLIHost, coreHostStatus, stopCoreHost, restartCoreHost } from '@bzzy/core/engine/host-service.js';
 import { syncCodexSkills, skillSyncSummary, skillSyncReport } from '@bzzy/core/engine/skill-sync.js';
-import { knowledgeCLI, sessionMemoryCLI } from './knowledge-command.js';
+import { knowledgeCLI, sessionMemoryCLI, sessionCostCLI } from './knowledge-command.js';
 import { subagentsCLI } from '@bzzy/core/engine/subagents-cli.js';
 import { skillsAliasesCLI } from './skills-aliases-cli.js';
 import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
@@ -73,6 +73,8 @@ Usage:
   bzzy knowledge search TEXT           Search this engagement's knowledge and past chats
   bzzy knowledge review [SESSION]      Queue a bounded lesson review for an existing chat
   bzzy session-memory status [SESSION] Inspect this session's history index and background budget
+  bzzy session-memory cost [SESSION]   Inspect lifetime background compactor spending and historical gaps
+  bzzy cost [SESSION]                  Inspect DeepSeek Chat + Compactor = Total estimates
   bzzy session-memory build [SESSION]  Index saved history without replaying the chat
   bzzy --delegate                       Choose brain and hands; chat normally or start /goal
   bzzy --besties                        Choose two peers; chat normally or start a shared /goal
@@ -572,7 +574,7 @@ export async function main(argv) {
   options.cwd = fs.realpathSync(options.cwd);
   if (!['debug', 'full_debug_export'].includes(args[0])) await retireTelegram();
   const launchCommand = args[0];
-  const staticCommands = new Set(['integration', 'export', 'debug', 'full_debug_export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'subagents', 'workflows', 'library']);
+  const staticCommands = new Set(['integration', 'export', 'debug', 'full_debug_export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'cost', 'subagents', 'workflows', 'library']);
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }
@@ -595,6 +597,7 @@ export async function main(argv) {
     }
     if (command === 'knowledge') return knowledgeCLI(rest, options, ui);
     if (command === 'session-memory') return sessionMemoryCLI(rest, options, ui);
+    if (command === 'cost') return sessionCostCLI(rest, options, ui);
     if (command === 'subagents') return subagentsCLI(rest, options, ui);
     if (command === 'workflows') return workflowsCLI(rest, options, ui);
     if (command === 'library') { await libraryCommand(rest.join(' '), options.cwd, ui); return 0; }

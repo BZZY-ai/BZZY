@@ -13,6 +13,7 @@ import { TerminalChat } from './tui.js';
 import { validationPhaseLabel, validationSummary, validationResultStatus, validationResultBody } from './debate-ui.js';
 import { clean, cellWidth, clip } from './terminal-format.js';
 import { AccountStatusMonitor, accountStatusDetails, accountStatusLabels } from './account-status.js';
+import { deepseekSpendingVisible } from '@bzzy/core/engine/session-cost.js';
 import { ClientSettings } from './client-settings.js';
 import { Pet } from './mascot.js';
 import { MESSAGE_FORMAT_LIMITS, parseMessageBody } from '@bzzy/core/message-format';
@@ -151,6 +152,8 @@ export class UI {
     if (this.accountStatusEnabled) {
       this.accountMonitor ||= new AccountStatusMonitor(status => { this.accountStatus = status; this.tui?.schedule(); });
       this.accountMonitor.update(snapshot.session || snapshot);
+      const session = snapshot.session || snapshot;
+      if (deepseekSpendingVisible(session) && session.provider !== 'deepseek') this.accountMonitor.update({ ...session, provider: 'deepseek' });
     }
   }
   refreshSessionProjectLocation() {
@@ -161,7 +164,7 @@ export class UI {
     this.event('info', { message: sessionProjectDetails(this.refreshSessionProjectLocation()) });
   }
   showAccountStatus() { this.event('info', { message: accountStatusDetails(this.accountStatus) }); }
-  async showProviderBalance(providerId = this.tui?.provider) {
+  async showProviderBalance(providerId = deepseekSpendingVisible(this.tui) ? 'deepseek' : this.tui?.provider) {
     if (providerId !== 'deepseek' || this.closed) return;
     await this.accountMonitor?.refresh();
     const status = accountStatusLabels(this.accountStatus).find(item => item.label === 'DeepSeek');

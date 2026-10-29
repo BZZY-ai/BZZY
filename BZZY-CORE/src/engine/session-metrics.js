@@ -1,13 +1,15 @@
 import { database, transaction, digest } from './database.js';
 import { home } from './files.js';
 import { sessionHealth } from './session-health.js';
+import { sessionCompactionCost } from './compaction-cost.js';
+import { sessionSpending } from './session-cost.js';
 
 const caches = new Map(), MAX_SESSIONS = 2048, MAX_EVENTS = 2000, MAX_TRACKED = 100000, MAX_ROWS = 4096;
 const id = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value);
 const libraryId = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,256}$/.test(value);
 const safeName = value => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,127}$/i.test(value);
 const readOnly = operation => database().isTransaction ? operation() : transaction(operation, { readOnly: true });
-const sessionColumns = `id,json_extract(data,'$.parentSessionId') AS parentSessionId,json_extract(data,'$.assignmentId') AS assignmentId,
+const sessionColumns = `id,json_extract(data,'$.provider') AS provider,json_extract(data,'$.mode') AS mode,json_extract(data,'$.executor.provider') AS executorProvider,json_extract(data,'$.parentSessionId') AS parentSessionId,json_extract(data,'$.assignmentId') AS assignmentId,
   json_extract(data,'$.role') AS role,json_extract(data,'$.purpose') AS purpose,json_extract(data,'$.goal.id') AS goalId,
   json_extract(data,'$.goal.status') AS status,substr(json_extract(data,'$.goal.reason'),1,256) AS reason,json_extract(data,'$.goal.createdAt') AS createdAt,
   substr(json_extract(data,'$.goal.objective'),1,2000) AS objective,json_extract(data,'$.reviewSource.sessionId') AS reviewParent,
@@ -214,11 +216,13 @@ export function sessionMetrics(value) {
       ...(state.unknownFollowups.size ? ['followup_attribution_unavailable'] : []),
       ...(state.unknown.skillInvocations || state.unknown.subagentInvocations || state.unknown.workerAssignments || state.unknown.subagentFollowups || state.unknown.workerFollowups ? ['unknown_goal_attribution'] : [])];
     for (const goalId of state.goals.keys()) if (!goals.goals.has(goalId)) goals.goals.set(goalId, { id: goalId, status: 'unknown', createdAt: null, objective: '' });
-    return { version: 1, sessionId: root.id, currentGoalId: root.goalId || null, available: true,
+    return { version: 1, sessionId: root.id, provider: root.provider, mode: root.mode, executor: root.executorProvider ? { provider: root.executorProvider } : null, currentGoalId: root.goalId || null, available: true,
       session: shown(state.total), chat: shown(state.chat), unattributed: shown(state.unknown),
       goals: [...goals.goals.values()].sort((a, b) => Number(b.id === root.goalId) - Number(a.id === root.goalId) || (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 512)
         .map(goal => ({ ...goal, ...shown(state.goals.get(goal.id) || blank()) })),
       health: sessionHealth(root.id),
+      compactorCost: sessionCompactionCost(root.id),
+      spending: sessionSpending(root.id, { sessionIds: ids, bounded: relatives.bounded }),
       updatedAt: state.updatedAt, coverage: { skills: 'recorded-model-loads', complete: reasons.length === 0, legacySkillReads,
         historicalEvents: state.historical, unattributedFollowups: state.unknownFollowups.size, reasons } };
   });

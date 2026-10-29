@@ -28,6 +28,7 @@ import { identityAlive } from '../process-identity.js';
 import { recordWorkObservation } from '../episode.js';
 import { hydrateModelContext } from '../model-context.js';
 import { observeRunUsage } from '../usage-ledger.js';
+import { beginSessionCost, observeSessionCost } from '../session-cost.js';
 
 export { codexHome } from '../auth.js';
 
@@ -369,6 +370,7 @@ export class CodexEngine {
         if (result.reasoningEffort) this.session.reasoningEffort = result.reasoningEffort;
         saveSession(this.session);
       }
+      this.resumedThread = resumed;
     } catch (error) { throw markBackendStartupFailure(error, startupStage); }
   }
 
@@ -385,6 +387,8 @@ export class CodexEngine {
     try {
       await this.open();
       if (this.interrupted) return;
+      beginSessionCost(this.session, { threadId: this.threadId, resumed: this.resumedThread });
+      this.spendingArmed = true;
       let resolve, reject;
       const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
       promise.catch(() => {});
@@ -512,9 +516,11 @@ export class CodexEngine {
     }
     if (['item/started', 'item/completed', 'item/commandExecution/outputDelta', 'turn/started', 'turn/completed', 'thread/compacted'].includes(method) && params.item?.type !== 'reasoning') this.ui.event('backend', { method, params });
     if (method === 'thread/tokenUsage/updated') {
+      const spending = this.spendingArmed ? observeSessionCost(this.session, { threadId: this.threadId || params.threadId, tokenUsage: params.tokenUsage }) : null;
       this.session.usage = { ...(this.session.usage || {}), tokens: (this.session.engineTokenOffset || 0) + (params.tokenUsage?.total?.totalTokens || 0), available: true, source: 'backend-reported' };
       observeRunUsage(this.session, this.options.toolHost?.context?.runId);
-      this.ui.event('usage.updated', { provider: this.session.provider, model: this.session.model, ...this.session.usage, detail: params.tokenUsage?.total || null });
+      this.ui.event('usage.updated', { provider: this.session.provider, model: this.session.model, ...this.session.usage, detail: params.tokenUsage?.total || null,
+        ...(this.session.provider === 'deepseek' ? this.spendingArmed ? { spendingTracked: true, spendingReceiptId: spending?.id || null } : { spendingBaseline: true } : {}) });
       saveSession(this.session);
       if (this.options.tokenBudget && !this.operation?.goal && this.session.usage.tokens >= this.options.tokenBudget) this.interrupt('token_limit').catch(() => {});
     }

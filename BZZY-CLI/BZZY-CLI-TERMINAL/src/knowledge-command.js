@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { sessionMetrics } from '@bzzy/core/engine/session-metrics.js';
+import { deepseekSpendingVisible } from '@bzzy/core/engine/session-cost.js';
 import { CoreKnowledge } from '@bzzy/core/knowledge';
 import { findSession } from './store.js';
 import { activateCLIHost } from '@bzzy/core/engine/host-service.js';
@@ -43,8 +45,9 @@ export async function knowledgeCLI(args, options, ui) {
 
 export async function sessionMemoryCLI(args, options, ui) {
   const [action = 'status', target, ...extra] = args;
-  if (!['status', 'read', 'build', 'pause', 'resume', 'cancel'].includes(action) || extra.length) throw new Error('Use bzzy session-memory status|read|build|pause|resume|cancel [SESSION].');
-  const admin = new CoreKnowledge(), sessionId = findSession(target, options.cwd).id;
+  if (!['status', 'cost', 'read', 'build', 'pause', 'resume', 'cancel'].includes(action) || extra.length) throw new Error('Use bzzy session-memory status|cost|read|build|pause|resume|cancel [SESSION].');
+  const selected = findSession(target, options.cwd), admin = new CoreKnowledge(), sessionId = selected.id;
+  if (action === 'cost' && !deepseekSpendingVisible(selected)) throw new Error('Cost display requires direct DeepSeek in Solo or either Delegate role.');
   let result;
   if (['pause', 'resume', 'cancel'].includes(action)) {
     const status = admin.request('session-memory.status', { sessionId });
@@ -52,8 +55,18 @@ export async function sessionMemoryCLI(args, options, ui) {
     result = admin.request('session-memory.control', { sessionId, action, expectedRevision: status.control.revision });
   } else {
     if (action === 'build') await activateCLIHost();
-    result = admin.request(`session-memory.${action === 'build' ? 'queue' : action}`, { sessionId });
+    result = admin.request(`session-memory.${action === 'build' ? 'queue' : action === 'cost' ? 'status' : action}`, { sessionId });
+    if (action === 'cost') result = result.cost;
   }
+  ui.event('info', { result, message: JSON.stringify(result, null, 2) });
+  return 0;
+}
+
+export async function sessionCostCLI(args, options, ui) {
+  if (args.length > 1) throw new Error('Use bzzy cost [SESSION].');
+  const session = findSession(args[0], options.cwd);
+  if (!deepseekSpendingVisible(session)) throw new Error('Cost display requires direct DeepSeek in Solo or either Delegate role.');
+  const result = sessionMetrics(session.id).spending;
   ui.event('info', { result, message: JSON.stringify(result, null, 2) });
   return 0;
 }

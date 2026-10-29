@@ -77,6 +77,14 @@ while Core is stopped, never starts a model or service, and refreshes only while
 the panel is visible. Current goal, earlier recorded goals, whole-chat totals and
 work explicitly performed outside goals have separate views.
 
+The separate **DeepSeek spending · whole chat** section shows **Chat + Compactor
+= Total**, regardless of the selected goal view. It appears in official-DeepSeek
+Solo or Delegate with either role using official DeepSeek. Only that provider's
+calls add dollars, including linked Hands calls under a Codex/Claude Brain.
+The account balance stays separate. Older, interrupted and unpriced-model gaps
+remain visible independently of invocation coverage. See [session cost](SESSION-COST.md)
+for pinned prices, ranges, historical coverage and accounting limits.
+
 A skill use is a successful main `SKILL.md` load at offset zero from a live model
 tool host. Core records one receipt per run, skill identity and immutable version.
 Repeating that load, reading later pages or supporting files, discovering skills,

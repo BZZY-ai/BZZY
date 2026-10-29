@@ -25,6 +25,7 @@ import { escapeInputKind, TerminalKeyInput } from './terminal-keys.js';
 import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
 import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
 import { SessionMetricsPanel, sessionMetricsLayout } from './session-metrics-ui.js';
+import { deepseekSpendingVisible, sessionCostLines } from './session-cost-format.js';
 import { returnFromDefinitionBundle, cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { recordInvocationEvent, reconcileInvocationEntries, invocationEntryLayout, attributeInvocationActors } from './invocation-ui.js';
 import { ToolTreeProjection, toolTreeLayout, changeToolTree } from './tool-tree-ui.js';
@@ -133,6 +134,8 @@ export class TerminalChat {
         this.add('approval', this.pendingApproval.question, { questionId: this.pendingApproval.id });
     }
     this.mode = session.mode; this.executor = session.executor;
+    if (this.spending && this.spending.sessionId !== session.id) this.spending = null;
+    if (snapshot.spending?.sessionId === session.id) this.spending = snapshot.spending;
     this.bestiesGroupId = session.bestiesSessionId || (session.mode === 'besties' ? session.id || this.ui.sessionId : null);
     this.peers = session.peers || [];
     if (!this.bestiesGroupId && !this.sharedRoom.length && this.panel === 'room') this.panel = 'chat';
@@ -1191,7 +1194,7 @@ export class TerminalChat {
       this.libraryMenus = { panel: this.panel, menus: layout.menus, actions: layout.actions };
       this[key + 'FocusRow'] = layout.focusRow; this.contentHits.push(...layout.hits); lines.push(...layout.lines);
     } else if (this.panel === 'metrics') {
-      const layout = sessionMetricsLayout(this.ui.sessionMetrics, width, { currentGoal: this.goal, alias: this.alias, focus: this.metricsFocus || 0 });
+      const layout = sessionMetricsLayout(this.ui.sessionMetrics, width, { currentGoal: this.goal, alias: this.alias, focus: this.metricsFocus || 0, selection: this });
       for (const row of layout.lines) put(row.text, palette[row.tone] || palette.text, row.bold);
       this.contentHits.push(...layout.hits);
     } else if (this.panel === 'room') {
@@ -1433,9 +1436,9 @@ export class TerminalChat {
     const relayTone = relayOnline ? palette.goalSuccess : palette.danger;
     const relayFull = color('●', relayTone, true) + color(' BZZY Relay', palette.muted);
     const relayDot = color('●', relayTone, true);
-    const deepseekBalance = this.provider === 'deepseek' ? accountStatusLabels(this.ui.accountStatus)[2].value : null;
+    const deepseekBalance = deepseekSpendingVisible(this) ? accountStatusLabels(this.ui.accountStatus)[2].value : null;
     const balance = deepseekBalance != null ? {
-      text: ` ${deepseekBalance} `, tone: deepseekBalance.startsWith('$') ? palette.goalSuccess : palette.muted,
+      text: ` Balance ${deepseekBalance} `, tone: deepseekBalance.startsWith('$') ? palette.goalSuccess : palette.muted,
       bold: true, type: 'usage-balance', surface: true,
     } : null;
     const metric = hostMetricsCompact(this.ui.hostMetrics).replace(/\sGB$/, 'G');
@@ -1494,6 +1497,7 @@ export class TerminalChat {
       this.topBarOverflow = actionsCompact;
     }
     this.topBarHasMetrics = selected.rightTokens.some(token => /CPU/.test(clean(token.text)));
+    this.topBarHasBalance = selected.rightTokens.some(token => token.type === 'usage-balance');
     const tokens = [
       { text: selected.sessions, tone: palette.accent, bold: true, type: 'top-sessions' },
       { text: '  │ ', tone: palette.muted },
@@ -1987,6 +1991,19 @@ export class TerminalChat {
     }
     if (this.panel === 'activity' && this.ui.accountStatusEnabled) {
       header.push(color(clip('  ' + accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width), palette.muted));
+    }
+    if (deepseekSpendingVisible(this) && !this.promptDraft) {
+      if (this.spending?.sessionId === (this.ui.activeTab || this.ui.sessionId)) {
+        for (const line of sessionCostLines(this.spending, width - 4))
+          for (const part of wrap(line, Math.max(8, width - 4))) header.push(color('  ' + part, palette.muted));
+      }
+      if (this.ui.minimal || !this.topBarHasBalance) {
+        const label = 'DeepSeek account balance: ' + accountStatusLabels(this.ui.accountStatus)[2].value;
+        for (const part of wrap(label, Math.max(8, width - 4))) {
+          this.hitTargets.push({ type: 'usage-balance', row: header.length + 1, left: 3, right: Math.min(width, cellWidth(part) + 2) });
+          header.push(color('  ' + part, palette.muted));
+        }
+      }
     }
     if (pinned.length && !this.ui.minimal) {
       if (simpleChat) {

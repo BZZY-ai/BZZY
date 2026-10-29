@@ -11,6 +11,7 @@ import { backendCommand } from './process.js';
 import { processIdentity, identityAlive, signalProcess } from './process-identity.js';
 import { sanitizeLearningText } from './learning.js';
 import { runRestrictedDocumentModel } from './document-model.js';
+import { sessionCompactionCost } from './compaction-cost.js';
 import { sessionMemoryEligible, indexSessionMemory, pendingSessionMemoryNodes, sessionMemoryMaterial,
   publishSessionMemorySummary, sessionMemoryStatus } from './session-memory.js';
 
@@ -159,7 +160,7 @@ export function controlSessionCompaction(value, action, { expectedRevision } = {
 }
 export function sessionCompactionStatus(value) {
   const saved = source(value);
-  return { sessionId: saved.id, settings: sessionCompactionSettings(), usage: sessionCompactionUsage(), control: controlFor(saved.id),
+  return { sessionId: saved.id, settings: sessionCompactionSettings(), usage: sessionCompactionUsage(), cost: sessionCompactionCost(saved.id), control: controlFor(saved.id),
     memory: sessionMemoryStatus(saved), jobs: listRecords(JOB, { sessionId: saved.id, limit: 30 }).map(publicJob) };
 }
 

@@ -13,6 +13,7 @@ import { getProvider } from '../src/engine/providers.js';
 import { deleteTerminalConversation } from '../src/engine/session-deletion.js';
 import { processIdentity, identityAlive, signalProcess } from '../src/engine/process-identity.js';
 import { runRestrictedDocumentModel } from '../src/engine/document-model.js';
+import { CodexEngine } from '../src/engine/engines/codex.js';
 import { indexSessionMemory, readSessionMemory, resetSessionMemory, sessionMemoryStatus } from '../src/engine/session-memory.js';
 import { queueSessionCompaction, processSessionCompactions, sessionCompactionSettings, configureSessionCompaction,
   sessionCompactionStatus, sessionCompactionUsage, pauseSessionCompaction, pauseAllSessionCompactions,
@@ -43,6 +44,22 @@ function queue(target = session, { text, count = 8 } = {}) {
 const summary = (tokens = 100) => ({ text: 'Objective: compare authorization controls. Events retain inconclusive observations; ownership verification is unresolved.', tokens, usageAvailable: true });
 const job = (target = session) => listRecords(JOB, { sessionId: target.id })[0];
 const resume = (target = session) => controlSessionCompaction(target, 'resume', { expectedRevision: sessionCompactionStatus(target).control.revision });
+
+test('restricted document execution persists a separate compactor cost without changing session history', async () => {
+  queue(); const before = events(session.id, 0, 100);
+  class Engine extends CodexEngine {
+    async run() {
+      this.notification('thread/tokenUsage/updated', { tokenUsage: {
+        total: { inputTokens: 900, cachedInputTokens: 400, outputTokens: 100, totalTokens: 1000 } } });
+      this.ui.event('text', { text: summary().text }); return { tokens: 1000 };
+    }
+  }
+  await processSessionCompactions({ runModel: input => runRestrictedDocumentModel({ ...input, Engine }) });
+  const cost = sessionCompactionStatus(session).cost;
+  assert.equal(cost.attempts, 1); assert.equal(cost.legacyAttempts, 0); assert.equal(cost.complete, true);
+  assert.equal(cost.reportedTokens, 1000); assert.equal(cost.models[0].provider, 'deepseek');
+  assert.deepEqual(events(session.id, 0, 100), before);
+});
 
 test('compactor inherits Core coordinator selection independently from the foreground, with CAS budgets', () => {
   const settings = sessionCompactionSettings();

@@ -353,6 +353,17 @@ Compactor** default, which inherits BZZY Core unless explicitly changed. Inspect
 with `bzzy session-memory status [SESSION]`, index older history
 with `build`, and control background work with `pause`, `resume` or `cancel`.
 
+**Chat ≈ $… | Compactor ≈ $… = Total ≈ $…** appears for Solo with the official
+DeepSeek API provider, or Delegate with either Brain or Hands using that provider.
+Only direct DeepSeek calls add dollars, including Hands under a Codex/Claude
+Brain; DeepSeek models from OrcaRouter/Experiential Labs do not qualify. The
+existing **Balance $…** stays separate and account-wide. These displays hide
+outside the eligible selections while retaining saved amounts.
+**Metrics → DeepSeek spending · whole chat** and `bzzy cost NAME` inspect the same
+lifetime estimate; `bzzy session-memory cost NAME` gives compactor details.
+Existing chats work, with old missing usage and interrupted calls visibly partial.
+See [pricing and coverage](../../BZZY-CORE/docs/SESSION-COST.md).
+
 Core owns execution, provider/authentication configuration, model discovery,
 conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core

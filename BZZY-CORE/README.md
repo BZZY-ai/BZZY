@@ -143,6 +143,9 @@ Implemented:
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).
+- Per-session direct DeepSeek **Chat + Compactor = Total** estimates with pinned
+  pricing, worker attribution, durable receipts and historical/unpriced gaps.
+  Existing chats keep their identity. See [session spending](docs/SESSION-COST.md).
 - Reusable goal workflows with project/global text definitions and independent
   terminal selections. Core loads and pins the complete workflow before goal
   dispatch, retaining it across resume and model changes. See

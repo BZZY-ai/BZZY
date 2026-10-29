@@ -1,6 +1,7 @@
 import { clean, cellWidth, clip, wrap } from './terminal-format.js';
 import { debugExportErrorMessage } from '@bzzy/core/engine/debug-export-errors.js';
 import { isStalledGoal } from '@bzzy/core/engine/goal-state.js';
+import { costLabel, deepseekSpendingVisible, sessionCostLines } from './session-cost-format.js';
 
 const loadRecordedMetrics = async id => (await import('@bzzy/core/engine/session-metrics.js')).sessionMetrics(id);
 const exportRecordedDebug = async id => (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug(id);
@@ -106,7 +107,7 @@ export class SessionMetricsPanel {
   }
 }
 
-export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus = 0 } = {}) {
+export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus = 0, selection } = {}) {
   const lines = [], hits = [], actions = panel.actions();
   const put = (text = '', tone = 'text', bold = false) => lines.push({ text, tone, bold });
   const prose = (text, tone = 'text', maximum) => {
@@ -160,6 +161,22 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
     prose('This snapshot reached a recorded-history limit; totals are partial.', 'warning');
   const legacy = data.coverage?.legacySkillReads;
   if (Number.isSafeInteger(legacy) && legacy > 0) prose(`${legacy.toLocaleString()} older skill reads lack a confirmed model-use record; they are excluded.`, 'muted', 2);
+  const compactor = data.spending?.compactor || data.compactorCost;
+  if (compactor && deepseekSpendingVisible(selection || data)) {
+    put(); put('  DeepSeek spending · whole chat', 'accent', true);
+    if (data.spending) for (const line of sessionCostLines(data.spending, width - 4)) prose(line, data.spending.total.complete ? 'text' : 'warning');
+    else { prose('Memory compactor', 'muted'); }
+    prose(data.spending ? compactor.complete ? 'Compactor estimate' : 'Compactor known estimate · partial'
+      : compactor.complete ? 'Estimated cost' : 'Known estimate · partial', compactor.complete ? 'text' : 'warning');
+    prose(costLabel(compactor.estimatedUsd), compactor.complete ? 'text' : 'warning');
+    prose(`${recordedCount(compactor.attempts)} attempts · ${recordedCount(compactor.summaries)} summaries`, 'muted');
+    for (const model of compactor.models || []) prose(`${model.provider || 'Unknown provider'} / ${model.model || 'unknown model'} · ${costLabel(model.estimatedUsd)} · ${recordedCount(model.attempts)} attempts${model.unpricedAttempts ? ` · ${recordedCount(model.unpricedAttempts)} unpriced` : ''}`, 'muted');
+    if (compactor.legacyAttempts) prose(`${recordedCount(compactor.legacyAttempts)} older attempts have no billing breakdown; their cost is unknown.`, 'warning');
+    if (compactor.incompleteAttempts > compactor.legacyAttempts) prose('Some attempts have unfinished usage. The known estimate can increase.', 'warning');
+    if (data.spending?.chat.historical) prose('Older DeepSeek chat usage is unpriced. Tracking continues in this saved session.', 'warning');
+    prose('Chat includes linked DeepSeek workers. Compactor counts background summaries. The account balance is separate.', 'muted');
+    if (compactor.attempts) prose(`DeepSeek rates verified ${compactor.pricingVerifiedAt}; peak/holiday or cache uncertainty uses a range. Other providers remain unpriced.`, 'muted');
+  }
   if (!usage) return { lines, hits, actions };
   put();
   const wide = width >= 76, countColumn = Math.min(width - 18, 42);

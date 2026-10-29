@@ -38,6 +38,48 @@ const clickAction = (ui, action) => {
   assert.ok(hit, `Visible ${action} action`); ui.tui.mouse(0, hit.left, hit.row);
 };
 
+test('compactor estimate stays scoped to the whole chat and exposes old unpriced attempts at compact widths', () => {
+  const data = snapshot(); data.provider = 'deepseek'; data.currentGoalId = null; data.goals = [];
+  data.compactorCost = { complete: false, attempts: 5, summaries: 3, legacyAttempts: 2, incompleteAttempts: 3,
+    estimatedUsd: { min: 0.014, max: 0.028 }, pricingVerifiedAt: '2026-10-28',
+    models: [{ provider: 'deepseek', model: 'deepseek-flash', attempts: 5, unpricedAttempts: 2, estimatedUsd: { min: 0.014, max: 0.028 } }] };
+  const panel = { data, scope: 'goal', actions: () => [], selectedGoalId: null };
+  for (const width of [40, 80, 100]) {
+    const layout = sessionMetricsLayout(panel, width), text = layout.lines.map(line => line.text.trim()).join(' ');
+    assert.match(text, /DeepSeek spending · whole chat/); assert.match(text, /\$0\.0140–\$0\.0280/);
+    assert.match(text, /2 older attempts have no billing/); assert.match(text, /unfinished usage/);
+    assert.ok(layout.lines.every(line => cellWidth(line.text) <= width));
+  }
+  data.compactorCost.estimatedUsd = null;
+  assert.match(sessionMetricsLayout(panel, 80).lines.map(line => line.text).join('\n'), /Known estimate · partial\s+—/);
+});
+
+test('chat spending and account balance appear only for direct DeepSeek Solo or either Delegate role', async () => {
+  const { ui } = terminal(undefined, { columns: 80, rows: 24 });
+  ui.openTerminal();
+  const spending = { sessionId: firstId, chat: { estimatedUsd: { min: 0.01, max: 0.01 } },
+    compactor: { estimatedUsd: { min: 0.002, max: 0.002 } }, total: { estimatedUsd: { min: 0.012, max: 0.012 }, complete: true } };
+  ui.accountStatus = { deepseek: { status: 'available', balance: { currency: 'USD', amount: 12.34 }, checkedAt: Date.now(), source: 'provider-api' } };
+  try {
+    for (const [provider, mode, executor, visible] of [
+      ['deepseek', 'solo', null, true], ['codex', 'delegate', { provider: 'deepseek' }, true],
+      ['deepseek', 'delegate', { provider: 'claude' }, true], ['codex', 'solo', null, false],
+      ['orcarouter', 'solo', null, false], ['experiential', 'delegate', { provider: 'orcarouter' }, false],
+      ['deepseek', 'parallel', null, false],
+    ]) {
+      ui.updateSession({ session: { id: firstId, provider, mode, executor, model: 'deepseek-flash', executionState: 'idle' }, spending });
+      ui.tui.render(); const text = ui.tui.lastFrame.map(clean).join('\n');
+      assert.equal(/Chat ≈ \$0\.0100/.test(text), visible, `${provider}/${mode} spending`);
+      assert.equal(/Balance \$12\.34|DeepSeek account balance: \$12\.34/.test(text), visible, `${provider}/${mode} balance`);
+      if (visible) { assert.match(text, /Compactor ≈ \$0\.0020/); assert.match(text, /Total ≈ \$0\.0120/); }
+    }
+    ui.minimal = true;
+    ui.updateSession({ session: { id: firstId, provider: 'codex', mode: 'delegate', executor: { provider: 'deepseek' }, model: 'gpt-5.6-sol', executionState: 'idle' }, spending });
+    ui.tui.render();
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /DeepSeek account balance: \$12\.34/);
+  } finally { ui.close(); }
+});
+
 test('execution health separates routing blockers and native readiness from invocation counts', () => {
   const data = snapshot(); data.health = { available: true, routing: { enforced: true, covered: 1, closed: 2, open: 1, blocked: 1, unmet: 2,
     units: [{ classId: 'idor', state: 'open', specialist: 'idor-agent', missing: ['review'] }] },

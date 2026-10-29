@@ -87,6 +87,36 @@ overages are charged. Unknown usage conservatively consumes the reservation;
 uncertain dispatched failures require explicit resume. Restart never blindly
 replays an uncertain paid request.
 
+### Compactor cost estimate
+
+CLI **Metrics → DeepSeek spending · whole chat** separates Compactor from Chat
+and their Total in eligible direct-DeepSeek Solo/Delegate selections. See
+[session spending](SESSION-COST.md). The owner-local
+`bzzy session-memory cost [SESSION]` command reads the same lifetime estimate;
+`status` includes it as `cost`. Reading either view starts no inference or
+maintenance. Existing saved sessions work without creating a new chat.
+
+New restricted compactor executions retain one private cost receipt per document
+attempt, with the original session/job identity, selected provider/model, reported
+input/cached-input/output totals and a pinned price snapshot. Repeated cumulative
+telemetry updates that receipt; retries use separate receipts. Chat model changes,
+renaming, reopening and memory-index rebuilds do not reset or reprice them. This
+first version prices supported DeepSeek Flash and V4 Pro calls using published
+rates verified on 2026-10-28. Rates remain labelled estimates, not provider invoices.
+Possible peak/Chinese-holiday boundaries and missing cache counters produce ranges.
+Other providers and unrecognized model versions remain explicitly unpriced.
+
+Older attempts without receipts remain visible as historical gaps. Conservative
+token reservations cannot recover an input/output/cache split and never become
+measured dollars. Interrupted requests with reported usage contribute only a
+partial known estimate; missing usage is not zero. Only an adapter-proven failure
+before any inference establishes zero. Receipts include counts/model/cost metadata,
+never summary bodies, credentials or private reasoning, and stay out of portable
+project imports. The estimate covers direct background summary generation only;
+native backend context compaction and foreground chat/worker costs belong to the
+separate Chat subtotal. Hypothetical future savings are not estimated. Updating does not replace code in active runners or
+replay old work; new compactions must run through the updated Core implementation.
+
 Session pause/cancel, Core stop, deletion and shutdown stop background work.
 An already dispatched summary can finish against immutable sources during an
 ordinary foreground turn. Paused compaction requires explicit resume.
@@ -107,6 +137,7 @@ for update/resume behavior, source boundaries and scheduling controls.
 
 ```sh
 bzzy session-memory status [SESSION]
+bzzy session-memory cost [SESSION]
 bzzy session-memory read [SESSION]
 bzzy session-memory build [SESSION]
 bzzy session-memory pause [SESSION]

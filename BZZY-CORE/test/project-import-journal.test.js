@@ -231,7 +231,8 @@ test('project knowledge originals and revision histories transfer as inconclusiv
 });
 
 test('import journals stay private even in owner backups and malicious raw archives cannot install receipt authority', async () => {
-  const session = original(), kinds = ['project-import-source', 'project-import-pending', 'project-import-archive', 'project-import-record-version'];
+  const session = original(), kinds = ['project-import-source', 'project-import-pending', 'project-import-archive', 'project-import-record-version',
+    'core.session.spending.receipt', 'core.session.spending.cursor', 'core.session.compactor.cost'];
   for (const kind of kinds) putRecord(kind, kind, { sessionId: session.id, root: work, sourceFingerprint: sender, alreadyImported: true });
   assert.ok(collectProjectState(work, session.id).records.every(row => !kinds.includes(row.kind)));
   const archive = await exportProject(session, path.join(directory, 'owner.zip'));
