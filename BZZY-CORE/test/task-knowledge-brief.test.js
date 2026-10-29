@@ -13,6 +13,7 @@ import { checkpoint, remember } from '../src/engine/memory.js';
 import { compactTaskState, contextFor, readTaskStateDetails } from '../src/engine/recovery.js';
 import { conversationPrompt } from '../src/engine/conversation.js';
 import { ToolHost } from '../src/engine/tools.js';
+import { refreshKnowledgeRecords } from '../src/engine/knowledge-index.js';
 
 let directory, previousHome, alpha, beta, session, source;
 function saved(cwd, extra = {}) {
@@ -203,6 +204,9 @@ test('legacy typed fields and malformed source pins cannot leak metadata or brea
   putRecord('issue', wrongPin, { ...original, id: randomUUID() });
   const malformedId = randomUUID();
   putRecord('issue', malformedId, { ...original, id: malformedId, inputs: 'invalid legacy inputs' });
+  let migrated;
+  for(let round=0;round<16;round++) { migrated=refreshKnowledgeRecords(session);if(!migrated.remaining)break; }
+  assert.equal(migrated.remaining,false);
   const state = compactTaskState(session);
   assert.doesNotMatch(JSON.stringify(state.knowledgeBrief), new RegExp(secret));
   const issueHit = state.knowledgeBrief.items.find(item => item.sourceId === original.id);
@@ -220,12 +224,33 @@ test('malformed legacy text objects cannot break the task-state pull path', () =
   assert.equal(state.knowledgeBrief.items.find(item => item.sourceId === original.id).truth, 'inconclusive');
 });
 
+test('oversized legacy source and index payloads are omitted before hydration without altering originals', t => {
+  const original=issue(source,{title:'Orbit stored XSS oversized legacy source'});
+  const record={...original,details:'Orbit stored XSS '+ 'x'.repeat(256*1024)};
+  putRecord('issue',original.id,record);
+  const stored=JSON.stringify(record),indexed=JSON.stringify({legacyPadding:'y'.repeat(512*1024)});
+  database().prepare('UPDATE knowledge_documents SET payload=? WHERE source_id=?').run(indexed,original.id);
+  const parse=JSON.parse;
+  const spy=t.mock.method(JSON,'parse',function(value,...args) {
+    assert.ok(typeof value!=='string' || Buffer.byteLength(value)<=128*1024,'Polling must not hydrate oversized source or index JSON.');
+    return Reflect.apply(parse,this,[value,...args]);
+  });
+  let state;
+  try { state=compactTaskState(session); } finally { spy.mock.restore(); }
+  assert.equal(briefIds(state).includes(original.id),false);assert.ok(state.knowledgeBrief.omitted>=1);
+  assert.equal(state.knowledgeBrief.coverage.maximumSourceBytes,128*1024);
+  assert.ok(bytes(state.knowledgeBrief)<=2200);assert.ok(bytes(state)<=8192);
+  assert.equal(database().prepare("SELECT data FROM records WHERE kind='issue' AND id=?").get(original.id).data,stored);
+  assert.equal(database().prepare('SELECT payload FROM knowledge_documents WHERE source_id=?').get(original.id).payload,indexed);
+});
+
 test('legacy nested session discovery and repeated task reads do not mutate durable state', () => {
   const nested = path.join(alpha, 'legacy-nested'); fs.mkdirSync(nested);
   const legacy = createSession(BUILTINS.codex, nested, 'offline-fixture');
   assert.equal(legacy.projectId, undefined); assert.equal(legacy.projectRoot, undefined);
   const original = issue(source, { title: 'Orbit stored XSS legacy nested source' });
   putRecord('issue', original.id, { ...original, sessionId: legacy.id });
+  refreshKnowledgeRecords(session);
   const identity = getRecord('core.project.identity', session.projectId);
   putRecord('core.project.identity', session.projectId, { ...identity, updatedAt: '2000-01-01T00:00:00.000Z' });
   const records = () => database().prepare('SELECT kind,id,data,updated_at FROM records ORDER BY kind,id').all();

@@ -68,6 +68,12 @@ function fixtures(sourceGroup = 'held-out') { return { name: 'Approved offline c
 ] }; }
 const verdictOutput = definition => ({ tokens: 20, text: JSON.stringify({ results: definition.cases.map(item => ({ id: item.id, verdict: item.expected })) }) });
 async function evaluated(candidateId, definition = fixtures()) {
+  const staged = getRecord('core.skill.candidate', candidateId);
+  const sourceJob = staged?.provenance?.jobId && getRecord('core.learning.job', staged.provenance.jobId);
+  // sourcePacket simulates the publication phase of a running review. Its
+  // staged candidate now exists; finish that synthetic generation operation
+  // before asking the separate evaluator to acquire maintenance capacity.
+  if (sourceJob?.state === 'running') putRecord('core.learning.job', sourceJob.id, { ...sourceJob, state: 'completed' });
   session.executionState = 'idle'; saveSession(session);
   const candidate = inspectSkillCandidate(candidateId, { session });
   const dataset = registerLearningFixtures(definition, { session, reviewed: true });

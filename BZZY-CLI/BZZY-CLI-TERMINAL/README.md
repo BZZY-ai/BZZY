@@ -1,5 +1,13 @@
 # bzzy 🐝
 
+Keep a [permanent program session](../../BZZY-CORE/docs/PERMANENT-SESSIONS.md)
+with `bzzy --attach fake-program-session`. Reopening starts no work. Core retains
+branches, blockers, attempts and prior findings across goals and compactions.
+`bzzy session-memory document SESSION` reads its generated view; `export` writes
+`.bzzy/sessions/<session-id>/MEMORY.md` and refuses to overwrite owner edits.
+Versioned scope and evaluated automatic procedure updates use Core's existing
+owner-only `bzzy knowledge request OPERATION FILE.json` interface.
+
 Give another AI the installed format reference with `bzzy --help-skills`,
 `bzzy --help-agents`, `bzzy --help-workflows`, `bzzy --help-goals` or `bzzy --help-extensions`.
 Each prints a detailed Markdown specification, complete native examples,
@@ -782,7 +790,7 @@ New/changed versions require review and enable; repeat syncs preserve unchanged
 enable decisions and independent BZZY edits. See
 [Core skills](../../BZZY-CORE/docs/SKILLS.md).
 
-Use `/memory [query]` for attributed project history and `/learn` for bounded lesson reviews, pinned input packets, automatic progress observations, project fact pins, proposed resolutions and skill feedback/curation. Closed complex work, possible fixes, reviewed worker evidence and meaningful saved outcomes can queue reviews. Each job pins its source and reviewer selection; queued work defers during its own conversation's activity without blocking every other idle session. New skills and corrections stage by default; reviewed policy can opt into automatic new project skills. Pauses and recovery retain interrupted reviews until explicit resume. Candidates need domain-appropriate reviewed offline evaluation and explicit activation; open workflow pins protect existing versions. Opening these views never starts inference. See [knowledge and learning](../../BZZY-CORE/docs/KNOWLEDGE.md) for scope, defaults, owner commands and validation limits.
+Use `/memory [query]` for attributed project history and `/learn` for bounded lesson reviews, pinned input packets, automatic progress observations, project fact pins, proposed resolutions and skill feedback/curation. Closed complex work, possible fixes, reviewed worker evidence and meaningful saved outcomes can queue reviews. Each job pins its source and reviewer selection; queued work defers during its own conversation's activity without blocking every other idle session. New skills and corrections stage by default; reviewed policy can opt into automatic new project skills. Explicit pauses and uncertain reviews require inspection/resume; provably undispatched shutdown work and cached local publication recover safely. Candidates need domain-appropriate reviewed offline evaluation and owner-governed activation; a separately reviewed fixture policy can allow evaluated automatic updates. Open workflow pins protect existing versions. Opening these views never starts inference. See [knowledge and learning](../../BZZY-CORE/docs/KNOWLEDGE.md) for scope, defaults, owner commands and validation limits.
 
 Use **Check for updates** or `/update` to update CLI and Core together. The TUI stays open during installation, then reloads the new frontend in the same terminal with its saved chat and unsent draft. Core control briefly restarts; active runners keep running and paused work stays paused and another client's input lease is respected. Older already-running CLIs need one final reopen to load this updater. See [update behavior and limits](docs/UPDATES.md). The existing command remains:
 

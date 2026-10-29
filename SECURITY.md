@@ -8,6 +8,28 @@ AI-generated workflow, script, integration, or tool. This file states requiremen
 its prose does not implement or prove them. Source and validation records define
 which controls are enforced today.
 
+Versioned program scope is an explicit owner opt-in, separate from historical
+scope text. Private approval/binding receipts, exact goal pins and current fences
+govern admission. Enrolled Codex execution requires verified strict configuration
+and an acknowledged named profile with native networking/inherited integrations
+disabled; mediated access uses Core's checked HTTP tool. Host verification also
+disables networking. Unsupported profiles/backends fail before execution. Other
+terminal sessions retain their existing isolation limits. Revocation cannot
+undo traffic already sent. Imported histories never carry scope authority.
+HTTP mediation validates URL/hostname/method scope; it does not pin DNS answers
+or provide private-address isolation against DNS rebinding. Host network
+controls are still required for that boundary.
+
+Investigation branches, blockers, report-lifecycle claims and host attempt
+metadata remain attributed observations, not verification or permissions.
+Automatic updates of existing project skills require an explicitly reviewed
+policy with pinned semantic and continuation fixtures, separate authoring/source
+groups, measured improvement, no regressions and an unchanged enabled base.
+Continuation worlds execute no scripts or target requests and cannot replace
+semantic safety checks. Unknown independence and uncertain paid requests remain
+explicit; changing policy alone does not authorize retry of an uncertain request.
+Running skill pins, owner stops and private credential boundaries remain in force.
+
 Persistent Agent v1 resolves identity from Core's live registry/session ancestry,
 uses bounded scoped project/context reads and durable Core tools, and rejects
 native shell, file writes, unapproved HTTP, delegation and account operations.

@@ -45,11 +45,14 @@ export async function knowledgeCLI(args, options, ui) {
 
 export async function sessionMemoryCLI(args, options, ui) {
   const [action = 'status', target, ...extra] = args;
-  if (!['status', 'cost', 'read', 'build', 'pause', 'resume', 'cancel'].includes(action) || extra.length) throw new Error('Use bzzy session-memory status|cost|read|build|pause|resume|cancel [SESSION].');
+  if (!['status', 'cost', 'read', 'document', 'export', 'build', 'pause', 'resume', 'cancel'].includes(action) || extra.length) throw new Error('Use bzzy session-memory status|cost|read|document|export|build|pause|resume|cancel [SESSION].');
   const selected = findSession(target, options.cwd), admin = new CoreKnowledge(), sessionId = selected.id;
   if (action === 'cost' && !deepseekSpendingVisible(selected)) throw new Error('Cost display requires direct DeepSeek in Solo or either Delegate role.');
   let result;
-  if (['pause', 'resume', 'cancel'].includes(action)) {
+  if (action === 'export') {
+    const view = admin.request('session-memory.document', { sessionId });
+    result = admin.request('session-memory.export', { sessionId, expectedRevision: view.revision });
+  } else if (['pause', 'resume', 'cancel'].includes(action)) {
     const status = admin.request('session-memory.status', { sessionId });
     if (action === 'resume') await activateCLIHost();
     result = admin.request('session-memory.control', { sessionId, action, expectedRevision: status.control.revision });
@@ -58,7 +61,7 @@ export async function sessionMemoryCLI(args, options, ui) {
     result = admin.request(`session-memory.${action === 'build' ? 'queue' : action === 'cost' ? 'status' : action}`, { sessionId });
     if (action === 'cost') result = result.cost;
   }
-  ui.event('info', { result, message: JSON.stringify(result, null, 2) });
+  ui.event('info', { result, message: action === 'document' ? result.markdown : JSON.stringify(result, null, 2) });
   return 0;
 }
 

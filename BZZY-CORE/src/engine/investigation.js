@@ -206,3 +206,6 @@ Do not inspect other agents' reports during this independent check. Useful bound
   ui.event('debate.phase', { phase: 'investigation', status: 'finished', snapshotHash: snapshot.manifestHash });
   return reports.filter(Boolean).map(report => ({ ...report.participant, role: 'investigation', assignmentId: report.assignmentId, tokens: report.usage.tokens ?? null, available: Boolean(report.usage.available) }));
 }
+
+// Session branch tracking reuses the existing work-unit and episode stores.
+export { investigationScope, investigationCapsule, readInvestigationSource, updateInvestigation, investigationToolSpecs, sanitizedNativeBlocker } from './session-investigation.js';

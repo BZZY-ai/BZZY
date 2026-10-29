@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { CoreAssistant } from '../src/assistant.js';
 import { CoreKnowledge } from '../src/knowledge.js';
-import { appendEvent, getRecord, putRecord, listRecords, events } from '../src/engine/database.js';
+import { appendEvent, getRecord, putRecord, listRecords, events, removeRecord, digest } from '../src/engine/database.js';
 import { createSession, loadSession, saveSession, setSessionAlias } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
 import { deleteTerminalConversation } from '../src/engine/session-deletion.js';
@@ -169,7 +169,8 @@ test('completed helper overage charges actual reported tokens even when the help
   assert.equal(result.state, 'budget_limited'); assert.equal(result.error, 'COMPACTOR_BUDGET');
   assert.equal(result.usage.tokens, 23000); assert.equal(result.usage.conservative, false); assert.equal(result.totalTokensUsed, 23000);
   assert.equal(sessionCompactionUsage().tokensUsed, 23000); assert.equal(sessionCompactionUsage().reservedTokens, 0);
-  assert.equal(readSessionMemory(session).items.length, 0); assert.equal(closed, true);
+  assert.equal(getRecord('core.session.memory.node', result.nodeId).state, 'pending');
+  assert.equal(readSessionMemory(session).items[0].provenance, 'host-extractive-v1'); assert.equal(closed, true);
 });
 
 test('daily exhaustion defers requests until the next UTC day', async () => {
@@ -267,7 +268,9 @@ test('pause rejects late output, settles conservatively and never implicitly res
   const began = new Promise(resolve => { started = resolve; }), held = new Promise(resolve => { release = resolve; });
   const pending = processSessionCompactions({ runModel: async () => { started(); return held; } }); await began;
   pauseSessionCompaction(session.id, 'owner_pause'); release(summary()); const [result] = await pending;
-  assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'owner_pause'); assert.equal(readSessionMemory(session).items.length, 0);
+  assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'owner_pause');
+  assert.equal(getRecord('core.session.memory.node', result.nodeId).state, 'pending');
+  assert.equal(readSessionMemory(session).items[0].provenance, 'host-extractive-v1');
   assert.equal(sessionCompactionUsage().reservedTokens, 0); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Pause is durable') }), []);
   assert.throws(() => controlSessionCompaction(session, 'resume', { expectedRevision: 0 }), { code: 'CONFLICT' });
@@ -358,6 +361,28 @@ test('crash recovery charges unsettled calls once and never automatically replay
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Recovery never replays an uncertain request') }), []);
 });
 
+test('shutdown resumes never-dispatched compaction without clearing an earlier owner pause', async () => {
+  queue(); pauseAllSessionCompactions('host_shutdown');
+  const pending = job(); assert.deepEqual(recoverSessionCompactions(), [pending.id]);
+  assert.equal(job().state, 'queued'); assert.equal(sessionCompactionStatus(session).control.state, 'enabled');
+  const [completed] = await processSessionCompactions({ runModel: async () => summary() });
+  assert.equal(completed.state, 'completed');
+  queue(session); pauseSessionCompaction(session.id, 'owner_pause'); pauseAllSessionCompactions('host_shutdown');
+  recoverSessionCompactions();
+  assert.equal(sessionCompactionStatus(session).control.reasonPaused, 'owner_pause');
+  assert.ok(listRecords(JOB, { sessionId: session.id }).filter(item => item.state !== 'completed').every(item => item.state === 'paused'));
+});
+
+test('a busy source gets host extraction while paid compaction remains deferred', async () => {
+  queue(); session.executionState = 'running'; saveSession(session);
+  await processSessionCompactions({ runModel: () => assert.fail('Foreground opt-in remains required for paid inference.') });
+  const node = getRecord('core.session.memory.node', job().nodeId);
+  assert.equal(node.fallbackProvenance, 'host-extractive-v1');
+  assert.equal(node.state, 'pending');
+  assert.match(readSessionMemory(session).items[0].summary, /Host-selected historical excerpts/);
+  assert.equal(sessionCompactionUsage().tokensUsed, 0);
+});
+
 test('recovery releases reservations if the owner pause committed before the crash', () => {
   queue(); const queued = job(), reservationId = 'paused-crash', day = new Date().toISOString().slice(0, 10);
   putRecord('core.session.compactor.reservation', reservationId, { id: reservationId, jobId: queued.id, day, tokens: 20000, state: 'reserved' });
@@ -432,4 +457,31 @@ test('cached summaries recover host publication without another model request', 
   recoverSessionCompactions(); resume();
   const [result] = await processSessionCompactions({ runModel: () => assert.fail('Use the checked cached result') });
   assert.equal(result.state, 'completed'); assert.equal(readSessionMemory(session).items.length, 1); assert.equal(sessionCompactionUsage().tokensUsed, 100);
+});
+
+for (const corruption of ['missing', 'different-source', 'replaced-result']) test(`recovered compaction publication with ${corruption} cache cannot become a fresh request`, async () => {
+  queue(); await processSessionCompactions({ runModel: async () => summary() });
+  const completed = job(), original = getRecord('core.session.compactor.output', completed.id);
+  putRecord(JOB, completed.id, { ...completed, state: 'running', runner: null });
+  recoverSessionCompactions(); assert.equal(job().recovery.mode, 'cached-publication');
+  if (corruption === 'missing') removeRecord('core.session.compactor.output', completed.id);
+  else {
+    const changed = { ...original, ...(corruption === 'different-source' ? { sourceHash: '0'.repeat(64) } : { text: 'A different historical summary.' }) };
+    changed.hash = digest({ text: changed.text, selection: changed.selection, sourceHash: changed.sourceHash });
+    putRecord('core.session.compactor.output', completed.id, changed);
+  }
+  const reservations = listRecords('core.session.compactor.reservation').length, usage = sessionCompactionUsage(); let calls = 0;
+  const runModel = async () => { calls++; return summary(); };
+  await processSessionCompactions({ runModel });
+  assert.equal(job().state, 'paused'); assert.equal(job().reasonPaused, 'publication_cache_unavailable');
+  putRecord(JOB, completed.id, { ...job(), state: 'running', dispatched: false, runner: null, reservationId: null });
+  recoverSessionCompactions();
+  assert.equal(job().state, 'paused'); assert.equal(job().recovery.publicationOnly, true); assert.equal(job().recovery.mode, 'manual-inspection');
+  resume(); await processSessionCompactions({ runModel });
+  assert.equal(job().state, 'paused'); assert.equal(calls, 0);
+  assert.equal(listRecords('core.session.compactor.reservation').length, reservations);
+  assert.equal(sessionCompactionUsage().tokensUsed, usage.tokensUsed); assert.equal(sessionCompactionUsage().reservedTokens, 0);
+  putRecord('core.session.compactor.output', completed.id, original);
+  resume(); const [restored] = await processSessionCompactions({ runModel });
+  assert.equal(restored.state, 'completed'); assert.equal(calls, 0);
 });

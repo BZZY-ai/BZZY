@@ -26,9 +26,12 @@ import { database, digest, getRecord, listRecords } from '../database.js';
 import { delegationUsage, assignmentFilter, assignmentParameters } from '../delegation-usage.js';
 import { identityAlive } from '../process-identity.js';
 import { recordWorkObservation } from '../episode.js';
+import { sanitizedNativeBlocker } from '../session-investigation.js';
 import { hydrateModelContext } from '../model-context.js';
 import { observeRunUsage } from '../usage-ledger.js';
 import { beginSessionCost, observeSessionCost } from '../session-cost.js';
+import { preflightGoalScope, programScopePermissionProfile, programScopeDisabledFeatures } from '../program-scope.js';
+import { inside } from '../evidence.js';
 
 export { codexHome } from '../auth.js';
 
@@ -91,26 +94,47 @@ export function codexSandboxMode(options = {}) {
 }
 
 export function codexLaunch(provider, session, options = {}) {
+  // Derive this only from local owner receipts and the canonical saved session;
+  // neither caller options nor portable historical state select the profile.
+  const scopeAdmission = preflightGoalScope(session, options);
   // Old conversations remain resumable in the store where their thread lives.
   const legacy = path.join(home(), 'codex');
-  if (options.agentScope || options.learningReview) {
+  if (options.agentScope || options.learningReview || scopeAdmission) {
     const isolatedHome = options.learningReview ? learningCodexHome(provider, session) : isolatedAgentCodexHome(provider, session);
-    if (session.engineHome !== isolatedHome || session.agentToolPolicy !== 1) {
+    if (session.engineHome !== isolatedHome || session.agentToolPolicy !== 1 || scopeAdmission && session.programScopeToolPolicy !== 1) {
       rotateNativeThread(session);
     }
     session.engineHome = isolatedHome; session.agentToolPolicy = 1;
+    if (scopeAdmission) session.programScopeToolPolicy = 1;
   }
   session.engineHome ||= session.engineThreadId && fs.existsSync(legacy) ? legacy : (provider.auth === 'api-key' ? session.backendHomes?.codexApi : session.backendHomes?.codex) || codexHome(provider);
   privateDir(session.engineHome);
-  const args = ['app-server', '--listen', 'stdio://', ...(options.learningReview ? ['--strict-config'] : ['--enable', 'goals'])];
+  const args = ['app-server', '--listen', 'stdio://', ...(options.learningReview || scopeAdmission ? ['--strict-config'] : []), ...(!options.learningReview ? ['--enable', 'goals'] : [])];
   const env = { ...subscriptionEnvironment('codex'), ...options.networkEnv, CODEX_HOME: session.engineHome };
   const override = (key, value) => args.push('-c', `${key}=${tomlValue(value)}`);
   if (options.documentOnly) {
     override('features.shell_tool', false); override('features.multi_agent', false);
     args.push('-c', 'mcp_servers={}');
   }
-  override('approval_policy', options.learningReview || options.agentScope || options.yolo || options.scopedAutonomy ? 'never' : 'on-request');
-  if (options.learningReview) {
+  override('approval_policy', scopeAdmission || options.learningReview || options.agentScope || options.yolo || options.scopedAutonomy ? 'never' : 'on-request');
+  let scopePermissions;
+  if (scopeAdmission) {
+    const executable = fs.realpathSync(backendCommand('codex'));
+    const filesystem = { ':root': 'deny', ':minimal': 'read', [session.cwd]: 'read', [executable]: 'read', ':tmpdir': 'write', ':slash_tmp': 'deny' };
+    if (options.policy?.mode === 'workspace-write') for (const relative of options.policy.writablePaths || []) filesystem[inside(session.cwd, relative, { exists: false })] = 'write';
+    // The authenticated host stays outside the model's permissions, even when
+    // an owner places a project above BZZY's private home.
+    filesystem[home()] = 'deny'; filesystem[codexHome(provider)] = 'deny'; filesystem[session.engineHome] = 'deny';
+    scopePermissions = { filesystem, network: { enabled: false } };
+    override('default_permissions', programScopePermissionProfile);
+    override(`permissions.${programScopePermissionProfile}`, scopePermissions);
+    for (const feature of programScopeDisabledFeatures) override(`features.${feature}`, false);
+    override('features.skip_host_skill_discovery', true);
+    override('shell_environment_policy.inherit', 'none'); override('shell_environment_policy.set', { PATH: '/usr/bin:/bin' });
+    override('mcp_servers', {}); override('web_search', 'disabled');
+    override('project_doc_max_bytes', 0); override('project_doc_fallback_filenames', []);
+    override('projects', { [session.cwd]: { trust_level: 'untrusted' } });
+  } else if (options.learningReview) {
     const executable = fs.realpathSync(backendCommand('codex'));
     override('default_permissions', learningPermissionProfile);
     override(`permissions.${learningPermissionProfile}`, { filesystem: { ':root': 'deny', ':minimal': 'read',
@@ -200,7 +224,21 @@ export function codexLaunch(provider, session, options = {}) {
     override('model_providers.bzzy_api.capabilities.remote_compaction', 'unsupported');
     override('web_search', 'disabled');
   } else override('model_provider', 'openai');
-  return { args, env, contextBudget };
+  return { args, env, contextBudget, scopeAdmission, scopePermissions };
+}
+
+export function assertProgramScopeCodexConfig(result, permissions) {
+  const config = result?.config, profile = config?.permissions?.[programScopePermissionProfile];
+  const nonnull = value => Object.fromEntries(Object.entries(value || {}).filter(([, entry]) => entry != null));
+  if (!config || config.default_permissions !== programScopePermissionProfile || profile?.extends != null || profile?.workspace_roots != null
+      || digest(nonnull(profile?.network)) !== digest({ enabled: false }) || digest(nonnull(profile?.filesystem)) !== digest(permissions?.filesystem ?? null)
+      || config.approval_policy !== 'never' || config.web_search !== 'disabled'
+      || programScopeDisabledFeatures.some(name => config.features?.[name] !== false)
+      || config.features?.skip_host_skill_discovery !== true
+      || Object.values(config.mcp_servers || {}).some(server => server?.enabled !== false)
+      || config.shell_environment_policy?.inherit !== 'none'
+      || digest(config.shell_environment_policy?.set ?? null) !== digest({ PATH: '/usr/bin:/bin' })
+      || config.project_doc_max_bytes !== 0) throw new Error('Codex did not acknowledge the restricted program-scope configuration. No thread or turn was started.');
 }
 
 export class CodexEngine {
@@ -221,6 +259,7 @@ export class CodexEngine {
   }
 
   async open() {
+    preflightGoalScope(this.session, this.options);
     if (this.rpc && !this.rpc.closed) {
       const expected = toolSchemaManifest(codexDynamicTools(this.session, this.options));
       if (!this.options.toolHost || this.session.nativeBackendReadiness?.tools?.sha256 === expected.sha256) return;
@@ -248,6 +287,7 @@ export class CodexEngine {
           model: this.session.model, contextBudget: { metadata: metadata.provenance, changed: metadata.changed } });
       }
       const launchConfig = codexLaunch(this.provider, this.session, this.options);
+      this.programScopeAdmission = launchConfig.scopeAdmission;
       if (launchConfig.contextBudget.source === 'conservative-local-fallback' && !this.contextFallbackNoticed) {
         this.contextFallbackNoticed = true;
         this.ui.event('info', { message: 'Model capacity metadata is unavailable. BZZY is using an assumed local 32,768-token planning window; this is not the provider’s verified limit. Refresh model metadata or select a model with known capacity if context pressure continues.' });
@@ -257,7 +297,7 @@ export class CodexEngine {
       if (this.provider.auth === 'subscription' && !subscriptionStatus(this.provider, { directory: launchConfig.env.CODEX_HOME }).available) throw new Error(`Codex / ChatGPT subscription authentication is unavailable in ${launchConfig.env.CODEX_HOME}. Run bzzy auth codex with the same BZZY_CODEX_HOME to sign in.`);
       startupStage = 'process_spawn';
       this.rpc = new Rpc(launch('codex', launchConfig.args, { env: launchConfig.env, cwd: this.session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
-        canonicalExecutable: Boolean(this.options.agentScope || this.options.learningReview),
+        canonicalExecutable: Boolean(this.options.agentScope || this.options.learningReview || this.programScopeAdmission),
         isolation: !this.options.agentScope && this.options.strictPolicy ? backendIsolation('codex', launchConfig.env, this.session.cwd, this.options.policy) : null }), (method, params) => this.request(method, params));
       this.session.backendProcess = processIdentity(this.rpc.child.pid); saveSession(this.session);
       this.rpc.on('notification', (method, params) => this.notification(method, params));
@@ -268,13 +308,18 @@ export class CodexEngine {
       // Unknown capability stays pending; normal user steering is unchanged.
       this.hostRefreshCapability = initialization.capabilities?.hostContextRefresh || null;
       this.rpc.notify('initialized');
-      if (this.options.agentScope || this.options.learningReview) {
+      if (this.programScopeAdmission) {
         startupStage = 'permission_profile';
-        const profileId = this.options.learningReview ? learningPermissionProfile : agentPermissionProfile;
+        assertProgramScopeCodexConfig(await this.rpc.request('config/read', { cwd: this.session.cwd, includeLayers: false }), launchConfig.scopePermissions);
+      }
+      if (this.options.agentScope || this.options.learningReview || this.programScopeAdmission) {
+        startupStage = 'permission_profile';
+        const profileId = this.programScopeAdmission ? programScopePermissionProfile : this.options.learningReview ? learningPermissionProfile : agentPermissionProfile;
         const profiles = await this.rpc.request('permissionProfile/list', {});
         if (!profiles.data?.some(profile => profile.id === profileId && profile.allowed === true)) throw new Error('This Codex backend cannot enforce the required isolated permission profile. No unrestricted fallback was started.');
       }
-      const policy = this.options.learningReview ? { approvalPolicy: 'never', permissions: learningPermissionProfile }
+      const policy = this.programScopeAdmission ? { approvalPolicy: 'never', permissions: programScopePermissionProfile }
+        : this.options.learningReview ? { approvalPolicy: 'never', permissions: learningPermissionProfile }
         : this.options.agentScope ? { approvalPolicy: 'never', permissions: agentPermissionProfile }
         : { approvalPolicy: this.options.yolo || this.options.scopedAutonomy ? 'never' : 'on-request', sandbox: codexSandboxMode(this.options) };
       const params = { cwd: this.session.cwd, ...policy,
@@ -375,6 +420,7 @@ export class CodexEngine {
   }
 
   assertAgentPermissions(result) {
+    if (this.programScopeAdmission && (result.activePermissionProfile?.id !== programScopePermissionProfile || result.activePermissionProfile.extends != null)) throw new Error('Codex did not activate the restricted program-scope profile. No turn was started.');
     if (this.options.learningReview && (result.activePermissionProfile?.id !== learningPermissionProfile || result.activePermissionProfile.extends != null)) throw new Error('Codex did not activate the isolated learning permission profile. No review was started.');
     if (this.options.agentScope && (result.activePermissionProfile?.id !== agentPermissionProfile || result.activePermissionProfile.extends != null)) throw new Error('Codex did not activate the isolated Agent permission profile. No turn was started.');
   }
@@ -465,9 +511,14 @@ export class CodexEngine {
     Object.assign(this.session.goal, { nativeStatus: goal.status, status: this.contextStallRequested ? 'paused' : goal.status === 'complete' ? 'verifying' : goal.status, nativeGoalId: goal.id || goal.goalId,
       nativeTokensUsed: tokens, tokensUsed: tokens + (this.session.goal.delegatedTokensUsed || 0), timeUsedSeconds: goal.timeUsedSeconds });
     if (this.contextStallRequested) this.session.goal.reason = 'context_no_progress';
+    else if (goal.status === 'blocked') {
+      const blocker = sanitizedNativeBlocker(goal.reason || goal.blockedReason || goal.lastBlocker || goal.blocker?.message);
+      Object.assign(this.session.goal, { reason: 'native_blocked', lastBlocker: blocker.reason, nativeBlocker: blocker });
+    }
     observeRunUsage(this.session, this.options.toolHost?.context?.runId, { nativeGoal: true });
     saveSession(this.session);
-    this.ui.event('goal', { status: this.contextStallRequested ? 'paused' : goal.status, tokensUsed: tokens });
+    this.ui.event('goal', { status: this.contextStallRequested ? 'paused' : goal.status, tokensUsed: tokens,
+      ...(goal.status === 'blocked' ? { reason: this.session.goal.lastBlocker, reasonAvailable: this.session.goal.nativeBlocker?.reasonAvailable } : {}) });
   }
 
   notification(method, params) {
@@ -548,7 +599,11 @@ export class CodexEngine {
       this.pauseForContextPressure();
       this.ui.newline();
       if (params.turn.status === 'failed') {
-        if (this.session.goal?.status === 'active') { this.session.goal.status = 'blocked'; saveSession(this.session); }
+        if (this.session.goal?.status === 'active') {
+          const blocker = sanitizedNativeBlocker(params.turn.error?.message);
+          Object.assign(this.session.goal, { status: 'blocked', reason: 'native_turn_failed', lastBlocker: blocker.reason, nativeBlocker: blocker });
+          saveSession(this.session);
+        }
         this.operation?.reject(new Error(params.turn.error?.message || 'Codex turn failed.'));
       } else if (params.turn.status === 'interrupted') {
         if (this.session.goal?.status === 'active') { this.session.goal.status = 'paused'; saveSession(this.session); }

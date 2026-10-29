@@ -3,6 +3,7 @@ import { database, getRecord, putRecord, appendEvent, digest, now, transaction }
 import { diagnosticRedactor } from './diagnostic-redaction.js';
 import { privateWorkspacePath } from './private-paths.js';
 import { normalizeErrorSignature } from './error-signature.js';
+import { currentInvestigationAttribution } from './session-investigation.js';
 
 const kinds = ['work.observed', 'diagnostic.tool', 'assignment.reviewed', 'acceptance', 'verification.finished', 'artifact'];
 const ignored = new Set(['activity', 'get_task_state', 'read_task_state_details', 'get_goal', 'list_skills', 'read_skill', 'list_subagents', 'read_subagent',
@@ -41,7 +42,9 @@ export function recordWorkObservation(session, input) {
     return [{ path: scrub(relative), ...(diff ? { diff: excerpt(diff, 1600), diffHash: digest(diff) } : {}) }];
   });
   const observation = { version: 1, id, sessionId: saved.id, runId: run.id, goalId: run.goalMode ? run.goalId : null,
-    assignmentId: saved.assignmentId || null, kind: input.kind || 'tool', name: suppressed ? 'private-operation' : scrub(String(input.name || 'tool')).slice(0, 120),
+    assignmentId: saved.assignmentId || null, assignmentRound: saved.assignmentRound ?? null,
+    ...(() => { try { const { dependencies: _dependencies, ...attribution } = currentInvestigationAttribution(saved, { goalMode: run.goalMode, runId: run.id }); return attribution; } catch { return {}; } })(),
+    kind: input.kind || 'tool', name: suppressed ? 'private-operation' : scrub(String(input.name || 'tool')).slice(0, 120),
     operationFingerprint: safeCommand ? digest(safeCommand) : null, outcome,
     exitCode: Number.isInteger(input.exitCode) ? input.exitCode : null, durationMs: Number.isFinite(input.durationMs) ? Math.max(0, input.durationMs) : null,
     summary: clean ? excerpt(clean) : oversized ? '[omitted: complete output exceeds privacy bound]' : suppressed ? '[omitted: private operation]' : '',
@@ -82,6 +85,8 @@ export function episodeMaterial(session, options = {}) {
     const data = JSON.parse(row.data);
     if (row.type === 'work.observed') {
       attempts.push({ id: data.id, sourceSeq: row.seq, throughSeq: row.seq, kind: data.kind, name: data.name,
+        workUnitId: data.workUnitId || null, workUnitRevision: data.workUnitRevision || null,
+        dependencyFingerprint: data.dependencyFingerprint || null, assignmentId: data.assignmentId || null, assignmentRound: data.assignmentRound ?? null,
         operationFingerprint: data.operationFingerprint, outcome: data.outcome, exitCode: data.exitCode, durationMs: data.durationMs,
         summary: data.summary, ...(data.error ? { error: data.error } : {}), changedFiles: data.changedFiles || [],
         omittedPrivate: data.omittedPrivate, omittedOversize: data.omittedOversize });
@@ -165,7 +170,7 @@ export function captureEpisode(session, options = {}) {
     const prior = getRecord('core.episode', id);
     if (prior) return prior;
     putRecord('core.episode', id, record, db);
-    putRecord('core.episode.progress', session.id, { sessionId: session.id, goalId: material.goalId, runId: material.runId,
+    putRecord('core.episode.progress', session.id, { ...getRecord('core.episode.progress', session.id), sessionId: session.id, goalId: material.goalId, runId: material.runId,
       episodeId: id, throughSeq: material.throughSeq, observedThroughSeq: latest, counts: material.counts, authority: material.authority, updatedAt: now() }, db);
     return record;
   };

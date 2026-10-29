@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { database, getRecord, putRecord, digest, now, transaction } from './database.js';
-import { knowledgeAccess, allowedKnowledgeSessionIds, knowledgeDatabase, cleanKnowledgeText } from './knowledge-index.js';
+import { knowledgeAccess, allowedKnowledgeSessionIds, knowledgeDatabase, cleanKnowledgeText, canonicalKnowledgeSource } from './knowledge-index.js';
 
 let localAdapter = null;
 const fail = message => { throw Object.assign(new Error(message), { code: 'RETRIEVAL_CONFIGURATION' }); };
@@ -79,14 +79,20 @@ export async function refreshLocalEmbeddings(session, { limit = 8 } = {}) {
   const start = performance.now(), state = available(session);
   if (!state.adapter) return { indexed: 0, fallback: state.reason, latencyMs: performance.now() - start };
   const { access, settings, adapter } = state, ids = allowedKnowledgeSessionIds(session, access), db = knowledgeDatabase();
-  // The recent document window and each maintenance batch have explicit caps.
-  const rows = db.prepare(`SELECT d.* FROM knowledge_documents d WHERE d.project_id=? AND d.session_id IN (SELECT value FROM json_each(?))
-    AND (d.kind!='chat' OR json_extract(d.payload,'$.sourceVersion')=2) ORDER BY d.updated_at DESC LIMIT 2000`).all(access.project.id, JSON.stringify(ids));
+  const cursor = db.prepare('SELECT * FROM knowledge_embedding_cursor WHERE project_id=? AND generation=?').get(access.project.id, settings.generation);
+  const bootstrap = cursor?.complete ? [] : db.prepare(`SELECT d.* FROM knowledge_documents d WHERE d.project_id=?
+    AND d.session_id IN (SELECT value FROM json_each(?)) AND (d.kind!='chat' OR json_extract(d.payload,'$.sourceVersion')=2)
+    AND d.key>? ORDER BY d.key LIMIT ?`).all(access.project.id, JSON.stringify(ids), cursor?.document_key || '', limit + 1);
+  const pending = db.prepare(`SELECT d.* FROM knowledge_embedding_dirty q JOIN knowledge_documents d ON d.key=q.document_key
+    WHERE q.project_id=? AND q.session_id IN (SELECT value FROM json_each(?)) ORDER BY q.document_key LIMIT ?`)
+    .all(access.project.id, JSON.stringify(ids), limit + 1);
+  const rows = [...new Map([...bootstrap.slice(0, Math.ceil(limit / 2)), ...pending].map(row => [row.key, row])).values()].slice(0, limit);
+  const completed = new Set();
   let indexed = 0, inputBytes = 0;
   for (const doc of rows) {
-    if (getRecord('session-deletion', doc.session_id)) continue;
+    if (getRecord('session-deletion', doc.session_id)) { completed.add(doc.key); continue; }
     const id = digest([access.project.id, settings.generation, doc.key]), sourceHash = docHash(doc), prior = getRecord('core.retrieval.vector', id);
-    if (prior?.sourceHash === sourceHash && equalPin(prior, settings)) continue;
+    if (prior?.sourceHash === sourceHash && equalPin(prior, settings)) { completed.add(doc.key); continue; }
     const text = boundedText(doc.body, 2000);
     let result;
     try { result = await embed(adapter, text, settings.dimensions); }
@@ -96,10 +102,19 @@ export async function refreshLocalEmbeddings(session, { limit = 8 } = {}) {
         !allowedKnowledgeSessionIds(session, current.access).includes(doc.session_id) || getRecord('session-deletion', doc.session_id)) return { indexed, inputBytes, fallback: 'generation-or-source-changed', latencyMs: performance.now() - start };
     putRecord('core.retrieval.vector', id, { id, projectId: access.project.id, sessionId: doc.session_id, documentKey: doc.key,
       sourceId: doc.source_id, sourceHash, generation: settings.generation, ...pin(settings), vector: result, createdAt: now() });
-    indexed++; inputBytes += Buffer.byteLength(text);
+    completed.add(doc.key); indexed++; inputBytes += Buffer.byteLength(text);
     if (indexed >= limit) break;
   }
-  return { indexed, inputBytes, local: true, generation: settings.generation, windowBounded: rows.length === 2000, latencyMs: performance.now() - start };
+  for (const documentKey of completed) db.prepare('DELETE FROM knowledge_embedding_dirty WHERE document_key=?').run(documentKey);
+  if (!cursor?.complete) {
+    let last = cursor?.document_key || '';
+    for (const doc of bootstrap) { if (!completed.has(doc.key)) break; last = doc.key; }
+    const complete = bootstrap.length <= limit && bootstrap.every(doc => completed.has(doc.key));
+    db.prepare(`INSERT INTO knowledge_embedding_cursor VALUES(?,?,?,?) ON CONFLICT(project_id,generation)
+      DO UPDATE SET document_key=excluded.document_key,complete=excluded.complete`).run(access.project.id, settings.generation, last, Number(complete));
+  }
+  return { indexed, inputBytes, local: true, generation: settings.generation, windowBounded: false,
+    remaining: bootstrap.some(doc => !completed.has(doc.key)) || pending.some(doc => !completed.has(doc.key)), latencyMs: performance.now() - start };
 }
 
 export async function localSemanticCandidates(session, query, { limit = 12, types, excludeChatSessionId } = {}) {
@@ -107,25 +122,47 @@ export async function localSemanticCandidates(session, query, { limit = 12, type
   if (typeof query !== 'string' || query.length > 500 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) fail('Use a bounded semantic query.');
   if (!state.adapter) return { items: [], fallback: state.reason, latencyMs: performance.now() - start };
   const { access, settings, adapter } = state, ids = allowedKnowledgeSessionIds(session, access), db = knowledgeDatabase();
-  // Scope is applied in SQL before vector access, not after global similarity.
-  const rows = db.prepare(`SELECT data FROM records WHERE kind='core.retrieval.vector' AND json_extract(data,'$.projectId')=?
-    AND json_extract(data,'$.generation')=? AND json_extract(data,'$.sessionId') IN (SELECT value FROM json_each(?)) LIMIT 2000`)
-    .all(access.project.id, settings.generation, JSON.stringify(ids));
+  // Stream keyset pages rather than restricting every query to the same first
+  // 2,000 vectors. Canonical documents are joined before hydration; work has a
+  // wall-time budget and incomplete coverage is explicit in the response.
+  const page = db.prepare(`SELECT r.id,r.data,d.body,d.payload,d.kind,d.source_id,d.session_id FROM records r
+    JOIN knowledge_documents d ON d.key=json_extract(r.data,'$.documentKey')
+    WHERE r.kind='core.retrieval.vector' AND json_extract(r.data,'$.projectId')=? AND json_extract(r.data,'$.generation')=?
+      AND d.project_id=? AND d.session_id IN (SELECT value FROM json_each(?)) AND r.id>?
+    ORDER BY r.id LIMIT 128`);
   try {
     const queryVector = await embed(adapter, cleanKnowledgeText(query, 500), settings.dimensions), current = available(session);
     if (current.adapter !== adapter || current.settings.generation !== settings.generation) return { items: [], fallback: 'generation-changed', latencyMs: performance.now() - start };
     const stillAllowed = allowedKnowledgeSessionIds(session, current.access), items = [];
-    for (const row of rows) {
-      const record = JSON.parse(row.data);
-      if (!stillAllowed.includes(record.sessionId) || getRecord('session-deletion', record.sessionId) || !equalPin(record, settings)) continue;
-      const doc = db.prepare('SELECT * FROM knowledge_documents WHERE key=? AND project_id=? AND session_id=?').get(record.documentKey, access.project.id, record.sessionId);
-      if (!doc || docHash(doc) !== record.sourceHash || types && !types.includes(doc.kind) || excludeChatSessionId === doc.session_id && doc.kind === 'chat') continue;
-      const v = vector(record.vector, settings.dimensions), score = queryVector.reduce((sum, item, index) => sum + item * v[index], 0);
-      if (score <= 0) continue;
-      items.push({ ...JSON.parse(doc.payload), kind: doc.kind, sourceId: doc.source_id, sessionId: doc.session_id, projectId: doc.project_id,
-        excerpt: cleanKnowledgeText(doc.body, 1500), score, whyMatched: 'Optional local semantic similarity; relevance and validity require source review.' });
-    }
-    return { items: items.sort((a, b) => b.score - a.score || a.sourceId.localeCompare(b.sourceId)).slice(0, limit), local: true, generation: settings.generation, latencyMs: performance.now() - start };
+    let after = '', scanned = 0, complete = false;
+    const deadline = performance.now() + 100;
+    do {
+      const rows = page.all(access.project.id, settings.generation, access.project.id, JSON.stringify(stillAllowed), after);
+      if (!rows.length) { complete = true; break; }
+      for (const row of rows) {
+        after = row.id; scanned++;
+        const record = JSON.parse(row.data);
+        if (record.sessionId !== row.session_id || !stillAllowed.includes(record.sessionId) || getRecord('session-deletion', record.sessionId) || !equalPin(record, settings)) continue;
+        if (docHash(row) !== record.sourceHash || types && !types.includes(row.kind) || excludeChatSessionId === row.session_id && row.kind === 'chat') continue;
+        const hit = { ...JSON.parse(row.payload), kind: row.kind, sourceId: row.source_id, sessionId: row.session_id, projectId: access.project.id };
+        if (['memory', 'issue', 'checkpoint', 'goal', 'artifact','attempt'].includes(hit.kind)) {
+          const live = canonicalKnowledgeSource(current.access,hit,stillAllowed);
+          if (!live || hit.sourceRevision && hit.sourceRevision !== live.sourceRevision) continue;
+          // Native writers update their index synchronously. A direct legacy
+          // record edit queues maintenance; do not use its old vector meanwhile.
+          if (!hit.sourceRevision && Number.isSafeInteger(hit.revision) && live.revision !== hit.revision) continue;
+        }
+        const v = vector(record.vector, settings.dimensions), score = queryVector.reduce((sum, item, index) => sum + item * v[index], 0);
+        if (score <= 0) continue;
+        items.push({ ...hit, excerpt: cleanKnowledgeText(row.body, 1500), score,
+          whyMatched: 'Optional local semantic similarity; relevance and validity require source review.' });
+        items.sort((a, b) => b.score - a.score || a.sourceId.localeCompare(b.sourceId));
+        if (items.length > limit) items.length = limit;
+      }
+      if (rows.length < 128) { complete = true; break; }
+    } while (performance.now() < deadline);
+    return { items, local: true, generation: settings.generation, scanned, complete,
+      ...(complete ? {} : { fallback: 'semantic-time-budget-reached; scoped FTS remains available' }), latencyMs: performance.now() - start };
   } catch { return { items: [], fallback: 'local-capability-failed', latencyMs: performance.now() - start }; }
 }
 

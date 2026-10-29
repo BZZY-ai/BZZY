@@ -13,7 +13,7 @@ import { sanitizeLearningText } from './learning.js';
 import { runRestrictedDocumentModel } from './document-model.js';
 import { sessionCompactionCost } from './compaction-cost.js';
 import { sessionMemoryEligible, indexSessionMemory, pendingSessionMemoryNodes, sessionMemoryMaterial,
-  publishSessionMemorySummary, sessionMemoryStatus } from './session-memory.js';
+  publishSessionMemorySummary, publishSessionMemoryFallback, sessionMemoryStatus } from './session-memory.js';
 
 const JOB = 'core.session.compactor.job', CONTROL = 'core.session.compactor.control';
 const SETTINGS = 'core.session.compactor.settings', USAGE = 'core.session.compactor.usage', RESERVATION = 'core.session.compactor.reservation';
@@ -21,6 +21,7 @@ const OUTPUT = 'core.session.compactor.output', DISCOVERY = 'core.session.compac
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const stopped = () => readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
+const publicationOnly = job => job.recovery?.publicationOnly === true || job.recovery?.mode === 'cached-publication';
 const publicJob = ({ runner, lease, ...job }) => job;
 const busyStates = ['starting', 'running', 'waiting_for_input', 'verifying'];
 const jobStates = ['queued', 'waiting_for_configuration', 'waiting_for_auth', 'retry_wait', 'running'];
@@ -182,8 +183,8 @@ function foregroundIdle() {
 }
 function schedulingReason(job, material, canRun) {
   if (!canRun()) return 'host_priority';
-  if (requestInFlight()) return 'request_in_flight';
   if (outputFor(job, material) || shortMaterial(material)) return null;
+  if (requestInFlight() || listRecords('core.learning.job', { state: 'running', limit: 1 }).length) return 'request_in_flight';
   const settings = sessionCompactionSettings(), source = loadSession(job.sessionId);
   const foreground = busyStates.includes(source?.executionState) || !foregroundIdle();
   if (!foreground) return null;
@@ -242,9 +243,17 @@ function settle(job, tokens) {
 }
 function outputFor(job, material) {
   const cached = getRecord(OUTPUT, job.id);
-  if (!cached) return null;
+  if (!cached) {
+    if (publicationOnly(job)) throw fail('COMPACTOR_SCOPE', 'Recovered publication has lost its cached summary. Inspect it before continuing.');
+    return null;
+  }
+  if (job.recovery?.outputHash && digest(cached) !== job.recovery.outputHash) throw fail('COMPACTOR_SCOPE', 'Recovered publication cached summary changed.');
   if (cached.generation !== material.generation || cached.sourceHash !== material.sourceHash || cached.hash !== digest({ text: cached.text, selection: cached.selection, sourceHash: cached.sourceHash })) throw fail('COMPACTOR_SCOPE', 'Cached summary source changed.');
   return cached;
+}
+function publicationCacheValid(job) {
+  try { return Boolean(outputFor(job, sessionMemoryMaterial(job.sessionId, job.nodeId))); }
+  catch { return false; }
 }
 function validSummary(text) {
   if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text.trim()) > 2048 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text) || sanitizeLearningText(text).trim() !== text.trim()) throw fail('COMPACTOR_OUTPUT', 'The compactor returned an invalid summary.');
@@ -288,6 +297,9 @@ function publish(job, material, output) {
 async function runJob(id, { runModel, canRun, authAvailable }) {
   let material, cached, job, sourceSession;
   let preflight = getRecord(JOB, id);
+  if (preflight && publicationOnly(preflight) && !publicationCacheValid(preflight)) return updateJob(preflight, {
+    state: 'paused', reasonPaused: 'publication_cache_unavailable', error: 'COMPACTOR_SCOPE', runner: null, lease: null,
+    recovery: { ...preflight.recovery, publicationOnly: true, mode: 'manual-inspection' } });
   if (preflight && !preflight.selection) {
     const background = backgroundModelSettings();
     if (background.configured) preflight = updateJob(preflight, { selection: background.selection, selectionSource: background.source,
@@ -296,6 +308,7 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
   }
   if (preflight && ['queued', 'retry_wait', 'waiting_for_configuration', 'waiting_for_auth'].includes(preflight.state) && (!preflight.nextAttemptAt || Date.parse(preflight.nextAttemptAt) <= Date.now())) {
     const saved = authorized(preflight);
+    publishSessionMemoryFallback(saved, preflight.nodeId);
     const input = sessionMemoryMaterial(saved, preflight.nodeId);
     const reason = schedulingReason(preflight, input, canRun);
     if (reason) return deferJob(preflight, reason);
@@ -479,17 +492,39 @@ export function recoverSessionCompactions() {
       signalProcess(draft.backendProcess, 'SIGKILL', { group: draft.backendProcess.pgid === draft.backendProcess.pid });
     }
     const unsettled = job.reservationId && getRecord(RESERVATION, job.reservationId)?.state === 'reserved';
-    if (job.state !== 'running' && !unsettled && !backends.length) continue;
+    const interrupted = job.state === 'running' || job.state === 'paused' && job.reasonPaused === 'host_shutdown';
+    if (!interrupted && !unsettled && !backends.length) continue;
     settle(job, job.dispatched ? undefined : 0);
     const current = getRecord(JOB, job.id);
     // A durable owner pause/cancel remains authoritative even if the process
     // died between recording it and releasing the API reservation.
-    if (current.state === 'cancelled') updateJob(current, { runner: null, lease: null });
-    else {
-      updateJob(current, { state: 'paused', reasonPaused: 'recovery_required', error: job.dispatched ? 'COMPACTOR_UNCERTAIN' : null, runner: null, lease: null });
-      pauseSessionCompaction(job.sessionId, 'recovery_required');
+    const control = controlFor(job.sessionId), saved = loadSession(job.sessionId);
+    const ownerStopped = !['enabled', 'paused'].includes(control.state) || control.state === 'paused' && control.reasonPaused !== 'host_shutdown'
+      || current.state === 'paused' && current.reasonPaused !== 'host_shutdown';
+    const cached = getRecord(OUTPUT, job.id), hostOnly = publicationOnly(job) || Boolean(cached);
+    const neverDispatched = job.dispatched === false || job.dispatched === undefined && !(job.attempts > 0) && !job.reservationId && job.state !== 'running';
+    const safe = hostOnly ? publicationCacheValid(job) : neverDispatched;
+    const allowed = saved && !sessionDeleted(saved.id) && !['paused', 'cancelled'].includes(saved.executionState)
+      && !stopped() && sessionCompactionSettings().enabled;
+    if (current.state === 'cancelled' || ownerStopped) updateJob(current, { runner: null, lease: null });
+    else if (safe && allowed && !documentBackends(job).length) {
+      updateControl(job.sessionId, { state: 'enabled', reasonPaused: null });
+      updateJob(current, { state: 'queued', reasonPaused: null, error: null, scheduleReason: null, runner: null, lease: null,
+        recovery: { mode: hostOnly ? 'cached-publication' : 'never-dispatched',
+          ...(hostOnly ? { publicationOnly: true, outputHash: job.recovery?.outputHash || digest(cached) } : {}), recoveredAt: now() } });
+    } else {
+      updateJob(current, { state: 'paused', reasonPaused: 'recovery_required', error: job.dispatched ? 'COMPACTOR_UNCERTAIN' : null, runner: null, lease: null,
+        ...(hostOnly ? { recovery: { ...job.recovery, publicationOnly: true, mode: 'manual-inspection',
+          outputHash: job.recovery?.outputHash || (cached ? digest(cached) : null) } } : {}) });
     }
     recovered.push(job.id);
+  }
+  for (const control of listRecords(CONTROL, { state: 'paused' })) {
+    const saved = loadSession(control.sessionId);
+    if (control.reasonPaused === 'host_shutdown' && saved && !sessionDeleted(saved.id)
+        && !['paused', 'cancelled'].includes(saved.executionState) && !stopped() && sessionCompactionSettings().enabled) {
+      updateControl(control.sessionId, { state: 'enabled', reasonPaused: null });
+    }
   }
   return recovered;
 }

@@ -28,7 +28,7 @@ function live(session, context) {
   return { saved, contract };
 }
 function rows(session, maximum = 257) {
-  return database().prepare("SELECT data FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.goalId')=? ORDER BY updated_at,id LIMIT ?")
+  return database().prepare("SELECT data FROM records WHERE kind=? AND json_extract(data,'$.version')=1 AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.goalId')=? ORDER BY updated_at,id LIMIT ?")
     .all(UNIT, session.id, session.goal?.id || '', maximum).map(row => JSON.parse(row.data));
 }
 function currentUnit(session, id, contract) {

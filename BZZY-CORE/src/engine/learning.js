@@ -34,6 +34,27 @@ const publicJob = ({ runner, lease, ...job }) => {
   }) } };
 };
 const operatorStopped = () => readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
+const publicationOnly = job => job.recovery?.publicationOnly === true || job.recovery?.mode === 'cached-publication';
+const cachedResult = job => getRecord(job.reason === 'evaluation' ? 'core.learning.evaluation' : 'core.learning.output', job.id);
+function publicationCacheValid(job, cached = cachedResult(job)) {
+  if (!cached || job.recovery?.outputHash && digest(cached) !== job.recovery.outputHash) return false;
+  if (job.reason === 'evaluation') {
+    const pin = job.evaluation;
+    return Boolean(pin && cached.jobId === job.id && cached.candidateId === pin.candidateId && cached.candidateVersion === pin.candidateVersion
+      && cached.candidateRevision === pin.candidateRevision && cached.fixtureId === pin.datasetId && cached.fixtureHash === pin.fixtureHash
+      && cached.fixtureRevision === pin.fixtureRevision && cached.authority === 'host-fixture');
+  }
+  return Array.isArray(cached.material) && cached.parsed && cached.sourcesHash === job.sourcesHash
+    && cached.sourcesHash === digest(cached.material) && cached.hash === digest(cached.parsed);
+}
+function retainPublication(job, db = database()) {
+  if (!publicationOnly(job) || publicationCacheValid(job)) return job;
+  const paused = { ...job, state: 'paused', reasonPaused: 'publication_cache_unavailable', error: 'LEARNING_SCOPE',
+    recovery: { ...job.recovery, publicationOnly: true, mode: 'manual-inspection' },
+    scheduleReason: null, revision: job.revision + 1, updatedAt: now() };
+  delete paused.runner; delete paused.lease;
+  putRecord(kind, job.id, paused, db); return paused;
+}
 const bounded = (value, maximum, name) => {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > maximum || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw error('INVALID_LEARNING', `Invalid ${name}.`);
   return value.trim();
@@ -201,9 +222,21 @@ export function recoverLearningJobs() {
       }
     }
     settleUsage(job, job.reviewStarted ? undefined : 0);
-    if (!['queued', 'running'].includes(job.state)) continue;
-    controlLearningJob(job.id, 'pause', { expectedRevision: getRecord(kind, job.id).revision });
-    const paused = getRecord(kind, job.id); putRecord(kind, job.id, { ...paused, reasonPaused: 'recovery_required' }); ids.push(job.id);
+    const interrupted = job.state === 'running' || job.state === 'paused' && job.reasonPaused === 'host_shutdown';
+    if (!interrupted) continue;
+    const current = getRecord(kind, job.id), parent = loadSession(job.sessionId);
+    const cached = cachedResult(job), hostOnly = publicationOnly(job) || Boolean(cached);
+    const neverDispatched = job.reviewStarted === false || job.reviewStarted === undefined && !job.dispatchedAt && !job.reservationId && job.state !== 'running';
+    const safe = Boolean(job.packetId) && (hostOnly ? publicationCacheValid(job, cached) : neverDispatched);
+    const allowed = parent && !sessionDeleted(parent.id) && !['paused', 'cancelled'].includes(parent.executionState)
+      && !sourceStopRequested(parent.id) && !operatorStopped() && learningSettings().enabled;
+    const resume = safe && allowed && !identityAlive(job.reviewSessionId && loadSession(job.reviewSessionId)?.backendProcess);
+    const recovered = { ...current, state: resume ? 'queued' : 'paused', reasonPaused: resume ? null : 'recovery_required',
+      scheduleReason: null, revision: current.revision + 1, updatedAt: now(),
+      recovery: { mode: resume ? hostOnly ? 'cached-publication' : 'never-dispatched' : 'manual-inspection',
+        ...(hostOnly ? { publicationOnly: true, outputHash: job.recovery?.outputHash || (cached ? digest(cached) : null) } : {}), recoveredAt: now() } };
+    delete recovered.runner; delete recovered.lease;
+    putRecord(kind, job.id, recovered); ids.push(job.id);
   }
   return ids;
 }
@@ -379,11 +412,12 @@ export async function runRestrictedLearningModel({ session, prompt, budget, sign
 
 function runnable(job) {
   const source = sourceSession(job.sessionId), project = projectFor(source);
+  const local = Boolean(getRecord(job.reason === 'evaluation' ? 'core.learning.evaluation' : 'core.learning.output', job.id));
   if (operatorStopped() || ['paused', 'cancelled'].includes(source.executionState)) return false;
   if (sourceStopRequested(source.id)) return false;
-  if (!learningSettings().duringForeground && ['running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState)) return false;
+  if (!local && !learningSettings().duringForeground && ['running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState)) return false;
   if (project.id !== job.projectId || project.root !== job.projectRoot || (source.agentNamespace ?? null) !== job.agentNamespace) throw error('LEARNING_SCOPE', 'Learning source changed scope.');
-  if (!learningSettings().duringForeground && listRecords('execution', { sessionId: source.id, states: ['queued', 'starting', 'running', 'waiting_for_input'] }).length) return false;
+  if (!local && !learningSettings().duringForeground && listRecords('execution', { sessionId: source.id, states: ['queued', 'starting', 'running', 'waiting_for_input'] }).length) return false;
   return source;
 }
 
@@ -394,6 +428,9 @@ function sourceStopRequested(sessionId) {
 
 function scheduleReason(job, source, settings = learningSettings()) {
   if (!job.packetId) return 'snapshot_required';
+  if (getRecord(job.reason === 'evaluation' ? 'core.learning.evaluation' : 'core.learning.output', job.id)) return null;
+  if (listRecords('core.session.compactor.job', { state: 'running', limit: 1 }).length) return 'maintenance_capacity';
+  if (listRecords(kind, { state: 'running', limit: 2 }).some(item => item.id !== job.id)) return 'maintenance_capacity';
   if (!job.selection?.provider) return 'model_configuration';
   const busy = ['running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState) ||
     listRecords('execution', { sessionId: source.id, states: ['queued', 'launching', 'starting', 'running', 'waiting_for_input'] }).length > 0;
@@ -443,11 +480,13 @@ function settleUsage(job, tokens) {
 
 // Trusted host processors can reuse this lifecycle for held-out evaluations.
 // commit is synchronous and invoked only after cancellation/scope/budget checks.
-export async function executeLearningOperation(id, { session, signal, runReview = runRestrictedLearningModel, perform, commit, canRun = () => true } = {}) {
+export async function executeLearningOperation(id, { session, signal, runReview = runRestrictedLearningModel, perform, commit, authorizeReview, canRun = () => true } = {}) {
   const controller = new AbortController(), pendingReviews = new Set(); let job, source, timer, monitor, measuredTokens = 0, unknownUsage = false;
   job = transaction(db => {
     const previous = ownJob(id, session);
     if (previous.state !== 'queued') throw error('CONFLICT', 'Learning job is not queued.');
+    const retained = retainPublication(previous, db);
+    if (retained.state !== 'queued') return retained;
     source = runnable(previous);
     if (!source || !canRun()) throw error('LEARNING_PAUSED', 'Learning waits for idle authorized work.');
     if (!learningSettings().enabled) throw error('LEARNING_PAUSED', 'Learning is disabled by its owner.');
@@ -483,6 +522,7 @@ export async function executeLearningOperation(id, { session, signal, runReview 
     try {
       const current = getRecord(kind, id);
       if (!current || current.state !== 'running' || current.lease !== job.lease || !runnable(job) || !canRun()) controller.abort(error('LEARNING_PAUSED', 'Learning was preempted.'));
+      else authorizeReview?.({ job: current, source });
     } catch { controller.abort(error('LEARNING_SCOPE', 'Learning scope is no longer available.')); }
   }, 100);
   try {
@@ -490,7 +530,10 @@ export async function executeLearningOperation(id, { session, signal, runReview 
     const trackedReview = async arguments_ => {
       const live = getRecord(kind, id);
       if (live?.state !== 'running' || live.lease !== job.lease || controller.signal.aborted) throw error('LEARNING_PAUSED', 'Learning was stopped.');
-      const remainingTokens = job.attemptBudget.tokenBudget - measuredTokens;
+      if (publicationOnly(live)) throw error('LEARNING_SCOPE', 'Recovered publication cannot dispatch another model request. Inspect its cached result.');
+      authorizeReview?.({ job: live, source });
+      const remainingTokens = Math.min(job.attemptBudget.tokenBudget - measuredTokens,
+        Number.isSafeInteger(arguments_.maxTokens) && arguments_.maxTokens > 0 ? arguments_.maxTokens : Infinity);
       if (remainingTokens < 1000) throw error('LEARNING_BUDGET', 'Learning token budget reached.');
       const pinned = { ...arguments_.session, provider: job.selection.provider, model: job.selection.model,
         selectedEffort: job.selection.effort, modelCapabilities: job.modelCapabilities || null };
@@ -511,6 +554,7 @@ export async function executeLearningOperation(id, { session, signal, runReview 
       } finally { pendingReviews.delete(pending); }
       if (output.usageAvailable === false || !Number.isSafeInteger(output.tokens) || output.tokens < 0) throw error('LEARNING_BUDGET', 'Learning usage was not reported.');
       measuredTokens += output.tokens; unknownUsage = false;
+      if (output.tokens > remainingTokens) throw error('LEARNING_BUDGET', 'The review exceeded its comparison allocation.');
       if (measuredTokens > job.attemptBudget.tokenBudget) throw error('LEARNING_BUDGET', 'Learning token budget reached.');
       return output;
     };
@@ -636,6 +680,17 @@ function discoveryPage(limit = 128) {
 }
 export async function processLearningReviews({ limit = 1, canRun = () => true, runReview } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4) throw error('INVALID_LEARNING', 'Invalid learning concurrency.');
+  // Queue capacity is a scheduler deferral, not a user's stop. Reconsider a
+  // bounded page only when the original immutable packet was never dispatched.
+  if (!operatorStopped() && learningSettings().enabled) {
+    const waiting = database().prepare("SELECT data FROM records WHERE kind=? AND json_extract(data,'$.state')='paused' AND json_extract(data,'$.reasonPaused')='queue_limit' ORDER BY updated_at,id LIMIT 32").all(kind);
+    for (const row of waiting) {
+      const job = JSON.parse(row.data), parent = loadSession(job.sessionId);
+      if (!job.packetId || job.reviewStarted || job.dispatchedAt || job.reservationId || !parent || ['paused', 'cancelled'].includes(parent.executionState) || sourceStopRequested(parent.id)) continue;
+      const count = database().prepare("SELECT count(*) AS total FROM records WHERE kind=? AND json_extract(data,'$.projectId')=? AND json_extract(data,'$.state') IN ('queued','running')").get(kind, job.projectId).total;
+      if (count < learningSettings().maxPendingPerProject) putRecord(kind, job.id, { ...job, state: 'queued', reasonPaused: null, scheduleReason: null, revision: job.revision + 1, updatedAt: now() });
+    }
+  }
   const page = discoveryPage();
   // Reconcile owner pauses even while the host cannot dispatch. Polling never
   // infers permission to resume a durable source or owner stop.
@@ -650,6 +705,7 @@ export async function processLearningReviews({ limit = 1, canRun = () => true, r
     putRecord('core.learning.discovery', 'queued', { afterId: discovered.id, updatedAt: now() });
     const job = getRecord(kind, discovered.id);
     if (job?.state !== 'queued') continue;
+    if (retainPublication(job).state !== 'queued') continue;
     const parent = loadSession(job.sessionId);
     if (!parent || sessionDeleted(job.sessionId) || ['paused', 'cancelled'].includes(parent.executionState)) continue;
     const reason = !canRun() ? 'host_priority' : scheduleReason(job, parent);

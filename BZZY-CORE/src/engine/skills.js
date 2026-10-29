@@ -3,12 +3,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { home, privateDir } from './files.js';
+import { home, privateDir, readJson } from './files.js';
 import { database, transaction, getRecord, putRecord, digest, appendEvent, now } from './database.js';
 import { assertShareText, sharedSecrets } from './share-bundle-policy.js';
 import { resolveProjectIdentity, projectIdentityForSession } from './project-identity.js';
 import { recordLibraryCreation } from './library-notifications.js';
-import { skillEvolutionSettings } from './skill-evolution-policy.js';
+import { skillEvolutionSettings, currentEvolutionFixture } from './skill-evolution-policy.js';
 import { fixtureApprovalHash, assertHeldOutSources } from './learning-fixture-contract.js';
 
 // Trusted host administration lives here; models receive only list/read tools.
@@ -583,7 +583,8 @@ function publicCandidate(record) {
   return { ...publicRecord(record), id: record.id, skillId: record.skillId, state: record.state,
     domain: record.domain, baseRevision: record.baseRevision, baseVersion: record.baseVersion,
     provenance: record.provenance, createdAt: record.createdAt,
-    evaluation: record.evaluation || null, acceptedAt: record.acceptedAt || null, ...(record.update ? { update: record.update } : {}) };
+    evaluation: record.evaluation || null, behaviorEvaluation: record.behaviorEvaluation || null,
+    acceptedAt: record.acceptedAt || null, ...(record.update ? { update: record.update } : {}) };
 }
 
 function saveCandidate(prepared, previous, options, db) {
@@ -696,7 +697,7 @@ function evaluationFor(candidate, evaluationId) {
     }
     if (fixture.approvalHash && (fixture.approvalHash !== fixtureApprovalHash(fixture) || evaluation.fixtureApprovalHash !== fixture.approvalHash)) fail('Fixture evaluation contract or source approval changed.');
     const contract = fixture.contract || 'security-decision-v1';
-    if (contract !== (candidate.domain === 'general' ? 'procedure-review-v1' : 'security-decision-v1') ||
+    if (contract !== 'continuation-trace-v1' && contract !== (candidate.domain === 'general' ? 'procedure-review-v1' : 'security-decision-v1') ||
         evaluation.contract !== undefined && evaluation.contract !== contract) fail('The approved fixture contract must match the candidate evaluation domain.');
     assertHeldOutSources(candidate, fixture);
   }
@@ -707,6 +708,7 @@ function evaluationFor(candidate, evaluationId) {
 // by a review model are not accepted as evidence and cannot certify a recipe.
 export function evaluateSkillCandidate(id, { expectedRevision, evaluationId } = {}, options = {}) {
   const candidate = findCandidate(id, options), evaluation = evaluationFor(candidate, evaluationId);
+  if (evaluation.contract === 'continuation-trace-v1') fail('Continuation behavior cannot replace the required semantic safety evaluation.');
   if (evaluation.candidateRevision !== candidate.revision) fail('Evaluation belongs to an earlier candidate revision. Run a fresh evaluation.');
   return transaction(db => {
     const current = getRecord(candidateKind, id);
@@ -716,9 +718,68 @@ export function evaluateSkillCandidate(id, { expectedRevision, evaluationId } = 
     const changed = { ...current, state: 'evaluated', revision: current.revision + 1, updatedAt: now(),
       evaluation: { id: evaluation.id, candidateVersion: evaluation.candidateVersion, candidateRevision: evaluation.candidateRevision, fixtureHash: evaluation.fixtureHash,
         fixtureRevision: evaluation.fixtureRevision, evaluatorVersion: evaluation.evaluatorVersion,
-        authority: evaluation.authority, status: evaluation.status, digest: digest(evaluation) } };
+        authority: evaluation.authority, status: evaluation.status, digest: digest(evaluation), boundRevision: current.revision + 1 },
+      ...(current.behaviorEvaluation ? { behaviorEvaluation: { ...current.behaviorEvaluation, boundRevision: current.revision + 1 } } : {}) };
     putRecord(candidateKind, id, changed, db); return publicCandidate(changed);
   });
+}
+
+export function evaluateSkillBehaviorCandidate(id, { expectedRevision, evaluationId } = {}, options = {}) {
+  const candidate = findCandidate(id, options), evaluation = evaluationFor(candidate, evaluationId);
+  if (evaluation.contract !== 'continuation-trace-v1' || evaluation.authority !== 'host-fixture') fail('Behavior binding requires a host continuation evaluation.');
+  if (evaluation.candidateRevision !== candidate.revision) fail('Behavior evaluation belongs to an earlier candidate revision. Run a fresh evaluation.');
+  return transaction(db => {
+    const current = getRecord(candidateKind, id);
+    if (current.revision !== expectedRevision || !['pending', 'evaluated'].includes(current.state)) fail('Skill candidate changed. Reload before evaluating behavior.');
+    if (digest(evaluationFor(current, evaluationId)) !== digest(evaluation)) fail('Behavior evaluation changed before binding.');
+    const revision = current.revision + 1;
+    const changed = { ...current, state: 'evaluated', revision, updatedAt: now(),
+      ...(current.evaluation ? { evaluation: { ...current.evaluation, boundRevision: revision } } : {}),
+      behaviorEvaluation: { id: evaluation.id, candidateVersion: evaluation.candidateVersion, candidateRevision: evaluation.candidateRevision,
+        fixtureHash: evaluation.fixtureHash, fixtureRevision: evaluation.fixtureRevision, evaluatorVersion: evaluation.evaluatorVersion,
+        authority: evaluation.authority, status: evaluation.status, digest: digest(evaluation), boundRevision: revision } };
+    putRecord(candidateKind, id, changed, db); return publicCandidate(changed);
+  });
+}
+
+function behaviorForActivation(candidate) {
+  if (!candidate.behaviorEvaluation) return null;
+  const bound = candidate.behaviorEvaluation, evaluation = evaluationFor(candidate, bound.id);
+  if (bound.boundRevision !== candidate.revision || bound.digest !== digest(evaluation) || bound.candidateRevision !== evaluation.candidateRevision
+      || evaluation.contract !== 'continuation-trace-v1' || evaluation.authority !== 'host-fixture' || evaluation.status !== 'passed'
+      || !Array.isArray(evaluation.cases) || !evaluation.cases.length || evaluation.cases.some(item => item.passed !== true)
+      || !evaluation.baseline || evaluation.metrics?.baselineAvailable !== true || !Array.isArray(evaluation.metrics?.regressedCaseIds)
+      || evaluation.metrics.regressedCaseIds.length) fail('The supplemental behavior evaluation must pass against its baseline without regressions.');
+  const categories = new Set(evaluation.cases.map(item => item.category));
+  if (['completed', 'blocked', 'inconclusive'].some(category => !categories.has(category))) fail('Behavior evaluation needs completed, blocked and inconclusive continuation coverage.');
+  return evaluation;
+}
+
+function automaticUpdateApproval(candidate, semantic, behavior, approval, db) {
+  if (!approval) return null;
+  const policy = skillEvolutionSettings(), receipt = getRecord('core.skill.update', approval.updateId);
+  const source = getRecord('session', candidate.provenance?.sourceSessionId || '');
+  const packet = receipt && getRecord('core.learning.packet', receipt.packetId);
+  if (policy.updates !== 'auto' || !policy.reviewed || policy.revision !== approval.policyRevision || digest(policy) !== approval.policyHash ||
+      candidate.scope !== 'project' || candidate.provenance?.kind !== 'learning-update' || !candidate.update?.baseEnabled ||
+      !receipt || receipt.candidateId !== candidate.id || receipt.candidateVersion !== candidate.version || receipt.projectId !== candidate.projectId ||
+      receipt.jobId !== candidate.provenance.jobId || receipt.packetId !== candidate.update.packetId ||
+      receipt.automation?.state !== 'activation-ready' || receipt.automation.policyHash !== approval.policyHash ||
+      receipt.automation.semanticEvaluationHash !== digest(semantic) || !behavior || receipt.automation.continuationEvaluationHash !== digest(behavior) ||
+      !packet || receipt.automation.sourcePacketHash !== digest(packet) ||
+      getRecord('core.learning.job', receipt.jobId)?.state !== 'completed' ||
+      !source || source.id !== receipt.sessionId || source.parentSessionId || getRecord('session-deletion', source.id) ||
+      ['executor', 'reviewer', 'skill-writer', 'bestie', 'learning-review'].includes(source.role) || ['paused', 'cancelled'].includes(source.executionState) ||
+      getRecord('core.learning.settings', 'owner')?.enabled === false || readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped ||
+      db.prepare("SELECT 1 FROM records WHERE kind='execution' AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.state') IN ('queued','launching','running') AND json_extract(data,'$.stopAction') IN ('pause','cancel') LIMIT 1").get(source.id) ||
+      behavior.metrics?.improvementDemonstrated !== true || behavior.metrics?.sourceIndependence?.status !== 'independent' ||
+      behavior.baseline?.version !== candidate.baseVersion || behavior.metrics?.regressedCaseIds?.length !== 0) fail('Automatic update policy, source or independent behavioral improvement changed. Owner review is required.');
+  for (const [evaluation, pin] of [[semantic, policy.updateEvaluation?.semantic], [behavior, policy.updateEvaluation?.continuation]]) {
+    currentEvolutionFixture(pin);
+    if (evaluation.fixtureId !== pin.id || evaluation.fixtureHash !== pin.hash || evaluation.fixtureRevision !== pin.revision ||
+        evaluation.fixtureApprovalHash !== pin.approvalHash) fail('Automatic update evaluations must match the exact owner-approved fixture policy.');
+  }
+  return { updateId: receipt.id, policyRevision: policy.revision, policyHash: digest(policy), sourcePacketHash: receipt.automation.sourcePacketHash };
 }
 
 export function acceptSkillCandidate(id, { expectedRevision, expectedSkillRevision, expectedEvaluationId, reviewed = false, activate = true } = {}, options = {}) {
@@ -727,7 +788,7 @@ export function acceptSkillCandidate(id, { expectedRevision, expectedSkillRevisi
   if (typeof expectedEvaluationId !== 'string' || expectedEvaluationId !== candidate.evaluation?.id) fail('Review the exact candidate evaluation before accepting it.');
   const evaluation = evaluationFor(candidate, expectedEvaluationId);
   if (!candidate.evaluation || candidate.evaluation.id !== evaluation.id || candidate.evaluation.digest !== digest(evaluation) ||
-      evaluation.candidateRevision + 1 !== candidate.revision || candidate.evaluation.candidateRevision !== evaluation.candidateRevision ||
+      (candidate.evaluation.boundRevision ?? evaluation.candidateRevision + 1) !== candidate.revision || candidate.evaluation.candidateRevision !== evaluation.candidateRevision ||
       evaluation.authority !== 'host-fixture' || evaluation.status !== 'passed' || !Array.isArray(evaluation.cases) || !evaluation.cases.length ||
       evaluation.cases.some(item => item.passed !== true)) fail('A passing host-executed fixture evaluation is required.');
   const categories = new Set(evaluation.cases.map(item => item.category));
@@ -735,6 +796,7 @@ export function acceptSkillCandidate(id, { expectedRevision, expectedSkillRevisi
     fail('Security skills need real, false-positive and inconclusive fixture coverage.');
   }
   if (candidate.domain === 'general' && ['supported', 'unsafe', 'inconclusive'].some(category => !categories.has(category))) fail('General procedures need supported, unsafe and inconclusive fixture coverage.');
+  const behavior = behaviorForActivation(candidate);
   for (const file of candidate.files) {
     if (digest(regularRead(path.join(location(candidate), file.path), 1024 * 1024)) !== file.sha256) fail('Candidate content changed outside Core.');
   }
@@ -742,14 +804,19 @@ export function acceptSkillCandidate(id, { expectedRevision, expectedSkillRevisi
     const current = getRecord(candidateKind, id), previous = getRecord(kind, candidate.skillId);
     if (current.revision !== expectedRevision || current.state !== 'evaluated' ||
         (previous?.revision || 0) !== expectedSkillRevision || (previous?.revision || 0) !== candidate.baseRevision ||
-        digest(current.evaluation) !== digest(candidate.evaluation)) fail('Candidate, active skill or evaluation changed. Reload before approval.');
+        digest(current.evaluation) !== digest(candidate.evaluation) || digest(current.behaviorEvaluation || null) !== digest(candidate.behaviorEvaluation || null)) fail('Candidate, active skill or evaluation changed. Reload before approval.');
     if (digest(evaluationFor(current, expectedEvaluationId)) !== digest(evaluation)) fail('Evaluation or approved fixture changed before approval.');
+    if (behavior && digest(behaviorForActivation(current)) !== digest(behavior)) fail('Behavior evaluation or approved fixture changed before approval.');
+    const automaticUpdate = automaticUpdateApproval(current, evaluation, behavior, options.automaticUpdate, db);
+    if (automaticUpdate && (!previous?.enabled || previous.archived || previous.version !== current.baseVersion)) fail('The automatic update base is no longer enabled and current.');
     if (previous && previous.version !== candidate.version && activeSkillVersionPins(candidate.skillId, previous.version).length) fail('Active workflow work units pin this skill version. Close them before selecting its replacement.');
     const record = { id: candidate.skillId, name: candidate.name, description: candidate.description,
       scope: candidate.scope, projectId: candidate.projectId, version: candidate.version, files: candidate.files,
       domain: candidate.domain, enabled: activate, revision: (previous?.revision || 0) + 1, updatedAt: now(), provenance: candidate.provenance,
       review: { candidateId: id, evaluationId: evaluation.id, fixtureHash: evaluation.fixtureHash,
-        fixtureRevision: evaluation.fixtureRevision, evaluatorVersion: evaluation.evaluatorVersion, reviewedAt: now() } };
+        fixtureRevision: evaluation.fixtureRevision, evaluatorVersion: evaluation.evaluatorVersion,
+        ...(behavior ? { behaviorEvaluationId: behavior.id, behaviorFixtureHash: behavior.fixtureHash, behaviorEvaluatorVersion: behavior.evaluatorVersion } : {}), reviewedAt: now() } };
+    if (automaticUpdate) record.review.automaticUpdate = automaticUpdate;
     putRecord(kind, record.id, record, db); audit(record, previous, 'accept-candidate', db);
     putRecord(candidateKind, id, { ...current, state: 'accepted', acceptedAt: now(), updatedAt: now(), revision: current.revision + 1 }, db);
     return publicRecord(record);

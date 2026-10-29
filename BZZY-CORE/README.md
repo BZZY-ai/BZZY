@@ -19,6 +19,14 @@ starts no service, model or network request.
 
 Implemented:
 
+- [Permanent program sessions](docs/PERMANENT-SESSIONS.md): durable investigation
+  branches and dependency blockers, revisioned checkpoint edits, session-first
+  indexed archive retrieval, host summary fallback, readable MEMORY.md views,
+  safe background recovery and opt-in evaluated procedure updates. Versioned
+  owner scope admits verified Codex offline/Core-HTTP-only execution; unsupported
+  native profiles fail before work. Synthetic regression/scale results do not
+  establish unattended live engagement success.
+
 - [Native extensions](docs/EXTENSIONS.md): validated declarative controls and
   session-scoped form/table state, private version/installation-bound credentials,
   fixed public HTTPS JSON GET actions, ordinary owner-chat discovery/read/interaction

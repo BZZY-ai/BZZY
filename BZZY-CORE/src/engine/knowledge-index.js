@@ -5,7 +5,9 @@ import { sharedSecrets, assertShareText } from './share-bundle-policy.js';
 import { advanceConversationSource, conversationRedactionContext, conversationBody, conversationVisible } from './conversation-source.js';
 
 const ready = new WeakSet();
-export const knowledgeTypes = ['memory', 'issue', 'chat', 'checkpoint', 'goal', 'resolution'];
+export const knowledgeTypes = ['memory', 'issue', 'chat', 'checkpoint', 'goal', 'resolution', 'artifact', 'attempt'];
+const recordKinds = ['memory', 'issue', 'checkpoint', 'goal-history', 'artifact', 'core.episode.observation'];
+const indexedKind = kind => kind === 'goal-history' ? 'goal' : kind === 'core.episode.observation' ? 'attempt' : kind;
 const disabledRoles = new Set(['skill-writer', 'learning-review', 'knowledge-review']);
 const secretAssignment = /\b(password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization)["']?\s*[:=]\s*["']?[^\s"'<>]+/gi;
 
@@ -25,7 +27,7 @@ export function cleanKnowledgeValue(value) {
   if (typeof value === 'string') return cleanKnowledgeText(value);
   if (Array.isArray(value)) return value.slice(0, 100).map(cleanKnowledgeValue);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !/^(?:backendHomes|backendProcess|engineHome|credentials|accountBindings|ownerToken|privateKey|reasoning|analysis|chainOfThought)$/i.test(key))
+    .filter(([key]) => !/^(?:backendHomes|backendProcess|engineHome|credentials|accountBindings|ownerToken|privateKey|reasoning|analysis|chainOfThought|password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization|sourcePins|dependencySnapshot|dependencyValues)$/i.test(key))
     .map(([key, item]) => [key, cleanKnowledgeValue(item)]));
   return value;
 }
@@ -58,12 +60,42 @@ export function knowledgeAccess(session, { readOnly = false } = {}) {
 
 export function knowledgeDatabase() {
   const db = database();
-  if (!ready.has(db)) {
+  if (!ready.has(db) || !db.prepare("SELECT 1 FROM sqlite_master WHERE name='knowledge_memory_links'").get()) {
+    const ownTransaction=!db.isTransaction;
+    if(ownTransaction) db.exec('BEGIN IMMEDIATE');
+    try {
     db.exec(`CREATE TABLE IF NOT EXISTS knowledge_documents (
       key TEXT PRIMARY KEY, project_id TEXT NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL,
       source_id TEXT NOT NULL, body TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS knowledge_project ON knowledge_documents(project_id,kind,updated_at DESC);
       CREATE INDEX IF NOT EXISTS knowledge_session ON knowledge_documents(project_id,session_id,kind);
+      CREATE INDEX IF NOT EXISTS knowledge_update_cursor ON knowledge_documents(project_id,updated_at,key);
+      CREATE INDEX IF NOT EXISTS knowledge_document_keyset ON knowledge_documents(project_id,key);
+      CREATE TABLE IF NOT EXISTS knowledge_changes (
+        kind TEXT NOT NULL, source_id TEXT NOT NULL, session_id TEXT, project_id TEXT,
+        PRIMARY KEY(kind,source_id));
+      CREATE INDEX IF NOT EXISTS knowledge_changes_session ON knowledge_changes(session_id,kind,source_id);
+      CREATE TABLE IF NOT EXISTS knowledge_projection_cursor_v2 (
+        project_id TEXT NOT NULL, scope_id TEXT NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL, source_id TEXT NOT NULL,
+        complete INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(project_id,scope_id));
+      CREATE TABLE IF NOT EXISTS knowledge_source_revision (session_id TEXT PRIMARY KEY,revision INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS knowledge_index_revision (session_id TEXT PRIMARY KEY,revision INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS knowledge_memory_links (source_id TEXT NOT NULL,target_id TEXT NOT NULL,relation TEXT NOT NULL,
+        PRIMARY KEY(source_id,target_id,relation));
+      CREATE TABLE IF NOT EXISTS knowledge_memory_coverage (session_id TEXT PRIMARY KEY,complete INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS knowledge_memory_links_target ON knowledge_memory_links(target_id,relation,source_id);
+      CREATE INDEX IF NOT EXISTS knowledge_record_scope ON records(kind,json_extract(data,'$.sessionId'),id);
+      CREATE INDEX IF NOT EXISTS knowledge_vector_keyset ON records(kind,json_extract(data,'$.projectId'),json_extract(data,'$.generation'),id);
+      CREATE TABLE IF NOT EXISTS knowledge_embedding_dirty (document_key TEXT PRIMARY KEY, project_id TEXT NOT NULL, session_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS knowledge_embedding_cursor (project_id TEXT NOT NULL, generation INTEGER NOT NULL,
+        document_key TEXT NOT NULL DEFAULT '', complete INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(project_id,generation));
+      CREATE INDEX IF NOT EXISTS knowledge_embedding_dirty_scope ON knowledge_embedding_dirty(project_id,session_id,document_key);
+      CREATE TRIGGER IF NOT EXISTS knowledge_embedding_insert AFTER INSERT ON knowledge_documents BEGIN
+        INSERT INTO knowledge_embedding_dirty VALUES(new.key,new.project_id,new.session_id)
+        ON CONFLICT(document_key) DO UPDATE SET project_id=excluded.project_id,session_id=excluded.session_id; END;
+      CREATE TRIGGER IF NOT EXISTS knowledge_embedding_update AFTER UPDATE ON knowledge_documents BEGIN
+        INSERT INTO knowledge_embedding_dirty VALUES(new.key,new.project_id,new.session_id)
+        ON CONFLICT(document_key) DO UPDATE SET project_id=excluded.project_id,session_id=excluded.session_id; END;
       CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(body,content='knowledge_documents',content_rowid='rowid');
       CREATE TRIGGER IF NOT EXISTS knowledge_insert AFTER INSERT ON knowledge_documents BEGIN
         INSERT INTO knowledge_fts(rowid,body) VALUES(new.rowid,new.body); END;
@@ -72,21 +104,268 @@ export function knowledgeDatabase() {
       CREATE TRIGGER IF NOT EXISTS knowledge_update AFTER UPDATE ON knowledge_documents BEGIN
         INSERT INTO knowledge_fts(knowledge_fts,rowid,body) VALUES('delete',old.rowid,old.body);
         INSERT INTO knowledge_fts(rowid,body) VALUES(new.rowid,new.body); END;`);
+    for(const action of ['INSERT','UPDATE','DELETE']) {
+      const row=action==='DELETE'?'old':'new';
+      db.exec(`CREATE TRIGGER IF NOT EXISTS knowledge_revision_${action.toLowerCase()} AFTER ${action} ON knowledge_documents BEGIN
+        INSERT INTO knowledge_index_revision VALUES(${row}.session_id,1) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
+        ${action==='UPDATE'?`INSERT INTO knowledge_index_revision SELECT old.session_id,1 WHERE old.session_id!=new.session_id
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;`:''}
+        ${action==='DELETE'?'DELETE FROM knowledge_embedding_dirty WHERE document_key=old.key;':''} END;`);
+    }
+    const types = recordKinds.map(kind => `'${kind}'`).join(',');
+    for (const action of ['INSERT', 'UPDATE', 'DELETE']) {
+      const row = action === 'DELETE' ? 'old' : 'new';
+      db.exec(`DROP TRIGGER IF EXISTS knowledge_record_${action.toLowerCase()}`);
+      db.exec(`CREATE TRIGGER IF NOT EXISTS knowledge_record_${action.toLowerCase()} AFTER ${action} ON records
+        WHEN ${row}.kind IN (${types}) BEGIN
+          INSERT INTO knowledge_changes(kind,source_id,session_id,project_id)
+          VALUES (${row}.kind,${row}.id,json_extract(${row}.data,'$.sessionId'),json_extract(${row}.data,'$.projectId'))
+          ON CONFLICT(kind,source_id) DO UPDATE SET session_id=excluded.session_id,project_id=excluded.project_id;
+          INSERT INTO knowledge_source_revision VALUES(COALESCE(json_extract(${row}.data,'$.sessionId'),''),1)
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
+          ${action === 'UPDATE' ? `INSERT INTO knowledge_source_revision
+            SELECT COALESCE(json_extract(old.data,'$.sessionId'),''),1
+            WHERE json_extract(old.data,'$.sessionId') IS NOT json_extract(new.data,'$.sessionId')
+            ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;` : ''}
+          DELETE FROM knowledge_memory_links WHERE source_id=${row}.id AND ${row}.kind='memory';
+          ${action !== 'DELETE' ? `INSERT INTO knowledge_memory_coverage SELECT json_extract(new.data,'$.sessionId'),0
+            WHERE new.kind='memory' AND json_type(new.data,'$.sessionId')='text' ON CONFLICT DO NOTHING;` : ''}
+          ${action !== 'DELETE' ? `INSERT INTO knowledge_memory_links
+            SELECT new.id,json_extract(new.data,'$.supersedes'),'supersedes' WHERE new.kind='memory' AND json_type(new.data,'$.supersedes')='text'
+            ON CONFLICT DO NOTHING;
+            INSERT INTO knowledge_memory_links
+            SELECT new.id,value,'contradicts' FROM json_each(CASE WHEN json_type(new.data,'$.contradictions')='array'
+              THEN json_extract(new.data,'$.contradictions') ELSE '[]' END) WHERE new.kind='memory' AND type='text' LIMIT 32
+            ON CONFLICT DO NOTHING;` : ''}
+        END;`);
+    }
+    if(ownTransaction) db.exec('COMMIT');
     ready.add(db);
+    } catch(error) { if(ownTransaction && db.isTransaction) db.exec('ROLLBACK'); throw error; }
   }
   return db;
+}
+
+// Polling reads a small per-session change counter rather than aggregating the
+// source ledger. Before migration, callers receive a stable zero without DDL.
+export function knowledgeSourceRevision(session) {
+  const access = knowledgeAccess(session, { readOnly: true }), db = database();
+  if (access.disabled || !db.prepare("SELECT 1 FROM sqlite_master WHERE name='knowledge_source_revision'").get()) return 0;
+  const ids = allowedKnowledgeSessionIds(session, access, { readOnly: true });
+  return db.prepare('SELECT coalesce(sum(revision),0) AS revision FROM knowledge_source_revision WHERE session_id IN (SELECT value FROM json_each(?))')
+    .get(JSON.stringify(ids)).revision;
+}
+
+export function knowledgeIndexRevision(sessionIds) {
+  const db=database();
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='knowledge_index_revision'").get()) return 0;
+  return db.prepare('SELECT coalesce(sum(revision),0) AS revision FROM knowledge_index_revision WHERE session_id IN (SELECT value FROM json_each(?))')
+    .get(JSON.stringify(sessionIds)).revision;
+}
+
+export function reverseMemorySources(sourceId,relation,{readOnly=false}={}) {
+  if (!['supersedes','contradicts'].includes(relation) || typeof sourceId !== 'string') return [];
+  const db=readOnly ? database() : knowledgeDatabase();
+  if (readOnly && !db.prepare("SELECT 1 FROM sqlite_master WHERE name='knowledge_memory_links'").get()) return [];
+  return db.prepare(`SELECT r.data FROM knowledge_memory_links l JOIN records r ON r.kind='memory' AND r.id=l.source_id
+    WHERE l.target_id=? AND l.relation=? ORDER BY l.source_id LIMIT 32`).all(sourceId,relation).map(row=>JSON.parse(row.data));
+}
+
+// Initialize before a native write. An empty session is already complete:
+// every subsequent source mutation is covered by the installed triggers.
+export function initializeMemoryLinkCoverage(sessionId) {
+  const db=knowledgeDatabase();
+  if(db.prepare('SELECT 1 FROM knowledge_memory_coverage WHERE session_id=?').get(sessionId)) return;
+  const existing=db.prepare("SELECT 1 FROM records WHERE kind='memory' AND json_extract(data,'$.sessionId')=? LIMIT 1").get(sessionId);
+  db.prepare('INSERT INTO knowledge_memory_coverage VALUES(?,?) ON CONFLICT DO NOTHING').run(sessionId,Number(!existing));
+}
+
+export function memoryRelationshipCoverage(session,access,{readOnly=false}={}) {
+  const db=readOnly?database():knowledgeDatabase(),ids=allowedKnowledgeSessionIds(session,access,{readOnly});
+  const exists=db.prepare("SELECT 1 FROM sqlite_master WHERE name='knowledge_memory_coverage'").get();
+  const pending=exists?db.prepare(`SELECT 1 FROM json_each(?) s LEFT JOIN knowledge_memory_coverage c ON c.session_id=s.value
+    WHERE coalesce(c.complete,0)=0 AND EXISTS(SELECT 1 FROM records r WHERE r.kind='memory' AND json_extract(r.data,'$.sessionId')=s.value LIMIT 1) LIMIT 1`).get(JSON.stringify(ids))
+    :db.prepare("SELECT 1 FROM records WHERE kind='memory' AND json_extract(data,'$.sessionId') IN(SELECT value FROM json_each(?)) LIMIT 1").get(JSON.stringify(ids));
+  return pending?'backfill-pending':'complete';
+}
+
+// A typed source is always resolved from current authoritative records, never
+// from a cached payload alone. Artifact retrieval exposes metadata, not files.
+export function canonicalKnowledgeSource(access, hit, sessionIds, { maxSourceBytes, onOmitted } = {}) {
+  if (access.disabled || !sessionIds.includes(hit.sessionId) || getRecord('session-deletion', hit.sessionId)) return null;
+  const kind = hit.kind === 'goal' ? 'goal-history' : hit.kind === 'attempt' ? 'core.episode.observation' : hit.kind;
+  if (!recordKinds.includes(kind)) return null;
+  let record;
+  if (maxSourceBytes !== undefined) {
+    if (!Number.isSafeInteger(maxSourceBytes) || maxSourceBytes<1) throw new Error('Use a positive source hydration bound.');
+    const row=database().prepare(`SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data END AS data
+      FROM records WHERE kind=? AND id=?`).get(maxSourceBytes,kind,hit.sourceId);
+    if(row && row.data===null) { onOmitted?.('source-byte-limit'); return null; }
+    record=row?.data ? JSON.parse(row.data) : null;
+  } else record = getRecord(kind, hit.sourceId);
+  if (!record || (record.id || record.sessionId) !== hit.sourceId || record.sessionId !== hit.sessionId) return null;
+  const owner = getRecord('session', record.sessionId);
+  if (!owner || !sessionBelongsToProject(owner, access.project, { readOnly: true })) return null;
+  const material = !record.project && !record.projectRoot && ['goal-history', 'artifact', 'core.episode.observation'].includes(kind)
+    ? { ...record, project: access.project.root, projectId: access.project.id } : record;
+  if (!recordBelongsToProject(material, access.project)) return null;
+  if (kind === 'core.episode.observation') {
+    const reference = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(value) && cleanKnowledgeText(value)===value ? value : null;
+    const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null;
+    const sourceSeq = Number.isSafeInteger(record.sourceSeq) && record.sourceSeq>0 ? record.sourceSeq : null;
+    const event = sourceSeq && database().prepare("SELECT data FROM events WHERE session_id=? AND seq=? AND type='work.observed' AND length(CAST(data AS BLOB))<=262144").get(record.sessionId,sourceSeq);
+    if (!event) return null;
+    const { sourceSeq:_sourceSeq,throughSeq:_throughSeq,createdAt:_createdAt,importProvenance:_importProvenance,importedUntrusted:_importedUntrusted,...observed }=record;
+    if (digest(JSON.parse(event.data)) !== digest(observed)) return null;
+    const imported=Boolean(record.importProvenance || record.importedUntrusted);
+    return { id:record.id,sessionId:record.sessionId,projectId:access.project.id,sourceSeq,eventSourceId:`${record.sessionId}:${sourceSeq}`,
+      goalId:reference(record.goalId),runId:reference(record.runId),assignmentId:reference(record.assignmentId),
+      assignmentRound:Number.isSafeInteger(record.assignmentRound)?record.assignmentRound:null,
+      workUnitId:reference(record.workUnitId),workUnitRevision:Number.isSafeInteger(record.workUnitRevision)?record.workUnitRevision:null,
+      dependencyFingerprint:hash(record.dependencyFingerprint),operationFingerprint:hash(record.operationFingerprint),
+      attemptKind:cleanKnowledgeText(record.kind,80),name:cleanKnowledgeText(record.name,120),summary:cleanKnowledgeText(record.summary,2000),
+      outcome:['succeeded','failed','interrupted','denied','unknown'].includes(record.outcome)?record.outcome:'unknown',
+      exitCode:Number.isSafeInteger(record.exitCode)?record.exitCode:null,
+      error:record.error ? { errorCode:cleanKnowledgeText(record.error.errorCode,100),errorClass:cleanKnowledgeText(record.error.errorClass,100),
+        signatureHash:hash(record.error.signatureHash),normalizedMessage:cleanKnowledgeText(record.error.normalizedMessage,1000) } : null,
+      historical:true,truth:'inconclusive',stale:imported,staleReasons:imported?['imported-history-requires-revalidation']:[],
+      ...(imported?{importedUntrusted:true}:{}),
+      metadataOnly:true,provenance:imported?'imported-attempt-metadata':'host-observed-attempt',createdAt:record.createdAt,
+      authority:'Observed execution outcome only; not proof of a finding, root cause, current scope or completion.',
+      sourceRevision:digest(record),sha256:digest(record) };
+  }
+  if (kind === 'artifact') return { id: record.id, sessionId: record.sessionId, projectId: access.project.id,
+    label: cleanKnowledgeText(record.label || '', 1000), mediaType: cleanKnowledgeText(record.mediaType || '', 100),
+    size: Number.isSafeInteger(record.size) && record.size >= 0 ? record.size : null,
+    sha256: /^[a-f0-9]{64}$/.test(record.sha256 || '') ? record.sha256 : null,
+    createdAt: record.createdAt, provenance: record.importProvenance || record.importedUntrusted ? 'imported-artifact-metadata' : 'artifact-metadata',
+    truth: 'inconclusive', metadataOnly: true,
+    ...(record.importProvenance || record.importedUntrusted ? { importedUntrusted:true,stale:true,staleReasons:['imported-history-requires-revalidation'] } : {}),
+    historical: true, sourceRevision: digest(record) };
+  return { ...material, sourceRevision: digest(record) };
+}
+
+export function knowledgeRecordText(kind, record) {
+  const text = value => typeof value === 'string' ? value : '';
+  if (kind === 'memory') return `${text(record.statement)}\n${text(record.rationale)}`;
+  if (kind === 'issue') return `${text(record.title)}\n${text(record.details)}\n${text(record.resolution)}`;
+  if (kind === 'artifact') return `${text(record.label)}\n${text(record.mediaType)}`;
+  if (kind === 'attempt') return `${text(record.name)}\n${text(record.summary)}\n${text(record.error?.normalizedMessage)}\n${text(record.error?.errorCode)}`;
+  if (kind === 'checkpoint') return JSON.stringify({ objective: record.objective, decisions: record.decisions,
+    completedWork: record.completedWork, pendingActions: record.pendingActions, unresolvedQuestions: record.unresolvedQuestions,
+    blockers: publicBlockers(record.blockers) });
+  return `${text(record.objective) || text(record.goal?.objective) || text(record.contract?.objective)}\n${text(record.summary?.text)}`;
+}
+
+function publicBlockers(blockers) {
+  return Array.isArray(blockers) ? blockers.slice(0,32).map(value => ({ id: value.id, key: value.key, kind: value.kind,
+    description: value.description, state: value.state, revision: value.revision,
+    dependencyFingerprint: value.dependencyFingerprint,
+    ...(value.resolution ? { resolution: { statement: value.resolution.statement, observedChange: value.resolution.observedChange,
+      recordedAt: value.resolution.recordedAt, authority: value.resolution.authority } } : {}) })) : [];
+}
+
+// Keyset bootstrap visits old records once. Thereafter coalesced change keys
+// handle edits/deletes, including edits whose timestamp sorts behind a cursor.
+// No conversation, revision ledger or project directory is scanned here.
+export function refreshKnowledgeRecords(session, { limit = 64 } = {}) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new Error('Use a bounded knowledge projection batch.');
+  const access = knowledgeAccess(session, { readOnly: true });
+  if (access.disabled) return { indexed: 0, remaining: false, records: [], access, ids: [] };
+  const ids = allowedKnowledgeSessionIds(session, access, { readOnly: true }), db = knowledgeDatabase();
+  const scopeId = access.restricted ? session.id : 'project';
+  const cursor = db.prepare('SELECT * FROM knowledge_projection_cursor_v2 WHERE project_id=? AND scope_id=?').get(access.project.id, scopeId);
+  const orderedIds = [...ids].sort(), kinds = [...recordKinds].sort();
+  let sessionIndex = cursor?.session_id ? orderedIds.findIndex(id => id >= cursor.session_id) : 0;
+  if (sessionIndex < 0) sessionIndex = orderedIds.length;
+  let kindIndex = cursor?.kind && orderedIds[sessionIndex] === cursor.session_id ? Math.max(0,kinds.indexOf(cursor.kind)) : 0;
+  let after = cursor?.source_id || '', complete = Boolean(cursor?.complete), bootstrap = [];
+  const advance = () => {
+    if(kinds[kindIndex]==='memory' && orderedIds[sessionIndex]) db.prepare(`INSERT INTO knowledge_memory_coverage VALUES(?,1)
+      ON CONFLICT(session_id) DO UPDATE SET complete=1 WHERE complete!=1`).run(orderedIds[sessionIndex]);
+    after = ''; if (++kindIndex >= kinds.length) { kindIndex=0; sessionIndex++; }
+  };
+  // Each query seeks one exact session/kind index range. Empty source ranges
+  // also have a fixed quantum; no project-wide ORDER BY or JSON scan is needed.
+  for (let ranges=0; !complete && ranges<8; ranges++) {
+    if (sessionIndex >= orderedIds.length) { complete=true; break; }
+    bootstrap = db.prepare(`SELECT kind,id FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=?
+      AND id>? ORDER BY id LIMIT ?`).all(kinds[kindIndex],orderedIds[sessionIndex],after,Math.ceil(limit/2)+1);
+    if (bootstrap.length) break;
+    advance();
+  }
+  const changed = db.prepare(`SELECT kind,source_id AS id FROM knowledge_changes
+    WHERE session_id IN (SELECT value FROM json_each(?)) ORDER BY kind,source_id LIMIT ?`)
+    .all(JSON.stringify(ids), limit + 1);
+  const selected = new Map();
+  // Reserve at least half the allowance for historical bootstrap so sustained
+  // foreground changes cannot permanently starve older source records.
+  const page = bootstrap.slice(0, Math.max(1, Math.ceil(limit / 2)));
+  for (const row of page) selected.set(`${row.kind}:${row.id}`, row);
+  for (const row of changed) { if (selected.size >= limit) break; selected.set(`${row.kind}:${row.id}`, row); }
+  let indexed = 0; const records = [];
+  for (const row of selected.values()) {
+    const live = getRecord(row.kind, row.id), kind = indexedKind(row.kind);
+    const record = live && canonicalKnowledgeSource(access, { kind, sourceId: row.id, sessionId: live.sessionId }, ids);
+    // Invalid and removed sources lose only their derived document. Source
+    // records and immutable revisions are never edited by projection work.
+    if (!record) db.prepare('DELETE FROM knowledge_documents WHERE project_id=? AND kind=? AND source_id=?').run(access.project.id, kind, row.id);
+    else {
+      const text = knowledgeRecordText(kind, record);
+      const payload = kind === 'checkpoint' ? { id: record.id, sessionId: record.sessionId, projectId: access.project.id,
+        revision: record.revision, scope: record.scope, provenance: 'checkpoint-history', sourceRevision: record.sourceRevision } : record;
+      indexKnowledgeRecord(access.project, kind, row.id, record.sessionId, text, { ...payload, text: cleanKnowledgeText(text),
+        truth: record.truth || 'inconclusive', historical: true,
+        stale: Boolean(record.importProvenance || record.importedUntrusted),
+        ...(record.importProvenance || record.importedUntrusted ? { staleReasons: ['imported-history-requires-revalidation'] } : {}) });
+      indexed++; records.push({ ...record, _kind: kind });
+    }
+    // Restricted readers may not consume another session's pending mutation.
+    if (!access.restricted || live?.sessionId === session.id || changed.some(value => value.id === row.id && value.kind === row.kind)) {
+      db.prepare('DELETE FROM knowledge_changes WHERE kind=? AND source_id=? AND session_id IN (SELECT value FROM json_each(?))')
+        .run(row.kind, row.id, JSON.stringify(ids));
+    }
+  }
+  if (!cursor?.complete) {
+    if (bootstrap.length > page.length) after=page.at(-1).id;
+    else if (page.length) advance();
+    complete ||= sessionIndex >= orderedIds.length;
+    db.prepare(`INSERT INTO knowledge_projection_cursor_v2 VALUES(?,?,?,?,?,?) ON CONFLICT(project_id,scope_id)
+      DO UPDATE SET session_id=excluded.session_id,kind=excluded.kind,source_id=excluded.source_id,complete=excluded.complete`)
+      .run(access.project.id,scopeId,orderedIds[sessionIndex] || '',kinds[kindIndex],after,Number(complete));
+  }
+  const pendingChanges = Boolean(db.prepare('SELECT 1 FROM knowledge_changes WHERE session_id IN (SELECT value FROM json_each(?)) LIMIT 1').get(JSON.stringify(ids)));
+  return { indexed, remaining: !complete || pendingChanges, records, access, ids };
 }
 
 export function indexKnowledgeRecord(project, kind, sourceId, sessionId, text, payload = {}) {
   if (!knowledgeTypes.includes(kind) || typeof sourceId !== 'string' || !sourceId.trim() || sourceId.length > 160
     || typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 160) return;
-  const body = cleanKnowledgeText(text, kind === 'chat' && payload.sourceVersion === 2 ? 128 * 1024 : 6000), safePayload = cleanKnowledgeValue(JSON.parse(JSON.stringify(payload)));
+  const body = cleanKnowledgeText(kind === 'checkpoint' && payload.text === undefined ? knowledgeRecordText(kind,payload) : text,
+    kind === 'chat' && payload.sourceVersion === 2 ? 128 * 1024 : 6000);
+  // Checkpoints can carry host-only dependency snapshots. The index needs its
+  // public navigation text and pin, never the runtime-policy object graph.
+  const projection = kind === 'checkpoint' ? { id: sourceId,sessionId,projectId:project.id,revision:payload.revision,
+    createdAt:payload.createdAt,updatedAt:payload.updatedAt,sourceRevision:payload.sourceRevision || digest(payload),
+    text:body,truth:'inconclusive',historical:true,provenance:'checkpoint-history' } : payload;
+  const safePayload = cleanKnowledgeValue(JSON.parse(JSON.stringify(projection)));
+  const storedKind=kind==='goal'?'goal-history':kind==='attempt'?'core.episode.observation':kind;
+  const authoritative=recordKinds.includes(storedKind) && getRecord(storedKind,sourceId);
+  if(authoritative) safePayload.sourceRevision=digest(authoritative);
   for (const key of ['statement', 'rationale', 'text', 'title', 'details', 'resolution']) if (typeof safePayload[key] === 'string') safePayload[key] = cleanKnowledgeText(safePayload[key]);
   const key = `${project.id}:${kind}:${sourceId}`, db = knowledgeDatabase(), encoded = JSON.stringify(safePayload);
+  if (kind === 'memory' && authoritative) {
+    // Relationship repair is independent of document equality: old projections
+    // can already have the same text while the new reverse index is empty.
+    const links=[...(typeof authoritative.supersedes === 'string' ? [[authoritative.supersedes,'supersedes']] : []),
+      ...(Array.isArray(authoritative.contradictions) ? authoritative.contradictions.filter(id=>typeof id==='string').slice(0,32).map(id=>[id,'contradicts']) : [])];
+    db.prepare('DELETE FROM knowledge_memory_links WHERE source_id=?').run(sourceId);
+    for (const [target,relation] of links) db.prepare('INSERT INTO knowledge_memory_links VALUES(?,?,?) ON CONFLICT DO NOTHING').run(sourceId,target,relation);
+  }
   const previous = db.prepare('SELECT body,payload FROM knowledge_documents WHERE key=?').get(key);
   if (previous?.body === body && previous?.payload === encoded) return;
   db.prepare(`INSERT INTO knowledge_documents VALUES (?,?,?,?,?,?,?,?)
-    ON CONFLICT(key) DO UPDATE SET body=excluded.body,payload=excluded.payload,updated_at=excluded.updated_at`).run(
+    ON CONFLICT(key) DO UPDATE SET body=excluded.body,payload=excluded.payload,session_id=excluded.session_id,updated_at=excluded.updated_at`).run(
     key, project.id, sessionId, kind, sourceId, body, encoded, payload.updatedAt || payload.createdAt || now());
 }
 
@@ -195,25 +474,43 @@ function putHistoryCursor(id, value) {
     .run('core.knowledge.cursor', id, JSON.stringify(value), now());
 }
 
-export function searchKnowledgeIndex(access, sessionIds, { query = '', limit = 12, offset = 0, types = knowledgeTypes, includeStale = true, excludeChatSessionId } = {}) {
+export function searchKnowledgeIndex(access, sessionIds, { query = '', limit = 12, offset = 0, types = knowledgeTypes, includeStale = true, excludeChatSessionId, readOnly = false, count = true, identifiersOnly = false } = {}) {
   if (typeof query !== 'string' || query.length > 500 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || !Number.isSafeInteger(offset) || offset < 0
-    || !Array.isArray(types) || types.some(type => !knowledgeTypes.includes(type))) throw new Error('Invalid project knowledge search.');
-  const db = knowledgeDatabase(), tokens = [...new Set(query.match(/[\p{L}\p{N}_-]+/gu) || [])].slice(0, 24), match = tokens.map(token => '"' + token.replaceAll('"', '""') + '"*').join(' OR ');
+    || !Array.isArray(types) || types.some(type => !knowledgeTypes.includes(type)) || typeof identifiersOnly !== 'boolean') throw new Error('Invalid project knowledge search.');
+  const db = readOnly ? database() : knowledgeDatabase();
+  if (readOnly && !db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_documents'").get()) return { total: 0, items: [], nextOffset: null, indexingRequired: true };
+  const tokens = [...new Set(query.match(/[\p{L}\p{N}_-]+/gu) || [])].slice(0, 24), match = tokens.map(token => '"' + token.replaceAll('"', '""') + '"*').join(' OR ');
   const base = `d.project_id=? AND (d.kind!='chat' OR json_extract(d.payload,'$.sourceVersion')=2) AND d.session_id IN (SELECT value FROM json_each(?)) AND d.kind IN (SELECT value FROM json_each(?))${includeStale ? '' : " AND COALESCE(json_extract(d.payload,'$.stale'),0)=0"}${excludeChatSessionId ? " AND NOT (d.kind='chat' AND d.session_id=?)" : ''}`;
   const args = [access.project.id, JSON.stringify(sessionIds), JSON.stringify(types), ...(excludeChatSessionId ? [excludeChatSessionId] : [])];
-  const rows = match ? db.prepare(`SELECT d.*,bm25(knowledge_fts) AS rank,snippet(knowledge_fts,0,'','',' … ',48) AS match_excerpt FROM knowledge_fts JOIN knowledge_documents d ON d.rowid=knowledge_fts.rowid WHERE ${base} AND knowledge_fts MATCH ? ORDER BY rank,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, match, limit + 1, offset)
-    : db.prepare(`SELECT d.*,0 AS rank FROM knowledge_documents d WHERE ${base} ORDER BY CASE d.kind WHEN 'memory' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, limit + 1, offset);
-  const total = match ? db.prepare(`SELECT count(*) AS total FROM knowledge_fts JOIN knowledge_documents d ON d.rowid=knowledge_fts.rowid WHERE ${base} AND knowledge_fts MATCH ?`).get(...args, match).total
+  const fields=identifiersOnly?'d.kind,d.source_id,d.session_id,d.project_id':'d.*';
+  const excerpt=identifiersOnly?'':",snippet(knowledge_fts,0,'','',' … ',48) AS match_excerpt";
+  const rows = match ? db.prepare(`SELECT ${fields},bm25(knowledge_fts) AS rank${excerpt} FROM knowledge_fts JOIN knowledge_documents d ON d.rowid=knowledge_fts.rowid WHERE ${base} AND knowledge_fts MATCH ? ORDER BY rank,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, match, limit + 1, offset)
+    : db.prepare(`SELECT ${fields},0 AS rank FROM knowledge_documents d WHERE ${base} ORDER BY CASE d.kind WHEN 'memory' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,d.updated_at DESC LIMIT ? OFFSET ?`).all(...args, limit + 1, offset);
+  const total = !count ? offset + rows.length : match ? db.prepare(`SELECT count(*) AS total FROM knowledge_fts JOIN knowledge_documents d ON d.rowid=knowledge_fts.rowid WHERE ${base} AND knowledge_fts MATCH ?`).get(...args, match).total
     : db.prepare(`SELECT count(*) AS total FROM knowledge_documents d WHERE ${base}`).get(...args).total;
-  return { total, items: rows.slice(0, limit).map(row => ({ ...JSON.parse(row.payload), kind: row.kind, sourceId: row.source_id, sessionId: row.session_id, projectId: row.project_id,
+  return { total, items: rows.slice(0, limit).map(row => ({ ...(identifiersOnly?{}:JSON.parse(row.payload)), kind: row.kind, sourceId: row.source_id, sessionId: row.session_id, projectId: row.project_id,
     ...(row.match_excerpt ? { excerpt: cleanKnowledgeText(row.match_excerpt, 3000) } : {}),
-    score: -Number(row.rank), whyMatched: tokens.length ? `Matched ${tokens.filter(token => row.body.toLowerCase().includes(token.toLowerCase())).join(', ')}` : 'Recent project knowledge' })), nextOffset: rows.length > limit ? offset + limit : null };
+    score: -Number(row.rank), ...(identifiersOnly?{}:{whyMatched: tokens.length ? `Matched ${tokens.filter(token => row.body.toLowerCase().includes(token.toLowerCase())).join(', ')}` : 'Recent project knowledge'}) })), nextOffset: rows.length > limit ? offset + limit : null };
 }
 
 export function readKnowledgeSource(session, { sourceId, sha256, offset = 0, limit = 4096 } = {}) {
   const access = knowledgeAccess(session), match = typeof sourceId === 'string' && /^([a-f0-9-]{36}):(\d+)$/.exec(sourceId);
-  if (!match || !/^[a-f0-9]{64}$/.test(sha256 || '') || !Number.isSafeInteger(offset) || offset < 0 || offset > 128 * 1024 ||
+  const attemptId=typeof sourceId === 'string' && /^[a-f0-9]{64}$/.test(sourceId);
+  if (!match && !attemptId || !/^[a-f0-9]{64}$/.test(sha256 || '') || !Number.isSafeInteger(offset) || offset < 0 || offset > 128 * 1024 ||
       !Number.isSafeInteger(limit) || limit < 1 || limit > 8192) throw new Error('Use a scoped source ID, its SHA-256 and bounded UTF-8 page.');
+  if (attemptId) {
+    const record=getRecord('core.episode.observation',sourceId),ids=allowedKnowledgeSessionIds(session,access);
+    const live=record && canonicalKnowledgeSource(access,{kind:'attempt',sourceId,sessionId:record.sessionId},ids);
+    if (!live) throw new Error('Knowledge source is outside this authorized conversation scope or unavailable.');
+    if (live.sha256 !== sha256) throw Object.assign(new Error('Knowledge source changed. Search again before expanding it.'),{code:'KNOWLEDGE_SOURCE_CHANGED'});
+    const bytes=Buffer.from(JSON.stringify(live,null,2));
+    if (offset>bytes.length || offset<bytes.length && (bytes[offset]&0xc0)===0x80) throw new Error('Source offset must be a valid UTF-8 byte boundary.');
+    let nextOffset=Math.min(bytes.length,offset+limit);
+    while(nextOffset<bytes.length && nextOffset>offset && (bytes[nextOffset]&0xc0)===0x80) nextOffset--;
+    if(nextOffset===offset && offset<bytes.length) throw new Error('Source page is too short for one UTF-8 character.');
+    return {sourceId,sha256,sessionId:record.sessionId,offset,nextOffset,hasMore:nextOffset<bytes.length,text:bytes.subarray(offset,nextOffset).toString('utf8'),
+      redacted:true,metadataOnly:true,provenance:live.provenance,authority:live.authority};
+  }
   if (access.disabled || !allowedKnowledgeSessionIds(session, access).includes(match[1]) || getRecord('session-deletion', match[1])) throw new Error('Knowledge source is outside this authorized conversation scope.');
   const seq = Number(match[2]), db = database();
   const row = db.prepare(`SELECT e.seq,e.type FROM events e WHERE e.session_id=? AND e.seq=? AND ${conversationVisible}

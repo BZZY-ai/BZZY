@@ -6,7 +6,11 @@ import { inside, fileInfo } from './evidence.js';
 import { writeProjectRecord, projectRecords, agentRecords } from './project.js';
 import { assertPublicWorkspacePath } from './private-paths.js';
 import { recordBelongsToProject } from './project-identity.js';
-import { knowledgeAccess, allowedKnowledgeSessionIds, assertKnowledgeText, indexKnowledgeRecord, searchKnowledgeIndex, scopedRecord } from './knowledge-index.js';
+import { knowledgeAccess, allowedKnowledgeSessionIds, assertKnowledgeText, indexKnowledgeRecord, searchKnowledgeIndex, scopedRecord, reverseMemorySources,
+  refreshKnowledgeRecords,canonicalKnowledgeSource,cleanKnowledgeValue,initializeMemoryLinkCoverage,memoryRelationshipCoverage } from './knowledge-index.js';
+import { applyCheckpointItems } from './checkpoint-items.js';
+import { validateInvestigationBlockers } from './session-investigation.js';
+export { checkpointOperationProperties } from './checkpoint-items.js';
 
 const kinds = ['observation', 'hypothesis', 'experiment', 'failed_approach', 'conclusion', 'decision', 'inconclusive', 'disproved', 'blocked', 'question'];
 export const memoryTruthStates = ['hypothesis', 'observed', 'confirmed', 'disproved', 'inconclusive', 'stale'];
@@ -39,12 +43,17 @@ function validEvidence(session, ids, access) {
   });
 }
 function freshCondition(input = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['expiresAt', 'environment', 'version', 'conditions'].includes(key))) throw new Error('Invalid knowledge freshness conditions.');
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['validFrom', 'expiresAt', 'environment', 'version', 'conditions'].includes(key))) throw new Error('Invalid knowledge freshness conditions.');
   const result = {};
   if (input.expiresAt != null) {
     if (typeof input.expiresAt !== 'string' || !Number.isFinite(Date.parse(input.expiresAt))) throw new Error('Knowledge expiry must be an ISO timestamp.');
     result.expiresAt = new Date(input.expiresAt).toISOString();
   }
+  if (input.validFrom != null) {
+    if (typeof input.validFrom !== 'string' || !Number.isFinite(Date.parse(input.validFrom))) throw new Error('Knowledge applicability must start at an ISO timestamp.');
+    result.validFrom = new Date(input.validFrom).toISOString();
+  }
+  if (result.validFrom && result.expiresAt && result.validFrom >= result.expiresAt) throw new Error('Knowledge applicability must end after it starts.');
   for (const key of ['environment', 'version']) if (input[key] != null) result[key] = text(input[key], 300);
   if (input.conditions != null) result.conditions = list(input.conditions, 12).map(value => text(value, 500));
   return result;
@@ -104,6 +113,7 @@ export function remember(session, input, { learningJobId, sourceIds = [] } = {})
       || !Array.isArray(sourceIds) || sourceIds.some(id => !job.sourceRefs?.some(ref => ref.id === id))) throw new Error('Learning provenance does not match the active authorized review.');
     provenance = { kind: 'learning', jobId: learningJobId, sourceSessionId: session.id, sourceIds: sourceIds.slice(0, 32) };
   }
+  initializeMemoryLinkCoverage(session.id);
   const record = atomic(db => {
     const existing = request && getRecord('core.memory.request', request);
     if (existing) { if (existing.digest !== hash) throw new Error('Knowledge request ID was reused with different content.'); return existing.record; }
@@ -136,18 +146,21 @@ export function memoryFreshness(record, project, session = {}, { budget, readOnl
   if (record.importProvenance || record.importedUntrusted) reasons.push('imported-history-requires-revalidation');
   if (staleInputs.length) reasons.push('recorded-input-changed');
   if (record.freshness?.expiresAt && Date.parse(record.freshness.expiresAt) <= Date.now()) reasons.push('expired');
+  if (record.freshness?.validFrom && Date.parse(record.freshness.validFrom) > Date.now()) reasons.push('not-yet-applicable');
   if (record.freshness?.environment && record.freshness.environment !== session.environmentFingerprint) reasons.push('environment-unconfirmed-or-changed');
   if (record.freshness?.version && record.freshness.version !== session.projectVersion) reasons.push('version-unconfirmed-or-changed');
   const access = session?.id && session?.cwd ? knowledgeAccess(session, { readOnly }) : null;
+  const coverageKey=access?`${project.id}:${access.restricted?session.id:'project'}`:null;
+  const relationshipCoverage=budget?.relationshipCoverage?.get(coverageKey)
+    || (access?memoryRelationshipCoverage(session,access,{readOnly}):'backfill-pending');
+  if(budget) {budget.relationshipCoverage ||= new Map();budget.relationshipCoverage.set(coverageKey,relationshipCoverage);}
+  if(relationshipCoverage!=='complete') reasons.push('relationship-index-backfill-pending');
   const visible = item => item && typeof item.sessionId === 'string' && item.sessionId.trim() && recordBelongsToProject(item, project) && !getRecord('session-deletion', item.sessionId)
     && (!access?.restricted || item.sessionId === session.id);
   const sourceId = typeof record.id === 'string' && record.id.trim() ? record.id : null;
-  const newer = sourceId ? database().prepare(`SELECT data FROM records WHERE kind='memory' AND json_extract(data,'$.supersedes')=? LIMIT 32`).all(sourceId)
-    .map(row => JSON.parse(row.data)).find(visible) : null;
+  const newer = sourceId ? reverseMemorySources(sourceId,'supersedes',{readOnly}).find(visible) : null;
   if (newer) reasons.push('superseded');
-  const reverse = sourceId ? database().prepare(`SELECT data FROM records WHERE kind='memory' AND EXISTS
-    (SELECT 1 FROM json_each(json_extract(records.data,'$.contradictions')) WHERE value=?) LIMIT 32`).all(sourceId)
-    .map(row => JSON.parse(row.data)).filter(item => visible(item) && !item.invalidatedAt) : [];
+  const reverse = sourceId ? reverseMemorySources(sourceId,'contradicts',{readOnly}).filter(item => visible(item) && !item.invalidatedAt) : [];
   const contradictions = [...new Set([...(record.contradictions || []).filter(id => typeof id === 'string' && visible(getRecord('memory', id))), ...reverse.map(item => item.id)])];
   for (const id of record.evidence || []) {
     const evidence = getRecord('artifact', id);
@@ -157,7 +170,7 @@ export function memoryFreshness(record, project, session = {}, { budget, readOnl
   }
   if (budgetExceeded) reasons.push('verification-budget-reached');
   return { ...record, truth: reasons.length ? 'stale' : record.truth || (semanticKind === 'observation' ? 'observed' : semanticKind === 'hypothesis' ? 'hypothesis' : 'inconclusive'),
-    stale: reasons.length > 0, staleInputs, staleReasons: [...new Set(reasons)], supersededBy: newer?.id || null,
+    stale: reasons.length > 0, staleInputs, staleReasons: [...new Set(reasons)], relationshipCoverage,supersededBy: newer?.id || null,
     contradictions, disputed: contradictions.length > 0 };
 }
 
@@ -179,6 +192,17 @@ export function projectMemories(project, { session, access, sessionIds, evaluate
 // Legacy trusted-host signature remains usable. Model tools supply the immutable
 // session so executor/Agent reads never gain the owner's engagement-wide history.
 export function recall(projectRoot, query = '', limit = 12, { session } = {}) {
+  // Registered Agents retain the existing scoped file-only compatibility
+  // route. Terminal retrieval uses canonical DB sources and bounded cursors.
+  if (session && !knowledgeAccess(session,{readOnly:true}).restricted) {
+    const {access,ids}=refreshKnowledgeRecords(session),budget=knowledgeVerificationBudget();
+    return searchKnowledgeIndex(access,ids,{query,limit:Math.min(50,limit),types:['memory'],count:false}).items.flatMap(hit=>{
+      const current=canonicalKnowledgeSource(access,hit,ids);
+      if(!current) return [];
+      try { return [{...cleanKnowledgeValue(memoryFreshness(current,access.project,session,{budget})),score:hit.score,whyMatched:hit.whyMatched}]; }
+      catch { return []; }
+    });
+  }
   const context = session || { id: 'owner-project-recall', cwd: projectRoot }, access = knowledgeAccess(context);
   const records = projectMemories(access.project, { session: context, access, sessionIds: access.sessionIds, evaluateFreshness: false });
   const ids = allowedKnowledgeSessionIds(context, access);
@@ -297,7 +321,7 @@ function assertCheckpointWriter(session, scope, context) {
 }
 
 export function checkpoint(session, input, context = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['decisions', 'completedWork', 'pendingActions', 'unresolvedQuestions', 'constraints', 'evidence', 'expectedRevision', 'requestId'].includes(key))) throw new Error('Invalid checkpoint fields. Execution attribution is host-owned.');
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['decisions', 'completedWork', 'pendingActions', 'unresolvedQuestions', 'constraints', 'evidence', 'expectedRevision', 'requestId', 'itemOperations', 'evidenceOperations', 'blockerIds'].includes(key))) throw new Error('Invalid checkpoint fields. Execution attribution is host-owned.');
   if (input.expectedRevision != null && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0)) throw new Error('Checkpoint expectedRevision must be a nonnegative revision.');
   if (input.requestId != null && (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId))) throw new Error('Use a bounded checkpoint request ID.');
   const access = knowledgeAccess(session), scope = checkpointScope(session, context), fields = {};
@@ -328,6 +352,9 @@ export function checkpoint(session, input, context = {}) {
   for (const key of ['completedWork', 'pendingActions', 'unresolvedQuestions', 'evidence']) {
     if (input[key] != null) fields[key] = list(input[key], key === 'evidence' ? 32 : 50).map(value => key === 'evidence' ? value : text(value, 2000));
   }
+  if (input.blockerIds != null) fields.blockerIds = validateInvestigationBlockers(session, input.blockerIds, context);
+  if (input.evidenceOperations != null && (!input.evidenceOperations || typeof input.evidenceOperations !== 'object' || Array.isArray(input.evidenceOperations)
+      || Object.keys(input.evidenceOperations).some(key => !['add', 'remove'].includes(key)) || input.evidence != null)) throw new Error('Use evidence additions/removals or a replacement evidence list.');
   const record = atomic(db => {
     assertCheckpointWriter(session, scope, context);
     const requestKey = input.requestId && `${checkpointScopeId(scope)}:${input.requestId}`, hash = digest(input);
@@ -338,12 +365,19 @@ export function checkpoint(session, input, context = {}) {
     if (input.expectedRevision != null && input.expectedRevision !== checkpointRevision(previous)) throw new Error('Checkpoint changed. Refresh its revision.');
     const revision = Math.max(checkpointRevision(latest), checkpointRevision(previous)) + 1;
     if (!Number.isSafeInteger(revision)) throw new Error('Checkpoint revision limit reached.');
-    const record = { ...previous, ...fields, schemaVersion: 2, provenance: 'core-checkpoint', scope,
+    let record = { ...previous, ...fields, schemaVersion: 2, provenance: 'core-checkpoint', scope,
       project: access.project.root, projectId: access.project.id, sessionId: session.id,
       objective: scope.kind === 'goal' ? session.goal?.objective : scope.kind === 'assignment' ? session.contract?.objective : undefined,
       goalId: scope.goalId, runId: context.runId || null, assignmentId: scope.assignmentId, assignmentRound: scope.assignmentRound,
       constraints: [...new Set([...(session.contract?.constraints || []), ...(previous.constraints || []), ...(fields.constraints || [])])],
       revision, updatedAt: now() };
+    record = applyCheckpointItems(previous, record, input, scope, revision, session.contract?.constraints || []);
+    if (input.evidenceOperations) {
+      const added = validEvidence(session, input.evidenceOperations.add || [], access), removed = list(input.evidenceOperations.remove || [], 32);
+      if (removed.some(id => !(previous.evidence || []).includes(id))) throw new Error('Cannot remove evidence absent from the current checkpoint.');
+      record.evidence = [...new Set([...(previous.evidence || []).filter(id => !removed.includes(id)), ...added])];
+    }
+    if (record.blockerIds) validateInvestigationBlockers(session, record.blockerIds, context);
     if (record.evidence) validEvidence(session, record.evidence, access);
     if (latest) {
       const legacyKey = `${session.id}:${checkpointRevision(latest) || `legacy:${digest(latest)}`}`;

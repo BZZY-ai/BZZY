@@ -6,13 +6,14 @@ import { effectivePolicy } from './policy.js';
 import { captureEnvironment, saveExecutionEnvironment, removeExecutionEnvironment } from './execution-environment.js';
 import { terminalYolo } from './terminal-permissions.js';
 import { preflightGoalWorkflow } from './workflows.js';
+import { preflightGoalScope } from './program-scope.js';
 
 // All input channels use the same atomic queue and one-execution-per-session rule.
 export function enqueueExecution(sessionId, input, requestId, { authorize, prepare, channel } = {}) {
   if (!authorize) throw new Error('Execution needs an authorized input channel.');
   authorize();
   if (sessionDeleted(sessionId)) throw Object.assign(new Error('This chat was deleted.'), { code: 'SESSION_DELETED', status: 404 });
-  if (['workflowAdmission', 'workflowSelection', 'workflowBinding', 'goalWorkflow'].some(key => Object.hasOwn(input, key) || Object.hasOwn(input.options || {}, key))) {
+  if (['scopeAdmission', 'scopeBinding', 'programScope', 'workflowAdmission', 'workflowSelection', 'workflowBinding', 'goalWorkflow'].some(key => Object.hasOwn(input, key) || Object.hasOwn(input.options || {}, key))) {
     throw Object.assign(new Error('Workflow admission belongs to Core. Select a saved workflow instead of supplying host receipts or bindings.'), { code: 'INVALID_WORKFLOW', status: 400 });
   }
   const environment = captureEnvironment(input.environment);
@@ -35,6 +36,7 @@ export function enqueueExecution(sessionId, input, requestId, { authorize, prepa
     effectivePolicy(session, options);
     if (input.goal && !session.goal) throw new Error('This session has no goal contract. Create its goal through the CLI first.');
     const workflowAdmission = input.goal || input.resumeGoal ? preflightGoalWorkflow(session, { resumeGoal: Boolean(input.resumeGoal) }) : null;
+    const scopeAdmission = preflightGoalScope(session, { allowNewBinding: Boolean(input.goal && !input.resumeGoal), policy: effectivePolicy(session, options), strictPolicy: session.strictPolicy, yolo: options.yolo });
     if ((input.goal || input.resumeGoal) && session.goal?.importedHistorical) {
       delete session.goal.importedHistorical;
       session.goal.status = 'active';
@@ -43,7 +45,7 @@ export function enqueueExecution(sessionId, input, requestId, { authorize, prepa
       putRecord('session', session.id, session, db);
     }
     const job = { id: randomUUID(), sessionId, prompt: input.prompt, options, goal: Boolean(input.goal), resumeGoal: Boolean(input.resumeGoal), state: 'queued', createdAt: now(),
-      ...(workflowAdmission ? { workflowAdmission } : {}), ...(channel ? { channel } : {}) };
+      ...(workflowAdmission ? { workflowAdmission } : {}), ...(scopeAdmission ? { scopeAdmission } : {}), ...(channel ? { channel } : {}) };
     environmentId = job.id; saveExecutionEnvironment(job.id, environment);
     putRecord('execution', job.id, job, db);
     appendEvent(sessionId, 'message.user', { text: input.prompt, kind: input.goal ? 'goal' : 'chat', executionId: job.id, ...(channel ? { channel } : {}) }, db);

@@ -3,6 +3,8 @@
 Core retains the session, goal, workflow version, evidence and remaining budgets
 independently of a native model process. These repairs apply to updated execution
 runners. Updating source does not hot-patch an already-running runner.
+[Permanent sessions](PERMANENT-SESSIONS.md) documents durable branches and
+blockers, scope successors, archive retrieval and evaluated procedure updates.
 
 ## Updating an existing investigation
 
@@ -128,7 +130,8 @@ remain available for recipient-side indexing without automatic execution.
 ## Retention and learning
 
 Short sanitized retention material can publish verbatim during foreground work
-without inference. Paid retention and learning preserve independent Core-owned
+without inference; larger pending nodes get host extractive navigation with
+original source links. Paid retention and learning preserve independent Core-owned
 model selection, restricted no-tool backends, reservations, daily/job budgets,
 stop handling and explicit recovery after uncertain requests.
 

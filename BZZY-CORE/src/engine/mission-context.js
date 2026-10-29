@@ -4,15 +4,19 @@ import { database, digest, getRecord, putRecord, now, transaction } from './data
 import { sharedSecrets } from './share-bundle-policy.js';
 import { inside } from './evidence.js';
 import { checkpointState } from './memory.js';
+import { scopeForMission } from './program-scope.js';
 
 const fail = message => { throw Object.assign(new Error(message), { code: 'MISSION_CONTEXT_UNAVAILABLE' }); };
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
 const uuid = value => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
-const critical = parent => ({ sessionId: parent.id, goalId: parent.goal?.id || null,
+const critical = parent => {
+  const programScope = scopeForMission(parent);
+  return { sessionId: parent.id, goalId: parent.goal?.id || null,
   objective: parent.goal?.objective || parent.contract?.objective || '', instructions: parent.contract?.context || '',
   constraints: parent.contract?.constraints || [], scope: parent.contract?.scope || {}, policy: parent.policy || parent.contract?.policy || {},
   acceptanceCriteria: parent.contract?.acceptanceCriteria || [], artifacts: parent.contract?.artifacts || [], verification: parent.contract?.verification || [],
-  reviewSource: parent.reviewSource || null });
+  reviewSource: parent.reviewSource || null, ...(programScope ? { programScope } : {}) };
+};
 
 // This revision deliberately excludes counters, timestamps and execution state.
 // A new instruction or boundary does invalidate a worker's older brief.
@@ -114,6 +118,7 @@ export function createMissionContext(parent, { purpose = 'delegate', independent
   const original = { goal: { id: chat ? null : source.goalId, objective: chat ? taskContext.assignment : source.objective }, instructions: chat ? taskContext.request : source.instructions,
     constraints: source.constraints, scope: source.scope, acceptanceCriteria: chat ? [{ id: 'specialist-result', description: taskContext.assignment }] : source.acceptanceCriteria,
     deliverables: chat ? [] : source.artifacts, verification: chat ? [] : source.verification, policy: source.policy,
+    ...(source.programScope ? { programScope: source.programScope } : {}),
     directives, decisions: currentCheckpoint?.decisions || [], pendingQuestions: currentCheckpoint?.unresolvedQuestions || [],
     completedWork: currentCheckpoint?.completedWork || [], evidence, independent,
     ...(purpose === 'subagent' && taskContext ? { currentTask: taskContext } : {}),

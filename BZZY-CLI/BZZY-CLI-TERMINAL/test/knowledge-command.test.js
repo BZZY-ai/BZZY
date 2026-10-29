@@ -46,3 +46,13 @@ test('compactor cost reads existing chat history without starting Core or replay
   assert.equal(messages[1].result.compactor.legacyAttempts, 3); assert.equal(messages[1].result.total.complete, false);
   assert.equal(runtimeInfo(), null); assert.deepEqual(events(source.id), before);
 });
+
+test('session memory document and export use Core views without launching work', async () => {
+  const source = createSession(BUILTINS.codex, directory, 'fixture-model', 'Permanent program');
+  const messages = [], ui = { event: (_type, value) => messages.push(value) };
+  await sessionMemoryCLI(['document', source.id], { cwd: directory }, ui);
+  assert.match(messages[0].message, /BZZY session memory/);
+  await sessionMemoryCLI(['export', source.id], { cwd: directory }, ui);
+  assert.equal(fs.readFileSync(messages[1].result.path, 'utf8'), messages[0].result.markdown);
+  assert.equal(runtimeInfo(), null); assert.equal(listRecords('execution').length, 0);
+});

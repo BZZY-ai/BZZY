@@ -20,6 +20,8 @@ import { inspectSkillEvolution, suggestSkillCuration, curateSkill } from './engi
 import { readLearningPacket } from './engine/learning-packet.js';
 import { skillEvolutionSettings, configureSkillEvolution } from './engine/skill-evolution-policy.js';
 import { configureRetrieval, refreshLocalEmbeddings, retrievalQualityStatus, benchmarkRetrieval } from './engine/retrieval-quality.js';
+import { programScopeOperation } from './engine/program-scope.js';
+import { sessionMemoryDocument, exportSessionMemoryDocument } from './engine/session-memory-document.js';
 
 const fail = message => { throw new Error(message); };
 const shape = (input, fields) => {
@@ -52,9 +54,16 @@ export class CoreKnowledge {
       if (typeof input.sessionId !== 'string' || !input.sessionId.trim()) fail('Choose a saved terminal conversation for session memory.');
       return this.context(input);
     };
+    if (['scope.status', 'scope.inspect', 'scope.propose', 'scope.approve', 'scope.revoke', 'scope.continue'].includes(operation)) {
+      if (typeof input.sessionId !== 'string' || !input.sessionId.trim() || input.cwd !== undefined) fail('Choose a saved terminal session for scope changes.');
+      const { sessionId, ...fields } = input;
+      return programScopeOperation(operation, fields, { session: this.context({ sessionId }) });
+    }
     switch (operation) {
       case 'session-memory.status': return sessionCompactionStatus(historyScoped([]));
-      case 'session-memory.read': return readSessionMemory(historyScoped(['maxBytes', 'limit']), input);
+      case 'session-memory.document': return sessionMemoryDocument(historyScoped([]));
+      case 'session-memory.export': return exportSessionMemoryDocument(historyScoped(['expectedRevision']), input);
+      case 'session-memory.read': return readSessionMemory(historyScoped(['maxBytes', 'limit', 'query', 'recent']), input);
       case 'session-memory.expand': return expandSessionMemory(historyScoped(['id', 'offset', 'limit']), input);
       case 'session-memory.queue': return queueSessionCompaction(historyScoped([]), { force: true });
       case 'session-memory.rebuild': {

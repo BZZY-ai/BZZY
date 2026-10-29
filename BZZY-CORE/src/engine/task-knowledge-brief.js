@@ -1,9 +1,10 @@
 import { database, digest, getRecord } from './database.js';
-import { knowledgeAccess, allowedKnowledgeSessionIds, cleanKnowledgeText, cleanKnowledgeValue } from './knowledge-index.js';
+import { knowledgeAccess, allowedKnowledgeSessionIds, cleanKnowledgeText, cleanKnowledgeValue, searchKnowledgeIndex, canonicalKnowledgeSource,knowledgeSourceRevision,knowledgeIndexRevision } from './knowledge-index.js';
 import { memoryFreshness } from './memory.js';
 import { recordBelongsToProject } from './project-identity.js';
 
 const maximumBytes = 2200, candidateLimit = 32;
+const candidateCaches=new WeakMap();
 const issueStatuses = new Set(['open', 'investigating', 'resolved', 'blocked', 'inconclusive', 'disproved']);
 const memoryKinds = new Set(['observation', 'hypothesis', 'experiment', 'failed_approach', 'conclusion', 'decision', 'inconclusive', 'disproved', 'blocked', 'question']);
 const truthStates = new Set(['hypothesis', 'observed', 'confirmed', 'disproved', 'inconclusive', 'stale']);
@@ -31,20 +32,29 @@ export function taskKnowledgeBrief(session, goal) {
     .filter(token => token.length > 1 && !ignored.has(token)))].slice(0, 16);
   if (!tokens.length) return empty();
   const ids = allowedKnowledgeSessionIds(session, access, { readOnly: true });
-  const body = "lower(coalesce(json_extract(data,'$.title'),'') || ' ' || coalesce(json_extract(data,'$.statement'),'') || ' ' || coalesce(json_extract(data,'$.details'),'') || ' ' || coalesce(json_extract(data,'$.resolution'),'') || ' ' || coalesce(json_extract(data,'$.rationale'),''))";
-  const score = tokens.map(() => `CASE WHEN instr(${body},?)>0 THEN 1 ELSE 0 END`).join('+');
-  const rows = database().prepare(`SELECT * FROM (SELECT kind,id,data,updated_at,(${score}) AS relevance FROM records
-    WHERE kind IN ('issue','memory') AND length(CAST(data AS BLOB))<=131072
-      AND (json_extract(data,'$.projectId')=? OR coalesce(json_extract(data,'$.project'),json_extract(data,'$.projectRoot')) IN (SELECT value FROM json_each(?)))
-      AND json_extract(data,'$.sessionId') IN (SELECT value FROM json_each(?))
-      AND NOT EXISTS (SELECT 1 FROM records deleted WHERE deleted.kind='session-deletion' AND deleted.id=json_extract(records.data,'$.sessionId')))
-    WHERE relevance>0 ORDER BY relevance DESC,CASE kind WHEN 'issue' THEN 0 ELSE 1 END,updated_at DESC,id LIMIT ?`)
-    .all(...tokens, access.project.id, JSON.stringify(access.project.aliases), JSON.stringify(ids), candidateLimit + 1);
+  const options = { query: tokens.join(' ').slice(0, 500), limit: candidateLimit, types: ['issue', 'memory'], readOnly: true, count: false, identifiersOnly:true };
+  const db=database(); let cache=candidateCaches.get(db);
+  if(!cache) {cache=new Map();candidateCaches.set(db,cache);}
+  const key=digest({sessionId:session.id,projectId:access.project.id,ids,query:options.query,
+    sourceRevision:knowledgeSourceRevision(session),indexRevision:knowledgeIndexRevision(ids)});
+  let candidates=cache.get(key);
+  if(!candidates) {
+    const own = searchKnowledgeIndex(access, [session.id], options);
+    const project = searchKnowledgeIndex(access, ids.filter(id => id !== session.id), options);
+    const rows=[...own.items,...project.items];
+    // Cache identifiers only. Every poll below re-reads authoritative records,
+    // evidence files, expiry and current access, including a notModified poll.
+    candidates={rows:rows.slice(0,candidateLimit).map(row=>({kind:row.kind,sourceId:row.sourceId,sessionId:row.sessionId})),
+      more:rows.length>candidateLimit || own.nextOffset!=null || project.nextOffset!=null,
+      indexingRequired:Boolean(own.indexingRequired || project.indexingRequired)};
+    if(!candidates.indexingRequired) {cache.set(key,candidates);while(cache.size>128)cache.delete(cache.keys().next().value);}
+  }
+  const rows=candidates.rows;
   const budget = { bytes: 4 * 1024 * 1024, files: 16, fingerprints: new Map() }, sources = [];
-  brief.coverage = { candidateLimit, moreCandidates: rows.length > candidateLimit, source: 'matching Core records; project-file-only notes and oversized records require explicit search' };
+  brief.coverage = { candidateLimit, maximumSourceBytes:128*1024, moreCandidates: candidates.more, source: 'indexed session records first, then explicitly attributed project history; maintenance backfills older sources', indexingRequired:candidates.indexingRequired };
   for (const row of rows.slice(0, candidateLimit)) {
-    const record = JSON.parse(row.data);
-    if (!sourceReference(row.id) || record.id !== row.id || !sourceReference(record.sessionId)
+    const record = canonicalKnowledgeSource(access, row, ids, { maxSourceBytes:128*1024,onOmitted:()=>brief.omitted++ });
+    if (!record || !sourceReference(row.sourceId) || record.id !== row.sourceId || !sourceReference(record.sessionId)
       || !recordBelongsToProject(record, access.project) || !ids.includes(record.sessionId) || getRecord('session-deletion', record.sessionId)) continue;
     // Legacy/imported metadata is not necessarily shaped like a native write.
     // A malformed source must not make the entire recovery poll unavailable.
@@ -52,11 +62,13 @@ export function taskKnowledgeBrief(session, goal) {
       const fresh = memoryFreshness(record, access.project, session, { budget, readOnly: true });
       const textFields = row.kind === 'issue' ? [record.title, record.details, record.resolution] : [record.statement, record.rationale];
       const statement = textFields.filter(value => typeof value === 'string' && value.length).join('\n');
-      const item = { kind: row.kind, sourceId: row.id, sessionId: record.sessionId,
+      if(!tokens.some(token=>statement.toLowerCase().includes(token))) continue;
+      const item = { kind: row.kind, sourceId: row.sourceId, sourceScope: record.sessionId === session.id ? 'session' : 'project-history', sessionId: record.sessionId,
         revision: Number.isSafeInteger(record.revision) && record.revision > 0 ? record.revision : null,
         statement: excerpt(statement), ...(row.kind === 'issue' ? { status: issueStatuses.has(record.status) ? record.status : 'inconclusive' }
           : { recordKind: memoryKinds.has(record.kind) ? record.kind : 'inconclusive' }),
-        truth: truthStates.has(fresh.truth) ? fresh.truth : 'inconclusive', historical: true, stale: Boolean(fresh.stale), disputed: Boolean(fresh.disputed) };
+        truth: truthStates.has(fresh.truth) ? fresh.truth : 'inconclusive', historical: true, stale: Boolean(fresh.stale), disputed: Boolean(fresh.disputed),
+        ...(fresh.relationshipCoverage!=='complete'?{relationshipCoverage:fresh.relationshipCoverage}:{}) };
       // Keep source IDs, statuses and truth together. Never silently merge a
       // resolved finding with another record claiming the same work is blocked.
       const source = cleanKnowledgeValue({ ...item, statement, title: record.title, details: record.details, resolution: record.resolution,
@@ -69,7 +81,10 @@ export function taskKnowledgeBrief(session, goal) {
     } catch { brief.omitted++; }
   }
   // An extra matching candidate is evidence of omissions, not an exact total.
-  if (rows.length > candidateLimit) brief.omitted++;
+  if (candidates.more) brief.omitted++;
   while (bytes(brief) > maximumBytes && brief.items.length) { brief.items.pop(); sources.pop(); brief.omitted++; }
-  return { brief, sources, revision: digest({ brief, sources }) };
+  // Creating the derived index is not a change to historical source content.
+  // Keep diagnostic readiness out of the task-state revision fingerprint.
+  const { indexingRequired, ...coverage } = brief.coverage;
+  return { brief, sources, revision: digest({ brief: { ...brief,coverage }, sources }) };
 }

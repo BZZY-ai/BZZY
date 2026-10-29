@@ -2,7 +2,7 @@ import { getRecord, putRecord, now } from './database.js';
 import { sessionMemoryEligible } from './session-memory.js';
 import { advanceConversationSource } from './conversation-source.js';
 import { queueSessionCompaction } from './session-compactor.js';
-import { knowledgeAccess, refreshKnowledgeHistory } from './knowledge-index.js';
+import { knowledgeAccess, refreshKnowledgeHistory, refreshKnowledgeRecords } from './knowledge-index.js';
 
 // Called by the execution owner, independently of whether its native goal ends.
 // Only deterministic derived work runs here; the compactor owns paid admission.
@@ -15,9 +15,10 @@ export function maintainSessionHistory(session) {
   try {
     const result = queueSessionCompaction(saved, { throughSeq: source.sealedThroughSeq, maxParts: 32 });
     const knowledge = refreshKnowledgeHistory(saved, knowledgeAccess(saved), { limit: 64, sessionOnly: true });
+    const project = refreshKnowledgeRecords(saved, { limit: 32 });
     const state = { version: 1, sessionId: saved.id, goalId: saved.goal?.id || null, scannedThroughSeq: source.scanSeq,
       sealedThroughSeq: source.sealedThroughSeq, indexedThroughSeq: result.indexed.indexedThroughSeq || 0,
-      indexingRemaining: Boolean(source.remaining || result.indexed.indexingRemaining || knowledge.remaining),
+      indexingRemaining: Boolean(source.remaining || result.indexed.indexingRemaining || knowledge.remaining || project.remaining),
       pendingMessages: source.pendingMessages, status: 'indexed', updatedAt: now() };
     putRecord('core.history.maintenance', saved.id, state); return state;
   } catch (error) {

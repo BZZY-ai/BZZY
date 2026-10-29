@@ -37,7 +37,7 @@ There are four separate kinds of knowledge:
 | Kind | Scope and use |
 | --- | --- |
 | Investigation records | Engagement observations, hypotheses, failed approaches, findings, checkpoints, evidence and public chat history. |
-| Project methods | Learned procedures and corrections stage as candidates by default. Explicit owner policy may allow automatic creation of new project skills; existing updates remain staged. |
+| Project methods | Learned procedures and corrections stage as candidates by default. Explicit owner policy may allow automatic creation of new project skills; evaluated automatic updates require a separately reviewed fixture policy. |
 | General methods | Explicitly enabled global skills. Global promotion creates a new generic text-only candidate, separate from the original case bundle. |
 | Profiles | Explicit owner-approved user preferences and expiring host facts. These stay in private Core storage and are excluded from project exports. |
 
@@ -126,8 +126,10 @@ cooldown. Model routing can use the pinned source model, the configured Core
 background model, or an explicit installed provider/model/effort. Missing
 background configuration visibly defers work; there is no hidden fallback.
 Conversation/goal pause or cancel stops associated
-reviews, host stop stops all reviews, and daemon recovery leaves interrupted
-jobs paused. Starting Core or opening a chat does not resume those old jobs.
+reviews and host stop stops all reviews. Daemon recovery can requeue only
+provably undispatched shutdown work or cached local publication. Explicit stops
+and uncertain dispatched requests remain paused. Opening a chat never resumes
+those jobs.
 Explicit resume checks the current source and revision. A cached validated result
 can finish interrupted publication through idempotent receipts without another
 model call or replaying the assessment.
@@ -148,7 +150,10 @@ The review may return attributed local hypotheses/failed approaches, proposed
 resolutions, reusable project procedures, exact-base skill corrections and
 pending profile changes. It may also return no change. Core validates the
 bounded output. New skills and corrections stage by default; the owner can
-choose `newSkills: auto|stage|off` and `updates: stage|off`. Existing enabled
+choose `newSkills: auto|stage|off` and `updates: auto|stage|off`. Automatic
+updates require pinned approved semantic and continuation fixture datasets,
+independent measured improvement, no regressions and the unchanged enabled base.
+See [permanent sessions](PERMANENT-SESSIONS.md) for policy and limitations. Existing enabled
 skills retain their state during migration. Automatic creation requires an
 explicit reviewed opt-in and does not claim measured improvement. Profiles
 always remain pending owner review.
@@ -322,8 +327,8 @@ An optional hybrid path requires a trusted host to register an actual local
 embedding capability, then an explicit reviewed project opt-in. No embedding
 model is bundled or downloaded and no model-supplied remote endpoint is accepted.
 Model/version/dimension and project-generation pins invalidate incompatible
-vectors. Maintenance uses batches of at most 16, a recent 2,000-document window,
-bounded text and time per call. The scope filter runs before similarity; deleted,
+vectors. Maintenance uses batches of at most 16, dirty-source queues and keyset
+backfill across the archive, with bounded text and time per call. The scope filter runs before similarity; deleted,
 changed or stale sources are checked again. Missing or failed local capability
 falls back to scoped full-text search. Prompt recall remains synchronous full-text
 search; explicit model search can use the opted-in hybrid path. Measurements and

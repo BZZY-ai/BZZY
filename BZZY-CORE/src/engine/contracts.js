@@ -5,6 +5,26 @@ function strings(value, name) {
   if (!Array.isArray(value) || value.some(v => typeof v !== 'string' || !v.trim())) throw new Error(`${name} must be a list of nonempty strings.`);
   return value;
 }
+export function normalizeProgramScope(input) {
+  const keys = ['allowedTargets', 'excludedTargets', 'allowedActions', 'excludedActions', 'restrictions', 'cleanupObligations', 'networkMode'];
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !keys.includes(key))) throw new Error('Program scope needs only supported target, action and restriction fields.');
+  const result = {};
+  for (const key of keys.filter(key => key !== 'networkMode')) {
+    const values = strings(input[key] || [], `scope.${key}`);
+    if (values.length > 256 || values.some(value => value.length > 2000 || /[\x00-\x1f\x7f]/.test(value))) throw new Error('Program scope fields exceed their bounds.');
+    result[key] = [...new Set(values.map(value => value.trim()))].sort();
+  }
+  for (const target of [...result.allowedTargets, ...result.excludedTargets]) {
+    if (/^https?:\/\//.test(target)) {
+      const parsed = new URL(target.replace(/\*$/, ''));
+      if (parsed.username || parsed.password || parsed.search || parsed.hash || target.slice(0, -1).includes('*')) throw new Error('Scope URLs cannot contain credentials, queries, fragments or embedded wildcards.');
+    } else if (!/^(?:\*\.)?[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(target)) throw new Error('Scope targets must be hostnames or HTTP(S) URLs.');
+  }
+  for (const action of [...result.allowedActions, ...result.excludedActions]) if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(action)) throw new Error('Scope actions must be explicit supported HTTP methods.');
+  result.networkMode = input.networkMode || 'mediated';
+  if (!['offline', 'mediated'].includes(result.networkMode)) throw new Error('Program networkMode must be offline or mediated.');
+  return result;
+}
 export function normalizeContract(input = {}, objective) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Task contract must be an object.');
   const contract = { version: 1, objective: input.objective || objective, context: input.context || '',

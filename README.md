@@ -85,8 +85,14 @@ Enter, Tab or a click to insert its reference without sending the draft.
 
 Core also owns [project knowledge and reviewed learning](BZZY-CORE/docs/KNOWLEDGE.md):
 attributed recall, evidence freshness, scoped skills, private approved profiles
-and bounded idle reviews with explicit candidate evaluation and activation.
+and bounded reviews with explicit candidate evaluation and owner-governed activation.
 CLI `/memory` and `/learn` open its review controls in the existing Skills panel.
+
+[Permanent program sessions](BZZY-CORE/docs/PERMANENT-SESSIONS.md) retain durable
+investigation branches, blockers and prior attempts beneath the same saved chat.
+`bzzy session-memory document SESSION` reads a generated view; `export` writes it
+to `.bzzy/sessions/<session-id>/MEMORY.md`. Scope successors and evaluated automatic
+procedure updates use separate explicit owner policies and preserve old history.
 
 Reusable [workflows](BZZY-CORE/docs/WORKFLOWS.md) supply a goal's operating
 instructions. Create or load one from the **Workflows** top tab. `/workflow`

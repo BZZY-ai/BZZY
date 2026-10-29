@@ -78,6 +78,8 @@ Usage:
   bzzy session-memory cost [SESSION]   Inspect lifetime background compactor spending and historical gaps
   bzzy cost [SESSION]                  Inspect DeepSeek Chat + Compactor = Total estimates
   bzzy session-memory build [SESSION]  Index saved history without replaying the chat
+  bzzy session-memory document [SESSION] Read a generated session MEMORY.md view
+  bzzy session-memory export [SESSION] Save that view under .bzzy/sessions/SESSION/
   bzzy --delegate                       Choose brain and hands; chat normally or start /goal
   bzzy --besties                        Choose two peers; chat normally or start a shared /goal
   bzzy --parallel [2|3]                 Select agents, enter a goal, then open their chat tabs

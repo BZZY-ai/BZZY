@@ -11,7 +11,7 @@ export const sharedKinds = new Set(['session', 'acceptance', 'activity', 'artifa
   'core.memory.revision', 'core.issue.revision', 'core.checkpoint.revision']);
 const privateField = /^(?:token|nonce|accessToken|refreshToken|ownerToken|apiKey|password|authorization|cookie|set-cookie|credentials|privateKey|signingSecret|boxSecret|environment|backendHomes|engineHome|backendProcess|runner|launcher|notifications|notificationDestinations|inputOwner|coreGrantId|accountBinding|accountBindings|privateContext)$/i;
 const privateSuffix = /(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|AUTH_TOKEN|SECRET|PASSWORD)$/;
-const workflowAuthorityField = /^(?:workflowAdmission|workflowSelection|workflowBinding|goalWorkflow|workflowReceipt|workflowPin|subagentRouting)$/i;
+const workflowAuthorityField = /^(?:workflowAdmission|workflowSelection|workflowBinding|goalWorkflow|workflowReceipt|workflowPin|subagentRouting|scopeAdmission|programScope|scopeBinding|scopeApproval|programScopeBinding|scopeVersion|scopeBindingId|programScopeAdmission|programScopeEnforcement|programScopeToolPolicy)$/i;
 // These snapshots belong to the sender's native process and event sequence.
 // They are rebuilt locally, never resumed from a project/Library package.
 const nativeRuntimeAuthorityField = /^(?:nativeContext|nativeContextBudget|nativeBackendReadiness|contextEfficiency|coreSkillsProtocol|sessionMemoryRefresh|sessionMemorySeen|workerBudgetPolicy|workerBudget|workerBudgetSettings)$/i;

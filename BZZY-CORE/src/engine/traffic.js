@@ -9,6 +9,7 @@ import { randomUUID, createHash, randomBytes } from 'node:crypto';
 import { home, privateDir } from './files.js';
 import { digest, putRecord, appendEvent, now } from './database.js';
 import { artifact } from './evidence.js';
+import { assertScopeOperation } from './program-scope.js';
 
 const sensitive = /authorization|cookie|password|passwd|secret|token|api[-_]?key/i;
 export function redactedHeaders(headers) { return Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, sensitive.test(k) ? '[redacted]' : v])); }
@@ -142,6 +143,7 @@ function targetAllowed(url, scope) {
 export async function observedRequest(session, input, ui) {
   let url = new URL(input.url); const scope = session.contract?.scope || {};
   const method = (input.method || 'GET').toUpperCase();
+  assertScopeOperation(session, { url: url.href, method });
   if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method) || !['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported HTTP method or URL.');
   if (!targetAllowed(url, scope)) throw new Error('HTTP target is not within the contract’s declared allowedTargets, or is excluded.');
   if (session.policy?.mode === 'read-only' && !['GET', 'HEAD', 'OPTIONS'].includes(method)) throw new Error('This read-only task does not permit mutating HTTP methods.');

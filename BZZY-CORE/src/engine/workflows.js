@@ -209,6 +209,23 @@ function checkedBinding(session, binding, { context = true } = {}) {
 const admissionFor = binding => ({ version: 1, bindingId: binding.id, goalId: binding.goalId,
   workflowVersion: binding.workflow?.version || null, fingerprint: binding.fingerprint });
 
+// Explicit stopped scope transitions preserve the predecessor's exact workflow,
+// rather than resolving today's Library selection or duplicating its context.
+export function forkGoalWorkflowBinding(previous, next) {
+  const prior = getRecord(BINDING, bindingKey(previous.id, previous.goal?.id));
+  if (!prior) return null;
+  const checked = checkedBinding(previous, prior);
+  if (next.id !== previous.id || !uuid(next.goal?.id) || next.goal.id === previous.goal.id || next.contract?.context !== previous.contract?.context) fail('A scope successor must preserve its original workflow context.', 'WORKFLOW_PIN_INVALID', 409);
+  const id = bindingKey(next.id, next.goal.id);
+  if (getRecord(BINDING, id)) fail('Successor workflow binding already exists.', 'CONFLICT', 409);
+  const { fingerprint, ...body } = checked;
+  const value = { ...body, id, goalId: next.goal.id, predecessorBindingId: checked.id, admittedAt: now() };
+  const binding = { ...value, fingerprint: digest(value) };
+  putRecord(BINDING, id, binding);
+  appendEvent(next.id, 'workflow.admitted', { goalId: next.goal.id, workflow: binding.workflow, legacy: binding.legacy, predecessorBindingId: checked.id });
+  return admissionFor(binding);
+}
+
 // One deterministic host gate, after the goal is prepared but before any model
 // execution is queued. Selection is never resolved again for an existing pin.
 export function preflightGoalWorkflow(session, { resumeGoal = false } = {}) {

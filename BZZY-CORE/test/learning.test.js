@@ -8,10 +8,10 @@ import { spawn } from 'node:child_process';
 import { createSession, saveSession } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
 import { projectIdentityForSession } from '../src/engine/project-identity.js';
-import { appendEvent, getRecord, putRecord, listRecords } from '../src/engine/database.js';
+import { appendEvent, getRecord, putRecord, listRecords, removeRecord, digest } from '../src/engine/database.js';
 import { inspectSkill, inspectSkillCandidate, listSkills, setSkillEnabled, createSkill, stageSkillCandidate, acceptSkillCandidate } from '../src/engine/skills.js';
 import { queueLearningReview, inspectLearningJob, listLearningJobs, runLearningJob, processLearningReviews,
-  pauseLearningForSession, recoverLearningJobs, controlLearningJob, learningMaterial, configureLearning, learningUsage } from '../src/engine/learning.js';
+  pauseLearningForSession, pauseAllLearning, recoverLearningJobs, controlLearningJob, learningMaterial, configureLearning, learningUsage } from '../src/engine/learning.js';
 import { registerLearningFixtures, evaluateLearningCandidate, runLearningEvaluationJob, inspectLearningEvaluation, revokeLearningFixtures } from '../src/engine/learning-evaluation.js';
 import { codexLaunch } from '../src/engine/engines/codex.js';
 import { claudeArgs } from '../src/engine/engines/claude.js';
@@ -82,8 +82,24 @@ test('automatic triggers coalesce, keep idempotent receipts, and preserve stoppe
   pauseLearningForSession(session.id); session.executionState = 'idle'; saveSession(session);
   let calls = 0; assert.deepEqual(await processLearningReviews({ runReview: async () => { calls++; return noChange(); } }), []);
   assert.equal(calls, 0); assert.equal(inspectLearningJob(a.id).state, 'paused');
-  const fresh = queued(); assert.deepEqual(recoverLearningJobs(), [fresh.id]);
-  assert.equal(inspectLearningJob(fresh.id).reasonPaused, 'recovery_required');
+  const fresh = queued(); assert.deepEqual(recoverLearningJobs(), []);
+  assert.equal(inspectLearningJob(fresh.id).state, 'queued', 'Never-dispatched work remains eligible across daemon startup.');
+});
+
+test('shutdown recovers only undispatched or fully cached reviews and keeps owner intent', async () => {
+  const fresh = queued(); pauseAllLearning('host_shutdown');
+  assert.equal(inspectLearningJob(fresh.id).reasonPaused, 'host_shutdown');
+  assert.deepEqual(recoverLearningJobs(), [fresh.id]);
+  assert.equal(inspectLearningJob(fresh.id).state, 'queued');
+  assert.equal((await runLearningJob(fresh.id, { runReview: noChange })).state, 'completed');
+  const owner = queued(); controlLearningJob(owner.id, 'pause', { expectedRevision: owner.revision });
+  pauseAllLearning('host_shutdown'); recoverLearningJobs();
+  assert.equal(inspectLearningJob(owner.id).reasonPaused, 'owner_pause');
+  const uncertain = queued();
+  putRecord('core.learning.job', uncertain.id, { ...uncertain, state: 'running', reviewStarted: true, runner: null });
+  recoverLearningJobs();
+  assert.equal(inspectLearningJob(uncertain.id).reasonPaused, 'recovery_required');
+  assert.deepEqual(await processLearningReviews({ runReview: () => assert.fail('An uncertain paid request cannot replay.') }), []);
 });
 
 test('review material is bounded own-session visible data and excludes credentials, raw tools and private reasoning', () => {
@@ -134,6 +150,42 @@ test('explicit crash recovery finishes identical cached proposals without anothe
   const resumed = await runLearningJob(job.id, { runReview: async () => assert.fail('An inspected result is not reviewed twice') });
   assert.equal(resumed.state, 'completed'); assert.deepEqual(resumed.result.lessonIds, completed.result.lessonIds);
   assert.equal(listRecords('memory').length, 1); assert.equal(learningUsage().tokensUsed, 100);
+});
+
+for (const corruption of ['missing', 'different-source', 'replaced-result']) test(`recovered learning publication with ${corruption} cache stays host-only across another restart`, async () => {
+  const pending = queued(); await runLearningJob(pending.id, { runReview: noChange });
+  const original = getRecord('core.learning.output', pending.id), completed = getRecord('core.learning.job', pending.id);
+  putRecord('core.learning.job', pending.id, { ...completed, state: 'running', runner: null });
+  recoverLearningJobs(); assert.equal(inspectLearningJob(pending.id).recovery.mode, 'cached-publication');
+  if (corruption === 'missing') removeRecord('core.learning.output', pending.id);
+  else {
+    const changed = structuredClone(original);
+    if (corruption === 'different-source') changed.sourcesHash = '0'.repeat(64);
+    else {
+      changed.parsed.lessons.push({ kind: 'hypothesis', statement: 'A different proposed lesson.', rationale: 'Synthetic altered output.', evidence: [], sourceIds: [changed.material[0].sourceId] });
+      changed.hash = digest(changed.parsed);
+    }
+    putRecord('core.learning.output', pending.id, changed);
+  }
+  const reservations = listRecords('core.learning.reservation').length, usage = learningUsage(); let calls = 0;
+  const runReview = async () => { calls++; return noChange(); };
+  await processLearningReviews({ runReview });
+  assert.equal(inspectLearningJob(pending.id).state, 'paused');
+  assert.equal(inspectLearningJob(pending.id).reasonPaused, 'publication_cache_unavailable');
+  // A host publication resets reviewStarted while it runs. A second crash must
+  // not reinterpret that marker as permission for a fresh paid review.
+  putRecord('core.learning.job', pending.id, { ...getRecord('core.learning.job', pending.id), state: 'running', reviewStarted: false, runner: null, reservationId: null });
+  recoverLearningJobs();
+  const paused = inspectLearningJob(pending.id);
+  assert.equal(paused.state, 'paused'); assert.equal(paused.recovery.publicationOnly, true);
+  assert.equal(paused.recovery.mode, 'manual-inspection');
+  controlLearningJob(pending.id, 'resume', { expectedRevision: paused.revision });
+  assert.equal((await runLearningJob(pending.id, { runReview })).state, 'paused');
+  assert.equal(calls, 0); assert.equal(listRecords('core.learning.reservation').length, reservations);
+  assert.equal(learningUsage().tokensUsed, usage.tokensUsed); assert.equal(learningUsage().reservedTokens, 0);
+  putRecord('core.learning.output', pending.id, original);
+  controlLearningJob(pending.id, 'resume', { expectedRevision: inspectLearningJob(pending.id).revision });
+  assert.equal((await runLearningJob(pending.id, { runReview })).state, 'completed'); assert.equal(calls, 0);
 });
 
 test('pause while the model is pending rejects late output and safely settles a daily reservation', async () => {
@@ -252,7 +304,8 @@ test('candidate and approved baseline share the same held-out corpus and cumulat
       return prompt.includes('OLD PROCEDURE') ? { tokens: 100, text: JSON.stringify({ results: fixtureDefinition().cases.map(item => ({ id: item.id, verdict: 'inconclusive' })) }) } : expectedOutput();
     } });
   const evaluation = inspectLearningEvaluation(result.result.evaluationId, { session });
-  assert.equal(evaluation.metrics.baselineAvailable, true); assert.equal(evaluation.metrics.improvementDemonstrated, true);
+  assert.equal(evaluation.metrics.baselineAvailable, true); assert.equal(evaluation.metrics.improvementDemonstrated, false);
+  assert.equal(evaluation.metrics.sourceIndependence.status, 'unknown', 'Accuracy gains alone do not establish held-out improvement without authoring/source groups.');
   assert.equal(evaluation.metrics.candidateAccuracy, 1); assert.equal(evaluation.metrics.baselineAccuracy, 1 / 3);
   assert.equal(evaluation.metrics.improvedCaseIds.length, 2); assert.deepEqual(evaluation.metrics.regressedCaseIds, []);
   assert.deepEqual(budgets, [12000, 11900]); assert.equal(result.tokensUsed, 200); assert.equal(learningUsage().tokensUsed, 200);
@@ -276,7 +329,8 @@ test('a global candidate compares its approved global baseline even when this pr
   const evaluation = inspectLearningEvaluation(result.result.evaluationId, { session });
   assert.deepEqual(observed, ['candidate', 'global-baseline']);
   assert.equal(evaluation.baseline.version, global.version); assert.equal(evaluation.metrics.baselineAvailable, true);
-  assert.equal(evaluation.metrics.baselineAccuracy, 1 / 3); assert.equal(evaluation.metrics.improvementDemonstrated, true);
+  assert.equal(evaluation.metrics.baselineAccuracy, 1 / 3); assert.equal(evaluation.metrics.improvementDemonstrated, false);
+  assert.equal(evaluation.metrics.sourceIndependence.status, 'unknown');
 });
 
 test('changing fixture observations outside approval invalidates evaluation before a model is called', async () => {

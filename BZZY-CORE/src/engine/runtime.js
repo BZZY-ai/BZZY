@@ -27,10 +27,12 @@ import { assertCoreAvailable } from './maintenance.js';
 import { HostMetricsSampler } from './host-metrics.js';
 import { authorizedOwnPhoneTerminalInput } from './update-access.js';
 import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, pauseAllLearning } from './learning.js';
+import { processSkillEvolution } from './skill-evolution-runner.js';
 import { recoverSessionCompactions, processSessionCompactions, pauseSessionCompaction, pauseAllSessionCompactions } from './session-compactor.js';
 import { CoreKnowledge } from '../knowledge.js';
 import { recordGoalValidationResult } from './goal-validation.js';
 import { assertGoalWorkflowAdmission } from './workflows.js';
+import { assertGoalScopeAdmission } from './program-scope.js';
 import { sessionInvocations } from './invocation-state.js';
 import { createExecutionObserver } from './execution-observation.js';
 import { sessionMetricsFamily } from './session-metrics.js';
@@ -396,6 +398,7 @@ export async function serveRuntime() {
     const active = listRecords('execution', { states: ['launching', 'running'] });
     const learningMayRun = () => !stopping && !quiescing && !operatorStopRequested();
     if (!learningPump) {
+      try { processSkillEvolution({ canRun: learningMayRun }); } catch { /* Reviewed evolution remains staged on failure. */ }
       learningPump = processLearningReviews({ limit: 1, canRun: learningMayRun })
         .catch(() => { /* Learning persists its own bounded failure status. */ })
         .finally(() => { learningPump = undefined; });
@@ -554,6 +557,7 @@ export async function executeJob(id) {
   let code = 1, error;
   try {
     if (acquired.goal || acquired.resumeGoal) assertGoalWorkflowAdmission(session, acquired.workflowAdmission);
+    assertGoalScopeAdmission(session, acquired.scopeAdmission);
     if (acquired.goal && session.mode === 'debate') { const { runDebate } = await import('./debate.js'); code = await runDebate(session, acquired.options, ui); }
     else if (acquired.goal && session.mode === 'parallel') { const { runParallel } = await import('./parallel.js'); code = await runParallel(session, acquired.options, ui); }
     else if (acquired.goal && session.mode === 'besties') { const { runBesties } = await import('./besties.js'); code = await runBesties(session, { ...acquired.options, bestiesResume: acquired.resumeGoal, bestiesRunId: acquired.id }, ui); }

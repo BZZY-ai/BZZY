@@ -11,6 +11,13 @@ function jobHealth(kind, sessionId) {
     reason: ['paused', 'cancelled'].includes(row.state)
       ? row.reasonPaused ?? row.scheduleReason : row.scheduleReason ?? row.reasonPaused }));
 }
+function backlogAge(kind, sessionId) {
+  const value = database().prepare(`SELECT count(*) AS pending,min(json_extract(data,'$.createdAt')) AS oldestCreatedAt
+    FROM records WHERE kind=? AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.state')
+    IN ('queued','running','waiting_for_configuration','waiting_for_auth','retry_wait','paused')`).get(kind, sessionId);
+  return { ...value, oldestAgeSeconds: value.oldestCreatedAt && Number.isFinite(Date.parse(value.oldestCreatedAt))
+    ? Math.max(0, Math.floor((Date.now() - Date.parse(value.oldestCreatedAt)) / 1000)) : null };
+}
 
 // Read projection only: opening Metrics or exporting never schedules work.
 export function sessionHealth(id) {
@@ -33,6 +40,6 @@ export function sessionHealth(id) {
       compaction: session.nativeContext?.metrics || null, refresh: session.nativeContext?.refresh || null, efficiency: session.contextEfficiency || null },
     memory, maintenance: getRecord('core.history.maintenance', session.id), taskState: getRecord('core.task-state.read', session.id),
     episode: getRecord('core.episode.progress', session.id),
-    learning: { jobs: learning, policy: 'Closed work episodes, meaningful outcomes, skill feedback and corrections may queue bounded reviews. No-change is a valid result.' },
-    retention: { jobs: compaction, control: getRecord('core.session.compactor.control', session.id) } };
+    learning: { jobs: learning, backlog: backlogAge('core.learning.job', session.id), policy: 'Closed work episodes, meaningful outcomes, skill feedback and corrections may queue bounded reviews. No-change is a valid result.' },
+    retention: { jobs: compaction, backlog: backlogAge('core.session.compactor.job', session.id), control: getRecord('core.session.compactor.control', session.id) } };
 }

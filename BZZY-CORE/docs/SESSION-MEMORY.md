@@ -76,6 +76,8 @@ explicit resume. Authentication stays in Core's private backend setup.
 
 The optional worker gives foreground work scheduling priority. Indexing never
 waits for model output; short material may be retained verbatim without inference.
+Larger pending nodes receive source-linked host extractive fallback views. Query
+recall combines relevant nodes with recent coverage; originals stay unchanged.
 Model jobs use the verified restricted document profile, an empty private working
 directory and no tools, native commands, account operations or network tool access.
 
@@ -119,14 +121,18 @@ replay old work; new compactions must run through the updated Core implementatio
 
 Session pause/cancel, Core stop, deletion and shutdown stop background work.
 An already dispatched summary can finish against immutable sources during an
-ordinary foreground turn. Paused compaction requires explicit resume.
+ordinary foreground turn. Owner/source stops and uncertain requests require
+explicit inspection/resume. Startup can recover provably undispatched shutdown
+work and checked cached publication without another model request.
 
 Health diagnostics expose `scheduleReason` and `reasonPaused` separately; their
 compatibility `reason` prefers the actual pause reason for stopped jobs. A daemon
 shutdown preserves an existing compactor pause/cancellation reason, including
 owner/session stops and uncertain requests. Repeated queue and backfill calls
-do not revise unchanged control fields. These repairs do not resume old jobs or
-enable foreground inference automatically.
+do not revise unchanged control fields. Recovery never clears explicit owner
+intent or enables foreground inference automatically. See
+[permanent sessions](PERMANENT-SESSIONS.md) for the implemented lifecycle,
+archive discovery, investigation state and generated MEMORY.md view.
 
 Completed native messages now advance deterministic indexing while the overall
 goal continues. Source generation 4 retains whole-message masking and the

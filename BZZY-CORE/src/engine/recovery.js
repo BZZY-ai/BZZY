@@ -12,6 +12,9 @@ import { routingStatus } from './workflow-routing.js';
 import { currentAssignmentMemoryCapsule } from './assignment-memory.js';
 import { currentBudgetCapsule, workerAllocationRevision } from './worker-budget.js';
 import { taskKnowledgeBrief } from './task-knowledge-brief.js';
+import { investigationCapsule } from './session-investigation.js';
+import { programScopeCapsule } from './program-scope.js';
+import { knowledgeSourceRevision } from './knowledge-index.js';
 
 export { processIdentity, identityAlive, signalProcess } from './process-identity.js';
 
@@ -102,10 +105,14 @@ export function contextFor(session, context = {}) {
   // Keep live/recent assignments discoverable over long goals without replaying
   // every report and historical artifact manifest in each model prompt.
   const history = assignmentContextPage(assignmentSessionForContext(session, context), { limit: 12, prioritizeOpen: true, includeMoreIds: true });
+  // Recall advances one bounded legacy projection batch. Complete it before
+  // taking the full project view so both sections share relationship coverage.
+  const relevantMemory = recall(session.projectRoot || session.cwd, (session.goal?.objective || session.contract?.objective || '').slice(0, 500), 8, { session });
   const project = projectContext(session.projectRoot || session.cwd, { session });
   return JSON.stringify({ role: session.role || 'supervisor', mode: session.mode || 'solo', executor: session.executor || null, besties: session.besties || null, contract: session.contract, checkpoint, checkpointHistory, recovery: getRecord('recovery', session.id),
+    investigation: investigationCapsule(session, context, { maxBytes: 2200 }), programScope: programScopeCapsule(session),
     importedContext: session.importedContext || null,
-    relevantMemory: recall(session.projectRoot || session.cwd, (session.goal?.objective || session.contract?.objective || '').slice(0, 500), 8, { session }),
+    relevantMemory,
     projectContext: project, peers: session.peers || [], agentNamespace: session.agentNamespace || null,
     previousAcceptance: session.acceptance || null, pendingInput: session.pendingInput || [],
     assignments: history.items,
@@ -114,7 +121,7 @@ export function contextFor(session, context = {}) {
       lookup: 'Use assignment_status with an assignment ID. Full report and evidence remain durable artifacts, opened with read_artifact.' } });
 }
 
-export const taskStateDetailSections = ['contract', 'checkpoint', 'recovery', 'projectContext', 'relevantMemory', 'knowledgeBrief', 'assignments', 'importedContext', 'acceptance', 'mission', 'collaboration', 'routing'];
+export const taskStateDetailSections = ['contract', 'checkpoint', 'recovery', 'projectContext', 'relevantMemory', 'knowledgeBrief', 'investigation', 'programScope', 'assignments', 'importedContext', 'acceptance', 'mission', 'collaboration', 'routing'];
 const short = (value, maximum = 320) => typeof value === 'string' ? value.slice(0, maximum) : null;
 function preview(value, maximum = 1000) {
   const encoded = typeof value === 'string' ? value : JSON.stringify(value ?? null);
@@ -142,18 +149,18 @@ function taskStateSources(session, context) {
   const recovery = getRecord('recovery', session.id), routing = context.goalMode === false ? { enforced: false, reason: 'ordinary-chat' } : routingStatus(session, { limit: 3 });
   // Knowledge changes invalidate detail pages without loading all notes and old
   // reports into every polling response. Native heartbeat/usage do not.
-  const knowledgeVersion = database().prepare(`SELECT count(*) AS count,max(updated_at) AS updatedAt FROM records
-    WHERE kind IN ('memory','issue','checkpoint','goal-history') AND
-    (json_extract(data,'$.sessionId')=? OR json_extract(data,'$.projectId')=?)`).get(session.id, session.projectId || '');
+  const knowledgeVersion = knowledgeSourceRevision(session);
   const pendingInput = session.pendingInput || [], contract = state.scope.kind === 'chat'
     ? { constraints: session.contract?.constraints || [], scope: session.contract?.scope || {}, policy: session.policy || null }
     : session.contract || null;
   const knowledge = taskKnowledgeBrief(session, goal);
+  const investigation = investigationCapsule(session, context, { maxBytes: 1800 });
+  const programScope = programScopeCapsule(session);
   const revision = digest({ scope: state.scope, goal, contract, checkpoint: state.current, historical: state.historical,
     recovery, assignments, routing, pendingInput, acceptance: session.acceptance || null, importedContext: session.importedContext || null,
     mission: session.missionContext || null, assignmentContext: session.assignmentContext || null, knowledgeVersion,
-    allocationRevision: workerAllocationRevision(assignmentSession), knowledge: knowledge.revision });
-  return { state, goal, assignments, recovery, routing, pendingInput, contract, knowledge, revision, contextGeneration: contextGeneration(session, context) };
+    allocationRevision: workerAllocationRevision(assignmentSession), knowledge: knowledge.revision, investigation, programScope });
+  return { state, goal, assignments, recovery, routing, pendingInput, contract, knowledge, investigation, programScope, revision, contextGeneration: contextGeneration(session, context) };
 }
 
 // The execution preprompt above retains the full pinned contract. This separate
@@ -177,6 +184,8 @@ export function compactTaskState(session, input = {}, context = {}) {
       evidenceCount: checkpoint.evidence?.length || 0, detail: 'checkpoint', authority: 'Agent progress claims; never verified completion.' } : null,
     historicalCheckpoint: state.historical,
     knowledgeBrief: source.knowledge.brief,
+    investigation: source.investigation,
+    programScope: source.programScope,
     liveAgents: !session.parentSessionId && !session.role && !session.agentId ? currentAssignmentMemoryCapsule(session, { ...context, limit: 3 }) : undefined,
     recovery: recovery ? { state: recovery.state, createdAt: recovery.createdAt, automaticallyReplayed: recovery.automaticallyReplayed,
       workspaceChangeCount: recovery.workspaceChanges?.length || 0, uncertainOperationCount: recovery.uncertainOperations?.length || 0,
@@ -234,6 +243,8 @@ export function readTaskStateDetails(session, input, context = {}) {
     case 'projectContext': value = ['executor', 'reviewer'].includes(session.role) ? null : projectContext(session.projectRoot || session.cwd, { session }); break;
     case 'relevantMemory': value = ['executor', 'reviewer'].includes(session.role) ? [] : recall(session.projectRoot || session.cwd, (source.goal?.objective || '').slice(0, 500), 8, { session }); break;
     case 'knowledgeBrief': value = { items: source.knowledge.sources, authority: source.knowledge.brief.authority }; break;
+    case 'investigation': value = source.investigation; break;
+    case 'programScope': value = source.programScope; break;
     case 'assignments': value = source.assignments; break;
     case 'importedContext': value = session.importedContext || null; break;
     case 'acceptance': value = session.acceptance || null; break;

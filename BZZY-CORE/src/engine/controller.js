@@ -2,6 +2,7 @@ import { guardedInterval } from './interval.js';
 import { CodexEngine } from './engines/codex.js';
 import { ClaudeEngine } from './engines/claude.js';
 import { applyReport } from './goals.js';
+import { preflightGoalScope } from './program-scope.js';
 import { lockSession, saveSession, loadSession } from './store.js';
 import { NotificationHub } from './notifications.js';
 import { ToolHost } from './tools.js';
@@ -66,6 +67,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     options = { ...options, agentScope, yolo: false, scopedAutonomy: false, captureNetwork: false };
   } else options = { ...options, agentScope: null };
   const policy = effectivePolicy(session, options);
+  preflightGoalScope(session, { policy, strictPolicy: Boolean(options.strictPolicy || options.readOnly || session.strictPolicy), yolo: options.yolo === true || session.yolo === true });
   const unlock = lockSession(session), started = Date.now(), indicator = ui.executionIndicator?.(options.pet !== false && !ui.persistsEvents) || { start() {}, stop() {} }, abort = new AbortController();
   let engine, host, traffic, stopping, killTimer, fullText = '', heartbeat, historyMaintenance, controls, processing = false, failedThisTurn = false, preRequestUsageFailure = false, handoffRequested = false, forcedStopUsageUncertain = false;
   options = { ...options, goalMode: goal, policy, strictPolicy: Boolean(options.strictPolicy || options.readOnly || session.strictPolicy) }; session.policy = policy; session.captureNetwork = Boolean(options.captureNetwork);
@@ -103,6 +105,11 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     beginRunUsage(session, run, { tokenBudget: goal ? session.goal.tokenBudget : options.tokenBudget });
     options.activityReporter = new ActivityReporter(session, recorded, goal ? session.goal.objective : prompt);
     host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, runId: run.id, signal: abort.signal, prompt, tokenBudget: options.tokenBudget,
+      onInvestigationBlocked: blocker => {
+        if (!goal || !session.goal) return;
+        session.goal.investigationBlocker = blocker;
+        stop('investigation_blocked');
+      },
       onNeedsContext: () => stop('needs_context'), onWorkerReport: input => {
         const job = session.assignmentId && getRecord('assignment', session.assignmentId);
         if (input.status === 'partial' && job?.workerBudget?.mode === 'adaptive' && assignmentBudgetView(job).softReached) {
@@ -220,7 +227,7 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     } finally { clearTimeout(deadline); }
     if (stopping) {
       session.executionState = stopping === 'cancelled' ? 'cancelled' : 'paused';
-      if (goal && session.goal.status !== 'complete') { session.goal.status = stopping === 'cancelled' ? 'cancelled' : ['runtime_limit', 'token_limit'].includes(stopping) ? 'budget_limited' : 'paused'; session.goal.reason = stopping; }
+      if (goal && session.goal.status !== 'complete') { session.goal.status = stopping === 'cancelled' ? 'cancelled' : ['runtime_limit', 'token_limit'].includes(stopping) ? 'budget_limited' : stopping === 'investigation_blocked' ? 'blocked' : 'paused'; session.goal.reason = stopping === 'investigation_blocked' ? session.goal.investigationBlocker?.reason || stopping : stopping; }
     } else session.executionState = 'idle';
     return stopping ? ['interrupted', 'user_pause', 'cancelled'].includes(stopping) ? 130 : 2 : goal && session.goal.status !== 'complete' ? 2 : 0;
   } catch (error) {
@@ -229,8 +236,8 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     const failure = classifyFailure(error); session.failure = failure; session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping ? 'paused' : 'failed';
     const budgetLimited = ['runtime_limit', 'token_limit'].includes(stopping);
     if (goal && !['complete', 'cancelled'].includes(session.goal.status)) {
-      session.goal.status = stopping === 'cancelled' ? 'cancelled' : stopping ? budgetLimited ? 'budget_limited' : 'paused' : failure.category === 'rate_limit' ? 'usage_limited' : 'blocked';
-      session.goal.reason = stopping || failure.message;
+      session.goal.status = stopping === 'cancelled' ? 'cancelled' : stopping ? budgetLimited ? 'budget_limited' : stopping === 'investigation_blocked' ? 'blocked' : 'paused' : failure.category === 'rate_limit' ? 'usage_limited' : 'blocked';
+      session.goal.reason = stopping === 'investigation_blocked' ? session.goal.investigationBlocker?.reason || stopping : stopping || failure.message;
     }
     if (stopping) return budgetLimited ? 2 : 130;
     throw error;

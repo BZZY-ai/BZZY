@@ -4,6 +4,7 @@ import { artifact, captureEvidence, inside, fileInfo, artifactsFor, inspectWorks
 import { schemaErrors } from './contracts.js';
 import { putRecord, getRecord, listRecords, appendEvent, now, digest } from './database.js';
 import { spawnBounded, stopProcess } from './policy.js';
+import { programScopeCommandPolicy } from './program-scope.js';
 import { assignmentsFor } from './delegation-usage.js';
 import { pendingAssignmentContext } from './delegation.js';
 import { missionSourceRevision, missionResultRevision, missionContextCurrent, missionEvidenceCurrent } from './mission-context.js';
@@ -97,9 +98,10 @@ export function assessRequirement(session, input, role = 'supervisor') {
   putRecord('assessment', `${session.id}:${session.goal?.id || 'chat'}:${input.id}`, assessment); appendEvent(session.id, 'assessment', assessment); return assessment;
 }
 export async function runCheck(session, check, { signal } = {}) {
+  const policy = programScopeCommandPolicy(session);
   const op = { id: randomUUID(), sessionId: session.id, checkId: check.id, argv: check.argv, state: 'planned', createdAt: now() };
   putRecord('operation', op.id, op); appendEvent(session.id, 'verification.started', { id: op.id, checkId: check.id });
-  const child = spawnBounded(check.argv[0], check.argv.slice(1), { cwd: session.cwd, policy: session.policy || session.contract.policy });
+  const child = spawnBounded(check.argv[0], check.argv.slice(1), { cwd: session.cwd, policy });
   op.state = 'dispatched'; op.pid = child.pid; putRecord('operation', op.id, op);
   let stdout = '', stderr = '', truncated = false, timedOut = false;
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');

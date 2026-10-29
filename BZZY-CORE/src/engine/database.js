@@ -30,6 +30,7 @@ export function database() {
     CREATE INDEX IF NOT EXISTS records_document_source ON records(kind,json_extract(data,'$.documentSourceSessionId'),updated_at DESC,id);
     CREATE INDEX IF NOT EXISTS records_origin_session ON records(kind,json_extract(data,'$.originSessionId'),updated_at DESC,id);
     CREATE INDEX IF NOT EXISTS records_cwd ON records(kind,json_extract(data,'$.cwd'),updated_at DESC,id);
+    CREATE INDEX IF NOT EXISTS learning_evaluation_candidate ON records(json_extract(data,'$.evaluation.candidateId'),json_extract(data,'$.evaluation.candidateVersion'),json_extract(data,'$.evaluation.contract')) WHERE kind='core.learning.job';
     CREATE INDEX IF NOT EXISTS outbox_time ON records(json_extract(data,'$.event.occurredAt')) WHERE kind='outbox';
     CREATE TABLE IF NOT EXISTS requests (scope TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, response TEXT, state TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(scope,id));
     INSERT OR IGNORE INTO metadata VALUES ('schema_version','1');`);

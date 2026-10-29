@@ -82,6 +82,27 @@ test('compact execution reads project constraints without loading historical pro
   } finally { fs.readdirSync = readdir; }
 });
 
+test('full context samples project notes after the same bounded migration used by recall', () => {
+  session.goal.objective='RELATION_SNAPSHOT';saveSession(session);
+  for(let index=0;index<35;index++) {
+    const id=`00000000-0000-4000-8000-${String(index).padStart(12,'0')}`;
+    putRecord('memory',id,{id,sessionId:session.id,projectId:session.projectId,project:session.projectRoot,
+      kind:'hypothesis',truth:'hypothesis',statement:'RELATION_SNAPSHOT historical fixture',evidence:[],inputs:[],revision:1,createdAt:'2026-01-01T00:00:00Z'});
+  }
+  for(const expectedCoverage of ['backfill-pending','complete']) {
+    const snapshot=JSON.parse(contextFor(session));
+    const notes=new Map(snapshot.projectContext.notes.map(item=>[item.id,item]));
+    const overlap=snapshot.relevantMemory.filter(item=>notes.has(item.id));
+    assert.ok(overlap.length>0);
+    for(const memory of overlap) {
+      assert.equal(memory.relationshipCoverage,expectedCoverage);
+      assert.equal(notes.get(memory.id).relationshipCoverage,memory.relationshipCoverage);
+      assert.equal(notes.get(memory.id).stale,memory.stale);
+      assert.equal(notes.get(memory.id).truth,memory.truth);
+    }
+  }
+});
+
 test('worker compact execution retains complete immutable mission, bounded assignment contract and actual runtime grants', () => {
   const parent = createSession(getProvider('codex'), session.cwd, 'offline-parent'); initializeProject(parent); saveSession(parent);
   session.role = 'executor'; session.parentSessionId = parent.id; session.assignmentId = randomUUID(); session.assignmentRound = 3;

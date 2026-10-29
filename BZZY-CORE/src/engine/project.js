@@ -5,7 +5,7 @@ import { privateDir, readJson, writeJson } from './files.js';
 import { database, digest, now, getRecord, putRecord, transaction } from './database.js';
 import { inside } from './evidence.js';
 import { projectIdentityForSession, resolveProjectIdentity, recordBelongsToProject, sessionBelongsToProject } from './project-identity.js';
-import { knowledgeAccess, allowedKnowledgeSessionIds, indexKnowledgeRecord, assertKnowledgeText, cleanKnowledgeValue, cleanKnowledgeText } from './knowledge-index.js';
+import { knowledgeAccess, allowedKnowledgeSessionIds, indexKnowledgeRecord, assertKnowledgeText, cleanKnowledgeValue, cleanKnowledgeText, searchKnowledgeIndex, canonicalKnowledgeSource } from './knowledge-index.js';
 import { memoryFreshness, knowledgeVerificationBudget } from './memory.js';
 
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
@@ -104,6 +104,19 @@ export function agentRecords(root, kind) {
   return fs.readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isDirectory()).slice(0, 256)
     .flatMap(entry => recordsIn(inside(dir, entry.name) + path.sep + kind).map(record => ({ ...record, agent: entry.name })));
 }
+export const issueLifecycleProperties = {
+  observedAt: { type: ['string', 'null'], description: 'When the underlying issue observation occurred; null means unknown. This never refreshes technical truth.' },
+  applicability: { type: 'object', additionalProperties: false, properties: { validFrom: { type: 'string' }, validUntil: { type: 'string' }, environment: { type: 'string' }, version: { type: 'string' } } },
+  reportLifecycle: { type: 'object', additionalProperties: false, properties: {
+    state: { type: 'string', enum: ['draft', 'saved', 'claimed_submitted', 'acknowledged', 'fixed'] },
+    observedAt: { type: ['string', 'null'] }, evidence: { type: 'array', maxItems: 32, items: { type: 'string' } },
+    note: { type: 'string', maxLength: 1000 } }, required: ['state'] },
+};
+function knowledgeTimestamp(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string' || value.length > 40 || !/^\d{4}-\d\d-\d\dT/.test(value) || !Number.isFinite(Date.parse(value))) throw new Error('Use an ISO timestamp or null for an unknown observation time.');
+  return new Date(value).toISOString();
+}
 export function issue(session, input) {
   const access = knowledgeAccess(session), project = access.project, allowed = allowedKnowledgeSessionIds(session, access);
   if (access.disabled || !['open', 'investigating', 'resolved', 'blocked', 'inconclusive', 'disproved'].includes(input.status || 'open')) throw new Error('Issue needs a title and valid status.');
@@ -118,17 +131,57 @@ export function issue(session, input) {
   })) throw new Error('Issue evidence must use authorized recorded artifact IDs.');
   if (['resolved', 'disproved'].includes(input.status) && !evidence.length) throw new Error('Resolved or disproved issues need evidence.');
   const details = input.details ? assertKnowledgeText(input.details, 6000) : '', resolution = input.resolution ? assertKnowledgeText(input.resolution, 4000) : '';
+  const observedAt = input.observedAt === undefined ? previous?.observedAt || null : knowledgeTimestamp(input.observedAt);
+  let applicability = previous?.applicability || null;
+  if (input.applicability != null) {
+    if (!input.applicability || typeof input.applicability !== 'object' || Array.isArray(input.applicability)
+        || Object.keys(input.applicability).some(key => !['validFrom', 'validUntil', 'environment', 'version'].includes(key))) throw new Error('Invalid issue applicability fields.');
+    applicability = { validFrom: knowledgeTimestamp(input.applicability.validFrom), validUntil: knowledgeTimestamp(input.applicability.validUntil),
+      ...(input.applicability.environment ? { environment: assertKnowledgeText(input.applicability.environment, 300) } : {}),
+      ...(input.applicability.version ? { version: assertKnowledgeText(input.applicability.version, 300) } : {}) };
+    if (applicability.validFrom && applicability.validUntil && applicability.validFrom >= applicability.validUntil) throw new Error('Issue applicability must end after it starts.');
+  }
+  let reportLifecycle = previous?.reportLifecycle || null;
+  if (input.reportLifecycle != null) {
+    const value = input.reportLifecycle;
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['state', 'observedAt', 'evidence', 'note'].includes(key))
+        || !['draft', 'saved', 'claimed_submitted', 'acknowledged', 'fixed'].includes(value.state)) throw new Error('Invalid report lifecycle.');
+    const references = value.evidence || [];
+    if (!Array.isArray(references) || references.length > 32 || references.some(id => !evidence.includes(id)) || value.state !== 'draft' && !references.length) throw new Error('Report lifecycle claims require evidence linked to this issue.');
+    reportLifecycle = { state: value.state, observedAt: knowledgeTimestamp(value.observedAt), evidence: [...new Set(references)],
+      note: value.note ? assertKnowledgeText(value.note, 1000) : '', recordedAt: now(),
+      provenance: 'agent-reported', authority: 'Reported lifecycle only; submission, acknowledgement and a fix do not establish technical truth.' };
+  }
   const record = atomic(db => {
     const current = getRecord('issue', id) || previous;
     if (input.expectedRevision != null && (current?.revision || (current ? 1 : 0)) !== input.expectedRevision) throw new Error('Issue changed. Refresh its revision before updating.');
     const saved = { ...current, id, project: project.root, projectId: project.id, agent: session.agentNamespace, sessionId: session.id, title,
       status: input.status || 'open', details, evidence, resolution, truth: 'inconclusive', claimedTruth: input.status === 'disproved' ? 'disproved' : input.status === 'resolved' ? 'confirmed' : 'hypothesis',
       revision: (current?.revision || (current ? 1 : 0)) + 1, createdAt: current?.createdAt || now(), updatedAt: now(), provenance: 'agent-recorded' };
+    Object.assign(saved, { observedAt, recordedAt: now(), sourceVersion: saved.revision, applicability,
+      freshness: applicability ? { validFrom: applicability.validFrom, expiresAt: applicability.validUntil,
+        ...(applicability.environment ? { environment: applicability.environment } : {}), ...(applicability.version ? { version: applicability.version } : {}) } : current?.freshness || {},
+      reportLifecycle: reportLifecycle ? { ...reportLifecycle, ...(input.reportLifecycle ? { sourceVersion: saved.revision } : {}) } : null });
     if (current) putRecord('core.issue.revision', `${id}:${current.revision || 1}`, current, db);
     putRecord('issue', id, saved, db); putRecord('core.issue.revision', `${id}:${saved.revision}`, saved, db); return saved;
   });
   writeProjectRecord(session, 'issues', id, record);
-  indexKnowledgeRecord(project, 'issue', id, session.id, `${title}\n${details}\n${resolution}`, record); return record;
+  indexKnowledgeRecord(project, 'issue', id, session.id, `${title}\n${details}\n${resolution}`, record);
+  if (previous) return record;
+  let likelyDuplicateIssues;
+  try {
+    const result = searchKnowledgeIndex(access, allowed, { query: title.slice(0, 500), types: ['issue'], limit: 6, readOnly: true, count: false });
+    const items = result.items.filter(hit => hit.sourceId !== id).flatMap(hit => {
+      const source = canonicalKnowledgeSource(access, hit, allowed);
+      if (!source) return [];
+      return [{ id: hit.sourceId, revision: source.revision || 1, title: cleanKnowledgeText(source.title, 240),
+        status: ['open', 'investigating', 'resolved', 'blocked', 'inconclusive', 'disproved'].includes(source.status) ? source.status : 'inconclusive',
+        truth: 'inconclusive', historical: true }];
+    }).slice(0, 5);
+    likelyDuplicateIssues = { items, coverage: result.indexingRequired ? 'index-incomplete' : result.nextOffset != null ? 'bounded-matching-index' : 'matching-index-only',
+      complete: false, authority: 'Potential title matches only. Review original issue IDs before creating another claim; similarity never merges records or establishes truth.' };
+  } catch { likelyDuplicateIssues = { items: [], complete: false, coverage: 'index-unavailable', authority: 'Duplicate advice is unavailable; existing issues remain authoritative source records.' }; }
+  return { ...record, likelyDuplicateIssues };
 }
 // Execution constraints remain complete even when derived project history is
 // projected as navigation. Reuse knowledge's private-field/redaction policy,
