@@ -197,9 +197,14 @@ export class UI {
     }
     if (input.trim() === '/yolo') { await this.toggleYolo(); return true; }
     if (input.trim() === '/metrics') { this.openTerminal(); this.tui?.setPanel('metrics'); return true; }
-    if (input.trim() === '/debug' || input.trim() === '/full_debug_export') {
+    if (input.trim() === '/debug' || /^\/full_debug_export(?:\s|$)/.test(input.trim())) {
+      if (input.trim() !== '/debug' && !/^\/full_debug_export(?:\s+--bounded)?$/.test(input.trim())) {
+        this.event('error', { message: 'Use /full_debug_export or /full_debug_export --bounded.' }); return true;
+      }
       this.openTerminal(); this.tui?.setPanel('metrics');
-      await this.sessionMetrics?.activate(input.trim() === '/full_debug_export' ? 'full-export' : 'export'); return true;
+      await this.sessionMetrics?.activate(input.trim() === '/debug' ? 'export' : 'full-export', {
+        captureMode: /\s--bounded$/.test(input.trim()) ? 'bounded' : 'complete',
+      }); return true;
     }
     if (/^\/session-action(?:\s|$)/.test(input)) {
       const match = /^\/session-action (share|delete) ([a-f0-9-]{36})$/.exec(input.trim());

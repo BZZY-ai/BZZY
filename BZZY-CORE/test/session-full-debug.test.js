@@ -181,11 +181,11 @@ test('valid multibyte aliases keep export filenames within filesystem byte limit
   assert.deepEqual(state(), before);
 });
 
-test('large optional project files are listed as omissions while complete history and smaller files remain exportable', async () => {
+test('bounded capture lists oversized project files as omissions while complete history remains exportable', async () => {
   const large = path.join(parent.cwd, 'large.bin'); fs.closeSync(fs.openSync(large, 'wx')); fs.truncateSync(large, 65 * 1024 * 1024);
   fs.writeFileSync(path.join(parent.cwd, 'small.txt'), 'SMALL_INPUT_RETAINED');
   appendEvent(parent.id, 'text', { text: 'COMPLETE_SAVED_HISTORY' }); const before = state();
-  const result = await exportFullSessionDebug(parent.id), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
+  const result = await exportFullSessionDebug(parent.id, { captureMode: 'bounded' }), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
   assert.equal(manifest.complete, true);
   assert.equal(files['workspace/large.bin'], undefined);
   assert.equal(files['workspace/small.txt'].toString(), 'SMALL_INPUT_RETAINED');
@@ -195,6 +195,46 @@ test('large optional project files are listed as omissions while complete histor
   assert.equal(fs.statSync(large).size, 65 * 1024 * 1024); assert.deepEqual(state(), before);
   assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
   assert.deepEqual(fs.readFileSync(fileURLToPath(new URL('../../GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))), fs.readFileSync(fileURLToPath(new URL('../docs/GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))));
+});
+
+test('complete capture refuses an oversized atomic source instead of publishing a size-omitted archive', async () => {
+  const large = path.join(parent.cwd, 'large.txt'); fs.closeSync(fs.openSync(large, 'wx')); fs.truncateSync(large, 65 * 1024 * 1024);
+  const before = state();
+  await assert.rejects(exportFullSessionDebugInWorker(parent.id), error => error.code === 'SESSION_DEBUG_SOURCE_SIZE' && error.exportPhase === 'workspace');
+  assert.ok(!fs.readdirSync(parent.cwd).some(name => name.endsWith('.zip')));
+  assert.equal(fs.statSync(large).size, 65 * 1024 * 1024); assert.deepEqual(state(), before);
+  assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
+});
+
+test('complete capture streams a ledger over 64 MiB with every record and matching provenance', async () => {
+  const source = path.join(parent.cwd, '.bzzy', 'large-ledger.jsonl');
+  const row = Buffer.from(JSON.stringify({ note: 'z'.repeat(256 * 1024), token: 'PRIVATE_LEDGER_TOKEN', type: 'note' }) + '\n');
+  const fd = fs.openSync(source, 'wx');
+  try { for (let index = 0; index < 260; index++) fs.writeSync(fd, row); } finally { fs.closeSync(fd); }
+  assert.ok(fs.statSync(source).size > 64 * 1024 ** 2);
+  const before = state(), result = await exportFullSessionDebugInWorker(parent.id);
+  assert.equal(result.captureMode, 'complete'); assert.equal(result.contextLimited, false);
+  assert.equal(result.contextCapture.limitBytes, null); assert.ok(result.uncompressedBytes > 64 * 1024 ** 2);
+  const verified = spawnSync('python3', ['-c', `import sys, json, zipfile, hashlib
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    manifest = json.loads(archive.read('manifest.json'))
+    entry = next(row for row in manifest['inventory'] if row['path'] == 'workspace/.bzzy/large-ledger.jsonl')
+    count, size, digest = 0, 0, hashlib.sha256()
+    with archive.open(entry['path']) as ledger:
+        for line in ledger:
+            value = json.loads(line)
+            assert value == {'note': 'z' * (256 * 1024), 'type': 'note'}
+            count += 1; size += len(line); digest.update(line)
+    assert count == 260 and entry['bytes'] == size and entry['sha256'] == digest.hexdigest()
+    digest = hashlib.sha256()
+    with open(sys.argv[2], 'rb') as source:
+        while block := source.read(1024 * 1024): digest.update(block)
+    assert entry['sourceSha256'] == digest.hexdigest()
+    assert not any(name.startswith('.manifest-') or name.startswith('.jsonl-capture-') for name in archive.namelist())
+    assert sum(row.file_size for row in archive.infolist()) == int(sys.argv[3])
+print('verified')`, result.outputPath, source, String(result.uncompressedBytes)], { encoding: 'utf8', maxBuffer: 4096 });
+  assert.equal(verified.status, 0, verified.stderr); assert.match(verified.stdout, /verified/);
+  assert.deepEqual(state(), before); assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
 });
 
 test('optional context exhaustion keeps memory history and prioritizes notes, artifacts and skills over bulk files', async t => {
@@ -245,17 +285,29 @@ test('worker forwards an empty optional budget while retaining complete scoped d
   assert.equal(files['workspace/unvisited.txt'], undefined); assert.ok(files['GUIDE_TO_BZZY_DEBUGGER.txt']);
 });
 
-test('many empty optional files cannot exhaust reserved manifest space or silently drop omission coverage', async () => {
+test('bounded capture preserves manifest headroom and omission coverage for many empty files', async () => {
   const bulk = path.join(parent.cwd, 'bulk'); fs.mkdirSync(bulk);
   for (let index = 0; index < 5000; index++) fs.writeFileSync(path.join(bulk, `${String(index).padStart(5, '0')}-${'a'.repeat(200)}.txt`), '');
   appendEvent(parent.id, 'text', { text: 'HISTORY_WITH_MANY_EMPTY_CONTEXT_FILES' });
-  const result = await exportFullSessionDebug(parent.id), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
+  const result = await exportFullSessionDebug(parent.id, { captureMode: 'bounded' }), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
   assert.equal(result.contextLimited, true); assert.equal(result.contextCapture.metadataBytes, result.contextCapture.metadataLimitBytes);
   assert.equal(result.contextCapture.omittedPathsComplete, false);
   assert.ok(manifest.exclusions.some(row => row.path === 'optional-context' && row.reason === 'context_manifest_budget' && row.subtree));
   assert.ok(Object.keys(files).filter(name => name.startsWith('workspace/bulk/')).length < 5000);
   assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'HISTORY_WITH_MANY_EMPTY_CONTEXT_FILES'));
   assert.ok(Buffer.byteLength(files['manifest.json']) < result.contextCapture.manifestReserveBytes);
+});
+
+test('complete capture keeps a large inventory without the bounded metadata ceiling', async () => {
+  const bulk = path.join(parent.cwd, 'bulk'); fs.mkdirSync(bulk);
+  for (let index = 0; index < 5000; index++) fs.writeFileSync(path.join(bulk, `${String(index).padStart(5, '0')}-${'a'.repeat(200)}.txt`), '');
+  const result = await exportFullSessionDebug(parent.id), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
+  assert.equal(result.contextLimited, false); assert.equal(result.contextCapture.metadataLimitBytes, null);
+  assert.ok(result.contextCapture.metadataBytes > 4 * 1024 ** 2);
+  assert.equal(Object.keys(files).filter(name => name.startsWith('workspace/bulk/')).length, 5000);
+  assert.equal(manifest.inventory.filter(row => row.path.startsWith('workspace/bulk/')).length, 5000);
+  assert.ok(!manifest.exclusions.some(row => /budget|headroom/.test(row.reason)));
+  assert.ok(!Object.keys(files).some(name => name.startsWith('.manifest-')));
 });
 
 test('future events and incomplete records retain their valid JSON payloads without crashing or mutating history', async () => {
@@ -299,10 +351,14 @@ test('mandatory history size limits publish no clipped ZIP and retain the saved 
 test('staging disk failures remain fatal during optional capture and manifest writing without exposing private details', async t => {
   fs.writeFileSync(path.join(parent.cwd, 'small.txt'), 'saved source'); const before = state();
   for (const [suffix, phase] of [[path.join('workspace', 'small.txt'), 'workspace'], ['manifest.json', 'manifest']]) {
-    const write = fs.writeFileSync;
+    const write = fs.writeFileSync, open = fs.openSync;
     t.mock.method(fs, 'writeFileSync', (file, ...args) => {
       if (String(file).endsWith(path.sep + suffix)) throw Object.assign(new Error('private-token=DO_NOT_DISPLAY'), { code: 'ENOSPC' });
       return write(file, ...args);
+    });
+    t.mock.method(fs, 'openSync', (file, ...args) => {
+      if (suffix === 'manifest.json' && String(file).endsWith(path.sep + suffix)) throw Object.assign(new Error('private-token=DO_NOT_DISPLAY'), { code: 'ENOSPC' });
+      return open(file, ...args);
     });
     await assert.rejects(exportFullSessionDebug(parent.id), error => error.code === 'SESSION_DEBUG_SPACE' && error.exportPhase === phase && !error.message.includes('DO_NOT_DISPLAY'));
     t.mock.restoreAll();

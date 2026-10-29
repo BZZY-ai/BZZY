@@ -2,7 +2,7 @@ import { clean, cellWidth, clip, wrap } from './terminal-format.js';
 import { debugExportErrorMessage } from '@bzzy/core/engine/debug-export-errors.js';
 import { isStalledGoal } from '@bzzy/core/engine/goal-state.js';
 import { costLabel, deepseekSpendingVisible, sessionCostLines } from './session-cost-format.js';
-import { debugExportProgressLines, safeDebugExportProgress, debugExportContextNotice } from './debug-export-progress.js';
+import { debugExportProgressLines, safeDebugExportProgress, debugExportContextNotice, debugExportSummary } from './debug-export-progress.js';
 
 const loadRecordedMetrics = async id => (await import('@bzzy/core/engine/session-metrics.js')).sessionMetrics(id);
 const exportRecordedDebug = async id => (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug(id);
@@ -75,7 +75,7 @@ export class SessionMetricsPanel {
       { action: 'full-export', text: this.exporting && this.exportJob?.full ? 'Exporting ZIP…' : 'Full debug ZIP', disabled: this.exporting || !this.sessionId || this.data?.available === false },
     ];
   }
-  async activate(action) {
+  async activate(action, { captureMode = 'complete' } = {}) {
     if (!this.active || this.closed) return;
     if (['goal', 'session', 'chat'].includes(action)) {
       this.scope = action;
@@ -86,7 +86,7 @@ export class SessionMetricsPanel {
     if (action === 'export' || action === 'full-export') {
       if (this.exporting || !this.sessionId || this.data?.available === false) return;
       const id = this.sessionId, full = action === 'full-export';
-      const job = { sessionId: id, full, running: true, startedAt: Date.now(), updatedAt: Date.now(), progress: { phase: 'session' } };
+      const job = { sessionId: id, full, captureMode, running: true, startedAt: Date.now(), updatedAt: Date.now(), progress: { phase: 'session' } };
       this.exportJob = job;
       this.exporting = true; this.exportError = null; this.exportResult = null; this.changed();
       if (full) {
@@ -104,7 +104,7 @@ export class SessionMetricsPanel {
           job.progress = progress; job.updatedAt = Date.now();
           if (this.active && id === this.sessionId) this.changed();
         };
-        const result = await (full ? this.exportFullDebug(id, { onProgress }) : this.exportDebug(id));
+        const result = await (full ? this.exportFullDebug(id, { onProgress, captureMode }) : this.exportDebug(id));
         job.result = result;
         if (!this.closed && id === this.sessionId) this.exportResult = result;
       } catch (error) {
@@ -152,13 +152,15 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
   if (panel.exportJob?.running && panel.exportJob.full) {
     if (panel.exportJob.sessionId === panel.sessionId) {
       for (const line of debugExportProgressLines(panel.exportJob.progress, {
-        elapsedMs: Date.now() - panel.exportJob.startedAt, quietMs: Date.now() - panel.exportJob.updatedAt,
+        elapsedMs: Date.now() - panel.exportJob.startedAt, quietMs: Date.now() - panel.exportJob.updatedAt, captureMode: panel.exportJob.captureMode,
       })) prose(line, 'accent');
     } else prose('A full debug export for another chat is still in progress.', 'muted');
     put();
   }
   if (panel.exportResult) {
     prose((panel.exportResult.full ? 'Full debug ZIP exported · ' : 'Debug exported · ') + panel.exportResult.outputPath, 'goalSuccess');
+    const summary = debugExportSummary(panel.exportResult);
+    if (summary) prose(summary, 'muted');
     const contextNotice = debugExportContextNotice(panel.exportResult);
     if (contextNotice) prose(contextNotice, 'warning');
     if (panel.exportResult.full && Number.isSafeInteger(panel.exportResult.exclusions) && panel.exportResult.exclusions > 0)

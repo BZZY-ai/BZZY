@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { safeDebugExportProgress, debugExportProgressLines, createDebugExportProgressReporter, debugExportContextNotice } from '../src/debug-export-progress.js';
+import { safeDebugExportProgress, debugExportProgressLines, createDebugExportProgressReporter, debugExportContextNotice, debugExportSummary } from '../src/debug-export-progress.js';
+
+test('capture summaries distinguish complete and bounded mode and captured data from ZIP size', () => {
+  assert.equal(debugExportSummary({ full: true, captureMode: 'complete', files: 1000, uncompressedBytes: 5 * 1024 ** 3, bytes: 2 * 1024 ** 3 }),
+    'Complete capture · 1,000 files · 5.00 GiB captured · 2.00 GiB ZIP');
+  assert.equal(debugExportSummary({ full: true, captureMode: 'bounded', files: 0, uncompressedBytes: 0, bytes: 0 }),
+    'Bounded capture · 0 files · 0 B captured · 0 B ZIP');
+  assert.equal(debugExportSummary({ full: false }), null);
+  assert.equal(debugExportSummary({ full: true, captureMode: 'PRIVATE', files: -1, uncompressedBytes: Infinity, bytes: 'PRIVATE' }), 'Full capture');
+  assert.match(debugExportProgressLines({ phase: 'history' }, { captureMode: 'complete' }).join('\n'), /complete capture/);
+  assert.match(debugExportProgressLines({ phase: 'history' }, { captureMode: 'bounded' }).join('\n'), /bounded capture/);
+  assert.doesNotMatch(debugExportProgressLines({ phase: 'history' }, { captureMode: 'PRIVATE' }).join('\n'), /PRIVATE/);
+});
 
 test('successful context-limited export distinguishes retained diagnostics from omitted project files', () => {
   const message = debugExportContextNotice({ full: true, contextLimited: true, contextBudget: { reason: 'PRIVATE_TEXT' } });

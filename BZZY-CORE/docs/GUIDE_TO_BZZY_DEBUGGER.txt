@@ -85,6 +85,8 @@ Full debug ZIP:
   In another terminal: bzzy debug full "session-name"
   Alias command: bzzy full_debug_export "session-name"
   Optional destination: bzzy debug full "session-name" investigation_full.zip
+  Optional bounded capture: /full_debug_export --bounded
+  Or: bzzy debug full "session-name" investigation_full.zip --bounded
 
 Default filename:
 
@@ -95,6 +97,8 @@ streams, full logical conversation messages, memory/compaction/learning state,
 derived recall documents when present, project files including .bzzy notes and
 ledgers, referenced execution/evidence/snapshot files, and skill resources.
 The full streams do not inherit the regular overview's text/array display caps.
+Complete capture is the default. The result reports mode, file count,
+uncompressed captured bytes and compressed ZIP bytes separately.
 
 Inside the TUI, output goes into the saved terminal's original project directory.
 From a separate terminal, output goes into the calling directory or --cwd. Date
@@ -153,6 +157,10 @@ For a full ZIP:
   2. Read README_FIRST.txt, this guide when bundled, and manifest.json.
   3. Verify the manifest format is bzzy-full-session-debug and complete=true.
   4. Inspect exclusions before assuming any subsystem is absent or broken.
+     Read captureMode, contextLimited and contextCapture to distinguish complete
+     capture from an explicitly bounded export. Compare uncompressedBytes with
+     the archive's compressed size; speed and compression ratio do not establish
+     completeness.
      Also inspect excludedRecordKinds and recordPolicy for scoped record types
      that were excluded from the safe diagnostic projection.
   5. Read overview.md for orientation and its limitations.
@@ -259,24 +267,29 @@ credential/archive/database containers can be excluded. Their reason is listed.
 Do not call a ZIP literally complete at the byte level when exclusions exist.
 If a relevant source is absent, state the gap and propose a minimal safe follow-up.
 
-Optional source files over 64 MiB are omitted before reading, with their sizes
-recorded in manifest.exclusions. Unavailable or unlistable directories are also
-omissions; a large APK or binary does not block saved-history export. Individual
-logical messages are bounded to 64 MiB; generated JSONL streams can be larger.
-Optional context has a 512 MiB aggregate budget, further reduced when needed
-to fit within the 4 GiB uncompressed staging limit. Scoped diagnostic streams,
-skill metadata and guides are written first. File capture prioritizes .bzzy
-notes/ledgers, referenced artifact files and checked skills before bulk project,
-worker and snapshot trees. Budget overflow omits whole files or subtrees; it
-does not clip the saved diagnostic streams or fail an otherwise valid export.
-Check contextLimited, contextCapture and manifest.exclusions. An omitted subtree
-may not have been enumerated, so do not infer its exact missing-file count.
-A manifest reserve of at least 8 MiB and bounded context metadata prevent optional
-inventory or exclusions from exhausting the remaining space. This metadata reserve
-counts toward the hard stage budget and is admitted before optional capture.
-A mandatory message/stage
-limit still fails the operation rather than publishing clipped diagnostic
-streams. Staging byte counts are not compressed ZIP sizes.
+Complete capture has no 512 MiB project budget or 4 GiB staging cap. ZIP64
+packaging, manifest writing and JSONL source capture stream to disk. Multi-gigabyte
+archives require space for both redacted staging files and the output ZIP.
+Directory file counts and saved record selection still consume memory; host
+resources remain finite.
+
+Redaction processes complete logical values. Individual non-JSONL source files,
+JSONL records and assembled conversation messages have a 64 MiB processing limit.
+JSONL files can exceed that total size when each record fits. An oversized
+eligible source fails complete capture explicitly and publishes no completed ZIP;
+size is never a silent omission in this mode. Unavailable or unlistable project
+directories can still be listed as source omissions.
+
+Explicit --bounded mode retains a 512 MiB optional context budget and a 4 GiB
+uncompressed staging limit. Scoped diagnostic streams, skill metadata and guides
+are written first. File capture prioritizes .bzzy notes/ledgers, referenced
+artifacts and checked skills before bulk project, worker and snapshot trees.
+Optional files over the processing or capture limits are omitted whole. Check
+captureMode, contextLimited, contextCapture and manifest.exclusions. An omitted
+subtree may not have been enumerated, so do not infer its exact missing-file count.
+An 8 MiB minimum manifest reserve and bounded context metadata preserve space for
+required diagnostics. Mandatory message/stage limits still fail this mode rather
+than publishing clipped diagnostic streams. Staging bytes are not ZIP bytes.
 Binary/changed/unreadable/unsafe resources can be explicitly omitted. Check the
 manifest to distinguish an intentional privacy exclusion from a capture failure.
 

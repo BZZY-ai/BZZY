@@ -204,14 +204,30 @@ test('/debug stays local and stale exports cannot appear in another chat', async
 
 test('Full debug ZIP and /full_debug_export route to the full exporter without model input or draft changes', async () => {
   const { ui, input, frame } = terminal(); const exported = [];
-  ui.sessionFullDebugExporter = async id => { exported.push(id); return { outputPath: '/project/chat_full_debug_26102026.zip', full: true }; };
+  ui.sessionFullDebugExporter = async (id, { captureMode }) => { exported.push({ id, captureMode }); return {
+    outputPath: '/project/chat_full_debug_26102026.zip', full: true, captureMode, files: 100, uncompressedBytes: 5 * 1024 ** 3, bytes: 1024 ** 3,
+  }; };
   try {
     const pending = ui.ask('bzzy › '); await settle(); ui.tui.value = 'Keep this draft';
     await ui.settingsCommand('/metrics'); await settle(); input.write('f'); await settle(); await ui.tui.metricsTask; ui.tui.render();
-    assert.deepEqual(exported, [firstId]); assert.match(frame(), /Full debug ZIP exported/); assert.match(frame(), /chat_full_debug_26102026.zip/);
-    ui.tui.goBack(); await ui.settingsCommand('/full_debug_export'); assert.deepEqual(exported, [firstId, firstId]);
+    assert.deepEqual(exported, [{ id: firstId, captureMode: 'complete' }]); assert.match(frame(), /Full debug ZIP exported/); assert.match(frame(), /chat_full_debug_26102026.zip/);
+    assert.match(frame(), /Complete capture.*100 files.*5\.00 GiB captured.*1\.00 GiB ZIP/);
+    ui.tui.goBack(); await ui.settingsCommand('/full_debug_export');
+    ui.tui.goBack(); await ui.settingsCommand('/full_debug_export --bounded');
+    assert.deepEqual(exported, [{ id: firstId, captureMode: 'complete' }, { id: firstId, captureMode: 'complete' }, { id: firstId, captureMode: 'bounded' }]);
     assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.entries.length, 0); assert.equal(ui.permissionConnection, undefined);
     assert.ok(commandSuggestions('/full_debug').some(item => item.command === '/full_debug_export'));
+    ui.tui.finish(null); await pending;
+  } finally { ui.close(); }
+});
+
+test('invalid full export options are handled locally without exporting or sending model input', async () => {
+  const { ui } = terminal(); let calls = 0;
+  ui.sessionFullDebugExporter = async () => { calls++; };
+  try {
+    const pending = ui.ask('bzzy › '); await settle(); ui.tui.value = 'Keep this draft';
+    assert.equal(await ui.settingsCommand('/full_debug_export --unknown'), true);
+    assert.equal(calls, 0); assert.equal(ui.tui.value, 'Keep this draft');
     ui.tui.finish(null); await pending;
   } finally { ui.close(); }
 });

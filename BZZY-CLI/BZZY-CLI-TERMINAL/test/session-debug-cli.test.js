@@ -9,8 +9,20 @@ import { createSession, saveSession, loadSession } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
 import { database, appendEvent } from '../src/database.js';
 import { persistOperatorStopIntent, operatorStopRequested, runtimeInfo } from '../src/runtime.js';
+import { parseArgs } from '../src/cli.js';
 
 const binary = fileURLToPath(new URL('../bin/bzzy.js', import.meta.url));
+test('bounded export is explicit and unavailable to unrelated commands', () => {
+  assert.equal(parseArgs(['debug', 'full', 'chat']).options.debugBounded, undefined);
+  for (const args of [['debug', 'full', 'chat', '--bounded'], ['full_debug_export', 'chat', '--bounded'], ['--bounded', 'debug', 'full', 'chat']]) {
+    assert.equal(parseArgs(args).options.debugBounded, true);
+  }
+  for (const args of [['debug', 'export', 'chat', '--bounded'], ['run', 'hello', '--bounded'], ['--bounded']]) {
+    assert.throws(() => parseArgs(args), /--bounded is only available/);
+  }
+  assert.throws(() => parseArgs(['debug', 'full', 'chat', '--bounded=true']), /Unknown option/);
+});
+
 test('a separate CLI exports a saved running session into the caller folder without starting stopped Core or replaying work', () => {
   const before = process.env.BZZY_HOME, directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-debug-cli-')));
   try {
@@ -37,8 +49,18 @@ test('a separate CLI exports a saved running session into the caller folder with
     assert.ok(full.stdout.trim().split('\n').every(line => JSON.parse(line).type === 'debug.exported'), 'Progress must not pollute JSON stdout.');
     const fullResult = full.stdout.trim().split('\n').map(JSON.parse).find(event => event.type === 'debug.exported');
     const fullData = fullResult.data || fullResult; assert.equal(fullData.full, true); assert.equal(path.dirname(fullData.outputPath), current);
+    assert.equal(fullData.captureMode, 'complete'); assert.ok(fullData.uncompressedBytes > 0);
+    assert.match(fullData.message, /Complete capture.*files.*captured.*ZIP/); assert.match(full.stderr, /complete capture/);
     assert.match(path.basename(fullData.outputPath), /^nine-hour-session_full_debug_\d{8}\.zip$/);
     assert.equal(runtimeInfo(), null); assert.equal(operatorStopRequested(), true); assert.equal(loadSession(session.id).executionState, 'running');
+    assert.deepEqual(database().prepare('SELECT * FROM records ORDER BY kind,id').all(), state);
+    assert.deepEqual(database().prepare('SELECT * FROM events ORDER BY seq').all(), events);
+    const bounded = spawnSync(process.execPath, [binary, 'debug', 'full', session.alias, 'bounded.zip', '--bounded', '--json'],
+      { cwd: current, env: process.env, encoding: 'utf8', timeout: 15000 });
+    assert.equal(bounded.status, 0, bounded.stderr + bounded.stdout);
+    const boundedEvent = bounded.stdout.trim().split('\n').map(JSON.parse).find(event => event.type === 'debug.exported'), boundedData = boundedEvent.data || boundedEvent;
+    assert.equal(boundedData.captureMode, 'bounded'); assert.match(boundedData.message, /Bounded capture/); assert.match(bounded.stderr, /bounded capture/);
+    assert.equal(boundedData.contextCapture.limitBytes, 512 * 1024 ** 2);
     assert.deepEqual(database().prepare('SELECT * FROM records ORDER BY kind,id').all(), state);
     assert.deepEqual(database().prepare('SELECT * FROM events ORDER BY seq').all(), events);
     const failedFull = spawnSync(process.execPath, [binary, 'debug', 'full', session.alias, path.basename(fullData.outputPath), '--json'],

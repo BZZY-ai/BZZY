@@ -489,21 +489,29 @@ elapsed time and completed counts while the terminal remains responsive; the
 command-line exporter writes progress to stderr and keeps its final result on
 stdout. ZIP byte progress measures uncompressed input processed, not a predicted
 final archive size. Wait for the success message before opening or sharing the ZIP.
+The success message separates capture mode, file count, uncompressed captured
+size and compressed ZIP size.
 For a baseline before starting another goal, use
 `bzzy debug full "session-name" before-next-goal.zip` from a second terminal.
 It includes the regular overview plus complete scoped event/record/message
 streams, memory/compaction/learning history, project notes and ledgers, source
 files, referenced evidence/snapshots and skill resources. Secrets/private stores
-remain excluded, and manifest.json lists missing/changing/unsafe files. Optional
-source files over 64 MiB and unreadable directories become explicit omissions,
-so large APKs or binaries do not block saved-history export. Optional file capture
-also has a 512 MiB aggregate budget, prioritizing `.bzzy`, referenced evidence
-and checked skill resources before bulk project/snapshot/worker trees. The
-mandatory diagnostic streams are written first; project files that do not fit
-are listed as omissions instead of failing the saved-history export. Metrics
-and the command-line success message identify a context-limited ZIP. The manifest
-records budget usage and whether omitted subtrees were left unenumerated. The
-4 GiB staging cap concerns uncompressed data, not the final ZIP size. Failures
+remain excluded, and manifest.json lists missing/changing/unsafe files. Complete
+capture is the default: it has no 512 MiB project budget or 4 GiB staging cap,
+and supports multi-gigabyte archives using ZIP64. Manifest data and JSONL source
+files stream to disk. Individual non-JSONL source files, JSONL records and logical
+messages still have a 64 MiB atomic redaction limit; an oversized eligible source
+fails complete capture explicitly instead of silently omitting it. JSONL files
+may be larger when their individual records fit. Staging and the output ZIP need
+adequate disk space; file counts and selected saved records still consume memory.
+
+Use `/full_debug_export --bounded` or `bzzy debug full "session-name" --bounded`
+for the previous size-limited capture. This mode retains a 512 MiB optional
+project budget and 4 GiB uncompressed staging limit, prioritizing `.bzzy`,
+referenced evidence and checked skills. Optional files that exceed processing
+or capture limits become explicit omissions; saved diagnostic streams remain
+intact or the operation fails. The result identifies bounded mode, budget usage
+and whether omitted subtrees were left unenumerated. Failures
 show a safe category and capture phase; a ZIP retry uses
 `bzzy debug full NAME FILE.zip` from a writable caller directory.
 Every ZIP includes the detailed [read-first guide](../../GUIDE_TO_BZZY_DEBUGGER.txt)

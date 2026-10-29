@@ -146,6 +146,9 @@ For a deeper investigation, `/full_debug_export`, **Metrics → Full debug ZIP**
 or `bzzy debug full SESSION` creates `session-name_full_debug_ddmmyyyy.zip`.
 It adds complete scoped record/event/message streams, memory and learning state,
 project files/notes/ledgers, referenced evidence and safe binary skill resources.
+Complete capture supports multi-gigabyte ZIP64 archives without aggregate capture
+caps; `--bounded` opts into a size-limited project capture. Atomic redaction limits
+and source exclusions are documented in [session debugging](BZZY-CORE/docs/SESSION-DEBUG.md).
 Start with [GUIDE_TO_BZZY_DEBUGGER.txt](GUIDE_TO_BZZY_DEBUGGER.txt); that detailed
 read-first guide is also included in every full ZIP. Credential/private-store
 exclusions and capture gaps remain explicit in its manifest.

@@ -24,9 +24,19 @@ export function debugExportContextNotice(result) {
     : null;
 }
 
-export function debugExportProgressLines(value, { elapsedMs = 0, quietMs = 0 } = {}) {
+export function debugExportSummary(result) {
+  if (result?.full !== true) return null;
+  const details = [result.captureMode === 'bounded' ? 'Bounded capture' : result.captureMode === 'complete' ? 'Complete capture' : 'Full capture'];
+  if (count(result.files)) details.push(`${result.files.toLocaleString()} files`);
+  if (count(result.uncompressedBytes)) details.push(`${size(result.uncompressedBytes)} captured`);
+  if (count(result.bytes)) details.push(`${size(result.bytes)} ZIP`);
+  return details.join(' · ');
+}
+
+export function debugExportProgressLines(value, { elapsedMs = 0, quietMs = 0, captureMode } = {}) {
   const progress = safeDebugExportProgress(value) || { phase: 'session' };
-  const lines = [`Full debug ZIP · ${phases[progress.phase]} · ${duration(Math.max(elapsedMs, progress.elapsedMs || 0))} elapsed`];
+  const mode = captureMode === 'bounded' ? ' · bounded capture' : captureMode === 'complete' ? ' · complete capture' : '';
+  const lines = [`Full debug ZIP${mode} · ${phases[progress.phase]} · ${duration(Math.max(elapsedMs, progress.elapsedMs || 0))} elapsed`];
   const details = ['records', 'events', 'files'].filter(key => count(progress[key])).map(key => `${progress[key].toLocaleString()} ${key}`);
   if (count(progress.bytes)) details.push(`${size(progress.bytes)} captured`);
   if (details.length) lines.push(details.join(' · '));
@@ -40,12 +50,12 @@ export function debugExportProgressLines(value, { elapsedMs = 0, quietMs = 0 } =
 }
 
 // Keep stdout reserved for the command's final result, including --json output.
-export function createDebugExportProgressReporter({ stream = process.stderr, now = Date.now } = {}) {
+export function createDebugExportProgressReporter({ stream = process.stderr, now = Date.now, captureMode } = {}) {
   const startedAt = now(); let updatedAt = startedAt, lastPrintedAt = -Infinity, progress = { phase: 'session' }, closed = false, wrote = false;
   const render = force => {
     if (closed || !force && !stream.isTTY && now() - lastPrintedAt < 5000) return;
     const elapsedMs = Math.max(now() - startedAt, progress.elapsedMs || 0), quietMs = now() - updatedAt;
-    const lines = debugExportProgressLines(progress, { elapsedMs, quietMs });
+    const lines = debugExportProgressLines(progress, { elapsedMs, quietMs, captureMode });
     // A narrow one-line terminal must show a quiet worker before optional
     // counters. The elapsed timer alone is not evidence that work advanced.
     const line = stream.isTTY && quietMs >= 10000 && progress.phase !== 'complete'

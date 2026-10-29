@@ -153,7 +153,9 @@ Implemented:
   The separate full ZIP adds memory/compactor/learning records, complete scoped
   streams, project notes/ledgers/files and referenced execution evidence. It
   includes the [detailed debugging guide](docs/GUIDE_TO_BZZY_DEBUGGER.txt), with
-  manifest exclusions and safe capture limits instead of silent text clipping.
+  manifest exclusions and explicit atomic redaction limits. Complete capture
+  supports multi-gigabyte ZIP64 archives without aggregate capture caps;
+  `--bounded` opts into the previous size-limited project capture.
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
   and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).

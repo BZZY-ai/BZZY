@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createDebugContextBudget, debugExportLimits } from '../src/engine/debug-export-budget.js';
 
 test('optional bytes preserve manifest headroom near the hard stage limit', () => {
-  const budget = createDebugContextBudget(), limits = debugExportLimits;
+  const budget = createDebugContextBudget({ captureMode: 'bounded' }), limits = debugExportLimits;
   const mandatory = limits.stageBytes - limits.manifestReserveBytes - 25;
   assert.equal(budget.hasManifestHeadroom(mandatory), true);
   assert.equal(budget.hasManifestHeadroom(limits.stageBytes - limits.manifestReserveBytes), true);
@@ -35,6 +35,31 @@ test('optional metadata is bounded even for empty files and omitted path lists',
 
 test('trusted callers can reduce optional context but cannot enlarge the default capture cap', () => {
   assert.equal(createDebugContextBudget({ limitBytes: 0 }).reason(1, 0), 'context_byte_budget');
-  for (const limitBytes of [-1, NaN, Infinity, '10', debugExportLimits.contextBytes + 1])
+  for (const limitBytes of [null, -1, NaN, Infinity, '10', debugExportLimits.contextBytes + 1])
     assert.throws(() => createDebugContextBudget({ limitBytes }), /context budget/);
+});
+
+test('complete capture admits multi-gigabyte payloads and inventories without budget omissions', () => {
+  const budget = createDebugContextBudget();
+  const fiveGiB = 5 * 1024 ** 3;
+  assert.equal(budget.captureMode, 'complete');
+  assert.equal(budget.reason(fiveGiB, fiveGiB), null);
+  assert.equal(budget.withinStageLimit(fiveGiB), true);
+  assert.equal(budget.hasManifestHeadroom(fiveGiB), true);
+  assert.equal(budget.metadata(12 * 1024 ** 2), true);
+  budget.capture(fiveGiB);
+  assert.equal(budget.reason(fiveGiB, fiveGiB), null);
+  assert.deepEqual(JSON.parse(JSON.stringify(budget.snapshot())), {
+    captureMode: 'complete', limitBytes: null, capturedBytes: fiveGiB,
+    metadataLimitBytes: null, metadataBytes: 12 * 1024 ** 2, manifestReserveBytes: null,
+    omittedFiles: 0, omittedSubtrees: 0, omittedPathsComplete: true, limited: false,
+  });
+  assert.equal(budget.withinStageLimit(Number.MAX_SAFE_INTEGER + 1), false);
+});
+
+test('complete and bounded capture are explicit and incompatible budgets are rejected', () => {
+  assert.equal(createDebugContextBudget({ limitBytes: 100 }).captureMode, 'bounded');
+  assert.equal(createDebugContextBudget({ captureMode: 'bounded' }).withinStageLimit(debugExportLimits.stageBytes + 1), false);
+  assert.throws(() => createDebugContextBudget({ captureMode: 'complete', limitBytes: 100 }), /complete capture/);
+  assert.throws(() => createDebugContextBudget({ captureMode: 'unknown' }), /complete capture/);
 });

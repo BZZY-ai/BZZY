@@ -46,7 +46,10 @@ tool, project import format, sharing code or permission grant.
 `/full_debug_export`, **Metrics → Full debug ZIP**, or **F** creates a separate
 `session-name_full_debug_ddmmyyyy.zip`. From another terminal use
 `bzzy debug full SESSION [FILE.zip]` or `bzzy full_debug_export SESSION [FILE.zip]`.
-The regular Markdown export remains available independently.
+Full export defaults to complete capture, including multi-gigabyte projects.
+Use `/full_debug_export --bounded` or append `--bounded` to either terminal
+command when a size-limited project capture is preferred. The regular Markdown
+export remains available independently.
 
 The CLI runs full export in a separate Core worker so history scanning and file
 capture do not block terminal repainting. Metrics and the command-line exporter
@@ -55,6 +58,8 @@ counts as available. ZIP packaging reports files and uncompressed bytes processe
 these are not a global completion percentage or an estimate of the final ZIP size.
 Progress contains no source filenames, payloads or credentials. Command-line
 progress goes to stderr, preserving stdout for the final result or JSON output.
+The result shows the capture mode, file count, uncompressed captured size and
+compressed ZIP size separately.
 Wait for the exported-file success message before treating the ZIP as complete.
 
 To capture a baseline before another goal, export the existing saved session from
@@ -72,37 +77,37 @@ documents are projected only if already present; export builds no memory/index
 and starts no learning work. Explicitly related learning/compaction conversations
 are included, while unrelated raw terminal histories remain outside scope.
 
-Project context includes `.bzzy` notes, ledgers and compatibility projections
-within the optional capture budget.
+Project context includes `.bzzy` notes, ledgers and compatibility projections.
 Project-shared knowledge and ledgers remain labeled shared context. Referenced
 safe evidence/snapshot/worker files and checked skill resources,
-including safe binary resources, are captured separately when they fit. The archive is not a
+including safe binary resources, are captured separately. The archive is not a
 project-import or execution package and copies no raw runtime database.
 
-The full streams have no overview text/array/family display clipping. Optional
-source files over 64 MiB are skipped before reading and listed with their size
-in `manifest.exclusions`; an APK or browser binary cannot prevent exporting the
-saved chat. Unavailable or unlistable project directories are also recorded as
-omissions. Optional file capture has a separate 512 MiB budget, reduced further
-when necessary to leave space under the 4 GiB uncompressed staging limit. Core
-writes the scoped diagnostic streams, skill metadata and guides first, then
-prioritizes `.bzzy`, referenced artifact files and checked skill resources before
-bulk project, worker and snapshot trees. Source-size checks happen before reading;
-the redacted output must fit too. Files are omitted whole, never truncated to fit.
-A manifest reserve of at least 8 MiB and bounded context metadata prevent long
-omission lists from consuming the remaining diagnostic space. Required metadata
-headroom counts toward the hard staging limit and is checked before optional
-capture. Once a subtree is omitted, its
-descendants may not be enumerated; the manifest records that coverage limit rather
-than claiming an exact missing-file count.
+The full streams have no overview text/array/family display clipping. Complete
+capture has no 512 MiB project budget or 4 GiB staging cap. ZIP64 packaging and
+manifest writing stream their data; JSONL source files stream one complete record
+at a time. Large archives still require disk space for the redacted staging tree
+and output ZIP. File counts and saved record selection also consume memory, so
+this is not a promise of unlimited host resources.
 
-A context-budget limit produces a successful ZIP with `contextLimited: true` and
-`contextCapture` statistics in its result/manifest. Read `manifest.exclusions` to
-identify missing context. The full scoped record/event/message/index streams
-remain intact subject to their existing privacy exclusions. Individual logical
-messages still have a 64 MiB limit; mandatory streams still have the 4 GiB staging
-limit. Reaching a mandatory limit, or a real disk/write failure, publishes no
-clipped diagnostic ZIP. Staging bytes are not the compressed ZIP size.
+Redaction processes each logical value atomically: individual non-JSONL source
+files, JSONL records and assembled conversation messages have a 64 MiB processing
+limit. An oversized eligible source fails complete capture with a clear size
+error and no completed ZIP; it is never silently omitted to make the archive fit.
+JSONL files may exceed 64 MiB in total when every record fits. Unavailable,
+changing, unsafe and private sources remain explicit manifest exclusions.
+
+Explicit bounded capture retains the 512 MiB optional file budget and 4 GiB
+uncompressed staging limit. It writes scoped diagnostic streams, skill metadata
+and guides first, then prioritizes `.bzzy`, referenced artifact files and checked
+skill resources before bulk project, worker and snapshot trees. Source-size and
+post-redaction checks omit whole optional files or subtrees, never truncate them.
+An 8 MiB minimum manifest reserve and bounded context metadata preserve diagnostic
+headroom. Unenumerated subtrees are marked; their missing-file count is unknown.
+Budget omissions produce `contextLimited: true` and `contextCapture` statistics.
+An oversized optional source is listed in `manifest.exclusions`; an oversized
+logical message, mandatory staging limit or real disk/write failure still fails
+the export. Read `captureMode` and the exclusions before comparing exports.
 The overview retains
 its own earlier cutoff/limits and can be unavailable without preventing full
 streams. File capture follows the database cutoff and validates each read;
@@ -111,7 +116,7 @@ it cannot claim an atomic snapshot of a live project filesystem.
 Metrics shows the number of capture-omission entries after a successful full export;
 an entry can cover a subtree rather than one file.
 If export fails, it reports a safe cause category and capture phase, distinguishing
-missing Python, unavailable paths, access, disk space, packaging and mandatory
+missing Python, unavailable paths, access, disk space, packaging and processing
 size limits. Raw exception text and subprocess output are not displayed. A full
 ZIP retry uses `bzzy debug full NAME FILE.zip` in a writable caller directory;
 the Markdown retry uses `bzzy debug export NAME FILE.md`. Neither command changes
@@ -231,3 +236,13 @@ exports include current health; the full ZIP also retains scoped consultation,
 checkpoint, source/index maintenance and compaction dedup records. Unknown legacy
 delivery remains unknown. See [long-run reliability](LONG-RUN-RELIABILITY.md) and
 the read-first guide's source-generation/routing audit checklist.
+
+## Large-capture regression
+
+From `BZZY-CORE`, run `BZZY_TEST_LARGE_DEBUG=1 node --test test/session-full-debug-large.test.js`
+with Node 24+ and Python 3.9+. This opt-in fixture stages over 4 GiB of eligible
+project files, exports through the real worker and verifies every payload hash
+and ZIP CRC without loading the archive into memory. Allow at least 5 GiB of
+temporary disk space. Fixtures are removed afterwards. Repetitive input compresses
+well, so this validates over 4 GiB of captured data, not a compressed ZIP over
+4 GiB. The result reports captured bytes and ZIP bytes separately.

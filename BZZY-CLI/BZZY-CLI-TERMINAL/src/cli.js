@@ -48,7 +48,7 @@ import { skillsAliasesCLI } from './skills-aliases-cli.js';
 import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
 import { workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { resolveInteractiveGoal } from './goal-controls.js';
-import { createDebugExportProgressReporter, debugExportContextNotice } from './debug-export-progress.js';
+import { createDebugExportProgressReporter, debugExportContextNotice, debugExportSummary } from './debug-export-progress.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, openOrCreateChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
@@ -110,8 +110,8 @@ Usage:
                                        Grant explicit session actions to a client
   bzzy sessions                         Open named terminal chats; ↑/↓ select, Enter open
   bzzy debug export SESSION [FILE.md]   Export session + skills/agents here without stopping work
-  bzzy debug full SESSION [FILE.zip]    Full session/memory/learning/project diagnostic ZIP
-  bzzy full_debug_export SESSION       Same full debug ZIP in the current directory
+  bzzy debug full SESSION [FILE.zip] [--bounded]  Full diagnostic ZIP; --bounded limits project capture
+  bzzy full_debug_export SESSION [--bounded]    Same full debug ZIP in the current directory
   bzzy export [FILE.zip]                Export this directory and all saved project context
   bzzy --import FILE.zip|CODE          Restore a project ZIP or Relay terminal copy here
   bzzy setup                            Choose a backend and authenticate
@@ -291,6 +291,7 @@ export function parseArgs(argv) {
     else if (raw === '--read-only') options.readOnly = true;
     else if (raw === '--capture-network') options.captureNetwork = true;
     else if (raw === '--detailed') options.detailed = true;
+    else if (raw === '--bounded') options.debugBounded = true;
     else if (['--help', '-h'].includes(raw)) options.help = true;
     else if (['--version', '-v'].includes(raw)) options.version = true;
     else if (args[0] === 'subagents' && ['--global', '--revision'].includes(raw)) args.push(raw);
@@ -304,6 +305,7 @@ export function parseArgs(argv) {
     }
   }
   if ([options.view, options.attach, options.resume].filter(Boolean).length > 1) throw new Error('Choose --view, --attach or --resume.');
+  if (options.debugBounded && !(args[0] === 'full_debug_export' || args[0] === 'debug' && args[1] === 'full')) throw new Error('--bounded is only available for bzzy debug full or bzzy full_debug_export.');
   if (options.workflow !== undefined && (options.view || options.resume || args[0] === 'resume' || args[0] === 'goal' && args[1] === 'resume')) throw new Error('--workflow selects instructions for new goals. Use it with chat, --attach or a new goal; saved goal resumes keep their original workflow.');
   if (options.mode === 'validate') options.mode = 'debate';
   if (options.mode && !['solo', 'delegate', 'besties', 'debate', 'parallel'].includes(options.mode)) throw new Error('Invalid execution mode.');
@@ -598,15 +600,16 @@ export async function main(argv) {
     const [command, ...rest] = args;
     if (command === 'debug' || command === 'full_debug_export') {
       const parts = command === 'full_debug_export' ? ['full', ...rest] : rest;
-      if (!['export', 'full'].includes(parts[0]) || !parts[1] || parts.length > 3) throw new Error('Use bzzy debug export SESSION [FILE.md] or bzzy debug full SESSION [FILE.zip].');
+      if (!['export', 'full'].includes(parts[0]) || !parts[1] || parts.length > 3) throw new Error('Use bzzy debug export SESSION [FILE.md] or bzzy debug full SESSION [FILE.zip] [--bounded].');
       const full = parts[0] === 'full';
       const exportDebug = full ? (await import('@bzzy/core/engine/session-full-debug.js')).exportFullSessionDebugInWorker : (await import('@bzzy/core/engine/session-debug.js')).exportSessionDebug;
-      const id = findSession(parts[1]).id, progress = full ? createDebugExportProgressReporter() : null;
+      const captureMode = options.debugBounded ? 'bounded' : 'complete';
+      const id = findSession(parts[1]).id, progress = full ? createDebugExportProgressReporter({ captureMode }) : null;
       let result;
-      try { result = await exportDebug(id, { cwd: options.cwd, output: parts[2], ...(full ? { onProgress: progress.update } : {}) }); }
+      try { result = await exportDebug(id, { cwd: options.cwd, output: parts[2], ...(full ? { onProgress: progress.update, captureMode } : {}) }); }
       finally { progress?.close(); }
-      const contextNotice = debugExportContextNotice(result);
-      ui.event('debug.exported', { ...result, message: `Debug exported: ${result.outputPath}${contextNotice ? '\n' + contextNotice : ''}\nIncludes session history and skill/agent definitions. Review this private task content before sharing.` });
+      const contextNotice = debugExportContextNotice(result), summary = debugExportSummary(result);
+      ui.event('debug.exported', { ...result, message: `Debug exported: ${result.outputPath}${summary ? '\n' + summary : ''}${contextNotice ? '\n' + contextNotice : ''}\nIncludes session history and skill/agent definitions. Review this private task content before sharing.` });
       return 0;
     }
     if (command === 'knowledge') return knowledgeCLI(rest, options, ui);
