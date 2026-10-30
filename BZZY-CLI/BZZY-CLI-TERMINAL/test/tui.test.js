@@ -97,8 +97,8 @@ test('minimal chat uses the full terminal and retains conversation, input, mouse
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /A minimal question/); assert.match(frame, /A visible answer/); assert.match(frame, /Unsent draft/);
       assert.match(frame, /BZZY/); assert.doesNotMatch(frame, /CPU|RAM/); assert.equal(ui.tui.workspace.left, 0); assert.equal(ui.tui.workspace.right, 0);
-      assert.ok(ui.tui.textRegion.top >= 5);
-      assert.match(frame, /Session \.bzzy/);
+      assert.ok(ui.tui.textRegion.top >= 3);
+      assert.match(frame, /dir.*\.bzzy/);
       assert.match(frame, /● (?:BZZY )?Core.*● Relay/);
       const send = ui.tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(send); assert.equal(send.row, ui.tui.composerRow);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
@@ -341,7 +341,7 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       ui.tui.render();
       const chat = ui.tui.lastFrame.map(clean);
       assert.match(chat[0], /BZZY/);
-      assert.match(chat[0], /Nav ▾.*Sessions ▾/);
+      assert.doesNotMatch(chat[0], /Nav|Sessions|Live|Actions/); assert.match(chat[0], /dir.*\.bzzy/);
       assert.doesNotMatch(chat[0], /\+ New/);
       assert.doesNotMatch(chat[0], /CPU|RAM|chosen-model|tokens/); assert.match(chat.join('\n'), /CPU.*12%[\s\S]*RAM.*4\.0\/16G/);
       assert.match(chat.join('\n'), /chosen-model/); assert.match(chat.join('\n'), /Effort\s+high/);
@@ -352,7 +352,7 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-metrics'));
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-settings'));
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'confirm'));
-      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'yolo'));
+      assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'yolo'), ui.yoloEnabled());
 
       ui.tui.setPanel('settings'); ui.tui.render();
       const settings = ui.tui.lastFrame.map(clean);
@@ -509,7 +509,7 @@ test('a model picker loads asynchronously, scrolls to the focused model and canc
     await Promise.resolve(); ui.tui.render();
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Choose model/);
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Model 20/);
-    assert.match(ui.tui.lastFrame[0], /(?:Open Sessions|Sessions)/);
+    assert.match(clean(ui.tui.lastFrame[0]), /dir.*\.bzzy/);
     assert.doesNotMatch(clean(ui.tui.lastFrame[0]), /\+ New/);
     ui.tui.key('', { name: 'down' }); ui.tui.key('\r', { name: 'return' });
     assert.equal(await chosen, 'model-21'); assert.equal(ui.tui.value, 'unsent draft');

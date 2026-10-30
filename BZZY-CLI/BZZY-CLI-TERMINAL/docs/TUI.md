@@ -7,7 +7,7 @@ remain owned by Core and managed on iPhone.
 
 Navigation is visible from 78 usable columns and 22 rows. The live column
 starts open from 116 columns and 26 rows, when chat retains at least 46 columns.
-**Nav / Live** controls collapse or reveal the sidebars; small terminals use
+The center **≡** and sidebar **⋯** menus expose navigation and panel controls; small terminals use
 visible menus and expanded inspectors. Every size, minimal mode, restored-chat
 loading screen and submenu uses the same modern frame. Private transfer,
 secret-entry and pairing QR screens use its full-width variant and preserve
@@ -15,15 +15,15 @@ complete QR quiet zones. Terminal-native mouse support, true color, 256/basic
 colors and NO_COLOR remain supported.
 
 A green/red dot beside **BZZY Core** reflects a fresh Core response,
-independently of Relay. **Working dir** and **Session .bzzy** copy their complete
+independently of Relay. The header’s **dir** and **.bzzy** fields copy their complete
 paths when clicked; both use the selected saved session, including its original
-cwd and legacy memory binding. Below 18 rows **Session folders** in Nav/Actions
-retains both copy actions. The single-row header contains branding, navigation,
-Actions and connection dots. Model/effort, session/compactor tokens and host
+cwd and legacy memory binding. **Session folders** in the navigation/actions
+menus retains both copy actions. The single-row header contains branding, both
+paths and connection dots; navigation controls live inside the workspace. Model/effort, session/compactor tokens and host
 measurements stay in their dedicated sidebar sections. A compact **HOST USAGE**
 footer below Sessions shows Core's real CPU/RAM sample, independently of the
 session list's scroll. Compact/minimal terminals retain model controls and
-**Usage / host** through the visible Nav menu.
+**Usage / host** through the visible **≡** menu.
 
 ## Controls
 
@@ -34,7 +34,8 @@ session list's scroll. Compact/minimal terminals retain model controls and
   it or **↗** to inspect it in the center, then **Close** to return to chat.
 - The composer has no permanent shortcut toolbar beneath its input. Goal state
   and the selected Workflow remain there as colored text on the normal black
-  surface. Paste, models, tools and pause/cancel remain in visible menus.
+  surface. Enabled **YOLO** appears at the right of goal status; the actions
+  menu can enable it when off. Paste, models, tools and pause/cancel remain in visible menus.
 - Each activity section and the saved-session list scroll independently under
   the mouse. Chat stops following when scrolled up; **↓ Latest** in the composer
   caption follows again.
@@ -48,10 +49,10 @@ session list's scroll. Compact/minimal terminals retain model controls and
 - **HTTP PROBE** rows open redacted headers, status, duration, originating actor
   and a response preview when capture supplies one. Its menu filters by method
   or errors, sorts by status/time, and opens existing HTTP history, which also
-  retains backend-reported web visits. **Enable shell capture for next run**
-  arms the existing recorder for subsequent messages/goals and their workers;
-  **Disable** overrides an original launch flag for subsequent work. The control
-  does not alter an already running process. Empty views show capture status.
+  retains backend-reported web visits. Shell capture is enabled automatically for
+  new executions in both new and existing chats, including workers. The filter
+  menu can disable/re-enable subsequent capture. The control does not alter an
+  already running process. Empty HTTP/CODE bodies stay blank.
 - Click a saved session, then explicitly choose **Open** or **Cancel** before
   history loads. Cancel preserves the active reader, transcript, draft and scroll.
   Opening returns to the actual chat in its original cwd. Only
@@ -65,10 +66,16 @@ session list's scroll. Compact/minimal terminals retain model controls and
   explicit Save/Configure/Remove actions appear there. Selecting one discovers
   capabilities for that provider, validates supported effort, and uses existing
   ownership/idle checks. Saved tuples contain no account credentials and do not
-  change Core's independent assistant model or any mode defaults.
+  change Core's independent assistant model or any mode defaults. Naming/removing
+  presets stays available while working, preserving the live reader and draft;
+  switching a provider/model/effort still requires the response to be idle.
 - **USAGE** separates session tokens from measured background **Compactor**
   input/output tokens. `≥` means known partial usage; `—` means unavailable.
-  Conservative reservations never count as measured tokens. Click for Metrics,
+  Both cumulative total-only and detailed backend counters are supported,
+  including final document usage. These counters update when the background
+  compactor reports usage, not on every chat token. Older Core snapshots missing
+  the field fall back to the shared owner-local ledger. Conservative reservations
+  never count as measured tokens. Click for Metrics,
   which includes the whole-chat compactor count. Available DeepSeek spending remains an estimate, with
   provider-reported account balance identified separately. Missing accounting,
   prices or context metadata appear unavailable; the UI invents no billing data.
@@ -94,9 +101,11 @@ recent feed rows, and HTTP uses the existing 1,000-record client window. Durable
 history remains in Core. A status row never establishes goal completion.
 
 HTTP PROBE includes host-observed `http_request` exchanges and proxy-observed
-traffic from the existing opt-in `--capture-network` path or the HTTP Filter
-menu's next-run capture control. The option survives ordinary chat follow-ups
-and reopening an existing saved session with the flag. Backend-reported web
+traffic from the existing shell recorder, requested automatically by CLI
+executions. `--no-capture-network` or the filter menu opts out; the legacy
+`--capture-network` flag remains supported. The policy survives ordinary chat
+follow-ups and reopening existing saved sessions. Optional recorder setup
+failure reports capture unavailable without blocking the authorized model run. Backend-reported web
 visits remain labelled in HTTP history, without invented methods, status codes
 or request timings. Proxy coverage is limited to clients honoring its proxy/CA;
 direct sockets and excluded provider/model traffic are not captured. The proxy
@@ -124,9 +133,15 @@ source stays available for copying, and no typing events or execution progress
 are added to history. Real input deltas display as they arrive. Manual source
 scrolling disables the reveal. Uninstrumented shell file writes, external
 editors and direct diagnostic backend runs do not gain automatic file attribution.
-Updating/reopening a frontend cannot recover missing historical previews or
-patch an already running runner. Reuse the same saved chat after updating;
-subsequent executions use the new hooks. A new conversation is unnecessary.
+On restore, an owner-local compatibility projection reads at most 48 recent
+native command/edit records per actor across at most 17 related sessions when
+exact source events are absent. Recorded shell input is labelled **recorded**;
+current files read from a recorded launch/edit are labelled **observed**, never
+claimed as historical bytes. Live native events from older runners use the same
+Core source observer. Private/persistent/unrelated actors stay excluded. This
+starts no model work and writes no additional history. HTTP requests that were
+never captured cannot be recovered; already-running processes retain their
+launch environment. Reuse the same saved chat for subsequent instrumented work.
 
 Core bounds previews to 256 KiB, 16 files per native edit event and recognized
 source/text extensions; the client retains 24 recent files and 5,000 lines per

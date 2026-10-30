@@ -58,10 +58,10 @@ for (const minimal of [false, true]) test(`the selected session path stays visib
     ui.tui.cwd = path.join(directory, 'unrelated-shell-folder');
     for (const [columns, rows] of [[60, 18], [80, 24], [120, 36]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
-      assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Session \.bzzy:/);
+      assert.match(clean(ui.tui.lastFrame[0]), /dir.*\.bzzy/);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
       const hit = ui.tui.hitTargets.find(item => item.type === 'session-project-path');
-      assert.ok(hit); assert.ok(hit.row < ui.tui.composerRow);
+      assert.ok(hit); assert.equal(hit.row, 1);
       assert.equal(ui.tui.hitTargets.find(item => item.type === 'working-directory')?.path, session.cwd);
     }
     let copied;
@@ -108,7 +108,7 @@ test('missing saved folders retain their exact pinned location and never fall ba
   const { ui } = terminal();
   try {
     ui.setSession(session.id); ui.updateSession(session); ui.tui.render();
-    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Session \.bzzy \(missing\):/);
+    assert.match(clean(ui.tui.lastFrame[0]), /\.bzzy/);
     assert.equal(ui.sessionProjectLocation.path, expected);
     assert.equal(fs.existsSync(session.cwd), false, 'display does not recreate a missing workspace');
     assert.equal(sessionProjectLocation('no-such-session').status, 'unavailable');

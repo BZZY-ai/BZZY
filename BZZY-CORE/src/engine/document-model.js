@@ -97,6 +97,8 @@ export async function runRestrictedDocumentModel({ source, selection, prompt, in
     completed = true;
     const tokens = draft.usage?.tokens || result?.tokens || 0;
     const usageAvailable = Number.isSafeInteger(tokens) && tokens >= 0 && (draft.usage?.available === true || Number.isSafeInteger(result?.tokens));
+    if (usageAvailable) observeCompactionCost(draft, { provider: chosen.provider, model: draft.resolvedModel || chosen.model,
+      tokens, available: true, accountingComplete: draft.usage?.accountingComplete !== false });
     if (tokens > tokenBudget) throw Object.assign(fail('DOCUMENT_BUDGET', 'Document generation token limit reached.'),
       usageAvailable ? { tokens, usageAvailable: true } : {});
     return { text, tokens, usageAvailable, resolvedModel: draft.resolvedModel || chosen.model || null };

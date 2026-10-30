@@ -2,8 +2,8 @@
 
 The terminal now uses a black neon workspace with clickable navigation and model
 controls, a dominant chat, and independently scrolling **AGENTS**, **HTTP PROBE**
-and **CODE** feeds. Drag column separators to resize; use **Nav / Live** to
-collapse or reopen them. The same frame and palette surround Library, Metrics,
+and **CODE** feeds. Drag column separators to resize; use the center **≡** menu
+and sidebar **⋯** actions to reopen hidden panels. The same frame and palette surround Library, Metrics,
 Settings and their submenus. Smaller terminals and minimal mode use the same modern frame; private
 QR screens retain their full width and quiet zone.
 See [terminal workspace controls and telemetry coverage](docs/TUI.md).
@@ -401,7 +401,9 @@ has room, USAGE shows it separately from the estimated total. Click Usage for
 Metrics and the full chat/compactor/total breakdown. Compact/minimal layouts
 retain Metrics through the visible navigation menu. Session tokens and measured
 background compactor tokens have separate counters; unknown historical usage is
-marked unavailable or partial. CPU/RAM meters stay below the Sessions list.
+marked unavailable or partial. Compactor totals refresh on its own measured
+usage, including total-only/final backend reports, rather than every chat token.
+CPU/RAM meters stay below the Sessions list.
 **Metrics → DeepSeek spending · whole chat** and `bzzy cost NAME` inspect the same
 lifetime estimate; `bzzy session-memory cost NAME` gives compactor details.
 Existing chats work, with old missing usage and interrupted calls visibly partial.
@@ -414,10 +416,10 @@ for compatibility. Core's daemon and workers run without this CLI installed.
 
 `bzzy` opens a black neon terminal workspace with clickable navigation, a chat
 column and compact live **AGENTS / SKILLS**, **HTTP PROBE**, and **CODE** views.
-The single-row header keeps branding, navigation and Core/Relay dots visible.
+The single-row header keeps branding, the saved working/memory paths and Core/Relay dots visible.
 Model/effort, token counts and CPU/RAM stay in their dedicated sidebar sections;
-compact layouts retain these through Nav. The composer footer keeps goal status
-and Workflow, with other actions in visible menus. Thin column separators can be dragged; compact
+compact layouts retain these through **≡**. The composer footer keeps goal status,
+enabled YOLO at its right, and Workflow, with other actions in visible menus. Thin column separators can be dragged; compact
 and minimal layouts use the same frame with visible navigation menus. Settings
 and Library screens replace the center transcript while preserving its draft.
 Esc closes the innermost prompt or picker first. Saved sessions require an
@@ -425,6 +427,13 @@ Esc closes the innermost prompt or picker first. Saved sessions require an
 chat in its original cwd without replaying work. Normal attached chats can claim
 control through existing Core APIs when changing models; explicit read-only
 views remain locked. See [workspace behavior and telemetry limits](docs/TUI.md).
+
+Shell HTTP/HTTPS capture is automatic for CLI executions and resumed work in
+existing chats; `--no-capture-network` opts out. Existing processes retain their
+launch environment. CODE can recover real native command input from older saved
+history and show current source for its recorded script launches, without
+replaying work. Saving a named model combination remains available while busy;
+switching the active provider/model/effort still requires an idle response.
 
 Chat keeps its **Cooking…**, Pursuing, Verifying and Validating badges and adds
 an animated activity row beside the current action: waiting for model output,

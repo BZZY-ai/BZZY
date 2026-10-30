@@ -7,6 +7,12 @@ import { mascotCells, mascotLine } from './mascot.js';
 export const terminalVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 export const workspaceNavigation = [['Chat', 'chat'], ['Agents', 'agents'], ['Skills', 'skills'], ['Workflows', 'workflows'], ['Goals', 'goals'], ['Metrics', 'metrics'], ['Settings', 'settings']];
 const eyeSamples = new Map();
+const pathLabel = (label, path, width) => {
+  const prefix = ' ' + label + ' ', value = path || '—', available = Math.max(1, width - cellWidth(prefix));
+  const text = cellWidth(value) <= available ? value : available < 6 ? clip(value, available)
+    : sliceCells(value, 0, 1) + '…' + sliceCells(value, cellWidth(value) - available + 2, cellWidth(value));
+  return clip(prefix + text, width);
+};
 export const padSurface = (text, width, theme, surface = palette.background) => {
   const value = sliceCells(text, 0, width);
   return theme.background(surface) + value + theme.background(surface) + theme.foreground(palette.text) + ' '.repeat(Math.max(0, width - cellWidth(value))) + theme.background(palette.background);
@@ -26,16 +32,22 @@ export function workspaceHeader(tui, width, { privateMode = false, controls = ''
     + dot(relayOn) + c(tiny ? 'R' : ' Relay', palette.muted);
   const brand = eyes[0] + c(tiny ? ' BZZY ' : ` BZZY ${terminalVersion} `, palette.accent, true);
   let line = brand;
-  const control = (label, hit, tone = palette.accent) => {
+  const control = (label, hit, tone = palette.muted) => {
     const column = cellWidth(line) + 1;
-    line += c(label, tone, true);
+    line += c(label, tone);
     hits.push({ ...hit, row: 1, left: column, right: column + cellWidth(label) - 1 });
   };
-  if (!privateMode && !tui.hidden && !tui.promptDraft) {
-    control(tiny ? ' ≡ ' : ' Nav ▾ ', { type: 'workspace-toggle', side: 'left' });
-    if (cellWidth(line) + cellWidth(status) + 10 < width) control(tiny ? ' Chats ' : ' Sessions ▾ ', { type: 'top-sessions' });
-    if (cellWidth(line) + cellWidth(status) + 7 < width) control(' Live ↗ ', { type: 'workspace-toggle', side: 'right' }, palette.tool);
-    if (cellWidth(line) + cellWidth(status) + 11 < width) control(' Actions ▾ ', { type: 'workspace-actions' });
+  if (!privateMode && tui.ui.sessionId) {
+    const available = Math.max(0, width - cellWidth(brand) - cellWidth(status) - 4);
+    const dirWidth = Math.floor(available / 2), memoryWidth = available - dirWidth;
+    // Both paths come from the saved session binding, including external memory
+    // directories. Clipping affects presentation only; clicking copies the path.
+    const cwd = tui.ui.sessionWorkingDirectory, memory = tui.ui.sessionProjectLocation?.path;
+    if (dirWidth >= 6) control(pathLabel('dir', cwd, dirWidth), { type: 'working-directory', path: cwd });
+    if (memoryWidth >= 8) {
+      line += c(' │', palette.border);
+      control(pathLabel('.bzzy', memory, memoryWidth), { type: 'session-project-path' });
+    }
   }
   const controlLeft = controls ? Math.max(1, width - cellWidth(controls) + 1) : null;
   const tail = controls ? status + ' ' + c(controls, palette.accent, true) : status;

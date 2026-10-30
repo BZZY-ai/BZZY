@@ -3,8 +3,8 @@
 CLI shows **Chat ≈ $… | Compactor ≈ $… = Total ≈ $…** for Solo using the
 official `deepseek` provider, or Delegate when either Brain or Hands uses that
 provider. The existing **Balance $…** control remains a separate account-wide
-balance. Balance, Chat, Compactor and Total use matching badges in a dedicated
-row directly below the CLI navigation, wrapping in narrow terminals. DeepSeek model
+balance. Estimates and balance appear separately in the CLI USAGE sidebar;
+Metrics retains the full Chat/Compactor/Total breakdown. DeepSeek model
 names served by OrcaRouter, Experiential Labs or other providers do not qualify.
 The cost and balance controls are hidden outside these selections.
 
@@ -28,6 +28,11 @@ receipts with their actual selected/resolved DeepSeek model and pinned prices.
 Reasoning tokens are already part of output. Reopening retains native-thread
 cursors, so cumulative telemetry cannot charge the whole conversation again.
 Each restricted compactor attempt has a separate receipt, including retries.
+Measured compactor tokens also accept cumulative total-only telemetry and final
+document-runner usage. Such reports can advance the token count without an
+input/output breakdown or price. The counter updates on compactor usage,
+independently of foreground chat tokens; missing or unfinished receipts retain
+the partial marker. Conservative reservations never become measured tokens.
 
 Pricing is an offline estimate using the official
 [rate card](https://api-docs.deepseek.com/quick_start/pricing/) verified on

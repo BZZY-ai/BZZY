@@ -119,7 +119,17 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
           else stop('allocation_checkpoint');
         }
       } }).open(); options.toolHost = host; host.activityReporter = options.activityReporter;
-    if (options.captureNetwork) { traffic = await new TrafficRecorder(session, provider, recorded).open(); options.networkEnv = traffic.env; }
+    if (options.captureNetwork) {
+      traffic = new TrafficRecorder(session, provider, recorded);
+      try { await traffic.open(); options.networkEnv = traffic.env; }
+      catch {
+        await traffic.close(); traffic = null;
+        // Optional observation must not prevent an otherwise authorized run.
+        // No partial proxy env or private setup error reaches the backend/UI.
+        session.captureNetwork = false;
+        recorded.event('network.capture', { enabled: false, reason: 'unavailable' });
+      }
+    }
     if (options.yolo) recorded.event('info', { message: provider.backend === 'codex' ? 'YOLO · approvals off · Codex sandbox disabled' : 'YOLO · Claude permission checks bypassed' });
     const limit = options.runtimeSeconds || session.contract?.limits.runtimeSeconds;
     const remainingMs = limit == null ? null : Math.max(0, limit - (session.goal?.runtimeUsedSeconds || 0)) * 1000;

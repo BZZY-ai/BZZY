@@ -34,13 +34,16 @@ test('responsive workspace preserves readable chat, visible navigation and sourc
     }
     Object.assign(output, { columns: 180, rows: 48 }); tui.render();
     const text = tui.lastFrame.map(clean).join('\n');
-    for (const label of ['NAVIGATION', 'AGENTS', 'HTTP PROBE', 'CODE', 'No observed HTTP', 'Waiting for code']) assert.ok(text.includes(label), label);
+    for (const label of ['NAVIGATION', 'AGENTS', 'HTTP PROBE', 'CODE']) assert.ok(text.includes(label), label);
+    assert.doesNotMatch(text, /No observed HTTP|Waiting for code|Enable capture/);
     assert.equal(tui.monitor.feed.length, 0); assert.equal(tui.monitor.files.size, 0);
     for (const panel of ['chat', 'agents', 'skills', 'workflows', 'goals', 'metrics', 'settings']) assert.ok(tui.hitTargets.some(hit => hit.type === 'top-' + panel));
     const send = tui.hitTargets.find(hit => hit.type === 'confirm'); assert.ok(send);
     assert.equal(send.row, tui.composerRow); assert.ok(send.left > tui.workspace.x);
-    click(tui, 'workspace-toggle', hit => hit.side === 'right'); assert.equal(tui.workspace.right, 0);
-    click(tui, 'workspace-toggle', hit => hit.side === 'right'); assert.ok(tui.workspace.right);
+    for (const hidden of [true, false]) {
+      click(tui, 'workspace-actions'); await new Promise(resolve => setImmediate(resolve));
+      tui.finishSelection('@right'); await tui.menuTask; assert.equal(Boolean(tui.workspace.right), !hidden);
+    }
     const border = tui.workspaceRegions.find(region => region.kind === 'width' && region.side === 'right');
     const before = tui.workspace.right; tui.mouse(0, border.left, 10); tui.mouse(32, border.left - 7, 10); tui.mouse(0, border.left - 7, 10, true); tui.render(); assert.equal(tui.workspace.right, before + 7);
     click(tui, 'monitor-toggle', hit => hit.kind === 'agents'); assert.ok(tui.monitor.collapsed.has('agents'));

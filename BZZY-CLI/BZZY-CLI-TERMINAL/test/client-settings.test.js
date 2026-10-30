@@ -141,7 +141,8 @@ test('Settings takes over the full screen and keeps all requested choices at nor
     for (const label of ['DeepSeek API key', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
     assert.match(frame, /Settings/); assert.doesNotMatch(frame, /◉◉/);
     assert.equal(ui.tui.model, 'fixture-model-banner'); assert.match(frame, /fixture-model/); assert.match(frame, /987,654 tokens/);
-    assert.ok(frame.includes(ui.sessionWorkingDirectory)); assert.doesNotMatch(frame, /Ask BZZY to do anything/);
+    assert.equal(ui.tui.hitTargets.find(hit => hit.type === 'working-directory')?.path, ui.sessionWorkingDirectory);
+    assert.match(clean(ui.tui.lastFrame[0]), /dir.*\.bzzy/); assert.doesNotMatch(frame, /Ask BZZY to do anything/);
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'settings'));
     assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'confirm'), false);
     assert.doesNotMatch(frame, /Core service/);

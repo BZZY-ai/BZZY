@@ -109,3 +109,16 @@ test('terminal compactor tokens use measured usage across providers and flag mis
   const pending = draft('unknown'); finishCompactionCost(pending);
   assert.equal(sessionCompactorUsage('unknown').available, false); assert.equal(sessionCompactorUsage('unknown').complete, false);
 });
+test('cumulative total-only compactor telemetry advances live without inventing a billing breakdown', () => {
+  const value = draft('source', 'claude', 'fixture');
+  const report = tokens => observeCompactionCost(value, { provider: value.provider, tokens, available: true, accountingComplete: true });
+  report(16905);
+  assert.equal(sessionCompactorUsage('source').tokens, 16905);
+  assert.equal(sessionCompactorUsage('source').complete, false);
+  report(20500); report(20500);
+  assert.equal(sessionCompactorUsage('source').tokens, 20500);
+  finishCompactionCost(value, { completed: true });
+  assert.equal(sessionCompactorUsage('source').complete, true);
+  assert.equal(sessionCompactionCost('source').estimatedUsd, null);
+  report(30000); assert.equal(sessionCompactorUsage('source').tokens, 20500);
+});

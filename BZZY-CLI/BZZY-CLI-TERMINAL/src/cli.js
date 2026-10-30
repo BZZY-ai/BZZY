@@ -169,7 +169,8 @@ Options:
   --review-only         Skip independent investigation; validate a fixed snapshot
   --concurrency N       Maximum active workers
   --request-id ID       Idempotency key for a retried request
-  --capture-network     Record proxy-aware agent HTTP/HTTPS traffic locally
+  --no-capture-network  Disable automatic shell HTTP/HTTPS observation
+  --capture-network     Enable shell HTTP/HTTPS observation (default)
   --detailed            Include detailed activity entries
   --effort LEVEL        Model reasoning effort
   --yolo                Disable Codex approvals AND sandbox; bypass Claude permissions
@@ -233,7 +234,7 @@ API providers must support the Responses protocol in this version.
 `;
 
 export function parseArgs(argv) {
-  const options = { cwd: process.cwd(), pet: true, yolo: false, json: false };
+  const options = { cwd: process.cwd(), pet: true, yolo: false, json: false, captureNetwork: true };
   const args = [];
   const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile', '--workflow': 'workflow',
     '--token-budget': 'tokenBudget', '--max-turns': 'maxTurns', '--effort': 'effort',
@@ -297,6 +298,7 @@ export function parseArgs(argv) {
     else if (raw === '--follow') options.follow = true;
     else if (raw === '--read-only') options.readOnly = true;
     else if (raw === '--capture-network') options.captureNetwork = true;
+    else if (raw === '--no-capture-network') options.captureNetwork = false;
     else if (raw === '--detailed') options.detailed = true;
     else if (raw === '--bounded') options.debugBounded = true;
     else if (['--help', '-h'].includes(raw)) options.help = true;

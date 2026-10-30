@@ -264,6 +264,7 @@ export class ClaudeEngine {
       estimatedConversationCostUsd: result?.total_cost_usd ?? null, modelUsage: result?.modelUsage || null };
     observeRunUsage(this.session, this.options.toolHost?.context?.runId, { final: receipt.accountingComplete });
     saveSession(this.session);
+    this.ui.event('usage.updated', { provider: this.session.provider, model: this.session.model, ...this.session.usage });
     if (!goal && this.options.tokenBudget != null && this.session.usage.tokens >= this.options.tokenBudget) await this.interrupt('token_limit');
     if (this.interrupted) { fs.rmSync(reportPath(this.session.id, nonce), { force: true }); return { interrupted: true, activity, tokens }; }
     if (failure) throw failure;

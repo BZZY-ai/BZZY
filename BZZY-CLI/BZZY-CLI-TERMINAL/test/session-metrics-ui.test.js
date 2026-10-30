@@ -116,7 +116,7 @@ test('Metrics scopes use Core counters and real input/clicks preserve the chat d
     assert.equal(ui.tui.panel, 'metrics'); assert.match(frame(), /Current goal.*Achieved ✓/);
     assert.match(frame(), /Check the recorded HTTP responses/); assert.match(frame(), /Skill model loads:?\s+3/);
     assert.match(frame(), /Specialist agents invoked:?\s+2/); assert.match(frame(), /Worker assignments:?\s+4/);
-    assert.match(frame(), /recorded-model/); assert.match(frame().split('\n')[0], /Nav/);
+    assert.match(frame(), /recorded-model/); assert.match(frame().split('\n')[0], /dir.*\.bzzy/);
     assert.doesNotMatch(frame(), /Unsent private draft/); assert.equal(ui.tui.value, 'Unsent private draft');
     input.write('\x1b[C\r'); await settle(); ui.tui.render();
     assert.equal(ui.sessionMetrics.scope, 'session'); assert.match(frame(), /Whole chat/); assert.match(frame(), /Skill model loads:?\s+12/);

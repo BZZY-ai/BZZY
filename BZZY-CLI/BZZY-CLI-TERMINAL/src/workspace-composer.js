@@ -61,8 +61,15 @@ export function workspaceComposer(tui, width, height, completions) {
   const inputIndex = lines.length - 1;
   lines.push(edge('└' + '─'.repeat(Math.max(0, width - 2)) + '┘'));
   if (!tui.promptDraft && height >= 12) {
-    const badge = tui.goalBadgeLayout(width, { showEmpty: false });
-    if (badge.line) lines.push(badge.line, ...badge.extra);
+    const yolo = tui.ui.yoloEnabled?.() ? ' [YOLO] ' : '';
+    const badge = tui.goalBadgeLayout(width, { showEmpty: false, reserved: cellWidth(yolo) });
+    if (badge.line || yolo) {
+      const left = width - cellWidth(yolo) + 1;
+      if (yolo) hits.push({ type: 'yolo', row: lines.length, left, right: width });
+      lines.push(tui.theme.background(palette.background) + badge.line
+        + ' '.repeat(Math.max(0, width - cellWidth(badge.line) - cellWidth(yolo)))
+        + c(yolo, palette.warning, true) + tui.theme.background(palette.background), ...badge.extra);
+    }
   }
   if (tui.copyMode) lines.push(c(clip(' COPY MODE · Esc returns', width), palette.warning));
   if (!tui.promptDraft && tui.panel === 'chat' && height >= 14) {

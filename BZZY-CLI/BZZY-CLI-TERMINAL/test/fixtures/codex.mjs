@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import readline from 'node:readline';
+import { spawn } from 'node:child_process';
 import { savedTask, preparationHeld } from './context-state.mjs';
 
 const scenario = process.env.BZZY_TEST_SCENARIO || 'complete';
@@ -12,13 +13,23 @@ const send = value => console.log(JSON.stringify(value));
 const notify = (method, params) => send({ method, params: { threadId: 'native-thread', ...params } });
 let goal;
 let pendingApproval = false;
-const turns = (status = 'complete') => {
+const turns = async (status = 'complete') => {
   notify('turn/started', { turn: { id: 't1' } });
   if (scenario === 'web') {
     const item = { id: 'open-page', type: 'webSearch', query: '', action: { type: 'openPage', url: 'https://www.paypal.com/?token=fixture-secret' } };
     notify('item/started', { item }); notify('item/completed', { item });
   }
   if (scenario === 'interrupt') return;
+  if (scenario === 'observed-shell') {
+    const file = process.env.BZZY_TEST_PROBE_SCRIPT;
+    const item = { id: 'actual-shell', type: 'commandExecution', command: ['python3', file], cwd: process.cwd() };
+    notify('item/started', { item });
+    const exitCode = await new Promise((resolve, reject) => {
+      const child = spawn('python3', [file], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      child.stdout.resume(); child.stderr.resume(); child.once('error', reject); child.once('exit', resolve);
+    });
+    notify('item/completed', { item: { ...item, status: exitCode === 0 ? 'completed' : 'failed', exitCode } });
+  }
   notify('item/agentMessage/delta', { itemId: 'message-1', delta: 'First pass.\n' });
   notify('turn/completed', { turn: { id: 't1', status: 'completed' } });
   if (!goal) return;

@@ -14,6 +14,10 @@ import { saveWorkflow, selectWorkflow } from '@bzzy/core/engine/workflows.js';
 import { ActivityMonitor } from '../src/activity-monitor.js';
 import { sliceCells } from '../src/terminal-surface.js';
 import { palette, createTerminalTheme } from '../src/terminal-theme.js';
+import { savedModelCombinations } from '../src/model-controls.js';
+import { beginCompactionCost, observeCompactionCost } from '@bzzy/core/engine/compaction-cost.js';
+import { appendEvent, events, listRecords } from '../src/database.js';
+import { loadSession } from '../src/store.js';
 
 let directory, previous;
 test.beforeEach(() => { previous = process.env.BZZY_HOME; directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-front-regression-')); process.env.BZZY_HOME = path.join(directory, 'private'); });
@@ -145,6 +149,8 @@ test('header has no duplicate stats and the composer ends with only goal/workflo
       Object.assign(output, { columns, rows }); tui.render();
       assert.equal(tui.workspace.y, 1); assert.match(clean(tui.lastFrame[0]), /BZZY/);
       assert.doesNotMatch(clean(tui.lastFrame[0]), /unique-current-model|effort|tokens|CPU|RAM/i);
+      assert.doesNotMatch(clean(tui.lastFrame[0]), /Nav|Sessions|Live|Actions/);
+      assert.match(clean(tui.lastFrame[0]), /dir.*\.bzzy/);
       const center = tui.lastFrame.map(line => sliceCells(line, tui.workspace.x, tui.workspace.x + tui.workspace.center));
       const afterInput = center.slice(tui.composerRow + 1);
       assert.match(afterInput.map(clean).join('\n'), /Goal achieved/); assert.match(afterInput.map(clean).join('\n'), /Workflow: source-review/);
@@ -164,22 +170,83 @@ test('header has no duplicate stats and the composer ends with only goal/workflo
     }
   } finally { ui.close(); }
 });
-test('the HTTP capture control retains the chat reader and arms actual capture only for subsequent execution', async () => {
+test('shell capture defaults on; an explicit opt-out retains the chat reader and applies to subsequent execution', async () => {
   const { ui, tui, session } = terminal();
   try {
     const pending = ui.ask('bzzy › '); await tick(); tui.value = 'Unsent HTTP draft'; tui.cursor = 6;
     const reader = ui.reader;
-    assert.equal(ui.executionOptions({}, session).captureNetwork, undefined);
-    assert.match(tui.monitor.rows('http', 70, tui).lines.map(clean).join('\n'), /capture OFF/);
+    assert.equal(ui.executionOptions({}, session).captureNetwork, true);
+    assert.deepEqual(tui.monitor.rows('http', 70, tui).lines, []);
     const menu = tui.monitorMenu('http'); await tick();
     assert.ok(tui.selection.choices.some(choice => choice.value === '@capture'));
     tui.finishSelection('@capture'); await menu;
     assert.equal(ui.reader, reader); assert.equal(tui.value, 'Unsent HTTP draft'); assert.equal(tui.cursor, 6);
-    assert.equal(ui.executionOptions({}, session).captureNetwork, true); assert.match(tui.monitor.captureLabel(tui), /next run/);
+    assert.equal(ui.executionOptions({}, session).captureNetwork, false);
     assert.deepEqual(tui.traffic, []); assert.deepEqual(tui.inputQueue, []);
-    const disabling = tui.monitorMenu('http'); await tick(); tui.finishSelection('@capture'); await disabling;
     assert.equal(ui.executionOptions({ captureNetwork: true }, session).captureNetwork, false, 'an explicit menu disable wins over the original launch flag');
+    const enabling = tui.monitorMenu('http'); await tick(); tui.finishSelection('@capture'); await enabling;
+    assert.equal(ui.executionOptions({}, session).captureNetwork, true);
     ui.reader.close(); await pending;
+  } finally { ui.close(); }
+});
+test('saving a model combination while busy preserves the live chat reader, draft and execution', async () => {
+  const { ui, tui, session } = terminal();
+  try {
+    const pending = ui.ask('bzzy › '); await tick();
+    tui.busy = true; tui.value = 'Keep my live draft'; tui.cursor = 7;
+    const reader = ui.reader, resolver = tui.resolveInput, before = loadSession(session.id), commands = [];
+    tui.localCommand = command => commands.push(command); tui.render();
+    const hit = tui.hitTargets.find(hit => hit.command === '/providers @saved'); assert.equal(hit.disabled, false);
+    tui.mouse(0, hit.left, hit.row); await tick();
+    assert.equal(tui.selection.choices.find(row => row.value === '@configure').disabled, true);
+    assert.equal(Boolean(tui.selection.choices.find(row => row.value === '@save').disabled), false);
+    tui.finishSelection('@save'); await tick();
+    assert.ok(tui.promptDraft); ui.event('text', { text: 'Background output keeps arriving', itemId: 'live' });
+    tui.finish('My running combination'); await tick();
+    assert.equal(tui.selection.choices[0].disabled, true);
+    tui.finishSelection(null); await tui.modelSaveTask;
+    assert.equal(ui.reader, reader); assert.equal(tui.resolveInput, resolver); assert.equal(tui.value, 'Keep my live draft'); assert.equal(tui.cursor, 7);
+    assert.deepEqual(savedModelCombinations()[0], { name: 'My running combination', provider: session.provider, model: session.model, effort: session.selectedEffort || 'default' });
+    assert.deepEqual(loadSession(session.id), before); assert.deepEqual(commands, []); assert.equal(listRecords('execution').length, 0);
+    assert.equal(tui.busy, true); assert.ok(tui.entries.some(entry => /Background output/.test(entry.text)));
+    ui.reader.close(); await pending;
+  } finally { ui.close(); }
+});
+test('enabled YOLO sits at the right of goal status and disappears when disabled', () => {
+  const { ui, tui } = terminal();
+  try {
+    tui.goal = { status: 'complete', objective: 'Review evidence' }; ui.yoloEnabled = () => true; tui.render();
+    const hit = tui.hitTargets.find(hit => hit.type === 'yolo'); assert.ok(hit); assert.ok(hit.row > tui.composerRow);
+    const line = clean(tui.lastFrame[hit.row - 1]); assert.match(line, /Goal achieved.*\[YOLO\]/);
+    assert.equal(hit.right, tui.workspace.x + tui.workspace.center);
+    ui.yoloEnabled = () => false; tui.render(); assert.equal(tui.hitTargets.some(hit => hit.type === 'yolo'), false);
+    assert.doesNotMatch(frame(tui), /auto-approve|\[YOLO\]/);
+  } finally { ui.close(); }
+});
+test('older Core snapshots refresh cumulative compactor receipts instead of losing or freezing the sidebar total', t => {
+  const { ui, tui, session } = terminal();
+  try {
+    const instant = Date.now(); t.mock.timers.enable({ apis: ['Date'], now: instant });
+    const draft = { id: 'summary-fixture', documentTaskKind: 'session-compaction', documentTaskId: 'job-fixture', documentSourceSessionId: session.id };
+    beginCompactionCost(draft, { provider: 'codex', model: 'fixture' });
+    const report = tokens => observeCompactionCost(draft, { provider: 'codex', tokens, available: true });
+    report(16905); t.mock.timers.setTime(instant + 1000); ui.updateSession(session);
+    assert.equal(tui.compactorUsage.tokens, 16905); assert.equal(tui.compactorUsage.complete, false);
+    report(21000); t.mock.timers.setTime(instant + 2000); ui.updateSession(session); tui.render();
+    assert.equal(tui.compactorUsage.tokens, 21000); assert.match(frame(tui), /Compactor\s+≥21,000/);
+    const other = createSession(BUILTINS.codex, directory); ui.setSession(other.id); ui.updateSession(other);
+    ui.setSession(session.id); ui.updateSession(session); assert.equal(tui.compactorUsage.tokens, 21000);
+  } finally { ui.close(); }
+});
+test('restoring older native shell input populates CODE without model replay or placeholder prose', () => {
+  const { ui, tui, session } = terminal();
+  try {
+    appendEvent(session.id, 'backend', { method: 'item/started', params: { item: { id: 'old-command', type: 'commandExecution', command: "python3 - <<'PY'\nprint('actual saved source')\nPY" } } });
+    const before = events(session.id), finish = tui.beginHistoryRestore(session); finish();
+    assert.equal(tui.monitor.files.get(tui.monitor.activeFile).sourceText, "print('actual saved source')");
+    assert.equal(tui.monitor.files.get(tui.monitor.activeFile).phase, 'recorded');
+    assert.deepEqual(events(session.id), before); assert.equal(listRecords('execution').length, 0);
+    assert.doesNotMatch(frame(tui), /Waiting for code|Native input and saved source|No observed HTTP|Enable capture/);
   } finally { ui.close(); }
 });
 test('fast code reveal uses the actual snapshot and leaves execution state, copy data and real deltas intact', () => {

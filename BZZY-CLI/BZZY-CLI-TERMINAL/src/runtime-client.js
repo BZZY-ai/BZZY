@@ -421,7 +421,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
           if (snapshot.capabilities.activeSteering) await selectedApi('POST', 'control', { action: 'steer', text }, randomUUID());
           else ui.event('info', { message: 'This backend cannot accept text mid-turn. Use /pause, then send the next message.' });
         } else {
-          const nextOptions = options.executionOptions?.captureNetwork === true ? { captureNetwork: true } : {};
+          const nextOptions = typeof options.executionOptions?.captureNetwork === 'boolean' ? { captureNetwork: options.executionOptions.captureNetwork } : {};
           const execution = await selectedApi('POST', 'execute', { prompt: text, options: ui.executionOptions?.(nextOptions, { id: activeId }) || nextOptions, goal: false }, randomUUID());
           if (!children.length) options.executionId = execution.executionId;
         }

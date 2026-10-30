@@ -336,7 +336,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     { toolHost: { context: { runId: run.id } } }, { event(type, value) { if (type === 'usage.updated') usageEvents.push(value); }, newline() {} });
   try {
     const result = await engine.run('Use only this local offline fixture.');
-    assert.equal(usageEvents.length, 4);
+    assert.equal(usageEvents.length, 5);
     for (const event of usageEvents.slice(0, 2)) {
       assert.equal(event.tokens, 100, 'missing or invalid usage adds no measured tokens');
       assert.equal(event.available, false, 'unknown usage must not be presented as known zero');
@@ -344,6 +344,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       assert.equal(event.counter, 'claude-total-tokens');
     }
     assert.equal(usageEvents[2].available, true); assert.equal(usageEvents[2].accountingComplete, false);
+    assert.equal(usageEvents.at(-1).tokens, 200); assert.equal(usageEvents.at(-1).accountingComplete, true);
     assert.equal(result.tokens, 100); assert.equal(session.usage.tokens, 200);
     assert.equal(session.usage.accountingComplete, true);
     assert.deepEqual(session.usage.reconciliation, { streamedTokens: 20, finalTokens: 100, rule: 'compatible-total-high-water' });

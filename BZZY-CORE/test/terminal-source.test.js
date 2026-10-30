@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createSession, saveSession } from '../src/engine/store.js';
+import { BUILTINS } from '../src/engine/providers.js';
+import { appendEvent, events } from '../src/engine/database.js';
+import { createTerminalSourceProjection } from '../src/engine/terminal-source.js';
+
+let directory, previous;
+test.beforeEach(() => { previous = process.env.BZZY_HOME; directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-source-compat-')); process.env.BZZY_HOME = path.join(directory, 'private'); });
+test.afterEach(() => { if (previous === undefined) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous; fs.rmSync(directory, { recursive: true, force: true }); });
+const command = (id, text) => ({ method: 'item/started', params: { item: { type: 'commandExecution', id, command: text } } });
+test('older saved chats recover real command input and current launched source without replaying work or rewriting history', () => {
+  const parent = createSession(BUILTINS.codex, directory), child = createSession(BUILTINS.codex, directory);
+  child.parentSessionId = parent.id; saveSession(child);
+  fs.writeFileSync(path.join(directory, 'probe.py'), 'print("current actual source")');
+  appendEvent(parent.id, 'backend', command('inline', "python3 - <<'PY'\nprint('recorded input')\nPY"));
+  appendEvent(child.id, 'backend', command('script', 'python3 probe.py'));
+  const before = events(parent.id), seen = [];
+  const projection = createTerminalSourceProjection(parent.id, (type, data) => seen.push({ type, data }));
+  projection.restore();
+  assert.ok(seen.some(row => row.data.content === "print('recorded input')" && row.data.phase === 'recorded'));
+  assert.equal(seen.at(-1).data.content, 'print("current actual source")');
+  assert.equal(seen.at(-1).data.actorSessionId, child.id); assert.equal(seen.at(-1).data.phase, 'observed');
+  assert.deepEqual(events(parent.id), before);
+  const count = seen.length; projection.restore(); assert.equal(seen.length, count);
+  fs.writeFileSync(path.join(directory, 'probe.py'), 'print("real changes during the run")');
+  appendEvent(child.id, 'backend', { method: 'item/completed', params: { item: { id: 'script', type: 'commandExecution', status: 'completed' } } });
+  projection.event('worker.tool', { workerSessionId: child.id });
+  assert.equal(seen.at(-1).data.content, 'print("real changes during the run")'); assert.equal(seen.at(-1).data.phase, 'completed');
+  projection.event('backend', command('next', "python3 - <<'PY'\nprint('live input')\nPY"));
+  assert.equal(seen.at(-1).data.content, "print('live input')");
+});
+test('recorded source stays authoritative while newer legacy native commands fill the missing tail', () => {
+  const parent = createSession(BUILTINS.codex, directory), seen = [];
+  appendEvent(parent.id, 'backend', command('earlier', 'echo old'));
+  appendEvent(parent.id, 'source.changed', { path: 'Shell command', sourceId: 'command:earlier', content: 'echo old' });
+  appendEvent(parent.id, 'backend', command('newer', "python3 - <<'PY'\nprint('newer saved input')\nPY"));
+  createTerminalSourceProjection(parent.id, (type, data) => seen.push(data)).restore();
+  assert.equal(seen.length, 1); assert.equal(seen[0].content, "print('newer saved input')");
+});
+test('unrelated or private actors and paths never cross the owner source projection', () => {
+  const parent = createSession(BUILTINS.codex, directory), stranger = createSession(BUILTINS.codex, directory), child = createSession(BUILTINS.codex, directory);
+  child.parentSessionId = parent.id; child.importedUntrusted = true; saveSession(child);
+  const seen = [], projection = createTerminalSourceProjection(parent.id, (type, data) => seen.push(data));
+  projection.event('backend', { ...command('foreign', 'echo foreign'), actorSessionId: stranger.id });
+  projection.event('backend', { ...command('private', 'echo private'), actorSessionId: child.id });
+  assert.equal(seen.length, 0);
+  fs.mkdirSync(path.join(directory, '.bzzy')); fs.writeFileSync(path.join(directory, '.bzzy', 'private.py'), 'hidden');
+  projection.event('backend', command('private-file', 'python3 .bzzy/private.py'));
+  assert.equal(seen.length, 1); assert.equal(seen[0].sourceKind, 'command'); assert.doesNotMatch(JSON.stringify(seen), /hidden/);
+});

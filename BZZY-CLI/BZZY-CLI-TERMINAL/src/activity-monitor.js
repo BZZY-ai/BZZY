@@ -38,7 +38,7 @@ export class ActivityMonitor {
   scrub(value) { this.redactor ||= diagnosticRedactor({ maxString: 4096, maxItems: 32 }); return this.redactor.scrub(value); }
   event(type, data, actors, sessionId) {
     if (data.seq != null) { const key = `${data.eventSessionId || sessionId}:${data.seq}`; if (this.seen.has(key)) return; this.seen.add(key); if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value); }
-    if (type === 'network.capture' && typeof data.enabled === 'boolean') { this.captureEnabled = data.enabled; this.revision++; return; }
+    if (type === 'network.capture' && typeof data.enabled === 'boolean') { this.captureEnabled = data.enabled; this.captureUnavailable = data.reason === 'unavailable'; this.revision++; return; }
     if (['source.changed', 'source.delta'].includes(type) && typeof data.path === 'string') {
       const key = `${data.actorSessionId || sessionId}:${data.sourceId || data.path}`, previous = this.files.get(key);
       if (type === 'source.delta') {
@@ -86,6 +86,7 @@ export class ActivityMonitor {
     return rows;
   }
   captureLabel(tui) {
+    if (this.captureUnavailable && tui.busy) return 'Capture unavailable';
     if (!tui.busy) return tui.ui.launchCaptureNetwork ? 'Shell capture ON · next run' : 'Shell capture OFF';
     return (typeof tui.captureNetwork === 'boolean' ? tui.captureNetwork : this.captureEnabled) ? 'Shell capture ON' : 'Shell capture OFF';
   }
@@ -136,22 +137,16 @@ export class ActivityMonitor {
         hits.push({ type: 'monitor-detail', kind, item: row, row: lines.length, left: 1, right: width });
         lines.push(c(stamp + ' ', palette.muted) + c(clip(label, Math.max(1, width - stamp.length - 1)), tone));
       }
-      if (!lines.length) { put('No agent or skill invocations yet.'); put('Newest invocations appear here first.'); }
     } else if (kind === 'http') {
       for (const row of this.requests(tui.traffic)) {
         let endpoint; try { const url = new URL(redactedUrl(row.url)); endpoint = (width >= 60 ? url.host : '') + url.pathname + url.search; } catch { endpoint = '[invalid URL]'; }
         hits.push({ type: 'monitor-detail', kind, item: row, row: lines.length, left: 1, right: width });
         lines.push(c(clip(row.method || '?', 6).padEnd(7), methodTone(row.method)) + c(String(row.status || (row.type === 'network.error' ? 'ERR' : '…')).padEnd(4), row.type === 'network.error' ? palette.danger : statusTone(row.status)) + c(clip(endpoint, Math.max(1, width - 11)), palette.text));
       }
-      if (!lines.length) {
-        put('No observed HTTP requests.'); put(this.captureLabel(tui), palette.warning);
-        put('Enable capture in the Filter menu.'); put('Core HTTP-tool calls record automatically.');
-      }
     } else {
       const file = this.files.get(this.activeFile);
-      if (!file) { put('Waiting for code or file edits.'); put('Native input and saved source appear here.'); return { lines, hits }; }
+      if (!file) return { lines, hits };
       if (file.unavailable) put(file.unavailable, palette.warning);
-      if (!file.lines.length) put(file.phase === 'started' ? 'Edit started · waiting for file contents.' : 'No readable source available.');
       const digits = Math.max(3, String(file.lines.length).length);
       const visible = this.visibleSource(file), revealing = this.animating();
       for (const [index, source] of visible.entries()) {

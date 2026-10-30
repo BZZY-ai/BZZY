@@ -67,6 +67,10 @@ Implemented:
   labelled separately from completed source and never grants execution rights.
   Owner session snapshots include measured background-compactor token usage,
   independently of pricing; scoped observers gain no new accounting surface.
+  Total-only and final document usage are counted without inventing a token
+  breakdown or price. A bounded owner-local source projection supports older
+  native command histories and runners without replaying work. CLI executions
+  request shell HTTP capture by default; other clients retain their options.
   See [terminal telemetry coverage](../BZZY-CLI/BZZY-CLI-TERMINAL/docs/TUI.md).
 
 - Workspace snapshots default to 1 GiB per file, 8 GiB total and 100,000 files,

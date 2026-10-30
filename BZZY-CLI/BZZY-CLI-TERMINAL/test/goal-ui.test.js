@@ -52,11 +52,13 @@ async function until(check, label) {
 test('clicking YOLO toggles Core permissions, accepts the pending approval and preserves the unsent draft', async () => {
   await connection(); const input = ui.ask('bzzy › '); await Promise.resolve(); ui.tui.value = 'Unsent draft'; ui.tui.cursor = 12;
   const question = pending(); ui.tui.render();
-  const toggle = ui.tui.hitTargets.find(hit => hit.type === 'yolo'); assert.ok(toggle);
-  ui.tui.mouse(0, toggle.left, toggle.row); await ui.tui.permissionTask;
+  assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'yolo'), false);
+  const menu = ui.tui.openWorkspaceMenu('actions'); await new Promise(resolve => setImmediate(resolve));
+  ui.tui.finishSelection('@yolo'); await menu;
   assert.equal(ui.yoloEnabled(), true); assert.equal(getRecord('question', question.id).answer, 'yes');
   assert.equal(ui.tui.value, 'Unsent draft'); assert.equal(ui.tui.inputQueue.length, 0); assert.equal(listRecords('execution').length, 0);
-  assert.equal(await ui.settingsCommand('/yolo'), true); assert.equal(ui.yoloEnabled(), false);
+  ui.tui.render(); const toggle = ui.tui.hitTargets.find(hit => hit.type === 'yolo'); assert.ok(toggle); assert.ok(toggle.row > ui.tui.composerRow);
+  ui.tui.mouse(0, toggle.left, toggle.row); await ui.tui.permissionTask; assert.equal(ui.yoloEnabled(), false);
   ui.sessionMode = 'VIEW'; assert.equal(await ui.toggleYolo(), false); assert.equal(ui.yoloEnabled(), false);
   ui.reader.close(); await input;
 });
@@ -150,7 +152,7 @@ test('goal colors follow authoritative lifecycle states and animated dots fit co
     for (const [columns, rows] of [[80, 24], [140, 40]]) {
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(frame, /auto-approve: off/); assert.match(frame, status === 'complete' ? /Goal achieved/ : ['active', 'verifying'].includes(status) ? /goal\.\.\./ : /Goal stalled/);
+      assert.doesNotMatch(frame, /auto-approve|\[YOLO\]/); assert.match(frame, status === 'complete' ? /Goal achieved/ : ['active', 'verifying'].includes(status) ? /goal\.\.\./ : /Goal stalled/);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
     }
   }

@@ -34,7 +34,9 @@ export function workspaceChrome(tui, geometry) {
       if (hit) hits.push({ ...hit, row: sidebar.length + y + 1, left: 2, right: left - 1 });
       sidebar.push(outlinedRow(text, left, theme, { tone }));
     };
-    sidebar.push(sectionHeading('NAVIGATION', left, theme));
+    sidebar.push(sectionHeading('NAVIGATION', left, theme, palette.accent, '⋯'));
+    hits.push({ type: 'workspace-toggle', side: 'left', row: y + 1, left: 1, right: left - 4 },
+      { type: 'workspace-actions', row: y + 1, left: left - 3, right: left });
     for (const [label, panel] of workspaceNavigation) {
       const selected = tui.panel === panel;
       const row = sidebar.length + y + 1;
@@ -44,7 +46,7 @@ export function workspaceChrome(tui, geometry) {
     sidebar.push(sectionHeading('MODEL', left, theme, palette.agent));
     const savedRow = sidebar.length + y + 1;
     sidebar.push(outlinedRow(' ' + clip(tui.modelSelectionRequired ? 'Select / save model ▾' : tui.model + ' ▾', left - 3), left, theme, { tone: palette.main }));
-    hits.push({ type: 'model-control', command: '/providers @saved', disabled: tui.busy || !canControlSession(tui.ui), row: savedRow, left: 2, right: left - 1 });
+    hits.push({ type: 'model-control', command: '/providers @saved', disabled: !canControlSession(tui.ui), row: savedRow, left: 2, right: left - 1 });
     const modelDisabled = tui.busy || !canControlSession(tui.ui);
     put(` Provider  ${tui.provider || 'Select'} ▾`, palette.agent, false, { type: 'model-control', command: '/providers @provider', disabled: modelDisabled });
     if (bodyHeight >= 24) put(` Model     ${tui.model} ▾`, palette.main, true, { type: 'model-control', command: '/models', disabled: modelDisabled });
@@ -127,7 +129,7 @@ export function workspaceChrome(tui, geometry) {
         activity.push(c('│', palette.border) + fit(line, right - 2, theme) + c(mark === ' ' ? '│' : mark, palette.border));
       }
       for (const hit of layout.hits) if (hit.row >= start && hit.row < start + rows) hits.push({ ...hit, row: top + 2 + metadataRows + hit.row - start, left: monitorLeft + hit.left, right: Math.min(width - 1, monitorLeft + hit.right) });
-      const footer = kind === 'agents' ? 'Newest first · scroll ↕' : monitor.offsets[kind] ? '↓ Latest · scroll ↕' : kind === 'code' ? `[Follow ${monitor.followCode ? 'ON' : 'OFF'}] · ↓ Latest` : monitor.captureLabel(tui) + ' · ↕';
+      const footer = kind === 'agents' ? 'Newest first · scroll ↕' : monitor.offsets[kind] ? '↓ Latest · scroll ↕' : kind === 'code' ? `[Follow ${monitor.followCode ? 'ON' : 'OFF'}] · ↓ Latest` : 'scroll ↕';
       const tail = clip(' ' + footer + ' ', right - 4);
       activity.push(c('└─', palette.border) + c(tail, monitor.offsets[kind] ? palette.accent : palette.muted) + c('─'.repeat(Math.max(0, right - cellWidth(tail) - 3)) + '┘', palette.border));
       hits.push({ type: 'monitor-latest', kind, row: top + size - 1, left: monitorLeft, right: width - 2 });

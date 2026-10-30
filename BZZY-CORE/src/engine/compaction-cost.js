@@ -58,13 +58,16 @@ export function observeCompactionCost(draft, data) {
   const receipt = getRecord(KIND, draft.id);
   if (!receipt || receipt.state !== 'running' || data?.provider !== receipt.provider) return;
   const tokens = normalizeCompactionTokens(data.detail);
-  if (!tokens) return;
+  const reportedTokens = tokens?.total ?? (data.available === true && count(data.tokens) ? data.tokens : null);
+  if (reportedTokens === null) return;
   const previous = receipt.tokens;
-  const reset = receipt.counterReset || previous && (tokens.input < previous.input || tokens.output < previous.output ||
-    tokens.cached !== null && previous.cached !== null && tokens.cached < previous.cached);
+  const reset = receipt.counterReset || count(receipt.reportedTokens) && reportedTokens < receipt.reportedTokens
+    || tokens && previous && (tokens.input < previous.input || tokens.output < previous.output ||
+      tokens.cached !== null && previous.cached !== null && tokens.cached < previous.cached);
   // These are cumulative native-thread totals for a fresh document draft.
   // Duplicate telemetry replaces the same receipt instead of adding a charge.
-  const at = now(), next = { ...receipt, tokens: reset ? previous : tokens, counterReset: Boolean(reset), updatedAt: at };
+  const at = now(), next = { ...receipt, tokens: reset ? previous : tokens || (previous?.total === reportedTokens ? previous : null), reportedTokens: reset ? receipt.reportedTokens ?? previous?.total : reportedTokens,
+    accountingComplete: data.accountingComplete !== false, counterReset: Boolean(reset), updatedAt: at };
   if (data.model && data.model !== receipt.model && (!family(data.model) || family(data.model) !== receipt.pricing?.family)) next.modelMismatch = true;
   next.estimateNanos = estimate(next, at); putRecord(KIND, draft.id, next);
 }
@@ -73,7 +76,7 @@ export function finishCompactionCost(draft, { completed = false, noInference = f
   const receipt = getRecord(KIND, draft.id);
   if (!receipt || receipt.state === 'finished') return;
   const finishedAt = now(), next = { ...receipt, state: 'finished', finishedAt, noInference,
-    complete: noInference || Boolean(completed && receipt.tokens && !receipt.counterReset) };
+    complete: noInference || Boolean(completed && (receipt.tokens || count(receipt.reportedTokens)) && receipt.accountingComplete !== false && !receipt.counterReset) };
   if (draft.resolvedModel && draft.resolvedModel !== receipt.model &&
       (!family(draft.resolvedModel) || family(draft.resolvedModel) !== receipt.pricing?.family)) next.modelMismatch = true;
   next.estimateNanos = estimate(next, finishedAt); putRecord(KIND, draft.id, next);
@@ -89,7 +92,7 @@ export function sessionCompactionCost(sessionId, db = database(), sessionIds = [
     coalesce(sum(json_type(data,'$.estimateNanos.min')='integer'),0) AS pricedAttempts,
     coalesce(sum(json_extract(data,'$.estimateNanos.min')),0) AS minNanos,
     coalesce(sum(json_extract(data,'$.estimateNanos.max')),0) AS maxNanos,
-    coalesce(sum(json_extract(data,'$.tokens.total')),0) AS reportedTokens,
+    coalesce(sum(coalesce(json_extract(data,'$.reportedTokens'),json_extract(data,'$.tokens.total'))),0) AS reportedTokens,
     min(json_extract(data,'$.startedAt')) AS trackedSince
     FROM records WHERE kind=? AND json_extract(data,'$.sessionId') IN (SELECT value FROM json_each(?)) GROUP BY provider,model`).all(KIND, ids);
   const legacy = db.prepare(`SELECT json_extract(j.data,'$.selection.provider') AS provider,json_extract(j.data,'$.selection.model') AS model,

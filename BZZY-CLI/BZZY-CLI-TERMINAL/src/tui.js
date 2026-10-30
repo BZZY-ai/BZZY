@@ -34,6 +34,9 @@ import { workspaceGeometry, workspaceChrome } from './workspace-layout.js';
 import { workspaceHeader, workspaceNavigation, sectionHeading } from './workspace-header.js';
 import { workspaceComposer, workspacePanelFooter } from './workspace-composer.js';
 import { responseResources, openTerminalLink } from './response-actions.js';
+import { chooseSavedModel } from './model-controls.js';
+import { loadSession } from '@bzzy/core/engine/store.js';
+import { createTerminalSourceProjection } from '@bzzy/core/engine/terminal-source.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -143,7 +146,8 @@ export class TerminalChat {
     this.mode = session.mode; this.executor = session.executor;
     if (this.spending && this.spending.sessionId !== session.id) this.spending = null;
     if (snapshot.spending?.sessionId === session.id) this.spending = snapshot.spending;
-    this.compactorUsage = snapshot.compactorUsage?.sessionId === session.id ? snapshot.compactorUsage : null;
+    if (Object.hasOwn(snapshot, 'compactorUsage')) this.compactorUsage = snapshot.compactorUsage?.sessionId === session.id ? snapshot.compactorUsage : null;
+    else if (this.compactorUsage?.sessionId !== session.id) this.compactorUsage = null;
     this.bestiesGroupId = session.bestiesSessionId || (session.mode === 'besties' ? session.id || this.ui.sessionId : null);
     this.peers = session.peers || [];
     if (!this.bestiesGroupId && !this.sharedRoom.length && this.panel === 'room') this.panel = 'chat';
@@ -213,6 +217,9 @@ export class TerminalChat {
     }
     for (const entry of attributeInvocationActors(this.entries, this.actors, { sessionId })) this.entryLayouts.delete(entry);
     this.monitor.event(type, data, this.actors, sessionId);
+    if (!this.historyRestoreDepth && ['backend', 'worker.tool'].includes(type)) {
+      try { this.sourceProjection(sessionId).event(type, data); } catch { /* Observation cannot interrupt chat. */ }
+    }
     const tools = this.toolTrees.event(this.entries, type, data, { sessionId, actors: this.actors });
     if (tools.group && this.workspace?.right && !tools.group.workspaceCollapsed) { tools.group.expanded = false; tools.group.workspaceCollapsed = true; }
     for (const entry of tools.changed || []) this.entryLayouts.delete(entry);
@@ -801,6 +808,7 @@ export class TerminalChat {
     if (hit?.type === 'panel') this.setPanel(hit.panel);
     else if (hit?.type === 'model-control') {
       if (hit.disabled) this.notice(!canControlSession(this.ui) ? 'This terminal is read-only.' : this.busy ? 'Pause the current response before changing its model.' : 'Select a model first.', true);
+      else if (hit.command === '/providers @saved' && this.busy) { this.modelAnchor = { left: hit.left, row: hit.row }; this.modelSaveTask = this.saveModelWhileWorking(); }
       else if (hit.command === '/settings core') { this.ui.openSettings(); this.settingsAction('core'); }
       else { this.modelAnchor = { left: hit.left, row: hit.row }; this.localCommand(hit.command); }
     }
@@ -1431,6 +1439,11 @@ export class TerminalChat {
     if (view.meta) lines.push(color(clip('    ' + view.meta, width), view.warning ? palette.warning : palette.muted));
     return lines;
   }
+  sourceProjection(id = this.ui.activeTab || this.ui.sessionId) {
+    if (this.terminalSource?.id !== id || this.terminalSource.monitor !== this.monitor) this.terminalSource = { id, monitor: this.monitor,
+      projection: createTerminalSourceProjection(id, (type, data) => this.monitor.event(type, data, this.actors, id)) };
+    return this.terminalSource.projection;
+  }
   beginHistoryRestore(session) {
     if (!this.historyRestoreDepth) this.historyLoading = { session, count: 0, started: Date.now(), keys: [] };
     this.historyRestoreDepth = (this.historyRestoreDepth || 0) + 1;
@@ -1444,6 +1457,7 @@ export class TerminalChat {
         const queued = this.historyLoading?.failed ? [] : this.historyLoading?.keys || [];
         this.historyLoading = null; this.loadingMouseReport = false; this.loadingFrameKey = null; this.paintedFrame = null; this.lastFrame = [];
         this.scroll = 0; this.bodyCache = null;
+        if (success) { try { this.sourceProjection(session?.id).restore(); } catch { /* Missing old input stays absent. */ } }
         this.render();
         for (const [text, key] of queued) this.key(text, key);
       }
@@ -1680,11 +1694,32 @@ export class TerminalChat {
     if (!this.ui.reader && this.resolveInput === resolveInput && (this.ui.activeTab || this.ui.sessionId) === id) this.ui.reader = reader;
     return (this.ui.activeTab || this.ui.sessionId) === id ? result : null;
   }
+  async localAsk(question, options) {
+    const id = this.ui.activeTab || this.ui.sessionId;
+    const saved = Object.fromEntries(['resolveInput', 'question', 'hidden', 'promptDraft', 'value', 'cursor'].map(key => [key, this[key]]));
+    const reader = this.ui.reader;
+    try { return await this.ask(question, options); }
+    finally {
+      if (!this.closed && (this.ui.activeTab || this.ui.sessionId) === id) {
+        Object.assign(this, saved); this.ui.reader = reader; this.schedule();
+      } else saved.resolveInput?.(null);
+    }
+  }
+  async saveModelWhileWorking() {
+    if (this.selection || this.promptDraft || this.hidden || !canControlSession(this.ui)) return;
+    const current = loadSession(this.ui.activeTab || this.ui.sessionId);
+    if (!current) return;
+    try {
+      // Naming a tuple writes only private presets: no input claim, execution
+      // control or model mutation. Suspend the chat reader while naming it.
+      await chooseSavedModel(current, { chooseOne: (...args) => this.localChoice(...args), ask: (...args) => this.localAsk(...args) }, { allowSelection: false });
+    } catch (error) { this.notice(error.message, true); }
+  }
   async openWorkspaceMenu(kind) {
     if (this.selection || this.promptDraft || this.hidden || this.ui.privateView || this.historyRestoreDepth) return;
     const blocked = this.busy || !canControlSession(this.ui);
     const choices = kind === 'models' ? [
-      { value: '/providers @saved', label: 'Saved combinations ▾', description: `${this.provider} · ${this.model} · ${this.effort || 'default'}. Use, name or save this combination.`, disabled: blocked },
+      { value: '/providers @saved', label: 'Saved combinations ▾', description: `${this.provider} · ${this.model} · ${this.effort || 'default'}. Use, name or save this combination.`, disabled: !canControlSession(this.ui) },
       { value: '/providers @provider', label: 'Provider…', disabled: blocked },
       { value: '/models', label: 'Model…', disabled: blocked },
       { value: '/effort', label: 'Reasoning effort…', disabled: blocked || this.modelSelectionRequired },
@@ -1701,17 +1736,20 @@ export class TerminalChat {
     ] : [
       { value: ':chat', label: 'Back to chat' }, { value: '@models', label: 'Model configuration…' },
       { value: '@live', label: 'Live activity…' }, { value: '@paths', label: 'Session folders…' },
+      { value: '@right', label: this.workspace?.right ? 'Hide live panels' : 'Show live panels' },
       { value: '@paste', label: 'Paste into draft', disabled: !this.canCompose() },
+      { value: '@yolo', label: this.ui.yoloEnabled?.() ? 'Disable YOLO' : 'Enable YOLO', disabled: !canControlSession(this.ui) },
       { value: '/help', label: 'Help and slash commands' }, { value: '@latest', label: 'Jump to latest' }, { value: '@tools', label: this.showTools ? 'Hide tool details' : 'Show tool details' },
       ...(this.busy && canControlSession(this.ui) ? [{ value: '/pause', label: 'Pause session' }, { value: '/cancel', label: 'Cancel session' }] : []),
     ];
     const title = kind === 'models' ? 'MODEL · provider, model and effort' : kind === 'live' ? 'LIVE ACTIVITY' : kind === 'navigation' ? 'NAVIGATION' : 'ACTIONS';
     const chosen = await this.localChoice(title, choices);
     if (!chosen) return;
+    if (chosen === '/providers @saved' && this.busy) { await this.saveModelWhileWorking(); return; }
     if (['@models', '@live', '@actions'].includes(chosen)) { await this.openWorkspaceMenu(chosen.slice(1)); return; }
     if (chosen === '@usage') {
       const usage = this.compactorUsage, compactor = usage?.available && Number.isSafeInteger(usage.tokens) ? (usage.complete ? '' : '≥') + usage.tokens.toLocaleString() : 'unavailable';
-      const selected = await this.localChoice('USAGE / HOST', { description: this.tokenLabel() + '\nCompactor tokens: ' + compactor + '\n' + hostMetricsLabel(this.ui.hostMetrics, this.output.columns || 80), descriptionRows: 6, choices: [{ value: 'metrics', label: 'Detailed Metrics' }, { value: 'close', label: 'Close' }] });
+      const selected = await this.localChoice('USAGE / HOST', { description: this.tokenLabel() + '\nBackground compactor tokens: ' + compactor + '\nUpdates on reported compactor usage; ≥ marks missing or unfinished receipts.\n' + hostMetricsLabel(this.ui.hostMetrics, this.output.columns || 80), descriptionRows: 8, choices: [{ value: 'metrics', label: 'Detailed Metrics' }, { value: 'close', label: 'Close' }] });
       if (selected === 'metrics') this.setPanel('metrics');
     } else if (chosen === '@paths') {
       const cwd = this.ui.sessionWorkingDirectory, memory = this.ui.sessionProjectLocation?.path;
@@ -1721,6 +1759,8 @@ export class TerminalChat {
       ]);
       if (value) this.clipboardTask = this.copySelection(value);
     } else if (chosen === '@paste') this.clipboardTask = this.pasteClipboard();
+    else if (chosen === '@right') { this.workspaceOptions.hideRight = Boolean(this.workspace?.right); this.workspaceOptions.showRight = !this.workspaceOptions.hideRight; this.render(); }
+    else if (chosen === '@yolo') await this.ui.toggleYolo();
     else if (chosen === '@latest') { this.scroll = 0; this.schedule(); }
     else if (chosen === '@tools') { this.showTools = !this.showTools; this.schedule(); }
     else if (chosen.startsWith('@')) { this.monitor.expanded = chosen.slice(1); this.monitor.detail = null; this.setPanel('monitor'); }
@@ -1793,7 +1833,7 @@ export class TerminalChat {
     const choices = kind === 'code' ? [...[...monitor.files.values()].reverse().map(file => ({ value: file.key, label: file.path, description: `${this.actors.for(file.actorSessionId, sessionId).label} · ${file.language} · ${file.phase}` })),
       ...(monitor.activeFile ? [{ value: '@copy', label: 'Copy current source' }, { value: '@diff', label: 'Inspect captured edit diff' }] : [])]
       : [{ value: '@capture', label: this.ui.launchCaptureNetwork ? 'Disable shell capture for next run' : 'Enable shell capture for next run', disabled: !canControlSession(this.ui), description: 'Applies to your next message or goal, including its workers. Current processes keep their existing capture settings.' },
-        { value: '@coverage', label: 'How HTTP capture works…' },
+        { value: '@coverage', label: 'How HTTP capture works…', description: monitor.captureLabel(this) },
         { value: 'all', label: 'All observed requests' }, { value: 'errors', label: 'Errors (4xx / 5xx)' }, ...['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map(value => ({ value, label: value })), { value: '@status', label: 'Sort by status' }, { value: '@time', label: 'Sort by capture time' }, { value: '@history', label: 'Open HTTP history (includes web visits)' }];
     const selected = await this.localChoice(kind === 'code' ? 'Recent source / files' : 'HTTP filters', choices, { presentation: 'dropdown' });
     if ((this.ui.activeTab || this.ui.sessionId) !== sessionId || this.monitor !== monitor) return;
@@ -1807,7 +1847,7 @@ export class TerminalChat {
       this.ui.captureNetworkOverride = this.ui.launchCaptureNetwork;
       this.notice(`Shell capture ${this.ui.launchCaptureNetwork ? 'enabled' : 'disabled'} for the next execution. Existing processes keep their capture settings.`);
     } else if (selected === '@coverage') {
-      await this.localChoice('HTTP PROBE · capture coverage', { description: 'Core HTTP-tool requests appear automatically.\nShell/Python requests require shell capture enabled before execution. Proxy-aware clients are covered; direct sockets and clients ignoring proxy/CA settings are not.\nProvider/model traffic is excluded. Missing historical traffic cannot be recovered. Keep your saved session; enable capture for its next execution.', descriptionRows: 12, choices: [{ value: 'close', label: 'Close' }] });
+      await this.localChoice('HTTP PROBE · capture coverage', { description: 'CLI shell capture is enabled by default for new executions in existing or new chats.\nCore HTTP-tool requests appear automatically. Proxy-aware clients are covered; direct sockets and clients ignoring proxy/CA settings are not.\nProvider/model traffic is excluded. Missing historical traffic cannot be recovered. Already-running processes retain their launch environment.', descriptionRows: 12, choices: [{ value: 'close', label: 'Close' }] });
     } else if (selected === '@history') this.setPanel('http');
     else if (selected === '@status' || selected === '@time') monitor.httpSort = selected.slice(1);
     else if (selected) { monitor.httpFilter = selected; monitor.offsets.http = 0; monitor.detail = null; }
@@ -1918,31 +1958,10 @@ export class TerminalChat {
     for (let row = 0; row < height; row++) frame += `\x1b[${row + 1};1H${this.theme.background(palette.background)}\x1b[2K${lines[row] || ''}\x1b[0m`;
     this.lastFrame = lines; this.paintedFrame = null; this.writeFrame(frame);
   }
-  sessionLocationRows(header, width) {
-    if (!this.ui.sessionId) return header;
-    const { color } = this.theme, location = this.ui.sessionProjectLocation;
-    const cwd = this.ui.sessionWorkingDirectory;
-    if ((this.output.rows || 24) < 18) {
-      const row = Math.max(0, header.indexOf(''));
-      const prefix = header[row] ? cellWidth(header[row]) + 1 : 0;
-      if (prefix + 12 <= width) {
-        header[row] += color(' [ Paths ▾ ]', palette.accent);
-        this.hitTargets.push({ type: 'session-paths', row: row + 1, left: prefix + 1, right: prefix + 12 });
-      }
-      return header;
-    }
-    const dirLabel = width < 45 ? 'Dir' : 'Working dir';
-    this.hitTargets.push({ type: 'working-directory', path: cwd, row: header.length + 1, left: 2, right: width });
-    header.push(color(clip(`  ${dirLabel}: ${cwd || 'unavailable'}`, width), cwd ? palette.muted : palette.warning));
-    const status = location?.status === 'exists' ? '' : location?.status === 'missing' ? ' (missing)' : ' (unavailable)';
-    this.hitTargets.push({ type: 'session-project-path', row: header.length + 1, left: 2, right: width });
-    header.push(color(clip(`  Session .bzzy${status}: ${location?.path || 'unknown'}`, width), location?.status === 'exists' ? palette.muted : palette.warning));
-    return header;
-  }
   navigationHeader(width) {
     const { color: c } = this.theme;
     this.topBarHasMetrics = true;
-    const header = [], approval = this.ui.yoloEnabled?.() ? 'auto-approve: on' : 'auto-approve: off';
+    const header = [];
     if (this.aliasEdit) {
       const chars = [...this.aliasEdit.value], label = chars.slice(0, this.aliasEdit.cursor).join('') + '▏' + chars.slice(this.aliasEdit.cursor).join('');
       const controls = ' [Save] [Cancel] ', left = Math.max(2, width - cellWidth(controls));
@@ -1950,15 +1969,14 @@ export class TerminalChat {
       this.hitTargets.push({ type: 'alias-save', row: 1, left, right: left + 6 }, { type: 'alias-cancel', row: 1, left: left + 7, right: width });
     } else {
       const label = (this.alias || 'New chat') + '  #' + (this.ui.sessionId || '').slice(0, 6);
-      const detail = width >= 66 ? this.activeAgentCount() + ' agents · ' + approval : width >= 42 ? approval : '';
-      const available = Math.max(1, width - cellWidth(detail) - 7), name = clip(label, available);
-      const line = c('┌ ', palette.border) + c('● ', palette.main) + c(name, palette.accent, true)
-        + ' '.repeat(Math.max(1, width - cellWidth(name) - cellWidth(detail) - 5)) + c(detail, palette.muted) + c('┐', palette.border);
+      const detail = width >= 42 ? this.activeAgentCount() + ' agents ' : '';
+      const available = Math.max(1, width - cellWidth(detail) - 8), name = clip(label, available);
+      const line = c('┌', palette.border) + c('≡ ', palette.accent, true) + c('● ', palette.main) + c(name, palette.accent, true)
+        + ' '.repeat(Math.max(1, width - cellWidth(name) - cellWidth(detail) - 6)) + c(detail, palette.muted) + c('┐', palette.border);
       header.push(line);
-      this.hitTargets.push({ type: 'alias', row: 1, left: 3, right: Math.min(width - 2, cellWidth(name) + 4) });
-      if (detail) this.hitTargets.push({ type: 'yolo', row: 1, left: Math.max(2, width - cellWidth(approval) - 1), right: width - 1 });
+      this.hitTargets.push({ type: 'alias', row: 1, left: 4, right: Math.min(width - 2, cellWidth(name) + 5) },
+        { type: 'workspace-toggle', side: 'left', row: 1, left: 2, right: 3 });
     }
-    this.sessionLocationRows(header, width);
     if (this.pinned && !this.ui.minimal && !['settings', 'metrics'].includes(this.panel) && (this.output.rows || 24) >= 18) header.push(c(clip(' ❯ ' + this.pinned, width), palette.user));
     if (this.ui.tabs?.length > 1 && !this.promptDraft) {
       let line = '';

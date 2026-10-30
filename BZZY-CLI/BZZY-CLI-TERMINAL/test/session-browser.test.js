@@ -15,13 +15,14 @@ import { appendEvent, events, listRecords } from '../src/database.js';
 import { root } from '../src/process.js';
 import { runtimeInfo, runtimeRequest } from '../src/runtime.js';
 import { identityAlive } from '../src/recovery.js';
+import http from 'node:http';
 
 let directory, work, elsewhere, previous;
 test.beforeEach(() => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-sessions-'));
   work = path.join(directory, 'original-project'); elsewhere = path.join(directory, 'another-directory');
   fs.mkdirSync(work); fs.mkdirSync(elsewhere);
-  const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_TEST_LOG', 'BZZY_DIRECT'];
+  const keys = ['BZZY_HOME', 'BZZY_CODEX_HOME', 'BZZY_CODEX_BIN', 'BZZY_TEST_LOG', 'BZZY_DIRECT', 'BZZY_TEST_SCENARIO', 'BZZY_TEST_PROBE_SCRIPT'];
   previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   Object.assign(process.env, { BZZY_HOME: path.join(directory, 'private'), BZZY_CODEX_HOME: path.join(directory, 'codex'),
     BZZY_CODEX_BIN: path.join(root, 'test/fixtures/codex.mjs'), BZZY_TEST_LOG: path.join(directory, 'backend.jsonl') });
@@ -211,6 +212,38 @@ test('capture-network remains enabled for successive ordinary chat messages in a
   assert.ok(captures >= 2, 'both actual runners initialized the existing HTTP recorder');
   assert.equal(loadSession(session.id).cwd, work);
 });
+test('ordinary execution in a reopened chat automatically populates HTTP PROBE and CODE from a real Python child', { timeout: 25000 }, async () => {
+  let requests = 0;
+  const server = http.createServer((_request, response) => { requests++; response.writeHead(201); response.end('local fixture'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const session = createSession(BUILTINS.codex, work, 'fixture-model', 'Automatic live observation');
+  appendEvent(session.id, 'text', { text: 'Keep the older findings.', itemId: 'older-findings' });
+  const filename = path.join(work, 'live_probe.py');
+  const source = `import urllib.request\nresponse = urllib.request.urlopen('http://127.0.0.1:${server.address().port}/fixture?api_key=fixture-private')\nprint(response.status)\n`;
+  fs.writeFileSync(filename, source);
+  Object.assign(process.env, { BZZY_TEST_SCENARIO: 'observed-shell', BZZY_TEST_PROBE_SCRIPT: filename });
+  const input = new PassThrough(); Object.assign(input, { isTTY: true, setRawMode() {} });
+  const output = new PassThrough(); Object.assign(output, { isTTY: true, rows: 40, columns: 160 }); output.resume();
+  const ui = new UI({ input, output, pet: false }); let sent = false;
+  ui.ask = async () => {
+    if (!sent) { sent = true; return 'Run the approved local script fixture'; }
+    const deadline = Date.now() + 18000;
+    while (Date.now() < deadline) {
+      if (ui.tui.monitor.requests(ui.tui.traffic).some(row => row.status === 201) && [...ui.tui.monitor.files.values()].some(file => file.sourceKind === 'executed-file' && file.phase === 'completed')) return '/exit';
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    throw new Error('Real shell traffic/source never reached the reopened chat.');
+  };
+  try {
+    assert.equal(await attachSession(session, parseArgs([]).options, ui), 0);
+    assert.equal(requests, 1);
+    const row = ui.tui.monitor.requests(ui.tui.traffic)[0]; assert.equal(row.method, 'GET'); assert.equal(row.status, 201); assert.match(row.url, /api_key=\[redacted\]|api_key=%5Bredacted%5D/);
+    assert.ok([...ui.tui.monitor.files.values()].some(file => file.path === 'live_probe.py' && /import urllib\.request/.test(file.sourceText)));
+    assert.ok(ui.tui.entries.some(entry => /Keep the older findings/.test(entry.text)));
+    assert.equal(listRecords('execution', { sessionId: session.id }).length, 1); assert.equal(loadSession(session.id).cwd, work);
+    assert.equal(parseArgs(['--no-capture-network']).options.captureNetwork, false);
+  } finally { ui.close(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); }
+});
 
 test('real arrow keys and Enter open the chosen alias without leaking directories into the picker', async () => {
   const original = createSession(BUILTINS.codex, work, null, 'First alias');
@@ -247,7 +280,7 @@ test('Sessions navigation is local, queues once during a reply and never interru
   } finally { ui.close(); }
 });
 
-test('the top Open Sessions control deploys an anchored dropdown of aliased chats without losing the draft', async () => {
+test('the sidebar Sessions control deploys an anchored dropdown of aliased chats without losing the draft', async () => {
   const current = createSession(BUILTINS.codex, work, null, 'Current chat');
   createSession(BUILTINS.codex, elsewhere, null, 'Previous chat');
   const ui = terminal(); ui.setSession(current.id); ui.onSessions = () => queueSessionBrowser(ui);
@@ -257,11 +290,11 @@ test('the top Open Sessions control deploys an anchored dropdown of aliased chat
     const open = ui.tui.hitTargets.find(hit => hit.type === 'top-sessions'); assert.ok(open);
     ui.tui.mouse(0, open.left, open.row);
     assert.equal(await waiting, '/sessions');
-    assert.deepEqual(ui.tui.topSessionAnchor, { left: open.left, row: 1 });
+    assert.deepEqual(ui.tui.topSessionAnchor, { left: open.left, row: open.row });
 
     const choosing = chooseSavedSession(ui); await Promise.resolve(); ui.tui.render();
     assert.equal(ui.tui.selection.presentation, 'dropdown');
-    assert.ok(ui.tui.popupRegion.top <= 3, 'the combobox stays attached to the top bar');
+    assert.ok(ui.tui.popupRegion.top <= open.row + 1, 'the dropdown stays near its sidebar control');
     assert.deepEqual(ui.tui.selection.choices.map(choice => choice.label), namedTerminalSessions().map(session => session.alias));
     ui.tui.key('', { name: 'escape' }); assert.equal(await choosing, null);
     assert.equal(ui.tui.value, 'Keep this draft'); assert.equal(ui.tui.cursor, 5);

@@ -29,10 +29,11 @@ import { cancelDefinitionBundle } from './definition-bundle-ui.js';
 import { sessionProjectLocation, sessionProjectDetails, sessionWorkingDirectory } from './session-project-path.js';
 import { recordInvocationEvent, reconcileInvocationEntries, attributeInvocationActors, invocationEntryLayout } from './invocation-ui.js';
 import { ActorProjection } from './actor-ui.js';
+import { sessionCompactorUsage } from '@bzzy/core/engine/compaction-cost.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, minimal = false, cwd = process.cwd(), input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, sessionDebugExporter, sessionFullDebugExporter, updateHandoff, yolo, readOnly = false, captureNetwork = false } = {}) {
+  constructor({ json = false, pet = true, minimal = false, cwd = process.cwd(), input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, sessionDebugExporter, sessionFullDebugExporter, updateHandoff, yolo, readOnly = false, captureNetwork = true } = {}) {
     this.extensions = new NativeExtensions(this);
     this.json = json;
     this.pet = pet;
@@ -83,7 +84,7 @@ export class UI {
   }
   executionOptions(options, session) {
     this.launchYolo ??= Boolean(options.yolo);
-    return { ...options, ...(typeof this.captureNetworkOverride === 'boolean' ? { captureNetwork: this.captureNetworkOverride } : options.captureNetwork === undefined && this.launchCaptureNetwork ? { captureNetwork: true } : {}), yolo: terminalYolo(session.id) ?? this.yoloEnabled(session.id) };
+    return { ...options, captureNetwork: this.captureNetworkOverride ?? options.captureNetwork ?? this.launchCaptureNetwork, yolo: terminalYolo(session.id) ?? this.yoloEnabled(session.id) };
   }
   async toggleYolo() {
     const tui = this.tui, id = this.sessionId;
@@ -149,6 +150,15 @@ export class UI {
     this.extensions.refresh();
     this.refreshSessionProjectLocation();
     const current = snapshot.session || snapshot;
+    // Older running Core services omit this optional owner field. Read the
+    // shared accounting ledger without restarting Core or replaying inference.
+    if (this.tui && !Object.hasOwn(snapshot, 'compactorUsage')) {
+      if (!this.compactorSample || this.compactorSample.id !== current.id || Date.now() - this.compactorSample.at >= 500) {
+        try { this.compactorSample = { id: current.id, at: Date.now(), value: sessionCompactorUsage(current.id) }; }
+        catch { this.compactorSample = null; }
+      }
+      if (this.compactorSample?.id === current.id) snapshot = { ...(snapshot.session ? snapshot : { session: snapshot }), compactorUsage: this.compactorSample.value };
+    }
     if (!this.sessionWorkingDirectory && current.id === (this.activeTab || this.sessionId)) this.sessionWorkingDirectory = current.cwd || null;
     if (snapshot.permissions) this.sessionPermissionStates.set(this.sessionId || snapshot.session?.id, snapshot.permissions.yolo === true);
     this.tui?.update(snapshot);

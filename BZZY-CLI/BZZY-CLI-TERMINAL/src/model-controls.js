@@ -11,17 +11,17 @@ export function savedModelCombinations() {
 
 // Uses Core's locked private configuration writer. Presets contain selection
 // identifiers only; account bindings and credentials never enter this list.
-export async function chooseSavedModel(current, ui) {
+export async function chooseSavedModel(current, ui, { allowSelection = true } = {}) {
   while (true) {
     const saved = savedModelCombinations();
     const selected = await ui.chooseOne('Saved model combinations', [
-      ...saved.map((item, index) => ({ value: String(index), label: item.name, description: `${item.provider} · ${item.model || 'Provider default'} · ${item.effort}` })),
+      ...saved.map((item, index) => ({ value: String(index), label: item.name, disabled: !allowSelection, description: `${item.provider} · ${item.model || 'Provider default'} · ${item.effort}` })),
       { value: '@save', label: '＋ Save current combination', disabled: current.modelSelectionRequired, description: 'Give this provider, model and effort a reusable name.' },
-      { value: '@configure', label: 'Choose another provider / model…' },
+      { value: '@configure', label: 'Choose another provider / model…', disabled: !allowSelection, description: allowSelection ? '' : 'Pause the response before switching. Saving stays available.' },
       ...(saved.length ? [{ value: '@remove', label: 'Remove saved combination…' }] : []),
     ], { presentation: 'dropdown', kind: 'model', scope: 'chat' });
     if (selected == null) return null;
-    if (selected === '@configure') return chooseUnifiedModel(current, ui);
+    if (selected === '@configure' && allowSelection) return chooseUnifiedModel(current, ui);
     if (selected === '@save') {
       const label = await ui.ask('Save combination as · Esc cancels', { initialValue: `${current.provider} ${current.model || 'default'} ${current.selectedEffort || 'default'}` });
       if (label == null) continue;
@@ -42,7 +42,7 @@ export async function chooseSavedModel(current, ui) {
       continue;
     }
     const item = saved[Number(selected)];
-    if (item && String(Number(selected)) === selected) return { provider: item.provider, model: item.model, effort: item.effort, capabilities: null };
+    if (allowSelection && item && String(Number(selected)) === selected) return { provider: item.provider, model: item.model, effort: item.effort, capabilities: null };
   }
 }
 

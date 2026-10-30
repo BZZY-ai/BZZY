@@ -8,6 +8,7 @@ import { getProvider } from '../src/engine/providers.js';
 import { listRecords } from '../src/engine/database.js';
 import { markBackendStartupFailure, backendStartupFailure } from '../src/engine/backend-startup.js';
 import { runRestrictedDocumentModel, documentFinalizationFailure } from '../src/engine/document-model.js';
+import { sessionCompactorUsage, sessionCompactionCost } from '../src/engine/compaction-cost.js';
 
 let directory, previousHome, source, remove, rename;
 test.beforeEach(() => {
@@ -37,6 +38,13 @@ function runner({ primary, closeFailure, prepare } = {}) {
 }
 const invoke = Engine => runRestrictedDocumentModel({ source, prompt: 'Only supplied synthetic state.', instructions: 'Assess supplied state without tools.', Engine });
 const primary = () => markBackendStartupFailure(new Error('SYNTHETIC_PRIVATE_INITIALIZATION_DETAIL'), 'initialize');
+test('final measured document usage reaches the source compactor ledger even without detailed streaming telemetry', async () => {
+  await runRestrictedDocumentModel({ source, prompt: 'Summarize supplied synthetic text.', instructions: 'Use supplied text only.',
+    task: { kind: 'session-compaction', id: 'abcd' }, Engine: runner() });
+  const usage = sessionCompactorUsage(source.id);
+  assert.equal(usage.tokens, 7); assert.equal(usage.complete, true);
+  assert.equal(sessionCompactionCost(source.id).estimatedUsd, null);
+});
 
 test('close failures, including malformed thrown values, cannot replace the trusted primary startup error', async () => {
   for (const cleanupError of [new Error('SYNTHETIC_PRIVATE_CLEANUP_DETAIL'), { path: 'SYNTHETIC_PRIVATE_PATH' }, undefined]) {
