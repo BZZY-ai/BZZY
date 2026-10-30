@@ -166,6 +166,7 @@ Options:
   --agents A,B[,C]      Parallel or besties agents; optionally provider:model
   --default             Reuse this mode’s saved preset without questions or selectors
   --whoami              Print the detailed architecture, storage and integration reference
+  --help-api            Print the current Core API reference and integration examples
   --help-extensions     Print the complete native extension framework reference
   --help-skills         Print the complete native skill creation and sharing guide
   --help-agents         Print the complete specialist agent creation and sharing guide

@@ -1,3 +1,23 @@
+# Installed Core API reference (2026-10-30)
+
+`bzzy --help-api` and `bzzy-core --help-api` print the installed local HTTP/SDK
+reference before loading runtime/account modules. Subprocess checks use a
+nonexistent backend, empty PATH/HOME and a sentinel file as BZZY_HOME; both
+entry points print complete plain Markdown (also with --json), leave storage
+untouched and reject mixed execution flags. The reference includes all current
+local route families, dispatcher operations and transport methods, checked
+against source inventories. Its actual watcher and named-session status examples
+run with the real transport against synthetic responses: older goals are ignored,
+failed handlers cannot advance the saved cursor, and missing/ambiguous aliases
+cannot select a guessed session or create work.
+
+Node 24/macOS: **17 Core reference/extension tests**, **3 transport tests** and
+the **release packaging/install regression** passed. The packaged reference runs
+from bundled CLI/Core and standalone Core without sibling source directories.
+Core/CLI syntax and whitespace checks passed. These are isolated temporary
+fixtures; printing the reference starts no service/model and reads no credentials.
+No installed runtime, live session, target or Relay deployment was changed.
+
 # Memory pause lifecycle and bounded retrieval corrections (2026-10-30)
 
 New admitted source runs reopen local summary maintenance after a goal pause,

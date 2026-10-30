@@ -17,7 +17,7 @@ import { listRecords } from '../src/engine/database.js';
 
 const core = fileURLToPath(new URL('../', import.meta.url));
 const security = fs.readFileSync(new URL('../assets/generation-security.txt', import.meta.url), 'utf8').trim();
-const kinds = ['skills', 'agents', 'workflows', 'goals', 'extensions'];
+const kinds = ['skills', 'agents', 'workflows', 'goals', 'extensions', 'api'];
 let directory, previousHome, project, reviews;
 test.beforeEach(() => {
   previousHome = process.env.BZZY_HOME;
@@ -47,13 +47,13 @@ test('each standalone guide includes its actual examples and the complete mandat
   for (const kind of kinds) {
     const markdown = authoringGuide(kind);
     assert.equal(typeof markdown, 'string');
-    assert.ok(markdown.includes(fs.readFileSync(new URL(`../assets/authoring/${kind}.md`, import.meta.url), 'utf8').trim()));
+    assert.ok(markdown.includes(fs.readFileSync(new URL(kind === 'api' ? '../assets/api-reference.md' : `../assets/authoring/${kind}.md`, import.meta.url), 'utf8').trim()));
     assert.ok(markdown.trimEnd().endsWith(security), `${kind} retains the full mandatory policy`);
     assert.doesNotMatch(markdown, /\x1b\[|\x00/);
     assert.ok(markdown.length > security.length);
   }
   for (const kind of ['', 'skill', 'unknown', '../skills', null, {}]) assert.throws(() => authoringGuide(kind));
-  for (const args of [['--help-skills', '--help-agents'], ['--help-goals', '--help-goals'], ['--help-workflows', '--goal', 'must-not-run']]) {
+  for (const args of [['--help-skills', '--help-agents'], ['--help-goals', '--help-goals'], ['--help-workflows', '--goal', 'must-not-run'], ['--help-api', '--help-skills'], ['--help-api', '--detach']]) {
     assert.throws(() => authoringHelp(args), { code: 'AUTHORING_HELP_USAGE' });
   }
   assert.equal(authoringHelp(['--', '--help-skills']), null);

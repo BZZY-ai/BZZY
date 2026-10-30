@@ -1,5 +1,9 @@
 # Integrating bzzy
 
+`bzzy --help-api` and `bzzy-core --help-api` print the complete installed Core
+local API reference, including authentication, goal monitoring, script jobs,
+owner administration and SDK integration examples.
+
 Core owns the shared engine and authenticated host API. For durable script jobs,
 opt-in script alerts, `--preprompt`, machine-readable events and the current
 existing-session API, use [External execution API](../../../BZZY-CORE/docs/EXECUTION-API.md).

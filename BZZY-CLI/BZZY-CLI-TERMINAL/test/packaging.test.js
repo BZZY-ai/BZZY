@@ -43,6 +43,7 @@ test('the release tarball runs CLI, Core and Relay SDK without sibling source di
   assert.ok(contents.includes('node_modules/@bzzy/core/src/engine/rpc-failure.js'));
   assert.ok(contents.includes('node_modules/@bzzy/core/scripts/core-chat-init-probe.py'));
   assert.ok(contents.includes('node_modules/@bzzy/core/src/engine/authoring-guides.js'));
+  assert.ok(contents.includes('node_modules/@bzzy/core/assets/api-reference.md'));
   for (const kind of ['skills', 'agents', 'workflows', 'goals']) assert.ok(contents.includes(`node_modules/@bzzy/core/assets/authoring/${kind}.md`));
   assert.ok(contents.some(file => file.endsWith('@bzzy/relay/src/client.js')));
   assert.ok(contents.every(file => !/(^|\/)(?:connect\.txt|\.env(?:\..*)?|credentials\.json|\.npmrc|\._[^/]*)(?:\/|$)/i.test(file)), 'release must exclude private notes, credentials and host metadata');
@@ -54,6 +55,7 @@ test('the release tarball runs CLI, Core and Relay SDK without sibling source di
   fs.writeFileSync(path.join(coreSource, 'credentials.json'), '{"fixture":"not-a-real-credential"}');
   const [packedCore] = JSON.parse(npm(['pack', '--json', '--pack-destination', temporary], coreSource));
   assert.ok(packedCore.files.some(file => file.path === 'scripts/core-chat-init-probe.py'));
+  assert.ok(packedCore.files.some(file => file.path === 'assets/api-reference.md'));
   for (const kind of ['skills', 'agents', 'workflows', 'goals']) assert.ok(packedCore.files.some(file => file.path === `assets/authoring/${kind}.md`));
   assert.equal(fs.readFileSync(metadataFixture, 'utf8'), 'fixture dependency metadata', 'Core packaging must preserve original dependency metadata');
   assert.equal(fs.readFileSync(path.join(coreSource, 'connect.txt'), 'utf8'), 'fixture private host notes');
@@ -68,6 +70,9 @@ test('the release tarball runs CLI, Core and Relay SDK without sibling source di
   for (const [file, args, expected] of [
     [path.join(cli, 'bin/bzzy.js'), ['--version'], /^bzzy 0\.2\.0\s*$/],
     [path.join(cli, 'node_modules/@bzzy/core/bin/bzzy-core.js'), ['status'], /"running":false/],
+    [path.join(cli, 'bin/bzzy.js'), ['--help-api'], /^# BZZY Core API reference/],
+    [path.join(cli, 'bin/bzzy-core.js'), ['--help-api'], /^# BZZY Core API reference/],
+    [path.join(cli, 'node_modules/@bzzy/core/bin/bzzy-core.js'), ['--help-api'], /^# BZZY Core API reference/],
     ...['skills', 'agents', 'workflows', 'goals'].map(kind => [path.join(cli, 'bin/bzzy.js'), [`--help-${kind}`], new RegExp(`^# BZZY ${kind} authoring guide`)]),
   ]) {
     const result = spawnSync(process.execPath, [file, ...args], { cwd: temporary, env, encoding: 'utf8', timeout: 15000 });
@@ -82,6 +87,8 @@ test('the release tarball runs CLI, Core and Relay SDK without sibling source di
   assert.equal(fs.existsSync(path.join(host, 'node_modules/bzzy-cli')), false);
   const status = spawnSync(process.execPath, [path.join(host, 'node_modules/@bzzy/core/bin/bzzy-core.js'), 'status'], { cwd: host, env, encoding: 'utf8', timeout: 15000 });
   assert.equal(status.status, 0, status.stderr); assert.match(status.stdout, /"running":false/);
+  const api = spawnSync(process.execPath, [path.join(host, 'node_modules/@bzzy/core/bin/bzzy-core.js'), '--help-api'], { cwd: host, env, encoding: 'utf8', timeout: 5000 });
+  assert.equal(api.status, 0, api.stderr); assert.match(api.stdout, /^# BZZY Core API reference/);
   for (const kind of ['skills', 'agents', 'workflows', 'goals']) {
     const guide = spawnSync(process.execPath, [path.join(host, 'node_modules/@bzzy/core/bin/bzzy-core.js'), `--help-${kind}`], { cwd: host, env, encoding: 'utf8', timeout: 5000 });
     assert.equal(guide.status, 0, guide.stderr); assert.match(guide.stdout, new RegExp(`^# BZZY ${kind} authoring guide`));

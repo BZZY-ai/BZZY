@@ -28,6 +28,13 @@ branches, blockers, attempts and prior findings across goals and compactions.
 Versioned scope and evaluated automatic procedure updates use Core's existing
 owner-only `bzzy knowledge request OPERATION FILE.json` interface.
 
+Print the current Core integration reference with `bzzy --help-api` (also
+`bzzy-core --help-api`). It covers local authentication, all local HTTP route
+families, JSON goal status, replayable events, script jobs and the host SDK.
+Use `bzzy --help-api > bzzy-api-reference.md` to give an external application or
+AI the installed build’s reference. Printing starts no service or model and reads
+no credentials.
+
 Give another AI the installed format reference with `bzzy --help-skills`,
 `bzzy --help-agents`, `bzzy --help-workflows`, `bzzy --help-goals` or `bzzy --help-extensions`.
 Each prints a detailed Markdown specification, complete native examples,

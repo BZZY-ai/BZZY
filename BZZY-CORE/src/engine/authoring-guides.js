@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 const flags = Object.freeze({
+  '--help-api': 'api',
   '--help-extensions': 'extensions',
   '--help-skills': 'skills', '--help-agents': 'agents',
   '--help-workflows': 'workflows', '--help-goals': 'goals',
@@ -8,9 +9,18 @@ const flags = Object.freeze({
 
 // This reference path deliberately imports no account, storage or runtime code.
 export function authoringGuide(kind) {
-  if (!Object.values(flags).includes(kind)) throw new TypeError('Choose skills, agents, workflows, goals or extensions.');
-  const guide = fs.readFileSync(new URL(`../../assets/authoring/${kind}.md`, import.meta.url), 'utf8').trim();
+  if (!Object.values(flags).includes(kind)) throw new TypeError('Choose api, skills, agents, workflows, goals or extensions.');
+  const guide = fs.readFileSync(new URL(kind === 'api' ? '../../assets/api-reference.md' : `../../assets/authoring/${kind}.md`, import.meta.url), 'utf8').trim();
   const security = fs.readFileSync(new URL('../../assets/generation-security.txt', import.meta.url), 'utf8').trim();
+  if (kind === 'api') return `${guide}
+
+## Mandatory generation and credential policy
+
+Apply this policy to integration code, scripts, agents and workflows generated
+from this reference. Runtime authentication and authorization remain mandatory.
+
+${security}
+`;
   return `# BZZY ${kind} authoring guide
 
 Authoring reference version: 1. This describes the installed Core build.
@@ -43,7 +53,7 @@ export function authoringHelp(argv) {
   const requested = options.filter(value => Object.hasOwn(flags, value));
   if (!requested.length) return null;
   if (requested.length !== 1 || argv.some(value => value !== requested[0] && value !== '--json')) {
-    throw Object.assign(new Error('Run one of --help-skills, --help-agents, --help-workflows, --help-goals or --help-extensions by itself. These references remain Markdown with --json.'),
+    throw Object.assign(new Error('Run one of --help-api, --help-skills, --help-agents, --help-workflows, --help-goals or --help-extensions by itself. These references remain Markdown with --json.'),
       { code: 'AUTHORING_HELP_USAGE' });
   }
   return authoringGuide(flags[requested[0]]);

@@ -10,6 +10,11 @@ depends on Core and retains its commands and presentation; Core can run without
 the terminal source tree. Its existing host API and encrypted Relay gateway use
 the same engine and private state.
 
+The complete installed integration reference is `bzzy-core --help-api` (also
+`bzzy --help-api`): local HTTP routes, authentication, goal status/events, script
+jobs, owner administration and host SDK methods, with examples. It prints without
+starting Core or accessing credentials.
+
 Native authoring references are available through `bzzy-core --help-skills`,
 `--help-agents`, `--help-workflows`, `--help-goals` and `--help-extensions`, and the same flags on
 `bzzy`. Each prints a complete AI-readable guide to this build's formats,

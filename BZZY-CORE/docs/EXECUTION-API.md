@@ -1,5 +1,9 @@
 # External execution API
 
+Print the complete installed local API reference with `bzzy --help-api` or
+`bzzy-core --help-api`. It includes session monitoring/control, script jobs,
+owner administration, SDK methods and a goal-event consumer example.
+
 Core owns execution, durable outcomes and notification delivery. An external
 application owns its workflow, UI and retry decisions. These interfaces do not
 add a workflow engine or grant imported code access to private accounts.
