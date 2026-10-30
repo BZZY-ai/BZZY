@@ -147,6 +147,40 @@ An execution ending, exit 0, an agent saying "done", or a worker report is not
 parent-goal completion. A completion receipt also does not independently prove
 vulnerability validity beyond the recorded acceptance/evidence checks.
 
+### Headless CLI controls for an existing session
+
+```sh
+bzzy --attach nasa_v3 --g status
+bzzy --attach nasa_v3 --g continue --request-id huntr-resume-001 --json
+bzzy --attach nasa_v3 --g pause --request-id huntr-pause-001 --json
+```
+
+`--g` accepts only continue, pause and status, and requires --attach. It looks up
+an existing owner terminal; it never creates a missing name. Continue resumes the
+same saved goal and returns an accepted execution ID without opening the TUI;
+--detach is optional/redundant for this command. Pause returns acceptance and a
+control ID; the goal may remain running until the stop is observed. Both enter
+Core's canonical input path with its existing ownership, recovery and permission
+checks. These mutations can activate Core explicitly. Status only reads saved
+state and process observations, leaving an operator-stopped Core stopped.
+
+JSON is one object with sessionId,alias,goalId,status,rawStatus,reason,
+executionState,runnerAlive,observedAt, plus action/accepted/acceptedGoalId and the executionId or
+controlId for mutations. status uses achieved for canonical complete and stalled
+for Core's stall classification. Other labels are paused,cancelled,failed,queued,
+running,waiting_for_input,verifying,idle,no_goal,historical,unknown. Imported
+completion remains historical. Unknown does not assert a stall or achievement.
+Reasons and rawStatus retain the canonical detail behind these labels.
+
+Continue accepts paused/stalled goals, keeps the original contract/preprompt,
+workflow, source history and consumed budgets, and cannot restart achieved or
+cancelled work. Use --token-budget N only with continue to explicitly raise its
+TOTAL token allowance if exhausted. Fresh objectives/preprompts/workflows/model
+changes are rejected with --g. Reuse request IDs for identical mutation retries;
+accepted retries return the original execution/control instead of starting more
+work, including if that goal has since progressed. A changed goal ID invalidates
+an old command intent. Existing goal/start APIs are unchanged.
+
 ### Read only the goal in a named session, for example nasa
 
 The goal-status API is already session-specific. The HTTP path requires its

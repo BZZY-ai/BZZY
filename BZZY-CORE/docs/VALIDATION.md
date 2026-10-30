@@ -1,3 +1,23 @@
+# Named-session goal controls (2026-10-30)
+
+`bzzy --attach NAME --g status|continue|pause` looks up an existing owner terminal
+and returns without a chat UI. Continue/pause reuse canonical Core input with a
+persisted goal/actor pin and stable request IDs. Continuation retains the goal ID,
+contract/preprompt, workflow/history and consumed budgets. Status maps canonical
+outcomes to readable labels and checks goal-specific process observations; an
+unrelated live chat, imported achievement or missing liveness cannot establish a
+running/achieved goal. Status never starts Core or reconciles/replays work.
+
+Node 24/macOS: **18 CLI regressions**, including release packaging, and **39 Core
+input/goal/reference regressions** passed (**57 total**, no failures). The final
+six command fixtures passed again after the status projection refinements.
+Actual CLI fixtures continue both paused and blocked goals, deduplicate retries,
+pause a running fixture, and read status after an operator stop without clearing
+it. Missing/goal-less sessions, mixed definitions, completed goals and exhausted
+budgets are covered. Core/CLI syntax and whitespace checks passed. All execution
+used isolated homes and mock backends; no live hunt, installation or Relay was
+changed.
+
 # Custom owner iPhone notifications (2026-10-30)
 
 `bzzy --custom-notification "hey"` queues a bounded plain-text custom alert

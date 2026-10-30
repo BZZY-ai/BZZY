@@ -28,6 +28,25 @@ Settings and their submenus. Smaller terminals and minimal mode use the same mod
 QR screens retain their full width and quiet zone.
 See [terminal workspace controls and telemetry coverage](docs/TUI.md).
 
+Control the saved goal in an existing session without opening the chat UI:
+
+```sh
+bzzy --attach nasa_v3 --g status
+bzzy --attach nasa_v3 --g continue
+bzzy --attach nasa_v3 --g pause
+```
+
+`continue` queues another execution of the same paused/stalled goal and returns;
+its contract, preprompt, history and consumed budget remain intact. A completed
+or cancelled goal is not restarted. `pause` returns an accepted request; poll
+status to observe the stop. These commands never create a missing session.
+Add `--json` for a single JSON response and `--request-id ID` for mutation retry
+safety (reuse the same ID only for the same request). An exhausted token allowance
+requires an explicitly larger total `--token-budget N` with continue. Status
+shows running, achieved, paused or stalled, plus queued/waiting/verifying and
+unknown states when applicable; JSON retains rawStatus/reason and exact IDs.
+Status does not start Core, reconcile recovery or perform model work.
+
 Keep a [permanent program session](../../BZZY-CORE/docs/PERMANENT-SESSIONS.md)
 with `bzzy --attach fake-program-session`. Reopening starts no work. Core retains
 branches, blockers, attempts and prior findings across goals and compactions.

@@ -49,6 +49,7 @@ import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
 import { workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { resolveInteractiveGoal } from './goal-controls.js';
 import { createDebugExportProgressReporter, debugExportContextNotice, debugExportSummary } from './debug-export-progress.js';
+import { namedGoalCLI } from './named-goal-command.js';
 import { customNotificationCLI } from './custom-notification-command.js';
 import { backgroundCLI } from './background-command.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, openOrCreateChatSession, newConversation, startConversationGoal,
@@ -140,6 +141,7 @@ Options:
   --alias NAME          Name a session; restore it later with --attach NAME or --resume NAME
   --workflow NAME       Select a workflow for new goals; use none to clear it
   --import FILE.zip|CODE Restore a project ZIP or expiring Relay terminal copy into --cwd; never starts work
+  --g ACTION            With --attach: continue, pause or status of the saved goal; no chat UI
   --goal OBJECTIVE      Start a persistent goal; quoted positional text is sent first as context
   --context-file FILE   UTF-8 task instructions (up to 1 MiB), relative to --cwd; no initialization chat
   --preprompt FILE      Alias for --context-file; full instructions saved before work
@@ -247,7 +249,7 @@ API providers must support the Responses protocol in this version.
 export function parseArgs(argv) {
   const options = { cwd: process.cwd(), pet: true, yolo: false, json: false, captureNetwork: true };
   const args = [];
-  const values = { '--custom-notification': 'customNotification', '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile', '--preprompt': 'contextFile', '--background': 'backgroundScript', '--timeout': 'timeoutSeconds', '--workflow': 'workflow',
+  const values = { '--g': 'goalAction', '--custom-notification': 'customNotification', '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile', '--preprompt': 'contextFile', '--background': 'backgroundScript', '--timeout': 'timeoutSeconds', '--workflow': 'workflow',
     '--token-budget': 'tokenBudget', '--max-turns': 'maxTurns', '--effort': 'effort',
     '--base-url': 'baseUrl', '--env-key': 'envKey', '--context-window': 'contextWindow',
     '--view': 'view', '--attach': 'attach', '--atach': 'attach', '--resume': 'resume', '--mode': 'mode', '--supervisor': 'supervisor', '--executor': 'executor',
@@ -279,6 +281,7 @@ export function parseArgs(argv) {
       if (!value || (equal < 0 && value.startsWith('--'))) throw new Error(`${flag} requires a value.`);
       if (flag === '--participant') (options.participants ||= []).push(value);
       else {
+        if (flag === '--g' && options.goalAction !== undefined) throw new Error('Supply --g once.');
         if (['--preprompt', '--context-file'].includes(flag) && options.contextFile !== undefined) throw new Error('Supply --preprompt or --context-file once.');
         options[values[flag]] = value;
       }
@@ -327,6 +330,12 @@ export function parseArgs(argv) {
       if (!(key === 'maxRetries' ? /^(0|[1-9]\d*)$/ : /^[1-9]\d*$/).test(options[key]) || !Number.isSafeInteger(Number(options[key]))) throw new Error(`${key} must be ${key === 'maxRetries' ? 'a nonnegative' : 'a positive'} integer.`);
       options[key] = Number(options[key]);
     }
+  }
+  if (options.goalAction !== undefined) {
+    if (!options.attach || !['continue', 'pause', 'status'].includes(options.goalAction)) throw new Error('Use --attach SESSION --g continue|pause|status.');
+    if (args.length || Object.keys(options).some(key => !['cwd', 'pet', 'yolo', 'json', 'captureNetwork', 'attach', 'goalAction', 'detach', 'requestId', 'tokenBudget'].includes(key))
+        || options.yolo || !options.captureNetwork || options.tokenBudget !== undefined && options.goalAction !== 'continue')
+      throw new Error('--g controls the saved goal. Do not combine it with a new objective, preprompt, workflow, model or execution options.');
   }
   if (options.customNotification !== undefined && (args.length || Object.keys(options).some(key =>
       !['cwd', 'pet', 'yolo', 'json', 'captureNetwork', 'customNotification', 'requestId'].includes(key))
@@ -613,6 +622,7 @@ export async function main(argv) {
     return updateCoreAndCLI();
   }
   if (options.customNotification !== undefined) return customNotificationCLI(options);
+  if (options.goalAction !== undefined) return namedGoalCLI(options);
   try { if (!fs.statSync(options.cwd).isDirectory()) throw new Error('not a directory'); }
   catch { throw new Error(`--cwd must name an existing directory: ${options.cwd}`); }
   options.cwd = fs.realpathSync(options.cwd);

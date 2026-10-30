@@ -24,6 +24,11 @@ starts no service, model or network request.
 
 Implemented:
 
+- Headless saved-goal commands: `bzzy --attach NAME --g status|continue|pause`.
+  Status is observational; mutations use canonical Core input with pinned goal
+  identity and request-ID replay protection. Continue retains the existing goal,
+  contract, history and charged allowance, and returns without opening chat.
+
 - Owner-only custom iPhone alerts through `POST /v1/notifications` and
   `bzzy --custom-notification "hey"`, with bounded sanitized text, request-ID
   deduplication and the existing durable push queue. Only fully approved enabled
