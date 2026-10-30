@@ -60,7 +60,8 @@ full pinned workflow still enters execution instructions without clipping.
 
 For active ordinary terminal goals, the capsule includes a project knowledge
 brief of at most 2,200 UTF-8 bytes inside the existing 8 KiB limit. It selects
-goal-related Core issue and memory records, including resolved findings, without
+goal-related Core issues, memories and checkpoint outcome projections, including
+resolved findings and historical rejections, without
 requiring a separate knowledge search. Distinct records retain separate source
 IDs, revisions, status and truth even when their titles overlap. Current decisions
 and questions stay in the goal-scoped checkpoint; older completion claims never
@@ -99,11 +100,11 @@ Backfill rotates among sessions and yields after bounded parts/bytes/time.
 Masking joins the complete logical message before slicing excerpts. Unsealed
 native tails are excluded. Messages exceeding 128 KiB or 4,096 deltas receive an
 explicit derived omission marker; original history remains intact. Older
-derived maps are withheld and rebuilt into a new version 4 source generation;
+derived maps are withheld and rebuilt into a new version 5 source generation;
 old nodes remain historical and stale summary jobs retire. Search retains ranges,
 hashes and completion provenance. Summaries never establish permissions or proof.
 
-The version 4 memory source merges conversation excerpts with allowlisted host
+The version 5 memory source merges conversation excerpts with allowlisted host
 assignment receipts by source event sequence. Specialist identities and versions,
 rounds, allocation warnings/extensions, limit stops, missing reports and review/
 evidence references survive as navigable historical data. Parent-assigned task
@@ -141,7 +142,17 @@ learning defaults to 300 seconds (60–3,600 allowed). The existing owner-only
 `CoreKnowledge` settings operation requires `reviewed:true` and the displayed
 revision. Configuration starts no work and does not resume paused jobs.
 
-Learning queues meaningful outcomes, recorded lessons and corrections. Reviews
+Larger extracts use cited source spans rather than splitting text on periods;
+filenames, URLs and negations stay intact. Idle legacy sessions enter bounded
+local migration. A resumed active source clears only its automatic source-stop
+control; an owner pause, host stop or uncertain paid request never gains replay
+authority. Local extract publication remains independent of the paid lane.
+
+Learning queues meaningful outcomes, recorded lessons and corrections. New
+settings use a bounded source-model route (low effort when advertised, otherwise
+medium or the backend default) and a 90-second default runtime. Existing explicit
+settings and queued jobs retain their pins. Repeated failed reviews back off;
+unchanged successful command repetitions cannot alone trigger a new lesson. Reviews
 use complete masked messages inside their pinned cutoff. Empty validated output
 is valid. Queued jobs expose foreground-priority/cooldown reasons. Parent pause,
 Core stop, deletion, budget reservations and uncertain-request rules remain in

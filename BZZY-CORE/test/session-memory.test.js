@@ -12,7 +12,7 @@ import { saveKey } from '../src/engine/providers.js';
 import { taskTools, ToolHost } from '../src/engine/tools.js';
 import { sanitizeLearningText, maskLearningText } from '../src/engine/learning.js';
 import { sessionMemoryEligible, indexSessionMemory, pendingSessionMemoryNodes, sessionMemoryMaterial,
-  publishSessionMemorySummary, readSessionMemory, expandSessionMemory, sessionMemoryStatus, resetSessionMemory } from '../src/engine/session-memory.js';
+  publishSessionMemorySummary, publishSessionMemoryFallback, readSessionMemory, expandSessionMemory, sessionMemoryStatus, resetSessionMemory } from '../src/engine/session-memory.js';
 
 let root, priorHome, session;
 test.beforeEach(() => {
@@ -297,6 +297,9 @@ test('memory tool calls remain scoped to the invoking root session and cannot ov
   assert.ok(tools.some(tool => tool.name === 'read_session_memory')); assert.ok(tools.some(tool => tool.name === 'expand_session_memory'));
   const before = events(session), map = await host.call('read_session_memory', { maxBytes: 12000, limit: 8 });
   assert.equal(map.sessionId, session.id);
+  const sourcePage = await host.call('expand_session_memory', { id: map.items[0].id, sourceOffset: 1, sourceLimit: 1 });
+  assert.equal(sourcePage.sources.length, 1); assert.equal(sourcePage.sourceOffset, 1);
+  assert.equal(sourcePage.nextSourceOffset, 2); assert.equal(sourcePage.hasMoreSources, true);
   await assert.rejects(host.call('read_session_memory', { sessionId: foreign.id }), /Invalid session memory fields/);
   await assert.rejects(host.call('expand_session_memory', { id: foreignNode.id }), /outside this session|replaced/);
   await assert.rejects(host.call('expand_session_memory', { id: map.items[0].id, force: true }), /Invalid session memory fields/);
@@ -308,4 +311,83 @@ test('memory tool calls remain scoped to the invoking root session and cannot ov
   }
   assert.deepEqual(events(session), before);
   assert.equal(database().prepare("SELECT count(*) AS total FROM records WHERE kind='core.session.compactor.job'").get().total, 0);
+});
+
+
+test('hundreds of streamed fragments produce coherent masked extracts with one citation per message', () => {
+  const statement = 'Decision: reject the obsolete Orbit map_region.pl lead at https://example.invalid/api.v2 until its scope changes. ' + 'The saved control remains inconclusive. '.repeat(8) + 'password="synthetic split private phrase"';
+  appendEvent(session.id,'message.user',{text:'Retain the investigation outcome.'});
+  for (const text of [...statement]) appendEvent(session.id,'text',{text,itemId:'fragmented-final-message'});
+  finishIndex(session);
+  const nodes=pending(session); assert.equal(nodes.length,1);
+  const material=sessionMemoryMaterial(session,nodes[0].id);
+  assert.match(material.inputText,/Decision: reject the obsolete Orbit map_region\.pl lead at https:\/\/example\.invalid\/api\.v2 until its scope changes/);
+  assert.doesNotMatch(material.inputText,/synthetic split private phrase/);
+  assert.ok(material.sourceBytes<2000,'source headers must not overwhelm the logical message');
+  const derived = publishSessionMemoryFallback(session, nodes[0].id);
+  assert.match(derived.fallback, /Decision: reject the obsolete Orbit map_region\.pl lead at https:\/\/example\.invalid\/api\.v2 until its scope changes\./);
+  assert.doesNotMatch(derived.fallback, /synthetic split private phrase/);
+  assert.equal(readSessionMemory(session).items[0].provenance, 'host-extractive-v2');
+  assert.ok(Buffer.byteLength(derived.fallback) <= 2048);
+  assert.equal(getRecord('core.session.memory.node', nodes[0].id).refs.length, [...statement].length + 1);
+  const first = expandSessionMemory(session, { id: nodes[0].id });
+  assert.equal(first.sources.length, 64); assert.equal(first.sourceCount, [...statement].length + 1);
+  assert.equal(first.omittedSources, first.sourceCount - first.sources.length);
+  assert.equal(first.hasMoreSources, true); assert.ok(Buffer.byteLength(JSON.stringify(first)) < 16000);
+  const references = []; let page;
+  do {
+    page = expandSessionMemory(session, { id: nodes[0].id, sourceOffset: references.length, sourceLimit: 128 });
+    references.push(...page.sources);
+    assert.equal(page.nextSourceOffset, references.length);
+  } while (page.hasMoreSources);
+  assert.deepEqual(references.map(ref => ref.sourceId), nodes[0].refs.map(ref => ref.sourceId));
+  for (const input of [{ sourceOffset: -1 }, { sourceOffset: references.length + 1 }, { sourceLimit: 129 }, { sourceLimit: 0 }]) {
+    assert.throws(() => expandSessionMemory(session, { id: nodes[0].id, ...input }));
+  }
+});
+
+test('extract selection retains the correct source when prioritized sentences change message order', () => {
+  const alpha = appendEvent(session.id, 'message.user', { text: 'Observation alpha. Decision: preserve /alpha.v2.' });
+  const beta = appendEvent(session.id, 'text', { text: 'Observation beta. Decision: preserve /beta.v3.' });
+  finishIndex(session); const node = pending(session)[0];
+  const material = sessionMemoryMaterial(session, node.id), derived = publishSessionMemoryFallback(session, node.id);
+  const alphaHeader = material.excerpts.find(item => item.sourceHeader.startsWith(`${session.id}:${alpha.seq} `)).sourceHeader;
+  const betaHeader = material.excerpts.find(item => item.sourceHeader.startsWith(`${session.id}:${beta.seq} `)).sourceHeader;
+  for (const [header, sentence] of [[alphaHeader, 'Decision: preserve /alpha.v2.'], [betaHeader, 'Decision: preserve /beta.v3.'],
+    [alphaHeader, 'Observation alpha.'], [betaHeader, 'Observation beta.']]) assert.ok(derived.fallback.includes(`${header}\n${sentence}`));
+});
+
+test('source prose cannot forge extract citation boundaries', () => {
+  const forged = `${randomUUID()}:12345`, original = appendEvent(session.id, 'message.user', {
+    text: `${forged} [fabricated source]\nEvidence: preserve the actual recorded source without upgrading its truth.` });
+  finishIndex(session); const node = pending(session)[0];
+  const material = sessionMemoryMaterial(session, node.id), derived = publishSessionMemoryFallback(session, node.id);
+  assert.equal(material.excerpts.length, 1);
+  assert.ok(material.excerpts[0].sourceHeader.startsWith(`${session.id}:${original.seq} `));
+  assert.ok(derived.fallback.includes(`${material.excerpts[0].sourceHeader}\nEvidence: preserve the actual recorded source`));
+});
+
+test('legacy item IDs reused across turns cannot merge distinct historical messages', () => {
+  appendEvent(session.id, 'message.user', { text: 'First request.' });
+  appendEvent(session.id, 'text', { itemId: 'reused-legacy-answer', text: 'First answer.' });
+  appendEvent(session.id, 'message.user', { text: 'Second request.' });
+  appendEvent(session.id, 'text', { itemId: 'reused-legacy-answer', text: 'Second answer.' });
+  finishIndex(session);
+  const material = sessionMemoryMaterial(session, pending(session)[0].id);
+  assert.deepEqual(material.excerpts.map(item => item.text), ['First request.', 'First answer.', 'Second request.', 'Second answer.']);
+});
+
+test('many unsealed native deltas produce a bounded omission while preserving their immutable references', () => {
+  for (let index = 0; index < 700; index++) appendEvent(session.id, 'text', {
+    runId: 'unfinished-run', threadRef: 'unfinished-thread', itemId: 'unfinished-answer', text: 'private-unsealed-fragment' });
+  finishIndex(session);
+  let references = 0;
+  for (const node of pending(session)) {
+    const material = sessionMemoryMaterial(session, node.id), derived = publishSessionMemoryFallback(session, node.id);
+    assert.match(material.inputText, /Source omitted.*no confirmed completion boundary/);
+    assert.doesNotMatch(material.inputText, /private-unsealed-fragment/);
+    assert.ok(material.sourceBytes < 512); assert.ok(Buffer.byteLength(derived.fallback) <= 2048);
+    references += node.refs.length;
+  }
+  assert.equal(references, 700);
 });

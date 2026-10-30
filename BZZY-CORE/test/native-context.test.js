@@ -310,8 +310,8 @@ for (const retainedThread of [false, true]) test(`a 32K API goal compacts recove
   assert.equal(JSON.stringify(context.contract), original); assert.equal(context.derivedHistory.compacted, true);
   assert.doesNotMatch(received, /DERIVED_RECOVERY_FILE_/); assert.ok(Buffer.byteLength(received) < 60000);
   const admission = events(session.id).find(row => row.type === 'diagnostic.backend' && row.data.method === 'preprompt-admission');
-  assert.equal(admission.data.outcome, 'admitted'); assert.equal(admission.data.inputEstimate.compactedDerivedInstructions, true);
-  assert.ok(admission.data.inputEstimate.originalInstructionBytes > 200000);
+  assert.equal(admission.data.outcome, 'admitted'); assert.equal(admission.data.inputEstimate.compactedDerivedInstructions, false, 'Instructions are bounded before admission, so no second compaction is needed.');
+  assert.ok(admission.data.inputEstimate.originalInstructionBytes < 60000);
   for (const name of ['declare_work_unit', 'close_work_unit']) assert.ok(session.nativeBackendReadiness.tools.names.includes(name));
   assert.equal(session.goal.id, goalId); assert.equal(JSON.stringify(session.contract), original);
   await engine.interrupt('user_pause'); await running;

@@ -26,14 +26,21 @@ a vulnerability. Replayed copies of the same transition count once.
 
 Raw tool output, worker transcripts, account bindings, private reasoning, approval
 answers and intermediate debate transcripts are excluded. Leaves group eight logical source messages/receipts
-or about 12 KB of source text, reading bounded Unicode slices. Ready sibling
+or about 12 KB of source text, reading bounded Unicode slices, with a maximum of
+4,096 immutable source references per leaf. Ready sibling
 summaries form a binary tree. Source hashes are checked before publishing or
 expanding; maps validate node integrity without rereading the entire original
 history on every turn. Corrupt indexes require a rebuild; summaries cannot repair
 originals.
 
 Credential redaction runs across each complete logical message, including
-streamed assistant deltas, before source excerpts are sliced. Logical messages
+streamed assistant deltas, before source excerpts are sliced. Derived material
+joins those masked fragments into coherent logical messages with source headers;
+the complete per-fragment references and hashes remain in the node. Host extracts
+select complete sentences without breaking exact URLs and filenames. Citation
+boundaries come from validated metadata, not header-like text in a message, and
+source changes repeat their citation even when relevance changes sentence order.
+Logical messages
 larger than 128 KiB or 4,096 deltas are safely omitted from derived material and
 memory expansion, with an explicit omission marker. Their original saved history
 remains intact for local inspection; no partial secret fragments are exposed.
@@ -48,7 +55,12 @@ Projection versions and hashes are checked when original receipts are reopened.
 Ordinary chat and Delegate supervisors receive a bounded map on first recall,
 provider handoff or native context compaction. Models can call
 `read_session_memory` and `expand_session_memory` to navigate their own session
-and inspect sanitized original excerpts. Tools cannot select another session.
+and inspect sanitized original excerpts. Byte `offset`/`limit` page the leaf text;
+`sourceOffset`/`sourceLimit` independently page exact source references (64 by
+default, at most 128). `sourceCount`, `omittedSources`, `nextSourceOffset` and
+`hasMoreSources` make omitted reference metadata explicit. Every original
+reference remains available without repeating thousands of IDs in each text page.
+Tools cannot select another session.
 Native provider compaction and recent-message handoffs remain in place.
 Independent workers receive explicit mission context, scope and original evidence,
 without arbitrary parent-history summary access. After context refresh, a bounded
@@ -79,7 +91,10 @@ waits for model output; short material may be retained verbatim without inferenc
 Larger pending nodes receive source-linked host extractive fallback views. Query
 recall combines relevant nodes with recent coverage; originals stay unchanged.
 Local extraction also runs when paid compaction is disabled, without creating
-paid jobs or reservations. Explicit session/owner/operator stops still apply.
+paid jobs or reservations. A stopped prior turn or an uncertain paid request
+does not prevent local extraction once the source session can run. Explicit
+session/owner/operator pauses and cancellation still stop local maintenance.
+Uncertain paid jobs keep their dispatch receipts and stay paused.
 Status distinguishes `fallbackNodes`, `hostSummaries`, `modelSummaries` and
 `uncoveredNodes`; extracts do not increase the completed model-summary count.
 Model jobs use the verified restricted document profile, an empty private working
@@ -126,7 +141,9 @@ replay old work; new compactions must run through the updated Core implementatio
 Session pause/cancel, Core stop, deletion and shutdown stop background work.
 An already dispatched summary can finish against immutable sources during an
 ordinary foreground turn. Owner/source stops and uncertain requests require
-explicit inspection/resume. Startup can recover provably undispatched shutdown
+explicit inspection/resume for previously paused paid jobs. Fresh authorized
+source activity can reopen local maintenance after a source stop; it cannot
+resume old paused paid jobs or erase an explicit compactor owner pause. Startup can recover provably undispatched shutdown
 work and checked cached publication without another model request. Known
 invalid-output retries retain their settled-attempt receipts and backoff across
 shutdown, while uncertain requests remain paused. Already-paused legacy jobs
@@ -142,11 +159,15 @@ intent or enables foreground inference automatically. See
 archive discovery, investigation state and generated MEMORY.md view.
 
 Completed native messages now advance deterministic indexing while the overall
-goal continues. Source generation 4 retains whole-message masking and the
-unfinished-tail boundary, adds typed assignment receipts and keeps task previews
-separate from worker prose and private bindings. Older
-derived maps rebuild in bounded batches without rewriting original events or
-active goal contracts. Source-local memory/compactor cursors, nodes, jobs and
+goal continues. Source generation 5 retains whole-message masking, the
+unfinished-tail boundary and typed assignment receipts, and groups streaming
+fragments before constructing extractive navigation. Task previews stay separate
+from worker prose and private bindings. Older derived maps rebuild in bounded
+batches without rewriting original events or active goal contracts. Maintenance
+also migrates previously queued idle sessions whose older index was caught up;
+it honors owner pauses and pins the previously authorized source cursor. Old
+generation records remain archived, and old paid jobs retain their own recovery
+state. Merely reading memory never starts migration. Source-local memory/compactor cursors, nodes, jobs and
 accounting receipts are excluded from project transfer; recipients rebuild their
 own indexes from historical originals and never resume imported compactor jobs. Owner-only
 settings can allow budgeted inference during foreground work, with a cooldown;

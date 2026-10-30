@@ -8,7 +8,7 @@ import { CoreKnowledge } from '../src/knowledge.js';
 import { createSession, saveSession } from '../src/engine/store.js';
 import { BUILTINS } from '../src/engine/providers.js';
 import { appendEvent, listRecords, transaction } from '../src/engine/database.js';
-import { initializeProject } from '../src/engine/project.js';
+import { initializeProject, issue } from '../src/engine/project.js';
 import { prepareTask } from '../src/engine/task.js';
 import { insertConversation } from '../src/conversations.js';
 import { ToolHost, taskTools } from '../src/engine/tools.js';
@@ -72,7 +72,8 @@ test('explicit correction and verified completion hooks queue no speculative or 
 
 test('automatic historical briefs and enabled skills remain scoped across model changes without replaying the current prompt', () => {
   const source = saved(alpha), session = saved(alpha), other = saved(beta);
-  appendEvent(source.id, 'text', { text: 'The tenant baseline lacked an ownership control.' });
+  appendEvent(source.id, 'text', { text: 'RAW_CHAT_ONLY tenant baseline speculation.' });
+  issue(source, { title: 'Tenant baseline ownership control', details: 'The tenant baseline lacked an ownership control; historical claim awaiting verification.' });
   appendEvent(session.id, 'message.user', { text: 'Check the tenant baseline.' });
   appendEvent(other.id, 'text', { text: 'FOREIGN_CONVERSATION_PRIVATE' });
   const skill = createSkill({ name: 'tenant-baselines', description: 'Compare tenant baselines.', instructions: 'Compare ownership with controlled role observations.' }, { session });
@@ -80,7 +81,7 @@ test('automatic historical briefs and enabled skills remain scoped across model 
   for (const provider of ['codex', 'claude', 'deepseek']) {
     const prompt = conversationPrompt({ ...session, provider }, 'Check the tenant baseline.');
     assert.match(prompt, /ownership control/); assert.match(prompt, /tenant-baselines/);
-    assert.doesNotMatch(prompt, /FOREIGN_CONVERSATION_PRIVATE/);
+    assert.doesNotMatch(prompt, /FOREIGN_CONVERSATION_PRIVATE|RAW_CHAT_ONLY/);
     assert.equal(prompt.split('Check the tenant baseline.').length - 1, 1);
   }
   assert.equal(conversationPrompt({ ...session, role: 'learning-review' }, 'JSON review'), 'JSON review');

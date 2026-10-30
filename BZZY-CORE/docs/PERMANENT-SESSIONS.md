@@ -29,13 +29,29 @@ Recovery details must be inspected before retrying uncertain operations; the
 view never authorizes replay. Invalid access and stale source revisions still
 fail normally.
 
+Goal-start knowledge and task-state pulls now use the same conclusion selector:
+issues, recorded memories and per-goal checkpoint outcomes. Raw attempts and bare
+goal titles no longer compete for automatic brief space; explicit search retains
+attempts and conversation originals. An unchanged unrelated command observation
+does not invalidate the capsule. If pressure empties the brief, Core restores one
+small top-match reference when it fits without displacing current state, retaining
+truth, dispute and freshness warnings. Selection and delivery are still bounded.
+
+Execution instructions use the compact historical projection from the outset,
+so a large saved recovery file manifest stays behind its paged reader. The full
+current contract, owner context, policy and project constraints remain mandatory.
+Worker/reviewer instructions retain their separately scoped pinned mission and
+context-request protocol. Section hashes include execution scope: an opened
+section can continue across unrelated state changes, but a changed source or a
+new goal invalidates its old page hash.
+
 The normal goal handoff also includes current investigation state. Native push
 refresh remains capability- and acknowledgment-dependent; unsupported backends
 use the existing pull tools and safe prompt boundaries. A delivery receipt is
 not proof that the model attended to or acted correctly on that content.
 
 `search_knowledge` uses the existing FTS index for notes, issues, checkpoint
-navigation, chat, resolutions, artifact metadata and host-observed attempt
+navigation, goal outcomes, chat, resolutions, artifact metadata and host-observed attempt
 metadata. Attempt results retain session/goal/run/work-unit/dependency references;
 raw tool output is not a memory document. Artifact search indexes labels and
 hash metadata, never artifact contents. Original evidence still uses the
@@ -117,6 +133,26 @@ items stay in revision history. The 50-item working allowance excludes contract
 items, and an oversized legacy list does not prevent unrelated checkpoint saves.
 Grouping counts explicit repeated declarations of the exact working text; inherited
 copies and idempotent retries do not increase them. Counts never imply confidence.
+
+Per-goal outcomes are read-time projections of `core.checkpoint.scope` and
+immutable checkpoint revisions, not a second writable findings store. They carry
+decisions, completed work, pending checks, unresolved questions and bounded
+archived decisions/completed items into later goals without requiring `remember`.
+Archived text stays historical and inconclusive; superseded/resolved text is not
+a current conclusion. Optional checkpoint-item `disposition`, `subject` and
+`applicability` fields record rejected leads and conditions for revisiting them.
+Automatic navigation prioritizes explicit rejections/stoppers and matching source
+text without turning those labels into verification.
+
+The projection examines at most 32 archive pointers and 16 source revisions,
+with 256 KiB of archive input and 128 KiB per source. Coverage discloses older or
+oversized omissions; the original revision history is never pruned. This is a
+bounded navigation window, not exhaustive recall of every prior conclusion.
+`read_task_state_details` section `outcomes` lists 12 goals per record page;
+`recordOffset` advances that list and `offset` pages its UTF-8 JSON. A source-linked
+outcome can be expanded with `read_knowledge_source` and its exact hash. Changed
+recorded scope is labeled explicitly; even an unchanged scope fingerprint requires
+current evidence and applicability review. Legacy scope without a pin is unrecorded.
 
 `evidenceOperations` add/remove current evidence references. Historical evidence
 remains in source revisions and artifacts rather than accumulating forever in
@@ -271,7 +307,15 @@ edits are preserved as proposals: a later export refuses to overwrite a changed
 view, and no ingestion path treats edits as facts or approval. This file is
 navigation, not a complete backup. Preserve Core's private durable store and
 project evidence through the existing backup/transfer procedures.
-The issue view includes `reportLifecycle` separately from technical truth.
+The generated view includes historical goal outcomes and `reportLifecycle`
+separately from technical truth. Missing lifecycle data is labeled unrecorded;
+saving a report does not imply submission or acknowledgement.
+
+Health exports distinguish task-state reads, unchanged responses, delivered or
+empty briefs and successful detail-section opens. Learning outcomes distinguish
+timeouts, token limits, rejected output, backend failures and valid no-change
+reviews. These counters indicate delivery and pipeline behavior, not model
+understanding or improved vulnerability discovery.
 
 Regression tests cover continuing/new goals, stale completion, scope changes,
 blocker resolution, contradictory findings, source updates, compaction,

@@ -36,6 +36,36 @@ function contents(file) {
 const rows = buffer => buffer.toString().trim().split('\n').filter(Boolean).map(JSON.parse);
 const state = () => ({ records: database().prepare('SELECT * FROM records ORDER BY kind,id').all(), events: database().prepare('SELECT * FROM events ORDER BY seq').all() });
 
+test('full and compact exports retain scoped memory-delivery counters and learning failure outcomes', async () => {
+  const other = createSession(getProvider('deepseek'), parent.cwd, 'offline-other', 'foreign-session'); saveSession(other);
+  const counters = { totalReads: 36, notModifiedReads: 22, deliveredKnowledgeItems: 14, emptyBriefReads: 3,
+    repeatedReads: 2, responseSha256: 'a'.repeat(64), bytes: 1700, contextGeneration: 'generation-3', revision: 4 };
+  putRecord('core.task-state.read', parent.id, { sessionId: parent.id, ...counters });
+  putRecord('core.task-state.detail-read', parent.id + ':knowledgeBrief', { sessionId: parent.id, section: 'knowledgeBrief', reads: 7 });
+  putRecord('core.learning.job', 'scoped-review', { id: 'scoped-review', sessionId: parent.id, state: 'budget_limited',
+    failureKind: 'timeout', requestOutcome: 'uncertain' });
+  putRecord('core.task-state.detail-read', other.id + ':knowledgeBrief', { sessionId: other.id, section: 'FOREIGN_DETAIL_COUNTER', reads: 999 });
+  putRecord('core.learning.route-health', 'global-route-health', { consecutiveFailures: 3, failureKind: 'GLOBAL_ROUTE_HEALTH_NOT_SCOPED' });
+  // Exact support for the detail-read kind must not broaden the capture policy.
+  putRecord('core.task-state.detail-read.private', 'not-allowlisted', { sessionId: parent.id, details: 'UNALLOWLISTED_DETAIL_RECORD' });
+  const before = state();
+  const compact = exportSessionDebug(parent.id);
+  const compactRows = fs.readFileSync(compact.outputPath, 'utf8').split('\n').filter(line => line.startsWith('{')).map(JSON.parse);
+  const files = contents((await exportFullSessionDebug(parent.id)).outputPath), fullRows = rows(files['session/records.jsonl']);
+  for (const exported of [compactRows, fullRows]) {
+    const reads = exported.find(row => row.kind === 'core.task-state.read').data;
+    for (const [key, value] of Object.entries(counters)) assert.equal(reads[key], value, key);
+    const details = exported.filter(row => row.kind === 'core.task-state.detail-read');
+    assert.equal(details.length, 1); assert.equal(details[0].data.sessionId, parent.id);
+    assert.equal(details[0].data.section, 'knowledgeBrief'); assert.equal(details[0].data.reads, 7);
+    const job = exported.find(row => row.kind === 'core.learning.job').data;
+    assert.equal(job.failureKind, 'timeout'); assert.equal(job.requestOutcome, 'uncertain');
+    assert.ok(!exported.some(row => row.kind === 'core.learning.route-health'));
+    assert.doesNotMatch(JSON.stringify(exported), /FOREIGN_DETAIL_COUNTER|GLOBAL_ROUTE_HEALTH_NOT_SCOPED|UNALLOWLISTED_DETAIL_RECORD/);
+  }
+  assert.deepEqual(state(), before, 'Diagnostic export leaves durable delivery counters untouched.');
+});
+
 test('worker export reports safe real progress while the caller remains responsive during capture', async () => {
   for (let index = 0; index < 500; index++) appendEvent(parent.id, 'diagnostic.fixture', { index, text: 'Offline capture fixture. '.repeat(600) });
   fs.writeFileSync(path.join(parent.cwd, 'private-looking-file-name.txt'), 'Retained fixture file.');

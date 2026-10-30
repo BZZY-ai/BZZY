@@ -27,6 +27,8 @@ const recordFields = ['id', 'sessionId', 'parentSessionId', 'goalId', 'workerSes
   'candidateId', 'baseVersion', 'baseRevision', 'skillId', 'skillVersion', 'usageId', 'runId', 'authority', 'attribution', 'claim',
   'error', 'exitCode', 'durationMs', 'signature', 'symptom', 'rootCause', 'fixSteps', 'sourceIds', 'memoryId', 'proposedText',
   'changedFiles', 'omittedPrivate', 'omittedOversize', 'newSkills', 'updates', 'migration', 'modelRoute', 'enabled',
+  'totalReads', 'notModifiedReads', 'deliveredKnowledgeItems', 'emptyBriefReads', 'repeatedReads', 'responseSha256', 'section', 'reads',
+  'failureKind', 'requestOutcome',
   'omissions', 'omissionPolicy', 'workspaceOmissions', 'workspaceChanges', 'inspectionError', 'inspectionAuthority', 'snapshotId'];
 const eventFields = [...recordFields, 'text', 'message', 'error', 'code', 'name', 'input', 'detail', 'action', 'outcome', 'round',
   'runId', 'version', 'callId', 'durationMs', 'skills', 'agents', 'tools', 'model', 'provider', 'effort', 'resource', 'discovery', 'definition',
@@ -175,7 +177,7 @@ export function exportSessionDebug(sessionId, { cwd, output, at = new Date() } =
         for (const row of db.prepare('SELECT data FROM records WHERE kind=? AND json_extract(data,\'$.sessionId\') IN (SELECT value FROM json_each(?)) ORDER BY updated_at,id').iterate(kind, ids)) entry(kind, { data: pick(JSON.parse(row.data), recordFields) });
       }
       for (const row of db.prepare(`SELECT kind,data FROM records WHERE kind IN
-        ('core.workflow.work-unit','core.workflow.consultation','core.checkpoint.scope','core.history.maintenance','core.conversation.source','core.task-state.read','native-compaction',
+        ('core.workflow.work-unit','core.workflow.consultation','core.checkpoint.scope','core.history.maintenance','core.conversation.source','core.task-state.read','core.task-state.detail-read','native-compaction',
          'core.learning.job','core.episode.progress','core.skill.feedback','core.skill.outcome','core.skill.update','core.resolution')
         AND json_extract(data,'$.sessionId') IN (SELECT value FROM json_each(?)) ORDER BY updated_at,id`).iterate(ids)) {
         entry(row.kind, { data: pick(JSON.parse(row.data), recordFields) });

@@ -1,3 +1,5 @@
+import { knowledgeRecordText } from './knowledge-index.js';
+import { checkpointOutcome } from './session-outcomes.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -382,7 +384,8 @@ export function checkpoint(session, input, context = {}) {
       objective: scope.kind === 'goal' ? session.goal?.objective : scope.kind === 'assignment' ? session.contract?.objective : undefined,
       goalId: scope.goalId, runId: context.runId || null, assignmentId: scope.assignmentId, assignmentRound: scope.assignmentRound,
       constraints: [...new Set([...contractConstraints, ...workingConstraints])],
-      revision, updatedAt: now() };
+      revision, updatedAt: now(),
+      applicabilityContext: { scopeFingerprint: digest({ scope: session.contract?.scope || null, constraints: session.contract?.constraints || [], policy: session.policy || null }), observedAt: now() } };
     record = applyCheckpointItems(previous, record, input, scope, revision, session.contract?.constraints || []);
     record.workingConstraints = record.constraints.filter(value => !contractConstraints.includes(value));
     if (input.evidenceOperations) {
@@ -404,5 +407,9 @@ export function checkpoint(session, input, context = {}) {
   });
   writeProjectRecord(session, 'checkpoints', session.id, record);
   indexKnowledgeRecord(access.project, 'checkpoint', session.id, session.id, JSON.stringify({ objective: record.objective, decisions: record.decisions, pendingActions: record.pendingActions, unresolvedQuestions: record.unresolvedQuestions }), record);
+  if (scope.kind === 'goal') {
+    const sourceId = checkpointScopeId(scope), outcome = checkpointOutcome(record, sourceId);
+    indexKnowledgeRecord(access.project, 'outcome', sourceId, session.id, knowledgeRecordText('outcome', outcome), outcome);
+  }
   return record;
 }

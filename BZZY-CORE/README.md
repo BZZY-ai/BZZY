@@ -186,7 +186,13 @@ Implemented:
   and failure use the own-phone notification queue without starting model work.
 - Session-scoped hierarchical history indexes with bounded summary/original
   expansion tools, source references, background compaction, budgets
-  and durable stop/recovery. See [session memory](docs/SESSION-MEMORY.md).
+  and durable stop/recovery. Deterministic cited extracts run independently of
+  paid compaction; resumed source work does not replay uncertain model requests.
+  See [session memory](docs/SESSION-MEMORY.md).
+- Permanent-session continuation uses a bounded automatic brief of conclusions
+  and historical checkpoint outcomes, preserving rejected leads and source links.
+  Large recovery manifests stay behind paged readers; the current contract remains
+  complete. See [permanent sessions](docs/PERMANENT-SESSIONS.md).
 - Per-session direct DeepSeek **Chat + Compactor = Total** estimates with pinned
   pricing, worker attribution, durable receipts and historical/unpriced gaps.
   Existing chats keep their identity. See [session spending](docs/SESSION-COST.md).

@@ -1,16 +1,18 @@
 import { database, digest, getRecord } from './database.js';
-import { knowledgeAccess, allowedKnowledgeSessionIds, cleanKnowledgeText, cleanKnowledgeValue, searchKnowledgeIndex, canonicalKnowledgeSource,knowledgeSourceRevision,knowledgeIndexRevision } from './knowledge-index.js';
+import { knowledgeAccess, allowedKnowledgeSessionIds, cleanKnowledgeText, cleanKnowledgeValue, searchKnowledgeIndex, canonicalKnowledgeSource,knowledgeRecordText,knowledgeSourceRevision,knowledgeIndexRevision } from './knowledge-index.js';
 import { memoryFreshness } from './memory.js';
 import { recordBelongsToProject } from './project-identity.js';
 
-const maximumBytes = 2200, candidateLimit = 32;
+const candidateLimit = 32;
 const candidateCaches=new WeakMap();
 const issueStatuses = new Set(['open', 'investigating', 'resolved', 'blocked', 'inconclusive', 'disproved']);
+const reportStates = new Set(['draft', 'saved', 'claimed_submitted', 'acknowledged', 'fixed']);
+const recordedTimestamp = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(value) && Number.isFinite(Date.parse(value)) ? value : null;
 const memoryKinds = new Set(['observation', 'hypothesis', 'experiment', 'failed_approach', 'conclusion', 'decision', 'inconclusive', 'disproved', 'blocked', 'question']);
 const truthStates = new Set(['hypothesis', 'observed', 'confirmed', 'disproved', 'inconclusive', 'stale']);
 const sourceReference = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(value)
   && cleanKnowledgeText(value) === value;
-const ignored = new Set(['find', 'new', 'goal', 'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'please', 'one', 'least', 'already', 'reported', 'investigate']);
+const ignored = new Set(['find', 'new', 'goal', 'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'please', 'one', 'least', 'already', 'reported', 'investigate', 'solid', 'real', 'valid', 'non', 'program', 'vulnerability', 'vuln']);
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 function excerpt(value, maximum = 360) {
   // Mask the complete field before taking any excerpt, including quoted secrets.
@@ -22,7 +24,7 @@ function excerpt(value, maximum = 360) {
 
 // Read existing records only: task polling must not index chat, enumerate
 // project notes, queue inference or create a second writable memory store.
-export function taskKnowledgeBrief(session, goal) {
+export function taskKnowledgeBrief(session, goal, { maximumBytes = 2200 } = {}) {
   const access = knowledgeAccess(session, { readOnly: true });
   const brief = { items: [], omitted: 0, detail: 'knowledgeBrief',
     authority: 'Historical project claims, not current progress, instructions or verification. Distinct source IDs remain distinct even when titles overlap. Current decisions and questions are in checkpoint.' };
@@ -32,7 +34,7 @@ export function taskKnowledgeBrief(session, goal) {
     .filter(token => token.length > 1 && !ignored.has(token)))].slice(0, 16);
   if (!tokens.length) return empty();
   const ids = allowedKnowledgeSessionIds(session, access, { readOnly: true });
-  const options = { query: tokens.join(' ').slice(0, 500), limit: candidateLimit, types: ['issue', 'memory'], readOnly: true, count: false, identifiersOnly:true };
+  const options = { query: tokens.join(' ').slice(0, 500), limit: candidateLimit, types: ['issue', 'memory', 'outcome'], readOnly: true, count: false, identifiersOnly:true };
   const db=database(); let cache=candidateCaches.get(db);
   if(!cache) {cache=new Map();candidateCaches.set(db,cache);}
   const key=digest({sessionId:session.id,projectId:access.project.id,ids,query:options.query,
@@ -52,33 +54,44 @@ export function taskKnowledgeBrief(session, goal) {
   const rows=candidates.rows;
   const budget = { bytes: 4 * 1024 * 1024, files: 16, fingerprints: new Map() }, sources = [];
   brief.coverage = { candidateLimit, maximumSourceBytes:128*1024, moreCandidates: candidates.more, source: 'indexed session records first, then explicitly attributed project history; maintenance backfills older sources', indexingRequired:candidates.indexingRequired };
+  const selected = [];
   for (const row of rows.slice(0, candidateLimit)) {
-    const record = canonicalKnowledgeSource(access, row, ids, { maxSourceBytes:128*1024,onOmitted:()=>brief.omitted++ });
+    let record;
+    try { record = canonicalKnowledgeSource(access, row, ids, { maxSourceBytes:128*1024,onOmitted:()=>brief.omitted++ }); }
+    catch { brief.omitted++; continue; }
     if (!record || !sourceReference(row.sourceId) || record.id !== row.sourceId || !sourceReference(record.sessionId)
       || !recordBelongsToProject(record, access.project) || !ids.includes(record.sessionId) || getRecord('session-deletion', record.sessionId)) continue;
     // Legacy/imported metadata is not necessarily shaped like a native write.
     // A malformed source must not make the entire recovery poll unavailable.
     try {
-      const fresh = memoryFreshness(record, access.project, session, { budget, readOnly: true });
-      const textFields = row.kind === 'issue' ? [record.title, record.details, record.resolution] : [record.statement, record.rationale];
+      const fresh = row.kind === 'outcome' ? record : memoryFreshness(record, access.project, session, { budget, readOnly: true });
+      const outcome = row.kind === 'outcome' && record.goalId === goal.id ? { ...record, items: record.items.filter(item => item.state !== 'latest-checkpoint') } : record;
+      if (row.kind === 'outcome' && !outcome.items.length) continue;
+      const textFields = row.kind === 'outcome' ? [knowledgeRecordText('outcome', outcome)] : row.kind === 'issue' ? [record.title, record.details, record.resolution] : [record.statement, record.rationale];
       const statement = textFields.filter(value => typeof value === 'string' && value.length).join('\n');
       if(!tokens.some(token=>statement.toLowerCase().includes(token))) continue;
       const item = { kind: row.kind, sourceId: row.sourceId, sourceScope: record.sessionId === session.id ? 'session' : 'project-history', sessionId: record.sessionId,
         revision: Number.isSafeInteger(record.revision) && record.revision > 0 ? record.revision : null,
-        statement: excerpt(statement), ...(row.kind === 'issue' ? { status: issueStatuses.has(record.status) ? record.status : 'inconclusive' }
+        statement: excerpt(statement), ...(row.kind === 'outcome' ? { goalId: record.goalId, outcome: record.outcome, applicabilityStatus: record.applicabilityStatus, sha256: record.sourceRevision } : {}),
+        ...(row.kind === 'issue' ? { status: issueStatuses.has(record.status) ? record.status : 'inconclusive', ...(record.reportLifecycle ? { reportLifecycle: { state: reportStates.has(record.reportLifecycle.state) ? record.reportLifecycle.state : 'unrecorded', recordedAt: recordedTimestamp(record.reportLifecycle.recordedAt) } } : {}) }
           : { recordKind: memoryKinds.has(record.kind) ? record.kind : 'inconclusive' }),
         truth: truthStates.has(fresh.truth) ? fresh.truth : 'inconclusive', historical: true, stale: Boolean(fresh.stale), disputed: Boolean(fresh.disputed),
-        ...(fresh.relationshipCoverage!=='complete'?{relationshipCoverage:fresh.relationshipCoverage,freshnessStatus:fresh.freshnessStatus}:{}) };
+        ...(['issue','memory'].includes(row.kind) && fresh.relationshipCoverage!=='complete'?{relationshipCoverage:fresh.relationshipCoverage,freshnessStatus:fresh.freshnessStatus}:{}) };
       // Keep source IDs, statuses and truth together. Never silently merge a
       // resolved finding with another record claiming the same work is blocked.
       const source = cleanKnowledgeValue({ ...item, statement, title: record.title, details: record.details, resolution: record.resolution,
-        rationale: record.rationale, provenance: record.provenance, evidence: record.evidence || [],
+        rationale: record.rationale, reportLifecycle: record.reportLifecycle, observedAt: record.observedAt, applicability: record.applicability, provenance: record.provenance, evidence: record.evidence || [],
         staleReasons: fresh.staleReasons, contradictions: fresh.contradictions, supersededBy: fresh.supersededBy,
-        sourceRevision: digest(record) });
-      brief.items.push(item);
-      if (bytes(brief) > maximumBytes) { brief.items.pop(); brief.omitted++; continue; }
-      sources.push(source);
+        sourceRevision: record.sourceRevision || digest(record), ...(row.kind === 'outcome' ? { items: outcome.items, coverage: record.coverage } : {}) });
+      const relevance = tokens.filter(token => statement.toLowerCase().includes(token)).length;
+      selected.push({ item, source, relevance });
     } catch { brief.omitted++; }
+  }
+  selected.sort((a,b) => Number(b.item.sourceScope === 'session') - Number(a.item.sourceScope === 'session') || b.relevance-a.relevance);
+  for (const { item, source } of selected) {
+    brief.items.push(item);
+    if (bytes(brief) > maximumBytes) { brief.items.pop(); brief.omitted++; continue; }
+    sources.push(source);
   }
   // An extra matching candidate is evidence of omissions, not an exact total.
   if (candidates.more) brief.omitted++;

@@ -1,3 +1,4 @@
+import { sessionOutcomePage } from './session-outcomes.js';
 import fs from 'node:fs';
 import { processIdentity, identityAlive } from './process-identity.js';
 import { database, digest, getRecord, listRecords, putRecord, appendEvent, now } from './database.js';
@@ -14,7 +15,6 @@ import { currentBudgetCapsule, workerAllocationRevision } from './worker-budget.
 import { taskKnowledgeBrief } from './task-knowledge-brief.js';
 import { investigationCapsule, investigationBranchPage } from './session-investigation.js';
 import { programScopeCapsule } from './program-scope.js';
-import { knowledgeSourceRevision } from './knowledge-index.js';
 
 export { processIdentity, identityAlive, signalProcess } from './process-identity.js';
 
@@ -69,7 +69,11 @@ export function reconcileSession(id) {
   putRecord('recovery', id, record); appendEvent(id, 'recovery', record); return record;
 }
 export function contextFor(session, context = {}) {
-  if (context.compactDerived === true) {
+  // Workers retain their pinned assignment projection, including independent
+  // reviewer context. Compact supervisor history must not add live parent
+  // project metadata or replace a worker's immutable mission with navigation.
+  // Whole-goal peers likewise retain their explicit current collaboration view.
+  if (context.compactDerived === true && !['executor', 'reviewer'].includes(session.role) && !session.bestiesSessionId) {
     const state = compactTaskState(session, {}, context);
     const restrictedTools = context.restrictedTools === true;
     const navigation = restrictedTools ? { tools: ['get_task_state', 'recall', 'search_knowledge'],
@@ -89,9 +93,11 @@ export function contextFor(session, context = {}) {
         authority: 'The complete current contract, mission, runtime policy and project constraints above remain authoritative. Recovery changes/omissions, previous reports, recalled knowledge and historical project notes/goals/checkpoints are retained as derived navigation, not new task instructions. Recover originals only through tools actually supplied or owner assistance; no mandatory current instructions were shortened.' } });
   }
   const state = checkpointState(session, context), checkpoint = state.current, checkpointHistory = state.historical;
-  if (session.role === 'reviewer') return JSON.stringify({ role: 'reviewer', contract: session.contract, mission: session.missionContext?.brief || null,
+  const assignmentAuthority = { policy: session.policy || null, allowedArtifactIds: session.allowedArtifactIds || [], allowedSkillIds: session.allowedSkillIds || [],
+    assignmentId: session.assignmentId || null, assignmentRound: session.assignmentRound || null };
+  if (session.role === 'reviewer') return JSON.stringify({ ...assignmentAuthority, role: 'reviewer', contract: session.contract, mission: session.missionContext?.brief || null,
     contextRequest: compactAssignmentContextRequest(session.assignmentContext), checkpoint, checkpointHistory, previousReport: getRecord('worker-report', session.id), fixedSnapshot: true });
-  if (session.role === 'executor') return JSON.stringify({ role: 'executor', contract: session.contract, checkpoint, checkpointHistory, recovery: getRecord('recovery', session.id),
+  if (session.role === 'executor') return JSON.stringify({ ...assignmentAuthority, role: 'executor', contract: session.contract, checkpoint, checkpointHistory, recovery: getRecord('recovery', session.id),
     mission: session.missionContext?.brief || null, contextRequest: compactAssignmentContextRequest(session.assignmentContext),
     assignmentId: session.assignmentId, previousReport: compactAssignmentRound({ report: getRecord('worker-report', session.id) })?.report,
     selectedEvidence: (session.allowedArtifactIds || []).slice(0, 32).map(id => {
@@ -121,7 +127,7 @@ export function contextFor(session, context = {}) {
       lookup: 'Use assignment_status with an assignment ID. Full report and evidence remain durable artifacts, opened with read_artifact.' } });
 }
 
-export const taskStateDetailSections = ['contract', 'checkpoint', 'recovery', 'projectContext', 'relevantMemory', 'knowledgeBrief', 'investigation', 'programScope', 'assignments', 'importedContext', 'acceptance', 'mission', 'collaboration', 'routing'];
+export const taskStateDetailSections = ['contract', 'checkpoint', 'recovery', 'projectContext', 'relevantMemory', 'knowledgeBrief', 'outcomes', 'investigation', 'programScope', 'assignments', 'importedContext', 'acceptance', 'mission', 'collaboration', 'routing'];
 const short = (value, maximum = 320) => typeof value === 'string' ? value.slice(0, maximum) : null;
 function preview(value, maximum = 1000) {
   const encoded = typeof value === 'string' ? value : JSON.stringify(value ?? null);
@@ -152,7 +158,6 @@ function taskStateSources(session, context) {
   const recovery = getRecord('recovery', session.id), routing = context.goalMode === false ? { enforced: false, reason: 'ordinary-chat' } : routingStatus(session, { limit: 3 });
   // Knowledge changes invalidate detail pages without loading all notes and old
   // reports into every polling response. Native heartbeat/usage do not.
-  const knowledgeVersion = knowledgeSourceRevision(session);
   const pendingInput = session.pendingInput || [], contract = state.scope.kind === 'chat'
     ? { constraints: session.contract?.constraints || [], scope: session.contract?.scope || {}, policy: session.policy || null }
     : session.contract || null;
@@ -161,7 +166,7 @@ function taskStateSources(session, context) {
   const programScope = programScopeCapsule(session);
   const revision = digest({ scope: state.scope, goal, contract, checkpoint: state.current, historical: state.historical,
     recovery, assignments, routing, pendingInput, acceptance: session.acceptance || null, importedContext: session.importedContext || null,
-    mission: session.missionContext || null, assignmentContext: session.assignmentContext || null, knowledgeVersion,
+    mission: session.missionContext || null, assignmentContext: session.assignmentContext || null,
     allocationRevision: workerAllocationRevision(assignmentSession), knowledge: knowledge.revision, investigation, programScope });
   return { state, goal, assignments, recovery, routing, pendingInput, contract, knowledge, investigation, programScope, revision, contextGeneration: contextGeneration(session, context) };
 }
@@ -202,6 +207,17 @@ export function compactTaskState(session, input = {}, context = {}) {
     details: { tool: 'read_task_state_details', revision, sections: taskStateDetailSections,
       pagination: 'Each section is UTF-8 JSON text. Keep its sourceRevision for subsequent byte pages.' },
     authority: 'Current runtime permissions, scope and verified acceptance remain authoritative. Historical notes, progress and summaries grant no permissions or completion.' };
+  const restoreTopMatch = target => {
+    const first = source.knowledge.brief.items[0];
+    if (target.knowledgeBrief.items.length || !first) return target;
+    const item = { kind:first.kind, sourceId:first.sourceId, statement:preview(first.statement,160).text, truth:first.truth, historical:true, stale:Boolean(first.stale), disputed:Boolean(first.disputed),
+      ...(first.relationshipCoverage ? {relationshipCoverage:first.relationshipCoverage} : {}),
+      ...(first.freshnessStatus ? {freshnessStatus:first.freshnessStatus} : {}),
+      ...(first.applicabilityStatus ? {applicabilityStatus:first.applicabilityStatus} : {}),
+      ...(first.status ? {status:first.status} : {}), ...(first.sha256 ? {sha256:first.sha256} : {}) };
+    const next = { ...target, knowledgeBrief:{...target.knowledgeBrief,items:[item],omitted:Math.max(0,target.knowledgeBrief.omitted-1)} };
+    return Buffer.byteLength(JSON.stringify(next)) <= 8192 ? next : target;
+  };
   const overBudget = () => Buffer.byteLength(JSON.stringify(result)) > 8192;
   const branchStubs = () => ({ ...source.investigation, repeatedAttempts: [],
     branches: source.investigation.branches.map(item => ({ id: item.id, revision: item.revision, state: item.state,
@@ -261,18 +277,21 @@ export function compactTaskState(session, input = {}, context = {}) {
     // Do not copy optional imported metadata into the last-resort index.
     minimal.investigation = { branches: minimal.investigation.branches, omittedBranches: source.investigation.omittedBranches,
       detail: 'investigation', lookup: 'Use read_investigation action:list, then read a branch by ID and revision.' };
-    return minimal;
+    return restoreTopMatch(minimal);
   }
-  return result;
+  return restoreTopMatch(result);
 }
 
 export function readTaskStateDetails(session, input, context = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['section', 'revision', 'sourceRevision', 'offset', 'limit'].includes(key))
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['section', 'revision', 'sourceRevision', 'offset', 'limit', 'recordOffset'].includes(key))
       || !taskStateDetailSections.includes(input.section) || typeof input.revision !== 'string' || !/^[a-f0-9]{64}$/.test(input.revision)) throw new Error('Choose a task-state section and its current revision.');
   const offset = input.offset ?? 0, limit = input.limit ?? 4096;
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 8192) throw new Error('Task-state detail pages use a nonnegative byte offset and a limit of 1–8192 bytes.');
+  if (input.recordOffset != null && (input.section !== 'outcomes' || !Number.isSafeInteger(input.recordOffset) || input.recordOffset < 0)) throw new Error('recordOffset is a nonnegative outcome-list offset.');
   const source = taskStateSources(session, context);
-  if (input.revision !== source.revision) throw new Error('Task state changed. Refresh get_task_state before opening details.');
+  // A previously opened section can survive unrelated state changes; its
+  // source hash below includes execution scope and is revalidated on every page.
+  if (input.revision !== source.revision && !input.sourceRevision) throw new Error('Task state changed. Refresh get_task_state before opening details.');
   let value;
   switch (input.section) {
     case 'contract': value = source.contract; break;
@@ -281,6 +300,7 @@ export function readTaskStateDetails(session, input, context = {}) {
     case 'projectContext': value = ['executor', 'reviewer'].includes(session.role) ? null : projectContext(session.projectRoot || session.cwd, { session }); break;
     case 'relevantMemory': value = ['executor', 'reviewer'].includes(session.role) ? [] : recall(session.projectRoot || session.cwd, (source.goal?.objective || '').slice(0, 500), 8, { session }); break;
     case 'knowledgeBrief': value = { items: source.knowledge.sources, authority: source.knowledge.brief.authority }; break;
+    case 'outcomes': value = sessionOutcomePage(session,{offset:input.recordOffset || 0}); break;
     case 'investigation': value = investigationBranchPage(session, {}, context); break;
     case 'programScope': value = source.programScope; break;
     case 'assignments': value = source.assignments; break;
@@ -290,7 +310,7 @@ export function readTaskStateDetails(session, input, context = {}) {
     case 'collaboration': value = session.bestiesSessionId ? peerCollaborationState(session) : null; break;
     case 'routing': value = context.goalMode === false ? source.routing : routingStatus(session, { limit: 256 }); break;
   }
-  const encoded = Buffer.from(JSON.stringify(value ?? null)), sourceRevision = digest(encoded);
+  const encoded = Buffer.from(JSON.stringify(value ?? null)), sourceRevision = digest([source.state.scope, encoded.toString()]);
   if (offset > 0 && input.sourceRevision !== sourceRevision || input.sourceRevision != null && input.sourceRevision !== sourceRevision) throw new Error('Task-state section changed or its page revision is missing. Reopen from offset zero.');
   if (offset > encoded.length || offset > 0 && (encoded[offset] & 0xc0) === 0x80) throw new Error('Task-state offset must be a UTF-8 character boundary within the section.');
   let end = Math.min(encoded.length, offset + limit);

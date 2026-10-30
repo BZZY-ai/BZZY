@@ -66,5 +66,5 @@ DURABLE TASK CONTEXT:\n${JSON.stringify({ role: 'chat', policy: session.policy, 
   return `${responseIdentity}
 ${delegation}
 Preserve the full objective and every task constraint. The contract.context field contains user-supplied task instructions, including scope, workflow and submission requirements; follow them throughout the goal within the existing permission boundaries. Keep those instructions separate from the goal objective. Publish activity with short summaries and detailed evidence-grounded explanations as work changes. Use checkpoint and issue to preserve progress, uncertainty and decisions. Record supporting evidence and assess explicit acceptance criteria before reporting completion. In delegation mode retain strategy and final judgment, and inspect decisive worker evidence. Prefer http_request for in-scope assessment HTTP. Do not apply this workflow to unrelated small talk.
-DURABLE TASK CONTEXT:\n${contextFor(session, options.compactDerived === true ? { compactDerived: true, goalMode: options.goalMode, runId: options.runId, restrictedTools: Boolean(options.agentScope) } : {})}`;
+DURABLE TASK CONTEXT:\n${contextFor(session, { compactDerived: true, goalMode: options.goalMode, runId: options.runId, restrictedTools: Boolean(options.agentScope) })}`;
 }

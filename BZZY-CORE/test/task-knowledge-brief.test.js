@@ -14,6 +14,7 @@ import { compactTaskState, contextFor, readTaskStateDetails } from '../src/engin
 import { conversationPrompt } from '../src/engine/conversation.js';
 import { ToolHost } from '../src/engine/tools.js';
 import { refreshKnowledgeRecords } from '../src/engine/knowledge-index.js';
+import { sessionHealth } from '../src/engine/session-health.js';
 
 let directory, previousHome, alpha, beta, session, source;
 function saved(cwd, extra = {}) {
@@ -81,6 +82,13 @@ test('a continuing native goal can pull the brief after compaction without repla
   assert.equal(listRecords('execution').length, before);
   assert.equal(getRecord('session', session.id).goal.id, session.goal.id);
   assert.equal(getRecord('session', session.id).goal.status, 'active');
+  const unchanged = await host.call('get_task_state', { knownRevision: after.revision, contextGeneration: after.contextGeneration });
+  assert.equal(unchanged.notModified, true);
+  await host.call('read_task_state_details', { section: 'knowledgeBrief', revision: after.revision });
+  const health = sessionHealth(session.id);
+  assert.equal(health.taskState.totalReads, 3); assert.equal(health.taskState.notModifiedReads, 1);
+  assert.equal(health.taskState.deliveredKnowledgeItems, 4); assert.equal(health.taskState.emptyBriefReads, 0);
+  assert.equal(health.memoryDelivery.details.find(item => item.section === 'knowledgeBrief').reads, 1);
 });
 
 test('a fresh goal receives prior issue navigation in compact prompts but never adopts old completion', () => {
@@ -162,7 +170,7 @@ test('brief and paged originals sanitize historical text and invalidate deleted 
   const { blocked } = reportedPair();
   const stored = getRecord('issue', blocked.id);
   // Simulate an older/imported untrusted record that predates write validation.
-  putRecord('issue', blocked.id, { ...stored, details: 'Orbit stored XSS legacy note password="FICTIONAL_PRIVATE_VALUE"', revision: stored.revision + 1 });
+  putRecord('issue', blocked.id, { ...stored, details: 'Orbit stored XSS legacy note password="FICTIONAL_PRIVATE_VALUE"', reportLifecycle: { state: 'password="FICTIONAL_PRIVATE_VALUE"', recordedAt: 'api_key="FICTIONAL_PRIVATE_VALUE"' }, revision: stored.revision + 1 });
   const state = compactTaskState(session);
   assert.ok(briefIds(state).includes(blocked.id));
   assert.doesNotMatch(JSON.stringify(state.knowledgeBrief), /FICTIONAL_PRIVATE_VALUE/);

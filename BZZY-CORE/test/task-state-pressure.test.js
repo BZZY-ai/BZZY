@@ -7,8 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { createSession, saveSession } from '../src/engine/store.js';
 import { BUILTINS } from '../src/engine/providers.js';
 import { initializeProject, issue } from '../src/engine/project.js';
-import { checkpoint } from '../src/engine/memory.js';
-import { database, putRecord } from '../src/engine/database.js';
+import { checkpoint, remember } from '../src/engine/memory.js';
+import { database, getRecord, putRecord } from '../src/engine/database.js';
 import { compactTaskState, contextFor, readTaskStateDetails } from '../src/engine/recovery.js';
 import { updateInvestigation } from '../src/engine/session-investigation.js';
 
@@ -82,12 +82,19 @@ test('last-resort state retains recovery and scoped assignment status after comp
     putRecord('assignment', job.id, job);
     putRecord('round', `${job.id}:1`, { assignmentId: job.id, number: 1, state: 'needs_context' });
   }
+  session.goal.objective = 'ORBIT_FIXTURE disputed'; saveSession(session);
+  const contrary = remember(session, { kind: 'hypothesis', statement: 'An unrelated contrary offline claim.' });
+  const disputed = issue(session, { title: 'ORBIT_FIXTURE disputed old claim', details: 'Historical conclusion requiring contradiction review.' });
+  putRecord('issue', disputed.id, { ...getRecord('issue', disputed.id), truth: 'confirmed', contradictions: [contrary.id] });
   const operationId = randomUUID(), recovery = { state: 'reconciled', createdAt: new Date().toISOString(),
     uncertainOperations: [operationId], automaticallyReplayed: false, inspectionError: '全体🙂'.repeat(80) };
   putRecord('recovery', session.id, recovery);
   const state = compactTaskState(session, {}, context);
   assert.equal(state.compacted, true, 'Must exercise the last-resort form, not ordinary compaction.');
   assert.ok(bytes(state) <= 8192);
+  const top = state.knowledgeBrief.items.find(item => item.sourceId === disputed.id);
+  assert.ok(top, 'The available fallback space retains a top historical source.');
+  assert.equal(top.disputed, true); assert.equal(top.truth, 'confirmed'); assert.equal(top.historical, true);
   assert.equal(state.recovery.state, 'reconciled'); assert.equal(state.recovery.uncertainOperationCount, 1);
   assert.equal(state.recovery.createdAt, recovery.createdAt); assert.equal(state.recovery.automaticallyReplayed, false);
   assert.match(state.recovery.lookup, /inspect.*before retry/i);

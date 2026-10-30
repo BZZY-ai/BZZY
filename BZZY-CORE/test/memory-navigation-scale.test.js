@@ -196,7 +196,7 @@ test('host fallback remains pending, preserves original sources, and query navig
   }
   const view=readSessionMemory(session,{query:'RARE_OLD_ROUTE',limit:3,maxBytes:6000});
   assert.equal(view.selection,'recent-and-relevant'); assert.ok(view.items.some(item=>item.id===nodes[0].id));
-  assert.ok(view.items.some(item=>item.id===nodes.at(-1).id)); assert.ok(view.items.every(item=>item.provenance==='host-extractive-v1'));
+  assert.ok(view.items.some(item=>item.id===nodes.at(-1).id)); assert.ok(view.items.every(item=>item.provenance==='host-extractive-v2'));
   const relevant=readSessionMemory(session,{query:'RARE_OLD_ROUTE',limit:3,maxBytes:6000,recent:false});
   assert.equal(relevant.selection,'relevant'); assert.deepEqual(relevant.items.map(item=>item.id),[nodes[0].id]);
   assert.throws(()=>readSessionMemory(session,{recent:'yes'}),/bounds/);

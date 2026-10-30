@@ -1,48 +1,17 @@
 import { database, getRecord, digest, now } from './database.js';
 import { projectIdentityForSession, recordBelongsToProject, sessionBelongsToProject } from './project-identity.js';
 import { agentExecutionScope } from './agent-execution.js';
-import { sharedSecrets, assertShareText } from './share-bundle-policy.js';
+import { cleanKnowledgeText, cleanKnowledgeValue } from './knowledge-text.js';
+export { cleanKnowledgeText, cleanKnowledgeValue, assertKnowledgeText } from './knowledge-text.js';
 import { advanceConversationSource, conversationRedactionContext, conversationBody, conversationVisible } from './conversation-source.js';
 
+import { checkpointOutcome, outcomeText, publicCheckpointOutcome, outcomeSourceBytes, outcomeExpansionBytes } from './session-outcomes.js';
+
 const ready = new WeakSet();
-export const knowledgeTypes = ['memory', 'issue', 'chat', 'checkpoint', 'goal', 'resolution', 'artifact', 'attempt'];
-const recordKinds = ['memory', 'issue', 'checkpoint', 'goal-history', 'artifact', 'core.episode.observation'];
-const indexedKind = kind => kind === 'goal-history' ? 'goal' : kind === 'core.episode.observation' ? 'attempt' : kind;
+export const knowledgeTypes = ['memory', 'issue', 'chat', 'checkpoint', 'goal', 'resolution', 'artifact', 'attempt', 'outcome'];
+const recordKinds = ['memory', 'issue', 'checkpoint', 'goal-history', 'artifact', 'core.episode.observation', 'core.checkpoint.scope'];
+const indexedKind = kind => kind === 'core.checkpoint.scope' ? 'outcome' : kind === 'goal-history' ? 'goal' : kind === 'core.episode.observation' ? 'attempt' : kind;
 const disabledRoles = new Set(['skill-writer', 'learning-review', 'knowledge-review']);
-const secretAssignment = /\b(password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization)["']?\s*[:=]\s*["']?[^\s"'<>]+/gi;
-
-export function cleanKnowledgeText(value, maximum = 6000) {
-  if (typeof value !== 'string') return '';
-  let text = value.replace(/<(?:think|analysis|reasoning)\b[^>]*>[\s\S]*?(?:<\/(?:think|analysis|reasoning)>|$)/gi, '')
-    .replace(/\b(password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization)["']?\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$))/gi, '$1=<redacted>')
-    .replace(/\u0000/g, '').replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '<redacted authentication>')
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi, '$1<redacted authentication>@')
-    .replace(secretAssignment, '$1=<redacted>')
-    .replace(/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z ]+ )?PRIVATE KEY-----|$)/g, '<redacted private key>')
-    .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '<redacted credential>');
-  for (const secret of sharedSecrets()) text = text.split(secret).join('<redacted credential>');
-  return text.slice(0, maximum);
-}
-export function cleanKnowledgeValue(value) {
-  if (typeof value === 'string') return cleanKnowledgeText(value);
-  if (Array.isArray(value)) return value.slice(0, 100).map(cleanKnowledgeValue);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !/^(?:backendHomes|backendProcess|engineHome|credentials|accountBindings|ownerToken|privateKey|reasoning|analysis|chainOfThought|password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization|sourcePins|dependencySnapshot|dependencyValues)$/i.test(key))
-    .map(([key, item]) => [key, cleanKnowledgeValue(item)]));
-  return value;
-}
-
-export function assertKnowledgeText(value, maximum = 12000) {
-  if (typeof value !== 'string' || !value.trim() || value.length > maximum || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error('Knowledge text must be bounded plain text.');
-  assertShareText(value, sharedSecrets());
-  const quoted = [...value.matchAll(/\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|cookie|authorization)["']?\s*[:=]\s*(?:"((?:\\[\s\S]|[^"\\])*)(?:"|$)|'((?:\\[\s\S]|[^'\\])*)(?:'|$))/gi)];
-  if (quoted.some(match => !/^\s*(?:<redacted(?:[^>]*)>|\[redacted\])\s*$/i.test(match[1] ?? match[2])) || /\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|cookie|authorization)["']?\s*[:=]\s*["']?(?!<)[^\s"'<>]+/i.test(value)
-    || /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(value)
-    || /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@]+(?::[^\s/@]*)?@/i.test(value)
-    || /<(?:think|analysis|reasoning)\b/i.test(value)) throw new Error('Knowledge cannot contain authentication bindings or private reasoning.');
-  return value.trim();
-}
-
 export function knowledgeAccess(session, { readOnly = false } = {}) {
   if (!session?.id || !session.cwd) throw new Error('A saved session is required for knowledge access.');
   const saved = getRecord('session', session.id);
@@ -247,7 +216,7 @@ export function checkMemoryRelationships(session, record, access) {
 // from a cached payload alone. Artifact retrieval exposes metadata, not files.
 export function canonicalKnowledgeSource(access, hit, sessionIds, { maxSourceBytes, onOmitted } = {}) {
   if (access.disabled || !sessionIds.includes(hit.sessionId) || getRecord('session-deletion', hit.sessionId)) return null;
-  const kind = hit.kind === 'goal' ? 'goal-history' : hit.kind === 'attempt' ? 'core.episode.observation' : hit.kind;
+  const kind = hit.kind === 'outcome' ? 'core.checkpoint.scope' : hit.kind === 'goal' ? 'goal-history' : hit.kind === 'attempt' ? 'core.episode.observation' : hit.kind;
   if (!recordKinds.includes(kind)) return null;
   let record;
   if (maxSourceBytes !== undefined) {
@@ -257,12 +226,16 @@ export function canonicalKnowledgeSource(access, hit, sessionIds, { maxSourceByt
     if(row && row.data===null) { onOmitted?.('source-byte-limit'); return null; }
     record=row?.data ? JSON.parse(row.data) : null;
   } else record = getRecord(kind, hit.sourceId);
-  if (!record || (record.id || record.sessionId) !== hit.sourceId || record.sessionId !== hit.sessionId) return null;
+  if (!record || (kind === 'core.checkpoint.scope' ? `${record.sessionId}:${digest(record.scope)}` : record.id || record.sessionId) !== hit.sourceId || record.sessionId !== hit.sessionId) return null;
   const owner = getRecord('session', record.sessionId);
   if (!owner || !sessionBelongsToProject(owner, access.project, { readOnly: true })) return null;
   const material = !record.project && !record.projectRoot && ['goal-history', 'artifact', 'core.episode.observation'].includes(kind)
     ? { ...record, project: access.project.root, projectId: access.project.id } : record;
   if (!recordBelongsToProject(material, access.project)) return null;
+  if (kind === 'core.checkpoint.scope') {
+    if (record.schemaVersion !== 2 || record.provenance !== 'core-checkpoint' || record.scope?.kind !== 'goal') return null;
+    return checkpointOutcome(record, hit.sourceId);
+  }
   if (kind === 'core.episode.observation') {
     const reference = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(value) && cleanKnowledgeText(value)===value ? value : null;
     const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null;
@@ -301,6 +274,7 @@ export function canonicalKnowledgeSource(access, hit, sessionIds, { maxSourceByt
 
 export function knowledgeRecordText(kind, record) {
   const text = value => typeof value === 'string' ? value : '';
+  if (kind === 'outcome') return outcomeText(record);
   if (kind === 'memory') return `${text(record.statement)}\n${text(record.rationale)}`;
   if (kind === 'issue') return `${text(record.title)}\n${text(record.details)}\n${text(record.resolution)}`;
   if (kind === 'artifact') return `${text(record.label)}\n${text(record.mediaType)}`;
@@ -327,7 +301,7 @@ export function refreshKnowledgeRecords(session, { limit = 64 } = {}) {
   const access = knowledgeAccess(session, { readOnly: true });
   if (access.disabled) return { indexed: 0, remaining: false, records: [], access, ids: [] };
   const ids = allowedKnowledgeSessionIds(session, access, { readOnly: true }), db = knowledgeDatabase();
-  const scopeId = access.restricted ? session.id : 'project';
+  const scopeId = (access.restricted ? session.id : 'project') + ':outcomes-v1';
   const cursor = db.prepare('SELECT * FROM knowledge_projection_cursor_v2 WHERE project_id=? AND scope_id=?').get(access.project.id, scopeId);
   const orderedIds = [...ids].sort(), kinds = [...recordKinds].sort();
   let sessionIndex = cursor?.session_id ? orderedIds.findIndex(id => id >= cursor.session_id) : 0;
@@ -395,7 +369,10 @@ export function refreshKnowledgeRecords(session, { limit = 64 } = {}) {
 export function indexKnowledgeRecord(project, kind, sourceId, sessionId, text, payload = {}) {
   if (!knowledgeTypes.includes(kind) || typeof sourceId !== 'string' || !sourceId.trim() || sourceId.length > 160
     || typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 160) return;
-  const body = cleanKnowledgeText(kind === 'checkpoint' && payload.text === undefined ? knowledgeRecordText(kind,payload) : text,
+  // Reserve query terms from the goal even when many long conclusions precede
+  // it in the human-facing outcome text. The brief still shows rejected leads first.
+  const indexedText = kind === 'outcome' ? `Goal: ${cleanKnowledgeText(payload.objective, 500)}\nRecorded outcome: ${cleanKnowledgeText(payload.outcome, 40)}\n${text}` : text;
+  const body = cleanKnowledgeText(kind === 'checkpoint' && payload.text === undefined ? knowledgeRecordText(kind,payload) : indexedText,
     kind === 'chat' && payload.sourceVersion === 2 ? 128 * 1024 : 6000);
   // Checkpoints can carry host-only dependency snapshots. The index needs its
   // public navigation text and pin, never the runtime-policy object graph.
@@ -403,7 +380,7 @@ export function indexKnowledgeRecord(project, kind, sourceId, sessionId, text, p
     createdAt:payload.createdAt,updatedAt:payload.updatedAt,sourceRevision:payload.sourceRevision || digest(payload),
     text:body,truth:'inconclusive',historical:true,provenance:'checkpoint-history' } : payload;
   const safePayload = cleanKnowledgeValue(JSON.parse(JSON.stringify(projection)));
-  const storedKind=kind==='goal'?'goal-history':kind==='attempt'?'core.episode.observation':kind;
+  const storedKind=kind==='outcome'?'core.checkpoint.scope':kind==='goal'?'goal-history':kind==='attempt'?'core.episode.observation':kind;
   const authoritative=recordKinds.includes(storedKind) && getRecord(storedKind,sourceId);
   if(authoritative) safePayload.sourceRevision=digest(authoritative);
   for (const key of ['statement', 'rationale', 'text', 'title', 'details', 'resolution']) if (typeof safePayload[key] === 'string') safePayload[key] = cleanKnowledgeText(safePayload[key]);
@@ -548,24 +525,31 @@ export function searchKnowledgeIndex(access, sessionIds, { query = '', limit = 1
 }
 
 export function readKnowledgeSource(session, { sourceId, sha256, offset = 0, limit = 4096 } = {}) {
-  const access = knowledgeAccess(session), match = typeof sourceId === 'string' && /^([a-f0-9-]{36}):(\d+)$/.exec(sourceId);
+  const access = knowledgeAccess(session, { readOnly: true }), match = typeof sourceId === 'string' && /^([a-f0-9-]{36}):(\d+)$/.exec(sourceId);
+  const outcomeId=typeof sourceId === 'string' && /^[a-f0-9-]{36}:[a-f0-9]{64}$/.test(sourceId);
   const attemptId=typeof sourceId === 'string' && /^[a-f0-9]{64}$/.test(sourceId);
-  if (!match && !attemptId || !/^[a-f0-9]{64}$/.test(sha256 || '') || !Number.isSafeInteger(offset) || offset < 0 || offset > 128 * 1024 ||
+  if (!match && !attemptId && !outcomeId || !/^[a-f0-9]{64}$/.test(sha256 || '') || !Number.isSafeInteger(offset) || offset < 0 || offset > (outcomeId ? outcomeExpansionBytes : 128 * 1024) ||
       !Number.isSafeInteger(limit) || limit < 1 || limit > 8192) throw new Error('Use a scoped source ID, its SHA-256 and bounded UTF-8 page.');
-  if (attemptId) {
-    const record=getRecord('core.episode.observation',sourceId),ids=allowedKnowledgeSessionIds(session,access);
-    const live=record && canonicalKnowledgeSource(access,{kind:'attempt',sourceId,sessionId:record.sessionId},ids);
+  if (attemptId || outcomeId) {
+    const storedKind = outcomeId ? 'core.checkpoint.scope' : 'core.episode.observation';
+    const row = database().prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data END AS data FROM records WHERE kind=? AND id=?')
+      .get(outcomeSourceBytes, storedKind, sourceId);
+    if (row && !row.data) throw new Error('This source exceeds its bounded read allowance; original checkpoint history remains local.');
+    const record = row?.data ? JSON.parse(row.data) : null, ids = allowedKnowledgeSessionIds(session, access, { readOnly: true });
+    const live = record && canonicalKnowledgeSource(access, { kind: outcomeId ? 'outcome' : 'attempt', sourceId, sessionId: record.sessionId }, ids,
+      { maxSourceBytes: outcomeSourceBytes });
     if (!live) throw new Error('Knowledge source is outside this authorized conversation scope or unavailable.');
-    if (live.sha256 !== sha256) throw Object.assign(new Error('Knowledge source changed. Search again before expanding it.'),{code:'KNOWLEDGE_SOURCE_CHANGED'});
-    const bytes=Buffer.from(JSON.stringify(live,null,2));
+    if ((live.sha256 || live.sourceRevision) !== sha256) throw Object.assign(new Error('Knowledge source changed. Search again before expanding it.'),{code:'KNOWLEDGE_SOURCE_CHANGED'});
+    const bytes = Buffer.from(JSON.stringify(outcomeId ? publicCheckpointOutcome(live) : cleanKnowledgeValue(live), null, 2));
+    if (bytes.length > (outcomeId ? outcomeExpansionBytes : 128 * 1024)) throw new Error('This source exceeds its bounded expansion allowance; original history remains local.');
     if (offset>bytes.length || offset<bytes.length && (bytes[offset]&0xc0)===0x80) throw new Error('Source offset must be a valid UTF-8 byte boundary.');
     let nextOffset=Math.min(bytes.length,offset+limit);
     while(nextOffset<bytes.length && nextOffset>offset && (bytes[nextOffset]&0xc0)===0x80) nextOffset--;
     if(nextOffset===offset && offset<bytes.length) throw new Error('Source page is too short for one UTF-8 character.');
-    return {sourceId,sha256,sessionId:record.sessionId,offset,nextOffset,hasMore:nextOffset<bytes.length,text:bytes.subarray(offset,nextOffset).toString('utf8'),
+    return {sourceId,sha256,sessionId:record.sessionId,offset,nextOffset,totalBytes:bytes.length,hasMore:nextOffset<bytes.length,text:bytes.subarray(offset,nextOffset).toString('utf8'),
       redacted:true,metadataOnly:true,provenance:live.provenance,authority:live.authority};
   }
-  if (access.disabled || !allowedKnowledgeSessionIds(session, access).includes(match[1]) || getRecord('session-deletion', match[1])) throw new Error('Knowledge source is outside this authorized conversation scope.');
+  if (access.disabled || !allowedKnowledgeSessionIds(session, access, { readOnly: true }).includes(match[1]) || getRecord('session-deletion', match[1])) throw new Error('Knowledge source is outside this authorized conversation scope.');
   const seq = Number(match[2]), db = database();
   const row = db.prepare(`SELECT e.seq,e.type FROM events e WHERE e.session_id=? AND e.seq=? AND ${conversationVisible}
     AND typeof(${conversationBody})='text'`).get(match[1], seq);

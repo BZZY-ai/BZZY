@@ -6,7 +6,7 @@ const normalized = value => typeof value === 'string' ? value : JSON.stringify(v
 export const checkpointOperationProperties = {
   itemOperations: { type: 'array', maxItems: 50, items: { type: 'object', additionalProperties: false,
     properties: { op: { type: 'string', enum: ['add', 'update', 'archive', 'resolve'] }, field: { type: 'string', enum: fields },
-      id: { type: 'string' }, text: { type: 'string', maxLength: 2000 }, expectedItemRevision: { type: 'integer', minimum: 1 } }, required: ['op', 'field'] } },
+      id: { type: 'string' }, text: { type: 'string', maxLength: 2000 }, expectedItemRevision: { type: 'integer', minimum: 1 }, disposition: { type: 'string', enum: ['rejected','blocked','supported','needs_recheck'] }, subject: { type: 'string', maxLength: 240 }, applicability: { type: 'string', maxLength: 800 } }, required: ['op', 'field'] } },
   evidenceOperations: { type: 'object', additionalProperties: false, properties: {
     add: { type: 'array', maxItems: 32, items: { type: 'string' } }, remove: { type: 'array', maxItems: 32, items: { type: 'string' } } } },
   blockerIds: { type: 'array', maxItems: 32, items: { type: 'string' } },
@@ -44,19 +44,25 @@ export function applyCheckpointItems(previous, next, input, scope, revision, con
   if (!Array.isArray(operations) || operations.length > 50) throw new Error('Checkpoint operations must be a bounded list.');
   for (const operation of operations) {
     if (!operation || typeof operation !== 'object' || Array.isArray(operation)
-        || Object.keys(operation).some(key => !['op', 'field', 'id', 'text', 'expectedItemRevision'].includes(key))
+        || Object.keys(operation).some(key => !['op', 'field', 'id', 'text', 'expectedItemRevision', 'disposition', 'subject', 'applicability'].includes(key))
         || !fields.includes(operation.field) || !['add', 'update', 'archive', 'resolve'].includes(operation.op)) throw new Error('Invalid checkpoint item operation.');
+    const metadata = {};
+    if (operation.disposition != null) {
+      if (!['rejected','blocked','supported','needs_recheck'].includes(operation.disposition)) throw new Error('Invalid checkpoint disposition.');
+      metadata.disposition = operation.disposition;
+    }
+    for (const [name, limit] of [['subject',240],['applicability',800]]) if (operation[name] != null) metadata[name] = assertKnowledgeText(operation[name],limit);
     if (input[operation.field] != null) throw new Error('Use either a replacement list or item operations for each checkpoint field.');
     if (operation.op === 'add') {
       const value = assertKnowledgeText(operation.text, 2000), id = operation.id || digest([scope, operation.field, value]);
       if (typeof id !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(id)) throw new Error('Use a bounded checkpoint item ID.');
       const previous = items.find(item => item.id === id);
-      if (previous && (previous.field !== operation.field || previous.value !== value)) throw new Error('Checkpoint item ID already names different content.');
+      if (previous && (previous.field !== operation.field || previous.value !== value || Object.entries(metadata).some(([key,value])=>previous[key] !== value))) throw new Error('Checkpoint item ID already names different content.');
       if (!previous && operation.field === 'constraints' && contractValues.has(digest(value))) throw new Error('This constraint already belongs to the contract; do not add another working item.');
       // The checkpoint sequence stays monotonic even after an ID was archived
       // and its bounded archive pointer has aged out. Re-adding cannot revive
       // an old compare-and-set revision.
-      if (!previous) items.push({ id, field: operation.field, value, revision, checkpointRevision: revision });
+      if (!previous) items.push({ id, field: operation.field, value, ...metadata, revision, checkpointRevision: revision });
       else if (operation.field === 'constraints' && !contractValues.has(digest(value))) {
         items = items.map(item => item.id === id ? { ...item, occurrences: (item.occurrences || 1) + 1 } : item);
       }
@@ -65,7 +71,7 @@ export function applyCheckpointItems(previous, next, input, scope, revision, con
       if (!item || item.revision !== operation.expectedItemRevision) throw new Error('Checkpoint item changed. Use its current item revision.');
       if (item.field === 'constraints' && contractValues.has(digest(item.value))) throw new Error('Contract-owned constraints cannot be changed through checkpoint operations.');
       archive(item, operation.op === 'update' ? 'superseded' : operation.op === 'resolve' ? 'resolved' : 'archived');
-      if (operation.op === 'update') items[index] = { ...item, value: assertKnowledgeText(operation.text, 2000), occurrences: 1, revision, checkpointRevision: revision };
+      if (operation.op === 'update') items[index] = { ...item, ...metadata, value: assertKnowledgeText(operation.text, 2000), occurrences: 1, revision, checkpointRevision: revision };
       else items.splice(index, 1);
     }
   }

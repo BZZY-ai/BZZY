@@ -38,8 +38,8 @@ export function sessionHealth(id) {
         missing: missingRoutingTools, basis: nativeTools?.source || 'unknown-native-thread',
         meaning: 'Recorded submitted/inherited tool schemas, not proof of model attention.' } : null,
       compaction: session.nativeContext?.metrics || null, refresh: session.nativeContext?.refresh || null, efficiency: session.contextEfficiency || null },
-    memory, maintenance: getRecord('core.history.maintenance', session.id), taskState: getRecord('core.task-state.read', session.id),
+    memory, memoryDelivery: { details: database().prepare("SELECT data FROM records WHERE kind='core.task-state.detail-read' AND json_extract(data,'$.sessionId')=? LIMIT 32").all(session.id).map(row=>JSON.parse(row.data)), authority: 'Delivery/navigation receipts, not proof of attention or correct use.' }, maintenance: getRecord('core.history.maintenance', session.id), taskState: getRecord('core.task-state.read', session.id),
     episode: getRecord('core.episode.progress', session.id),
-    learning: { jobs: learning, backlog: backlogAge('core.learning.job', session.id), policy: 'Closed work episodes, meaningful outcomes, skill feedback and corrections may queue bounded reviews. No-change is a valid result.' },
+    learning: { jobs: learning, outcomes: database().prepare("SELECT json_extract(data,'$.failureKind') AS failureKind,json_extract(data,'$.result.noChange') AS noChange,json_extract(data,'$.state') AS state,count(*) AS count FROM records WHERE kind='core.learning.job' AND json_extract(data,'$.sessionId')=? GROUP BY failureKind,noChange,state").all(session.id), backlog: backlogAge('core.learning.job', session.id), policy: 'Closed work episodes, meaningful outcomes, skill feedback and corrections may queue bounded reviews. No-change is a valid result.' },
     retention: { jobs: compaction, backlog: backlogAge('core.session.compactor.job', session.id), control: getRecord('core.session.compactor.control', session.id) } };
 }

@@ -82,7 +82,7 @@ with zipfile.ZipFile(sys.argv[1]) as source, zipfile.ZipFile(sys.argv[2],'w') as
   assert.equal(restored.goal.workerBudgetPolicy, undefined);
   assert.equal(sessionMemoryStatus(restored).generation, null);
   indexSessionMemory(restored, { force: true });
-  assert.equal(sessionMemoryStatus(restored).sourceVersion, 4);
+  assert.equal(sessionMemoryStatus(restored).sourceVersion, 5);
   assert.equal(listRecords('core.session.compactor.job').length, 0);
   assert.equal(listRecords('usage.run').length, 0); assert.equal(listRecords('usage.goal').length, 0);
   assert.ok(messages(restored.id).includes('Original complete assistant answer'));

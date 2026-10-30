@@ -170,7 +170,7 @@ test('completed helper overage charges actual reported tokens even when the help
   assert.equal(result.usage.tokens, 23000); assert.equal(result.usage.conservative, false); assert.equal(result.totalTokensUsed, 23000);
   assert.equal(sessionCompactionUsage().tokensUsed, 23000); assert.equal(sessionCompactionUsage().reservedTokens, 0);
   assert.equal(getRecord('core.session.memory.node', result.nodeId).state, 'pending');
-  assert.equal(readSessionMemory(session).items[0].provenance, 'host-extractive-v1'); assert.equal(closed, true);
+  assert.equal(readSessionMemory(session).items[0].provenance, 'host-extractive-v2'); assert.equal(closed, true);
 });
 
 test('daily exhaustion defers requests until the next UTC day', async () => {
@@ -386,7 +386,7 @@ test('pause rejects late output, settles conservatively and never implicitly res
   pauseSessionCompaction(session.id, 'owner_pause'); release(summary()); const [result] = await pending;
   assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'owner_pause');
   assert.equal(getRecord('core.session.memory.node', result.nodeId).state, 'pending');
-  assert.equal(readSessionMemory(session).items[0].provenance, 'host-extractive-v1');
+  assert.equal(readSessionMemory(session).items[0].provenance, 'host-extractive-v2');
   assert.equal(sessionCompactionUsage().reservedTokens, 0); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Pause is durable') }), []);
   assert.throws(() => controlSessionCompaction(session, 'resume', { expectedRevision: 0 }), { code: 'CONFLICT' });
@@ -493,7 +493,7 @@ test('a busy source gets host extraction while paid compaction remains deferred'
   queue(); session.executionState = 'running'; saveSession(session);
   await processSessionCompactions({ runModel: () => assert.fail('Foreground opt-in remains required for paid inference.') });
   const node = getRecord('core.session.memory.node', job().nodeId);
-  assert.equal(node.fallbackProvenance, 'host-extractive-v1');
+  assert.equal(node.fallbackProvenance, 'host-extractive-v2');
   assert.equal(node.state, 'pending');
   assert.match(readSessionMemory(session).items[0].summary, /Host-selected historical excerpts/);
   assert.equal(sessionCompactionUsage().tokensUsed, 0);
@@ -600,4 +600,99 @@ for (const corruption of ['missing', 'different-source', 'replaced-result']) tes
   putRecord('core.session.compactor.output', completed.id, original);
   resume(); const [restored] = await processSessionCompactions({ runModel });
   assert.equal(restored.state, 'completed'); assert.equal(calls, 0);
+});
+
+
+test('a stopped source resumes fresh local work without resending paused requests', async () => {
+  queue(); const old=job(); pauseSessionCompaction(session.id,'source_stopped');
+  const paused=getRecord(JOB,old.id);
+  // Fresh authorized source activity, with paid inference disabled for this test.
+  configureSessionCompaction({enabled:false},{expectedRevision:0});
+  appendEvent(session.id,'message.user',{text:'New authorized offline continuation.'});
+  queueSessionCompaction(session,{force:true});
+  await processSessionCompactions({runModel:()=>assert.fail('Local derivation must be free')});
+  assert.ok(sessionMemoryStatus(session).fallbackNodes>0);
+  assert.deepEqual(getRecord(JOB,old.id),paused);
+});
+
+test('an uncertain paid request cannot block local extracts or be replayed by them', async () => {
+  queue(); await processSessionCompactions({ runModel: async () => { throw new Error('Synthetic interrupted model request'); } });
+  const paused = job(); assert.equal(paused.dispatched, true); assert.equal(paused.reasonPaused, 'uncertain_request');
+  const reservations = listRecords('core.session.compactor.reservation'), usage = sessionCompactionUsage();
+  pauseAllSessionCompactions('host_shutdown'); recoverSessionCompactions();
+  appendEvent(session.id, 'message.user', { text: 'Decision: preserve the fresh continuation even while a prior summary request needs inspection.' });
+  queueSessionCompaction(session, { force: true });
+  await processSessionCompactions({runModel:()=>assert.fail('Uncertain inference cannot replay')});
+  assert.ok(readSessionMemory(session).items.some(item => item.summary.includes('preserve the fresh continuation')));
+  assert.deepEqual(getRecord(JOB, paused.id), paused);
+  assert.deepEqual(listRecords('core.session.compactor.reservation'), reservations);
+  assert.deepEqual(sessionCompactionUsage(), usage);
+  assert.equal(sessionCompactionUsage().reservedTokens,0);
+});
+
+test('a foreground failure cannot erase an explicit compactor pause', async () => {
+  queue();pauseSessionCompaction(session.id,'owner_pause');pauseSessionCompaction(session.id,'source_stopped');
+  assert.equal(sessionCompactionStatus(session).control.reasonPaused,'owner_pause');
+  await processSessionCompactions({runModel:()=>assert.fail('Owner pause remains authoritative')});
+  assert.equal(sessionMemoryStatus(session).fallbackNodes,0);
+});
+
+test('a resumed active source reopens local maintenance without resuming old source-paused requests', async () => {
+  queue(); session.executionState = 'paused'; saveSession(session);
+  pauseSessionCompaction(session.id, 'source_paused'); const paused = job();
+  session.executionState = 'running'; saveSession(session);
+  appendEvent(session.id, 'message.user', { text: 'Continue this authorized offline investigation.' });
+  const native = { runId: 'resume-run', threadRef: 'resume-thread', turnId: 'resume-turn', itemId: 'resume-answer' };
+  appendEvent(session.id, 'text', { ...native, text: 'Decision: retain the new scoped baseline after resume.' });
+  appendEvent(session.id, 'message.finalized', native);
+  queueSessionCompaction(session, { force: true });
+  assert.equal(sessionCompactionStatus(session).control.state, 'enabled');
+  await processSessionCompactions({ runModel: () => assert.fail('The running foreground retains paid-inference priority') });
+  await processSessionCompactions({ runModel: () => assert.fail('No old request may resume') });
+  assert.ok(readSessionMemory(session).items.some(item => item.summary.includes('retain the new scoped baseline')));
+  assert.deepEqual(getRecord(JOB, paused.id), paused);
+});
+
+test('idle stopped sessions rebuild obsolete generations in bounded maintenance pages without replaying paid work', async () => {
+  const statement = 'Decision: keep this source-linked negative result. '.repeat(10);
+  for (const text of statement) appendEvent(session.id, 'text', { text, itemId: 'old-stream' });
+  let queued;
+  do { queued = queueSessionCompaction(session, { force: true }); } while (queued.indexed.indexingRemaining);
+  pauseSessionCompaction(session.id, 'source_stopped'); const paused = job();
+  const legacy = { ...getRecord('core.session.memory', session.id), sourceVersion: 4, version: 4 };
+  putRecord('core.session.memory', session.id, legacy);
+  const originalEvents = events(session.id, 0, 1000), goal = loadSession(session.id).goal;
+  assert.equal(sessionCompactionStatus(session).control.indexingRemaining, false);
+  assert.equal(sessionMemoryStatus(session).legacyRebuildPending, true);
+  pauseAllSessionCompactions('host_shutdown'); recoverSessionCompactions();
+  await processSessionCompactions({ runModel: () => assert.fail('Migration only derives local excerpts for a stopped source') });
+  let status = sessionMemoryStatus(session);
+  assert.equal(status.sourceVersion, 5); assert.equal(status.legacyRebuildPending, false);
+  assert.equal(status.indexingRemaining, true); assert.ok(status.indexedThroughSeq < legacy.cursorSeq);
+  for (let tick = 0; tick < 10 && sessionMemoryStatus(session).indexingRemaining; tick++) {
+    await processSessionCompactions({ runModel: () => assert.fail('Old paused requests remain paused') });
+  }
+  status = sessionMemoryStatus(session);
+  assert.equal(status.indexingRemaining, false); assert.equal(status.pendingMessages, 0);
+  assert.equal(status.fallbackNodes, 1); assert.equal(status.uncoveredNodes, 0);
+  assert.notEqual(status.generation, legacy.generation);
+  assert.deepEqual(getRecord('core.session.memory.history', `${session.id}:${legacy.generation}`), legacy);
+  assert.deepEqual(getRecord(JOB, paused.id), paused); assert.equal(listRecords(JOB).length, 1);
+  assert.deepEqual(events(session.id, 0, 1000), originalEvents); assert.deepEqual(loadSession(session.id).goal, goal);
+  assert.equal(sessionCompactionUsage().tokensUsed, 0);
+});
+
+for (const reason of ['owner_pause', 'owner_cancel', 'source_paused']) test(`generation migration cannot bypass ${reason}`, async () => {
+  queue();
+  if (reason === 'owner_cancel') controlSessionCompaction(session, 'cancel', { expectedRevision: sessionCompactionStatus(session).control.revision });
+  else pauseSessionCompaction(session.id, reason);
+  if (reason === 'source_paused') { session.executionState = 'paused'; saveSession(session); }
+  const legacy = { ...getRecord('core.session.memory', session.id), sourceVersion: 4, version: 4 };
+  putRecord('core.session.memory', session.id, legacy);
+  const before = sessionCompactionStatus(session).control;
+  pauseAllSessionCompactions('host_shutdown'); recoverSessionCompactions();
+  await processSessionCompactions({ runModel: () => assert.fail('A migration does not authorize work after an owner stop') });
+  assert.equal(sessionMemoryStatus(session).legacyRebuildPending, true);
+  assert.deepEqual(getRecord('core.session.memory', session.id), legacy);
+  assert.deepEqual(sessionCompactionStatus(session).control, before);
 });

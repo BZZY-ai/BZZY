@@ -13,7 +13,7 @@ import { sanitizeLearningText } from './learning.js';
 import { runRestrictedDocumentModel } from './document-model.js';
 import { sessionCompactionCost } from './compaction-cost.js';
 import { sessionMemoryEligible, indexSessionMemory, pendingSessionMemoryNodes, sessionMemoryMaterial,
-  publishSessionMemorySummary, publishSessionMemoryFallback, sessionMemoryStatus } from './session-memory.js';
+  publishSessionMemorySummary, publishSessionMemoryFallback, sessionMemoryStatus, sessionMemorySourceVersion } from './session-memory.js';
 
 const JOB = 'core.session.compactor.job', CONTROL = 'core.session.compactor.control';
 const SETTINGS = 'core.session.compactor.settings', USAGE = 'core.session.compactor.usage', RESERVATION = 'core.session.compactor.reservation';
@@ -115,6 +115,12 @@ function discoverJobs(sessionId) {
 export function queueSessionCompaction(value, { throughSeq, force = false, maxParts } = {}) {
   const saved = source(value), previous = controlFor(saved.id);
   if (previous.state === 'enabled' && ['paused', 'cancelled'].includes(saved.executionState)) pauseSessionCompaction(saved.id, 'source_paused');
+  // A new authorized source execution reopens maintenance, not old paid
+  // requests. Those jobs retain their own pause/dispatch receipts.
+  if (previous.reasonPaused === 'source_stopped' && !stopped() && !['paused','cancelled'].includes(saved.executionState)
+      || previous.reasonPaused === 'source_paused' && !stopped() && ['starting','running','verifying'].includes(saved.executionState)) {
+    updateControl(saved.id, { state: 'enabled', reasonPaused: null });
+  }
   const indexed = indexSessionMemory(saved, { throughSeq, force, ...(maxParts === undefined ? {} : { maxParts }) });
   const current = controlFor(saved.id);
   const finalizedThroughSeq = throughSeq ?? indexed.throughSeq ?? database().prepare('SELECT coalesce(max(seq),0) AS seq FROM events WHERE session_id=?').get(saved.id).seq;
@@ -130,7 +136,8 @@ function pause(id, reason, cancelled = false) {
     const prior = controlFor(id);
     // Daemon interruption must not replace an earlier owner/source stop or
     // uncertainty reason. Only explicit resume can clear those durable states.
-    const preserveStop = ['host_shutdown', 'owner_disabled'].includes(reason) && ['paused', 'cancelled'].includes(prior.state);
+    const preserveStop = ['host_shutdown', 'owner_disabled'].includes(reason) && ['paused', 'cancelled'].includes(prior.state)
+      || ['source_stopped','source_paused','uncertain_request'].includes(reason) && ['owner_pause','owner_cancel','user_pause','operator_stop','host_stopped'].includes(prior.reasonPaused);
     const nextState = preserveStop ? prior.state : cancelled ? 'cancelled' : 'paused';
     const nextReason = preserveStop ? prior.reasonPaused : reason;
     const control = { ...prior, state: nextState, reasonPaused: nextReason,
@@ -492,17 +499,23 @@ export async function processSessionCompactions({ runModel = runRestrictedDocume
   // A paid-inference setting is not a stop on local source derivation. Explicit
   // session/owner/operator pauses still exclude both indexing and extraction.
   const localControls = `(json_extract(data,'$.state')='enabled' OR
-    (json_extract(data,'$.state')='paused' AND json_extract(data,'$.reasonPaused')='owner_disabled'))`;
-  // Backfill only previously queued source sessions, in bounded source pages.
+    (json_extract(data,'$.state')='paused' AND json_extract(data,'$.reasonPaused') IN ('owner_disabled','uncertain_request','source_stopped')))`;
+  // Rebuild obsolete generations even when the old cursor was caught up and
+  // the session stays idle. Only previously queued, locally eligible sources
+  // enter these bounded pages; owner pauses and old paid jobs remain intact.
   for (const control of maintenanceControls('backfill-controls', `json_extract(data,'$.queued')=1
-    AND json_extract(data,'$.indexingRemaining')=1 AND ${localControls}`)) {
+    AND (json_extract(data,'$.indexingRemaining')=1 OR EXISTS (SELECT 1 FROM records memory
+      WHERE memory.kind='core.session.memory' AND memory.id=records.id
+      AND coalesce(json_extract(memory.data,'$.sourceVersion'),0)<>${sessionMemorySourceVersion})) AND ${localControls}`)) {
     const saved = loadSession(control.sessionId);
     if (!saved || sessionDeleted(saved.id) || !sessionMemoryEligible(saved) || ['paused', 'cancelled'].includes(saved.executionState)) continue;
     try {
-      const indexed = indexSessionMemory(saved, { ...(control.throughSeq !== undefined ? { throughSeq: control.throughSeq } : {}), force: control.force || false });
+      const old = getRecord('core.session.memory', saved.id), migrating = old && old.sourceVersion !== sessionMemorySourceVersion;
+      const force = Boolean(control.force || migrating);
+      const indexed = indexSessionMemory(saved, { ...(control.throughSeq !== undefined ? { throughSeq: control.throughSeq } : {}), force });
       const current = controlFor(saved.id);
-      updateControl(saved.id, { indexingRemaining: Boolean(indexed.indexingRemaining),
-        force: Boolean(indexed.indexingRemaining) && current.force });
+      const remaining = Boolean(indexed.deferred || indexed.indexingRemaining);
+      updateControl(saved.id, { indexingRemaining: remaining, force: remaining && (force || current.force) });
     }
     catch { pauseSessionCompaction(control.sessionId, 'source_changed'); }
   }

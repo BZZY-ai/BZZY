@@ -54,7 +54,7 @@ test('compact execution instructions preserve all mandatory source and replace h
     putRecord('memory', id, { id, sessionId: session.id, projectId: session.projectId, project: session.projectRoot,
       kind: 'observation', truth: 'observed', statement: `HISTORICAL-NOTE-${index} ` + 'Derived historical memory only. '.repeat(300), evidence: [], inputs: [], createdAt: new Date().toISOString() });
   }
-  const full = agentInstructions(session, context), compact = agentInstructions(session, { ...context, compactDerived: true });
+  const full = contextFor(session, context), compact = agentInstructions(session, context);
   assert.ok(Buffer.byteLength(full) > 700000); assert.ok(Buffer.byteLength(compact) < Buffer.byteLength(full) / 8);
   const parsed = durable(compact);
   assert.deepEqual(parsed.contract, session.contract); assert.equal(parsed.contract.context, originalContext);
@@ -66,7 +66,9 @@ test('compact execution instructions preserve all mandatory source and replace h
   assert.deepEqual(detail('contract', parsed.currentState, context), session.contract);
   assert.deepEqual(detail('recovery', parsed.currentState, context), recovery);
   assert.ok(detail('projectContext', parsed.currentState, context).notes.some(item => item.statement.startsWith('HISTORICAL-NOTE-')));
-  assert.deepEqual(durable(agentInstructions(session, context)), JSON.parse(contextFor(session)), 'Default context remains unchanged.');
+  const normal = durable(agentInstructions(session, context)), explicit = durable(agentInstructions(session, { ...context, compactDerived: true }));
+  delete normal.currentState.executionBudget.observedAt; delete explicit.currentState.executionBudget.observedAt;
+  assert.deepEqual(normal, explicit, 'Default execution now uses the bounded projection.');
   assert.deepEqual(getRecord('recovery', session.id), recovery, 'Projection does not rewrite durable observations.');
 });
 

@@ -1,3 +1,44 @@
+# Permanent-session memory continuity (2026-10-30)
+
+The six changes reuse canonical checkpoints/revisions, the event log, source
+index, compactor, worker allocations and learning/evaluation lifecycle. Offline
+fixtures cover same-goal compaction, a later goal, changed scope, archived
+rejections, contradictory findings, credential masking, scoped source expansion,
+owner pauses, uncertain requests, idle migration, and the 60K specialist ceiling.
+A synthetic reviewer output now passes through held-out semantic and continuation
+evaluation, activation and a recorded skill load in a later goal. This exercises
+the lifecycle; it does not measure live model judgment or vulnerability quality.
+
+Node 24/macOS full Core run: **1,445 passed, 4 skipped, 1 failed** out of 1,450.
+The failure was an `ENOTEMPTY` temporary-directory cleanup race in the unchanged
+Relay task-access test; its isolated rerun passed. The earlier full run also
+passed that test. After the final telemetry/export edits, **27 focused memory
+and health tests** and **35 debug-export tests** passed. CLI knowledge UI:
+**13 passed**. Core/CLI syntax and whitespace checks passed. Tests used private
+temporary homes; no installed runtime, target, account, Relay server or phone
+was changed.
+
+The 100,000-document retrieval benchmark (50 pulls per query) passed with warm
+p95 **7.61 ms** for a rare query and **30.39 ms** for a broad query. Briefs stayed
+within **2,190 bytes**, and polling produced **zero SQL writes**. These timings
+include concurrent test load. The accelerated **5,000-cycle soak** passed in
+89.55 seconds (task-state p95 6.01 ms; maintenance p95 7.16 ms). A separate,
+heavier fixture with **128 previous goals and 16 archived decisions per goal**
+measured about **157 ms p95**, a 6,067-byte capsule and zero polling writes.
+Outcome hydration is bounded, but it is more expensive than the issue/note-only
+benchmark. These are synthetic runs, not 5–15 hours of model-driven work or
+process-crash/disk-full validation.
+
+Remaining measured limits: automatic briefs inspect bounded candidates and
+archive pointers, not all history; originals remain stored when omitted. A native
+backend without acknowledged refresh still depends on state pulls during a goal.
+A native worker request can overshoot before usage telemetry arrives; the host
+handoff preserves uncertainty and evidence but cannot guarantee a model report.
+Existing explicit learning settings and queued pins remain unchanged, and paid
+reviews during foreground goals still require the owner's `duringForeground`
+opt-in. A Linux live run and its full debug export are required to judge model
+use, review quality, actual coverage and long-duration behavior.
+
 # Native Library authoring references (2026-10-28)
 
 Both `bzzy` and standalone `bzzy-core` expose `--help-skills`, `--help-agents`,

@@ -64,7 +64,7 @@ export class CoreKnowledge {
       case 'session-memory.document': return sessionMemoryDocument(historyScoped([]));
       case 'session-memory.export': return exportSessionMemoryDocument(historyScoped(['expectedRevision']), input);
       case 'session-memory.read': return readSessionMemory(historyScoped(['maxBytes', 'limit', 'query', 'recent']), input);
-      case 'session-memory.expand': return expandSessionMemory(historyScoped(['id', 'offset', 'limit']), input);
+      case 'session-memory.expand': return expandSessionMemory(historyScoped(['id', 'offset', 'limit', 'sourceOffset', 'sourceLimit']), input);
       case 'session-memory.queue': return queueSessionCompaction(historyScoped([]), { force: true });
       case 'session-memory.rebuild': {
         const session = historyScoped(['expectedGeneration', 'reviewed']);

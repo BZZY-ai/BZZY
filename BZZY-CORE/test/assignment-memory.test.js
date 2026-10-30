@@ -143,7 +143,7 @@ test('memory generation migrates lazily without editing source events or active 
   putRecord('core.session.memory', session.id, { sessionId: session.id, sourceVersion: 2, version: 2, generation: oldGeneration, leafCount: 0 });
   assert.equal(sessionMemoryStatus(session).legacyRebuildPending, true);
   const before = database().prepare('SELECT seq,type,data FROM events WHERE session_id=? ORDER BY seq').all(session.id);
-  indexAll(); assert.equal(sessionMemoryStatus(session).sourceVersion, 4);
+  indexAll(); assert.equal(sessionMemoryStatus(session).sourceVersion, 5);
   assert.ok(getRecord('core.session.memory.history', `${session.id}:${oldGeneration}`));
   assert.deepEqual(getRecord('assignment', job.id).contract, contract);
   assert.deepEqual(database().prepare('SELECT seq,type,data FROM events WHERE session_id=? ORDER BY seq').all(session.id), before);
@@ -265,7 +265,7 @@ test('projection-one generation-three maps rebuild lazily without changing activ
   const contract = structuredClone(getRecord('assignment', job.id).contract);
   assert.equal(sessionMemoryStatus(session).legacyRebuildPending, true);
   indexAll();
-  assert.equal(sessionMemoryStatus(session).sourceVersion, 4);
+  assert.equal(sessionMemoryStatus(session).sourceVersion, 5);
   assert.ok(getRecord('core.session.memory.history', `${session.id}:${generation}`));
   assert.ok(pending().flatMap(node => node.refs).every(ref => ref.projectionVersion === 2));
   assert.deepEqual(getRecord('assignment', job.id).contract, contract);
