@@ -134,6 +134,17 @@ items, and an oversized legacy list does not prevent unrelated checkpoint saves.
 Grouping counts explicit repeated declarations of the exact working text; inherited
 copies and idempotent retries do not increase them. Counts never imply confidence.
 
+A checkpoint's canonical record and request receipt are saved before publishing
+its disposable project/search views. If that publication fails, the tool returns
+the saved revision with `indexing.state: deferred` and a bounded component name;
+it does not report the mutation as failed or expose raw filesystem/database
+errors. Canonical transaction failures still fail normally. Knowledge maintenance
+can rebuild the index from the dirty-source queue or bootstrap; an unavailable
+project copy remains explicit and is not promised an automatic file repair.
+Retrying an older request returns its original receipt without overwriting newer
+project or search views. Publication checks the latest canonical version under
+the same write lock as index updates.
+
 Per-goal outcomes are read-time projections of `core.checkpoint.scope` and
 immutable checkpoint revisions, not a second writable findings store. They carry
 decisions, completed work, pending checks, unresolved questions and bounded

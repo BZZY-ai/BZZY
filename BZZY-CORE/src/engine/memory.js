@@ -405,11 +405,40 @@ export function checkpoint(session, input, context = {}) {
     if (requestKey) putRecord('core.checkpoint.request', requestKey, { sessionId: session.id, scope, digest: hash, record }, db);
     appendEvent(session.id, 'checkpoint', record, db); return record;
   });
-  writeProjectRecord(session, 'checkpoints', session.id, record);
-  indexKnowledgeRecord(access.project, 'checkpoint', session.id, session.id, JSON.stringify({ objective: record.objective, decisions: record.decisions, pendingActions: record.pendingActions, unresolvedQuestions: record.unresolvedQuestions }), record);
-  if (scope.kind === 'goal') {
-    const sourceId = checkpointScopeId(scope), outcome = checkpointOutcome(record, sourceId);
-    indexKnowledgeRecord(access.project, 'outcome', sourceId, session.id, knowledgeRecordText('outcome', outcome), outcome);
+  let component = 'project_copy';
+  const deferred = () => ({ ...record, indexing: { state: 'deferred', component,
+    authority: component === 'project_copy'
+      ? 'Checkpoint saved in Core. Its project copy is unavailable; Core remains authoritative. Do not repeat completed work.'
+      : 'Checkpoint saved. Derived knowledge is deferred to host maintenance; do not repeat completed work.' } });
+  try {
+    return atomic(db => {
+      // Serialize publication with competing checkpoint saves. Retrying an old
+      // request returns its original receipt without overwriting newer views.
+      if (digest(getRecord('checkpoint', session.id)) !== digest(record)) return record;
+      // A caller may already own a transaction. Roll back only disposable index
+      // changes on publication failure, never the checkpoint/request receipt.
+      db.exec('SAVEPOINT checkpoint_navigation');
+      try {
+        writeProjectRecord(session, 'checkpoints', session.id, record);
+        component = 'checkpoint';
+        indexKnowledgeRecord(access.project, 'checkpoint', session.id, session.id, knowledgeRecordText('checkpoint', record), record);
+        let result = record;
+        if (scope.kind === 'goal') {
+          component = 'outcome';
+          const sourceId = checkpointScopeId(scope), outcome = checkpointOutcome(record, sourceId);
+          if (outcome) indexKnowledgeRecord(access.project, 'outcome', sourceId, session.id, knowledgeRecordText('outcome', outcome), outcome);
+          else result = deferred();
+        }
+        db.exec('RELEASE checkpoint_navigation');
+        return result;
+      } catch (error) {
+        db.exec('ROLLBACK TO checkpoint_navigation'); db.exec('RELEASE checkpoint_navigation');
+        throw error;
+      }
+    });
+  } catch {
+    // The canonical write succeeded. Dirty-source maintenance (or bootstrap)
+    // can repair knowledge; no raw filesystem/database error enters the result.
+    return deferred();
   }
-  return record;
 }
