@@ -24,7 +24,7 @@ import { delegationTokenLines } from './delegation-format.js';
 import { agentExecutionScope } from './agent-execution.js';
 import { learningForTurn, learningForEpisode } from './learning-hooks.js';
 import { sessionMemoryEligible } from './session-memory.js';
-import { queueSessionCompaction, pauseSessionCompaction } from './session-compactor.js';
+import { beginSessionCompactionRun, queueSessionCompaction, pauseSessionCompaction } from './session-compactor.js';
 import { deferLearningForSession } from './learning.js';
 import { randomUUID } from 'node:crypto';
 import { maintainSessionHistory } from './history-maintenance.js';
@@ -102,6 +102,10 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     session.executionState = 'running'; if (goal) { session.goal.status = 'active'; session.deferTerminalNotification = true; }
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
     putRecord('run', session.id, run); saveSession(session);
+    if (sessionMemoryEligible(session)) {
+      try { beginSessionCompactionRun(session, run.id); }
+      catch { /* Optional derived maintenance must not fail an admitted foreground run. */ }
+    }
     beginRunUsage(session, run, { tokenBudget: goal ? session.goal.tokenBudget : options.tokenBudget });
     options.activityReporter = new ActivityReporter(session, recorded, goal ? session.goal.objective : prompt);
     host = await new ToolHost(session, recorded, { goalMode: goal, agentScope, runId: run.id, signal: abort.signal, prompt, tokenBudget: options.tokenBudget,

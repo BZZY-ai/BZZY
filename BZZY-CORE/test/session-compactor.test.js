@@ -17,7 +17,7 @@ import { CodexEngine } from '../src/engine/engines/codex.js';
 import { indexSessionMemory, readSessionMemory, resetSessionMemory, sessionMemoryStatus } from '../src/engine/session-memory.js';
 import { queueSessionCompaction, processSessionCompactions, sessionCompactionSettings, configureSessionCompaction,
   sessionCompactionStatus, sessionCompactionUsage, pauseSessionCompaction, pauseAllSessionCompactions,
-  controlSessionCompaction, recoverSessionCompactions } from '../src/engine/session-compactor.js';
+  controlSessionCompaction, recoverSessionCompactions, beginSessionCompactionRun } from '../src/engine/session-compactor.js';
 
 const JOB = 'core.session.compactor.job';
 let root, session, previous;
@@ -641,6 +641,8 @@ test('a resumed active source reopens local maintenance without resuming old sou
   queue(); session.executionState = 'paused'; saveSession(session);
   pauseSessionCompaction(session.id, 'source_paused'); const paused = job();
   session.executionState = 'running'; saveSession(session);
+  putRecord('run', session.id, { id: 'resumed-source-run', sessionId: session.id, state: 'running' });
+  beginSessionCompactionRun(session, 'resumed-source-run');
   appendEvent(session.id, 'message.user', { text: 'Continue this authorized offline investigation.' });
   const native = { runId: 'resume-run', threadRef: 'resume-thread', turnId: 'resume-turn', itemId: 'resume-answer' };
   appendEvent(session.id, 'text', { ...native, text: 'Decision: retain the new scoped baseline after resume.' });

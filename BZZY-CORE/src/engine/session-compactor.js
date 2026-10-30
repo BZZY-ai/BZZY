@@ -63,7 +63,14 @@ function source(value) {
   if (!saved || sessionDeleted(id) || !sessionMemoryEligible(saved)) throw fail('COMPACTOR_SCOPE', 'This terminal conversation is unavailable.');
   return saved;
 }
-const controlFor = id => ({ sessionId: id, state: 'enabled', revision: 0, ...getRecord(CONTROL, id) });
+const ownerHoldFor = control => ['pause', 'cancel'].includes(control?.ownerHold) ? control.ownerHold
+  : control?.reasonPaused === 'owner_pause' ? 'pause' : control?.reasonPaused === 'owner_cancel' ? 'cancel' : null;
+const sourceHolds = new Set(['source_stopped', 'source_paused', 'user_pause', 'user_cancel', 'host_operator_stop', 'operator_stop', 'host_stopped', 'host_shutdown']);
+const controlFor = id => {
+  const saved = getRecord(CONTROL, id);
+  // Legacy explicit compactor stops retain their intent without a read-time write.
+  return { sessionId: id, state: 'enabled', revision: 0, ...saved, ownerHold: ownerHoldFor(saved) };
+};
 function updateControl(id, changes, db = database()) {
   const prior = controlFor(id);
   if (Object.entries(changes).every(([key, value]) => prior[key] === value)) return prior;
@@ -110,19 +117,35 @@ function discoverJobs(sessionId) {
   }
 }
 
+// Called only by the admitted execution owner after it persists the new run.
+export function beginSessionCompactionRun(value, runId) {
+  const saved = source(value);
+  return atomic(db => {
+    const run = getRecord('run', saved.id), current = loadSession(saved.id), prior = controlFor(saved.id);
+    // This host-only hook follows admission and persistence of a new run. A
+    // delayed callback from the stopped run cannot clear a newer pause, and a
+    // service start or status/queue read is not source-execution authorization.
+    if (!runId || run?.id !== runId || run.state !== 'running' || current?.executionState !== 'running'
+        || stopped() || prior.sourceRunId === runId || prior.pausedRunId === runId || prior.ownerHold) return prior;
+    // Paid jobs are deliberately untouched. Only fresh local derivation is
+    // reopened; new jobs still obey settings, while old requests keep receipts.
+    return updateControl(saved.id, { sourceRunId: runId,
+      ...(sourceHolds.has(prior.reasonPaused) && ['paused', 'cancelled'].includes(prior.state)
+        ? { state: 'enabled', reasonPaused: null } : {}) }, db);
+  });
+}
+
 // Only completed-work hooks or an explicit owner action call this API. Reading
 // history/status never queues model requests or advances the source cursor.
 export function queueSessionCompaction(value, { throughSeq, force = false, maxParts } = {}) {
   const saved = source(value), previous = controlFor(saved.id);
   if (previous.state === 'enabled' && ['paused', 'cancelled'].includes(saved.executionState)) pauseSessionCompaction(saved.id, 'source_paused');
-  // A new authorized source execution reopens maintenance, not old paid
-  // requests. Those jobs retain their own pause/dispatch receipts.
-  if (previous.reasonPaused === 'source_stopped' && !stopped() && !['paused','cancelled'].includes(saved.executionState)
-      || previous.reasonPaused === 'source_paused' && !stopped() && ['starting','running','verifying'].includes(saved.executionState)) {
-    updateControl(saved.id, { state: 'enabled', reasonPaused: null });
+  const current = controlFor(saved.id);
+  if (stopped() || current.ownerHold || ['paused', 'cancelled'].includes(saved.executionState)
+      || current.state !== 'enabled' && !['owner_disabled', 'uncertain_request', 'source_stopped'].includes(current.reasonPaused)) {
+    return { sessionId: saved.id, indexed: { deferred: true, reason: 'maintenance_paused' }, control: current, previouslyPaused: true };
   }
   const indexed = indexSessionMemory(saved, { throughSeq, force, ...(maxParts === undefined ? {} : { maxParts }) });
-  const current = controlFor(saved.id);
   const finalizedThroughSeq = throughSeq ?? indexed.throughSeq ?? database().prepare('SELECT coalesce(max(seq),0) AS seq FROM events WHERE session_id=?').get(saved.id).seq;
   updateControl(saved.id, { queued: true, indexingRemaining: indexed.deferred || indexed.indexingRemaining || false,
     force: Boolean(indexed.deferred || indexed.indexingRemaining) && (current.force || force),
@@ -134,15 +157,21 @@ export function queueSessionCompaction(value, { throughSeq, force = false, maxPa
 function pause(id, reason, cancelled = false) {
   const result = atomic(db => {
     const prior = controlFor(id);
-    // Daemon interruption must not replace an earlier owner/source stop or
-    // uncertainty reason. Only explicit resume can clear those durable states.
-    const preserveStop = ['host_shutdown', 'owner_disabled'].includes(reason) && ['paused', 'cancelled'].includes(prior.state)
-      || ['source_stopped','source_paused','uncertain_request'].includes(reason) && ['owner_pause','owner_cancel','user_pause','operator_stop','host_stopped'].includes(prior.reasonPaused);
-    const nextState = preserveStop ? prior.state : cancelled ? 'cancelled' : 'paused';
-    const nextReason = preserveStop ? prior.reasonPaused : reason;
-    const control = { ...prior, state: nextState, reasonPaused: nextReason,
+    const explicitOwnerStop = ['owner_pause', 'owner_cancel'].includes(reason);
+    const ownerHold = explicitOwnerStop ? reason === 'owner_cancel' ? 'cancel' : 'pause' : prior.ownerHold;
+    // A goal/host stop must never replace independently recorded memory-owner
+    // intent. Preserve the specific source/host cause against a later generic
+    // controller callback, regardless of which callback arrived first.
+    const preserveStop = !explicitOwnerStop && Boolean(ownerHold)
+      || ['host_shutdown', 'owner_disabled'].includes(reason) && ['paused', 'cancelled'].includes(prior.state)
+      || ['source_stopped','source_paused','uncertain_request'].includes(reason) && ['user_pause','user_cancel','host_operator_stop','operator_stop','host_stopped'].includes(prior.reasonPaused);
+    const nextState = ownerHold ? ownerHold === 'cancel' ? 'cancelled' : 'paused' : preserveStop ? prior.state : cancelled ? 'cancelled' : 'paused';
+    const nextReason = ownerHold ? `owner_${ownerHold}` : preserveStop ? prior.reasonPaused : reason;
+    const pausedRunId = preserveStop ? prior.pausedRunId ?? null : getRecord('run', id)?.id || null;
+    const control = { ...prior, ownerHold, pausedRunId, state: nextState, reasonPaused: nextReason,
       revision: prior.revision + 1, updatedAt: now() };
-    const unchanged = prior.state === control.state && prior.reasonPaused === nextReason;
+    const unchanged = prior.state === control.state && prior.reasonPaused === nextReason && prior.ownerHold === ownerHold
+      && (prior.pausedRunId ?? null) === pausedRunId;
     if (!unchanged) putRecord(CONTROL, id, control, db);
     for (const job of listRecords(JOB, { sessionId: id, states: jobStates })) {
       const retryOutcome = snapshotLegacyRetry(job, db);
@@ -173,7 +202,7 @@ export function controlSessionCompaction(value, action, { expectedRevision } = {
     if ([...active.values()].some(item => item.sessionId === saved.id)) throw fail('CONFLICT', 'Wait for the previous compactor request to stop.');
     if (listRecords(JOB, { sessionId: saved.id }).some(job => (job.state === 'running' || job.reservationId && getRecord(RESERVATION, job.reservationId)?.state === 'reserved') && identityAlive(job.runner))) throw fail('CONFLICT', 'The previous compactor process is still running.');
     if (listRecords(JOB, { sessionId: saved.id }).some(job => documentBackends(job).length)) throw fail('CONFLICT', 'The previous compactor backend has not stopped.');
-    const settings = sessionCompactionSettings(), next = { ...prior, state: 'enabled', reasonPaused: null, queued: true, revision: prior.revision + 1, updatedAt: now() };
+    const settings = sessionCompactionSettings(), next = { ...prior, ownerHold: null, state: 'enabled', reasonPaused: null, queued: true, revision: prior.revision + 1, updatedAt: now() };
     putRecord(CONTROL, saved.id, next, db);
     for (const job of listRecords(JOB, { sessionId: saved.id }).filter(job => ['paused', 'cancelled', 'budget_limited', 'failed', 'waiting_for_configuration', 'waiting_for_auth', 'retry_wait'].includes(job.state))) {
       if (job.attempts >= 3 && !getRecord(OUTPUT, job.id)) continue;
@@ -581,7 +610,7 @@ export function recoverSessionCompactions() {
     // A durable owner pause/cancel remains authoritative even if the process
     // died between recording it and releasing the API reservation.
     const control = controlFor(job.sessionId), saved = loadSession(job.sessionId);
-    const ownerStopped = !['enabled', 'paused'].includes(control.state) || control.state === 'paused' && control.reasonPaused !== 'host_shutdown'
+    const ownerStopped = Boolean(control.ownerHold) || !['enabled', 'paused'].includes(control.state) || control.state === 'paused' && control.reasonPaused !== 'host_shutdown'
       || current.state === 'paused' && current.reasonPaused !== 'host_shutdown';
     const cached = getRecord(OUTPUT, job.id), hostOnly = publicationOnly(job) || Boolean(cached);
     const neverDispatched = job.dispatched === false || job.dispatched === undefined && !(job.attempts > 0) && !job.reservationId && job.state !== 'running';
@@ -607,7 +636,7 @@ export function recoverSessionCompactions() {
   }
   for (const control of listRecords(CONTROL, { state: 'paused' })) {
     const saved = loadSession(control.sessionId);
-    if (control.reasonPaused === 'host_shutdown' && saved && !sessionDeleted(saved.id)
+    if (!ownerHoldFor(control) && control.reasonPaused === 'host_shutdown' && saved && !sessionDeleted(saved.id)
         && !['paused', 'cancelled'].includes(saved.executionState) && !stopped()) {
       // Restore local maintenance even with inference disabled. The paid
       // settings gate and each job's independent recovery state still apply.

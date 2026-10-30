@@ -92,8 +92,10 @@ Larger pending nodes receive source-linked host extractive fallback views. Query
 recall combines relevant nodes with recent coverage; originals stay unchanged.
 Local extraction also runs when paid compaction is disabled, without creating
 paid jobs or reservations. A stopped prior turn or an uncertain paid request
-does not prevent local extraction once the source session can run. Explicit
-session/owner/operator pauses and cancellation still stop local maintenance.
+does not prevent local extraction once the source session can run. Active
+session/owner/operator pauses and cancellation still stop summary-tree
+maintenance. Event capture and the separate conversation/search index keep their
+existing behavior; a compactor pause does not delete or disable those originals.
 Uncertain paid jobs keep their dispatch receipts and stay paused.
 Status distinguishes `fallbackNodes`, `hostSummaries`, `modelSummaries` and
 `uncoveredNodes`; extracts do not increase the completed model-summary count.
@@ -141,9 +143,20 @@ replay old work; new compactions must run through the updated Core implementatio
 Session pause/cancel, Core stop, deletion and shutdown stop background work.
 An already dispatched summary can finish against immutable sources during an
 ordinary foreground turn. Owner/source stops and uncertain requests require
-explicit inspection/resume for previously paused paid jobs. Fresh authorized
-source activity can reopen local maintenance after a source stop; it cannot
-resume old paused paid jobs or erase an explicit compactor owner pause. Startup can recover provably undispatched shutdown
+explicit inspection/resume for previously paused paid jobs. After an explicitly
+admitted new source run is saved, a host hook reopens local
+summary-tree maintenance held by a goal pause/cancel or Core stop. Merely starting
+Core, opening status or queueing an idle session cannot clear those holds. The
+hook checks the current run ID; a late callback from the stopped run cannot undo
+a newer pause. An independent `ownerHold` retains an explicit compactor pause or
+cancel across goal/host events and new runs, including legacy owner-stop reasons.
+Only the explicit compactor resume operation clears it. While held, summary-tree
+indexing, extracts and paid summaries stop; ordinary event capture and the separate
+conversation/search index remain unchanged.
+
+New source runs do not resume old paid jobs, alter their uncertain dispatch
+receipts or reset charges. Fresh jobs remain governed by the paid settings and
+foreground scheduling policy. Startup can recover provably undispatched shutdown
 work and checked cached publication without another model request. Known
 invalid-output retries retain their settled-attempt receipts and backoff across
 shutdown, while uncertain requests remain paused. Already-paused legacy jobs
