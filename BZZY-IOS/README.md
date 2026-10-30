@@ -11,6 +11,25 @@ passed artifact/privacy/APNs checks and is prepared locally; it has **not been
 installed or launched on the live phone**. The existing installed build 25 and
 running host sessions remain unchanged.
 
+TestFlight release checkpoint (2026-10-30): **Release 0.1.0 (26)** was uploaded
+successfully through Xcode Organizer using **App Store Connect** distribution.
+The archive and exported IPA passed production APNs, permission-description,
+privacy-manifest and signature checks; the IPA also has an App Store provisioning
+profile with debugger access disabled. The Release UI test confirms that preview
+arguments cannot bypass approved Core pairing. Upload acceptance is separate from
+Apple processing, export compliance, Beta App Review and availability to friends;
+external testing has not yet been enabled. The beta description is saved in App
+Store Connect, and an empty **BZZY Internal** group is prepared without automatic
+distribution. Feedback/review contacts and the remaining external-review setup
+still need completion.
+
+For friends, distribute through an **external TestFlight group** after Apple's
+required review; **TestFlight Internal Only** does not support that audience.
+Each tester needs their own configured Core/CLI computer and approved phone
+pairing. Installing the beta grants no access to another user's host or accounts.
+Keep signing-team overrides, export options, provisioning profiles and generated
+archives/IPAs local and excluded from Git.
+
 Build **0.1.0 (25)** retains the latest **100 complete cached entries** per
 conversation for immediate reopening. Older pages and rendering stay bounded;
 Core owns full history. The protected display cache is separate from durable
