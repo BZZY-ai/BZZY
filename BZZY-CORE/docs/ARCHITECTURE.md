@@ -17,6 +17,7 @@ Reusable behavior must stay separate from private account bindings and results.
 | Concern | Core source, relative to `src/engine/` unless stated | Assessment |
 | --- | --- | --- |
 | Runtime lifetime | `runtime.js`, `runtime-processes.js` | Loopback service plus detached execution runners; existing queue dispatcher, not an agent trigger scheduler |
+| Owner script jobs | `background-jobs.js`, `background-job-worker.js`, `background-job-process.js` | Separate durable job queue, inert launch handshakes, verified process groups, bounded redacted logs and opt-in phone alerts; see [external execution API](EXECUTION-API.md) |
 | Storage | `database.js`, `store.js` | SQLite WAL, durable records/events and transactional request reservations; JSON session files are compatibility exports |
 | Goal lifecycle | `goals.js`, `controller.js`, `lifecycle.js` | Goal reporting transitions to verification; an execution's exit status is a separate field |
 | Contracts/evidence | `contracts.js`, `verification.js`, `evidence.js` | Artifact hashes, requirements, checks and acceptance records exist; explicit criteria can fail independently of a model claim |

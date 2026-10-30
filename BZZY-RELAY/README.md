@@ -35,6 +35,12 @@ it does not establish capacity on the intended 2 GB VPS.
 
 ## Implemented
 
+- Opt-in Core script completion/failure alerts reuse the bounded PAIR-only push
+  queue. Named `Completed script.py` / `Failed script.py` alerts carry fixed
+  outcome text and a job ID; host paths, arguments and logs are excluded. They use
+  the existing host-only Terminal navigation hint, compatible with iOS parsing.
+  Existing goal, export and Library notifications retain their routing.
+
 - Ed25519 device authentication using fresh, socket-bound challenges.
 - Separate signed encryption keys and libsodium authenticated public-key boxes.
 - Explicit peer key pinning, signed connection presence, encrypted routing binding,

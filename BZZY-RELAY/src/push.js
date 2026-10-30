@@ -13,7 +13,8 @@ function alertPayload(value, hostId, grant) {
   }
   const libraryCreation = /^(Skill|Agent) created( - .+)?$/.test(value.aps.alert.title);
   const debugExport = /^Full debug export (ready|failed)( - .+)?$/.test(value.aps.alert.title);
-  if ((!libraryCreation && !debugExport && !/^(Goal (achieved|stalled|paused|cancelled)|Input needed)( - .+)?$|^BZZY update available$/.test(value.aps.alert.title)) ||
+  const backgroundJob = /^(Completed|Failed) .+$/.test(value.aps.alert.title);
+  if ((!libraryCreation && !debugExport && !backgroundJob && !/^(Goal (achieved|stalled|paused|cancelled)|Input needed)( - .+)?$|^BZZY update available$/.test(value.aps.alert.title)) ||
     value.aps.sound !== 'default' || value.aps.category !== 'BZZY_UPDATE') fail('INVALID_PUSH');
   opaque(value.aps['thread-id']);
   const hint = value.bzzy;
@@ -21,9 +22,11 @@ function alertPayload(value, hostId, grant) {
   if (hint.v !== 1 || hint.hostId !== hostId || !['terminal', 'agents', 'updates'].includes(hint.destination)) fail('INVALID_PUSH');
   opaque(hint.eventId);
   if (debugExport && (hint.destination !== 'terminal' || hint.agentId !== undefined)) fail('INVALID_PUSH');
+  if (backgroundJob && (hint.destination !== 'terminal' || hint.resource !== undefined || hint.sessionId !== undefined || hint.agentId !== undefined ||
+      !/^Job [a-f0-9-]{36} (completed|failed|timed out|interrupted)\. Check status on your host\.$/i.test(value.aps.alert.body))) fail('INVALID_PUSH');
   if (hint.destination === 'updates') {
     if (libraryCreation || hint.resource !== undefined || hint.sessionId !== undefined || hint.agentId !== undefined) fail('INVALID_PUSH');
-  } else if (!(libraryCreation && hint.resource === undefined && hint.sessionId === undefined && hint.agentId === undefined)) {
+  } else if (!((libraryCreation || backgroundJob) && hint.resource === undefined && hint.sessionId === undefined && hint.agentId === undefined)) {
     opaque(hint.resource);
     if (typeof hint.sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(hint.sessionId)) fail('INVALID_PUSH');
     if (hint.agentId !== undefined && (hint.destination !== 'agents' || !/^[a-f0-9-]{36}$/i.test(hint.agentId))) fail('INVALID_PUSH');

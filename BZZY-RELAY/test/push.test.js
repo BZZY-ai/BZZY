@@ -12,6 +12,20 @@ const token = 'ab'.repeat(32), configuration = { environment: 'sandbox', fingerp
 const payload = (host, resource) => ({ aps: { alert: { title: 'Goal achieved - starbucks-japan', body: 'Verified result.' }, sound: 'default', category: 'BZZY_UPDATE', 'thread-id': 'thread' },
   bzzy: { v: 1, eventId: 'event', hostId: host, resource, sessionId: randomUUID(), destination: 'terminal' } });
 
+test('script completion alerts use compatible host terminal routing and reject raw diagnostics or arbitrary routes', async t => {
+  const f = await fixture(t), host = await f.client({ host: true }), phone = await f.client();
+  const { grant } = await pair(host, phone);
+  const worker = new RelayPushService({ store: f.store }); t.after(() => worker.close());
+  worker.register(grant.recipientId, { enabled: true, deviceToken: token, environment: 'sandbox', grantIds: [grant.id] });
+  const value = payload(grant.hostId, grant.spec.resource);
+  value.aps.alert = { title: 'Completed check.py', body: `Job ${randomUUID()} completed. Check status on your host.` };
+  value.bzzy = { v: 1, eventId: 'script-result', hostId: grant.hostId, destination: 'terminal' };
+  const fields = { grantId: grant.id, id: 'script-result', occurredAt: Date.now(), environment: 'sandbox', payload: value };
+  assert.equal(worker.enqueue(grant.hostId, fields).state, 'queued');
+  assert.throws(() => worker.enqueue(grant.hostId, { ...fields, id: 'unsafe', payload: { ...value, aps: { ...value.aps, alert: { ...value.aps.alert, body: 'raw script log' } } } }), { code: 'INVALID_PUSH' });
+  assert.throws(() => worker.enqueue(grant.hostId, { ...fields, id: 'route', payload: { ...value, bzzy: { ...value.bzzy, destination: 'agents' } } }), { code: 'INVALID_PUSH' });
+});
+
 test('real sockets queue to the bound phone while offline, deduplicate lost receipts and never expose tokens in replies/audit', async t => {
   let configured = false; const sends = [];
   const f = await fixture(t, { server: { push: { configurationLoader: () => configured ? configuration : null,

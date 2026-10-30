@@ -45,6 +45,12 @@ export class BzzyCore {
     return conversationExport(result.sessionId);
   }
   async sessions() { return (await this.#connection()).sessions(); }
+  async submitJob(input) { return (await this.#connection()).submitJob(input); }
+  async jobs(options) { return (await this.#connection()).jobs(options); }
+  async job(id) { return (await this.#connection()).job(uuid(id)); }
+  async jobLogs(id, options) { return (await this.#connection()).jobLogs(uuid(id), options); }
+  async jobEvents(id, options) { return (await this.#connection()).jobEvents(uuid(id), options); }
+  async cancelJob(id, options) { return (await this.#connection()).cancelJob(uuid(id), options); }
   async session(id) { return (await this.#connection()).session(uuid(id)); }
   async deleteConversation(id, { requestId } = {}) { return (await this.#connection()).deleteConversation(uuid(id), { requestId }); }
   async usage(id) { return (await this.#connection()).usage(uuid(id)); }

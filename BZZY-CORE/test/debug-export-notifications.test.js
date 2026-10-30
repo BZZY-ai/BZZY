@@ -10,6 +10,7 @@ import { debugExportFailure } from '../src/engine/debug-export-errors.js';
 import { sessionPermissions } from '../src/engine/session-access.js';
 import { registerDeviceNotifications, revokeDeviceNotifications } from '../src/push/registration.js';
 import { CorePushWorker } from '../src/push/worker.js';
+import { submitBackgroundJob, finishBackgroundJob, currentBackgroundOutcome } from '../src/engine/background-jobs.js';
 
 let directory, previous;
 const hostId = 'H'.repeat(43), token = 'ab'.repeat(32);
@@ -38,6 +39,34 @@ function worker(sends, options = {}) {
   return new CorePushWorker({ configurationLoader: () => ({ fingerprint: 'fixture', environment: 'sandbox' }), hostID: () => hostId,
     clientFactory: () => ({ send: async value => { sends.push(value); return { accepted: true, apnsId: value.id }; }, close() {} }), ...options });
 }
+
+test('script alerts are opt-in, name the script and reach only the fully approved phone without logs or paths', async () => {
+  phone({ relayPush: true }); phone({ full: false, deviceToken: 'cd'.repeat(32) });
+  const file = path.join(directory, 'check-results.py'); fs.writeFileSync(file, 'print("private output")');
+  const silent = submitBackgroundJob({ script: file, cwd: directory }, randomUUID()); finishBackgroundJob(silent.id, 'completed', { exitCode: 0 });
+  assert.equal(listRecords('outbox').length, 0);
+  const ready = submitBackgroundJob({ script: file, cwd: directory, notify: true }, randomUUID()); finishBackgroundJob(ready.id, 'completed', { exitCode: 0 });
+  const failed = submitBackgroundJob({ script: file, cwd: directory, notify: true }, randomUUID()); finishBackgroundJob(failed.id, 'failed', { exitCode: 9, message: 'PRIVATE_RAW_LOG' });
+  assert.equal(listRecords('outbox').length, 2); assert.ok(listRecords('outbox').every(row => currentBackgroundOutcome(row.event)));
+  const sends = [], sender = worker([], { relaySend: async (registration, value) => { sends.push(value); return { state: 'sent' }; } });
+  try { await sender.tick(); await sender.tick(); } finally { sender.close(); }
+  assert.equal(sends.length, 2);
+  assert.deepEqual(sends.map(value => value.payload.aps.alert.title).sort(), ['Completed check-results.py', 'Failed check-results.py']);
+  assert.ok(sends.every(value => value.payload.bzzy.destination === 'terminal' && !value.payload.bzzy.sessionId));
+  assert.doesNotMatch(JSON.stringify(sends), /PRIVATE_RAW_LOG|private output/); assert.equal(JSON.stringify(sends).includes(directory), false);
+});
+
+test('job notification names containing credential markers are replaced and forged outcomes are rejected', async () => {
+  phone(); const file = path.join(directory, 'api_key=fixture-private.py'); fs.writeFileSync(file, 'pass');
+  // Filenames with obvious credential assignments are rejected before persistence.
+  assert.throws(() => submitBackgroundJob({ script: file, cwd: directory, notify: true }, randomUUID()), /Credentials/);
+  const safe = path.join(directory, 'token-report.py'); fs.writeFileSync(safe, 'pass');
+  const job = submitBackgroundJob({ script: safe, cwd: directory, notify: true }, randomUUID()); finishBackgroundJob(job.id, 'completed', { exitCode: 0 });
+  const record = listRecords('outbox')[0]; assert.equal(currentBackgroundOutcome(record.event).notificationName, 'script');
+  putRecord('outbox', record.event.id, { ...record, event: { ...record.event, type: 'job.failed' } });
+  const sends = [], sender = worker(sends); try { await sender.tick(); } finally { sender.close(); }
+  assert.equal(sends.length, 0);
+});
 
 test('success and failure queue one scoped alert and use existing iOS terminal routing without host paths', async () => {
   const grant = phone(), ready = outcome(grant.sessionId), failed = outcome(grant.sessionId, debugExportFailure('SESSION_DEBUG_SPACE'));

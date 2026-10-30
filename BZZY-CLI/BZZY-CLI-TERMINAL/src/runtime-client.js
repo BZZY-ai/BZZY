@@ -150,7 +150,7 @@ export async function executeManaged(provider, session, options, ui, prompt, fla
   try {
     initializeLaunchYolo(ui, session.id, owner);
     const result = await api('POST', 'execute', { prompt, options, ...executionFlags }, options.requestId || randomUUID());
-    if (options.detach) { ui.event('info', { message: `Running independently.\nView: bzzy --view ${session.id}\nAttach: bzzy --attach ${session.id}` }); return 0; }
+    if (options.detach) { ui.event('info', { sessionId: session.id, executionId: result.executionId, state: 'queued', message: `Running independently.\nView: bzzy --view ${session.id}\nAttach: bzzy --attach ${session.id}` }); return 0; }
     return await watch(info, session.id, owner, ui, groupMode(session) && ui.interactive && !returnAfterExecution ? { activeControl: true, follow: true, allowControlOnInput: true } : { executionId: result.executionId, activeControl: true, allowControlOnInput: ui.interactive });
   } finally { await api('POST', 'release', {}).catch(() => {}); Object.assign(session, loadSession(session.id)); }
 }

@@ -49,6 +49,7 @@ import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
 import { workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { resolveInteractiveGoal } from './goal-controls.js';
 import { createDebugExportProgressReporter, debugExportContextNotice, debugExportSummary } from './debug-export-progress.js';
+import { backgroundCLI } from './background-command.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, openOrCreateChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
 
@@ -58,6 +59,9 @@ Usage:
   bzzy [options]                         Open the Codex-style terminal chat
   bzzy "initial context" --goal "task"  Send context first, then start a durable goal
   bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
+  bzzy --preprompt FILE --goal "task" --detach  Same saved instructions; Core keeps running
+  bzzy --background SCRIPT [--notif] -- ARG...  Submit a durable Core script job
+  bzzy background list|status ID|logs ID|cancel ID  Inspect saved script jobs
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
   bzzy skills sync                     Choose and import Codex skill folders
   bzzy skills aliases set NAME EMAILS Set this host's explicit signup alias list
@@ -137,6 +141,10 @@ Options:
   --import FILE.zip|CODE Restore a project ZIP or expiring Relay terminal copy into --cwd; never starts work
   --goal OBJECTIVE      Start a persistent goal; quoted positional text is sent first as context
   --context-file FILE   UTF-8 task instructions (up to 1 MiB), relative to --cwd; no initialization chat
+  --preprompt FILE      Alias for --context-file; full instructions saved before work
+  --background SCRIPT   Run a script through Core and immediately return its job ID
+  --timeout SECONDS     Script deadline (1–604800); omitted means no deadline
+  --notif               Opt in to iPhone completion/failure alerts for this script
   --token-budget N      Optional goal token budget
   --max-turns N         Optional goal turn limit; pauses rather than completes
   --runtime N           Total active runtime limit in seconds
@@ -236,7 +244,7 @@ API providers must support the Responses protocol in this version.
 export function parseArgs(argv) {
   const options = { cwd: process.cwd(), pet: true, yolo: false, json: false, captureNetwork: true };
   const args = [];
-  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile', '--workflow': 'workflow',
+  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile', '--preprompt': 'contextFile', '--background': 'backgroundScript', '--timeout': 'timeoutSeconds', '--workflow': 'workflow',
     '--token-budget': 'tokenBudget', '--max-turns': 'maxTurns', '--effort': 'effort',
     '--base-url': 'baseUrl', '--env-key': 'envKey', '--context-window': 'contextWindow',
     '--view': 'view', '--attach': 'attach', '--atach': 'attach', '--resume': 'resume', '--mode': 'mode', '--supervisor': 'supervisor', '--executor': 'executor',
@@ -245,7 +253,7 @@ export function parseArgs(argv) {
     '--concurrency': 'concurrency', '--request-id': 'requestId' };
   for (let i = 0; i < argv.length; i++) {
     const raw = argv[i];
-    if (raw === '--') { args.push(...argv.slice(i + 1)); break; }
+    if (raw === '--') { if (options.backgroundScript) options.scriptArgs = argv.slice(i + 1); else args.push(...argv.slice(i + 1)); break; }
     const equal = raw.indexOf('=');
     const flag = equal > 0 ? raw.slice(0, equal) : raw;
     if (args[0] === 'extensions' && flag === '--revision') {
@@ -267,7 +275,10 @@ export function parseArgs(argv) {
       const value = equal > 0 ? raw.slice(equal + 1) : argv[++i];
       if (!value || (equal < 0 && value.startsWith('--'))) throw new Error(`${flag} requires a value.`);
       if (flag === '--participant') (options.participants ||= []).push(value);
-      else options[values[flag]] = value;
+      else {
+        if (['--preprompt', '--context-file'].includes(flag) && options.contextFile !== undefined) throw new Error('Supply --preprompt or --context-file once.');
+        options[values[flag]] = value;
+      }
     } else if (['--codex', '--claude', '--deepseek'].includes(raw)) options.provider = raw.slice(2);
     else if (flag === '--parallel' || flag === '--paralel') {
       options.mode = 'parallel'; options.parallelSetup = true;
@@ -291,6 +302,7 @@ export function parseArgs(argv) {
     else if (raw === '--no-pet') options.pet = false;
     else if (raw === '--device') options.device = true;
     else if (raw === '--detach') options.detach = true;
+    else if (raw === '--notif') options.notify = true;
     else if (raw === '--full-debug-export') {
       if (args.length) throw new Error('Use bzzy --full-debug-export SESSION [FILE.zip] as its own command.');
       args.push('debug', 'full'); options.detach = true;
@@ -307,12 +319,16 @@ export function parseArgs(argv) {
     else if (raw.startsWith('-')) throw new Error(`Unknown option ${raw}. Run bzzy --help.`);
     else args.push(raw);
   }
-  for (const key of ['tokenBudget', 'maxTurns', 'contextWindow', 'runtimeSeconds', 'rounds', 'concurrency', 'maxRetries']) {
+  for (const key of ['tokenBudget', 'maxTurns', 'contextWindow', 'runtimeSeconds', 'rounds', 'concurrency', 'maxRetries', 'timeoutSeconds']) {
     if (options[key] != null) {
       if (!(key === 'maxRetries' ? /^(0|[1-9]\d*)$/ : /^[1-9]\d*$/).test(options[key]) || !Number.isSafeInteger(Number(options[key]))) throw new Error(`${key} must be ${key === 'maxRetries' ? 'a nonnegative' : 'a positive'} integer.`);
       options[key] = Number(options[key]);
     }
   }
+  if ((options.notify || options.timeoutSeconds) && !options.backgroundScript) throw new Error('--notif and --timeout require --background SCRIPT.');
+  if (options.timeoutSeconds > 604800) throw new Error('--timeout cannot exceed 604800 seconds.');
+  if (options.backgroundScript && (args.length || ['goal', 'contextFile', 'workflow', 'provider', 'model', 'effort', 'mode', 'view', 'attach', 'resume', 'contract', 'readOnly', 'yolo', 'alias', 'importFile'].some(key => options[key])))
+    throw new Error('--background is a script command. Place literal script arguments after -- and use AI options with a separate goal command.');
   if ([options.view, options.attach, options.resume].filter(Boolean).length > 1) throw new Error('Choose --view, --attach or --resume.');
   if (options.debugBounded && !(args[0] === 'full_debug_export' || args[0] === 'debug' && args[1] === 'full')) throw new Error('--bounded is only available for bzzy debug full or bzzy full_debug_export.');
   if (options.workflow !== undefined && (options.view || options.resume || args[0] === 'resume' || args[0] === 'goal' && args[1] === 'resume')) throw new Error('--workflow selects instructions for new goals. Use it with chat, --attach or a new goal; saved goal resumes keep their original workflow.');
@@ -593,6 +609,14 @@ export async function main(argv) {
   try { if (!fs.statSync(options.cwd).isDirectory()) throw new Error('not a directory'); }
   catch { throw new Error(`--cwd must name an existing directory: ${options.cwd}`); }
   options.cwd = fs.realpathSync(options.cwd);
+  if (options.backgroundScript || args[0] === 'background') {
+    try { return await backgroundCLI(options.backgroundScript ? args : args.slice(1), options); }
+    catch (error) {
+      if (!options.json) throw error;
+      const { diagnosticError } = await import('@bzzy/core/engine/diagnostic-error.js');
+      process.stderr.write(JSON.stringify({ error: diagnosticError(error), code: error.code || 'BACKGROUND_COMMAND_FAILED' }) + '\n'); return 1;
+    }
+  }
   if (!['debug', 'full_debug_export'].includes(args[0])) await retireTelegram();
   const launchCommand = args[0];
   const staticCommands = new Set(['integration', 'export', 'debug', 'full_debug_export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'cost', 'subagents', 'workflows', 'library', 'extensions']);
@@ -829,7 +853,10 @@ export async function main(argv) {
       const goal = Boolean(options.goal || command !== 'run' || ['parallel', 'besties', 'debate'].includes(options.mode));
       const created = createTaskSession(provider, options, prompt, { goal, initialContext, contextFileText });
       const session = created.session;
-      if (created.existingExecution) return await viewSession(session, options, ui);
+      if (created.existingExecution) {
+        if (options.detach) { ui.event('session', { sessionId: session.id, existing: true, message: `Session ${session.id} · existing execution retained` }); return 0; }
+        return await viewSession(session, options, ui);
+      }
       ui.event('session', { sessionId: session.id, message: `Session ${session.id}` });
       if (initialContext) {
         const contextOptions = { ...options, detach: false, ...(options.requestId ? { requestId: `${options.requestId}:context` } : {}) };

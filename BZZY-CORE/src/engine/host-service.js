@@ -313,6 +313,7 @@ async function lifecycleRuntime() {
       const info = current();
       if (info) return runtime.runtimeRequest(info, 'POST', '/v1/operator-stop', { shutdown: !managed });
       const result = await runtime.pauseRuntimeExecutions();
+      await (await import('./background-jobs.js')).stopBackgroundJobs();
       return { quiesced: true, ...result, runningAgentsContinue: false };
     },
     async shutdown() {

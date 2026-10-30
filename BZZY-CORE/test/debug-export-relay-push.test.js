@@ -11,8 +11,9 @@ import { putRecord, digest } from '../src/engine/database.js';
 import { sessionPermissions } from '../src/engine/session-access.js';
 import { finishDebugExportJob, debugExportJobKind } from '../src/engine/debug-export-jobs.js';
 import { debugExportFailure } from '../src/engine/debug-export-errors.js';
+import { submitBackgroundJob, finishBackgroundJob } from '../src/engine/background-jobs.js';
 
-test('real export outcome payloads cross authenticated Relay validation and reach the bound offline phone once', async t => {
+test('export and opt-in script outcomes cross authenticated Relay validation and reach the bound offline phone once', async t => {
   const previous = process.env.BZZY_HOME, directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'relay-export-push-')));
   process.env.BZZY_HOME = path.join(directory, 'private'); fs.mkdirSync(process.env.BZZY_HOME, { mode: 0o700 });
   t.after(() => { if (previous === undefined) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous; fs.rmSync(directory, { recursive: true, force: true }); });
@@ -34,13 +35,21 @@ test('real export outcome payloads cross authenticated Relay validation and reac
     const id = randomUUID(); putRecord(debugExportJobKind, id, { id, sessionId, state: 'running', createdAt: new Date().toISOString() });
     finishDebugExportJob(id, error ? { error } : { result: { outputPath: '/PRIVATE_EXPORT_PATH/result.zip', bytes: 123 } });
   }
+  const file = path.join(directory, 'check.py'); fs.writeFileSync(file, 'print("PRIVATE_SCRIPT_LOG")');
+  for (const state of ['completed', 'failed']) {
+    const job = submitBackgroundJob({ script: file, cwd: directory, notify: true }, randomUUID());
+    finishBackgroundJob(job.id, state, { exitCode: state === 'completed' ? 0 : 2 });
+  }
+  const silent = submitBackgroundJob({ script: file, cwd: directory }, randomUUID()); finishBackgroundJob(silent.id, 'completed', { exitCode: 0 });
   const sender = new CorePushWorker({ configurationLoader: () => null, hostID: () => grant.hostId,
     relaySend: (_binding, request) => host.request('push.enqueue', { grantId: grant.id, notificationId: request.id, occurredAt: request.occurredAt,
       environment: 'sandbox', payload: request.payload }) });
   t.after(() => sender.close());
   await sender.tick();
-  for (let index = 0; index < 100 && sends.length < 2; index++) await new Promise(resolve => setTimeout(resolve, 40));
-  assert.equal(sends.length, 2); assert.ok(sends.every(value => value.token === token && value.payload.bzzy.sessionId === sessionId));
-  assert.deepEqual(sends.map(value => value.payload.aps.alert.title).sort(), ['Full debug export failed - export-fixture', 'Full debug export ready - export-fixture']);
-  assert.doesNotMatch(JSON.stringify(sends), /PRIVATE_EXPORT_PATH/); assert.equal(JSON.stringify(f.audit).includes(token), false);
+  for (let index = 0; index < 100 && sends.length < 4; index++) await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(sends.length, 4); assert.ok(sends.every(value => value.token === token));
+  assert.ok(sends.filter(value => value.payload.aps.alert.title.startsWith('Full debug')).every(value => value.payload.bzzy.sessionId === sessionId));
+  assert.ok(sends.filter(value => !value.payload.aps.alert.title.startsWith('Full debug')).every(value => value.payload.bzzy.destination === 'terminal' && !value.payload.bzzy.sessionId));
+  assert.deepEqual(sends.map(value => value.payload.aps.alert.title).sort(), ['Completed check.py', 'Failed check.py', 'Full debug export failed - export-fixture', 'Full debug export ready - export-fixture']);
+  assert.doesNotMatch(JSON.stringify(sends), /PRIVATE_EXPORT_PATH|PRIVATE_SCRIPT_LOG/); assert.equal(JSON.stringify(f.audit).includes(token), false);
 });

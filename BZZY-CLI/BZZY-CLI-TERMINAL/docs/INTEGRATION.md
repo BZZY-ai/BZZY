@@ -1,5 +1,11 @@
 # Integrating bzzy
 
+Core owns the shared engine and authenticated host API. For durable script jobs,
+opt-in script alerts, `--preprompt`, machine-readable events and the current
+existing-session API, use [External execution API](../../../BZZY-CORE/docs/EXECUTION-API.md).
+Historical extraction/proposal notes in this document do not override that
+implemented contract, current pairing permissions or Core ownership.
+
 bzzy runs a local service and durable execution runners. Terminal clients,
 the bundled web view, and your application observe the same sessions. Closing
 a terminal or losing a stream does not stop the agent.

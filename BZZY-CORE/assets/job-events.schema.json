@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bzzy:job-events:v1",
+  "title": "BZZY background job event v1",
+  "type": "object",
+  "required": ["version", "id", "seq", "jobId", "type", "data", "createdAt"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "jobId": { "type": "string", "format": "uuid" },
+    "type": { "type": "string", "description": "job.queued, job.running, job.log, job.cancelling, job.completed, job.failed, job.cancelled, job.timed_out, job.interrupted. Ignore future unknown types." },
+    "data": { "type": "object", "description": "Lifecycle: state and optional outcome. Log: stream (stdout/stderr/system) and redacted text." },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

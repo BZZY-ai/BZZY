@@ -123,7 +123,7 @@ test('invalid context and ambiguous positional initialization fail before backen
 
 for (const provider of ['codex', 'deepseek', 'claude']) {
   test(`${provider}: persists the goal before execution and sends the full long context in the first native instructions`, { timeout: 30000 }, async () => {
-    const result = await run(['--context-file', 'bzzy_init.txt', '--goal', objective, '--provider', provider, '--yolo', '--json']);
+    const result = await run([provider === 'codex' ? '--preprompt' : '--context-file', 'bzzy_init.txt', '--goal', objective, '--provider', provider, '--yolo', '--json']);
     assert.equal(result.code, 0, result.stderr + result.stdout.slice(-2000));
     const [session] = sessions();
     assert.equal(session.contract.objective, objective); assert.equal(session.goal.objective, objective);
@@ -159,10 +159,24 @@ test('request IDs reject changed context and reuse identical contents without la
   assert.equal(sessions()[0].contract.context, briefing);
 });
 
+test('--preprompt --detach saves full instructions before work and repeated submission returns without attaching', async () => {
+  const args = ['--preprompt', 'bzzy_init.txt', '--goal', objective, '--codex', '--yolo', '--detach', '--json', '--request-id', 'preprompt-detached'];
+  const first = await run(args); assert.equal(first.code, 0, first.stderr);
+  const output = first.stdout.trim().split('\n').map(JSON.parse), receipt = output.find(event => event.executionId);
+  assert.ok(receipt?.sessionId); assert.equal(sessions()[0].contract.context, briefing);
+  const repeat = await run(args); assert.equal(repeat.code, 0, repeat.stderr);
+  assert.equal(repeat.stdout.trim().split('\n').map(JSON.parse).find(event => event.existing).sessionId, receipt.sessionId);
+  fs.unlinkSync(path.join(directory, 'bzzy_init.txt'));
+  await until(() => sessions()[0]?.goal?.status === 'complete', 'detached goal completion');
+  assert.equal(sessions().length, 1); assert.equal(sessions()[0].contract.context, briefing);
+  assert.equal(records().filter(record => record.method === 'thread/goal/set' && record.params.status === 'active').length, 1);
+  assert.ok(nativeInstructions('codex').every(instructions => taskContext(instructions) === briefing));
+});
+
 for (const provider of ['codex', 'claude']) {
   test(`${provider}: pause during backend preparation retains a real goal and resume uses its saved instructions`, { timeout: 30000 }, async () => {
     const gate = path.join(directory, 'preparation-gate'); fs.writeFileSync(gate, 'wait');
-    const active = launch(['--context-file', 'bzzy_init.txt', '--goal', objective, '--provider', provider, '--yolo', '--json'], {
+    const active = launch([provider === 'codex' ? '--preprompt' : '--context-file', 'bzzy_init.txt', '--goal', objective, '--provider', provider, '--yolo', '--json'], {
       extraEnv: { BZZY_DIRECT: '1', BZZY_TEST_PREPARATION_GATE: gate },
     });
     try {

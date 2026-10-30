@@ -1,5 +1,16 @@
 # bzzy 🐝
 
+Run a script independently of the terminal with
+`bzzy --background /path/task.py --cwd /path/project --timeout 300 --json -- ARG...`.
+Core returns a durable job ID immediately; inspect it with
+`bzzy background list|status JOB_ID|logs JOB_ID|cancel JOB_ID`.
+Add `--notif` for `Completed task.py` / `Failed task.py` iPhone alerts; scripts
+without that flag do not queue pushes. Existing debug export alerts are unchanged.
+`bzzy --preprompt instructions.txt --goal "Complete the assigned task" --detach`
+uses the existing full saved task context. See the
+[execution/API contract](../../BZZY-CORE/docs/EXECUTION-API.md) for literal args,
+timeouts, Core lifecycle, logs, idempotency and external session integration.
+
 The terminal now uses a black neon workspace with clickable navigation and model
 controls, a dominant chat, and independently scrolling **AGENTS**, **HTTP PROBE**
 and **CODE** command lists. Click a request or command to inspect it in the center;

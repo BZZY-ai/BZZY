@@ -19,6 +19,13 @@ starts no service, model or network request.
 
 Implemented:
 
+- [External execution API](docs/EXECUTION-API.md): durable owner-only script jobs,
+  literal argv, deadlines, cancellation, bounded redacted logs, request-ID
+  deduplication and replayable events. `bzzy --background SCRIPT` returns a job ID;
+  `--notif` opts into named completion/failure alerts through the existing phone
+  outbox. Existing AI goals accept `--preprompt` as `--context-file` and retain the
+  full instructions before work and across resume. External apps own workflows.
+
 - [Permanent program sessions](docs/PERMANENT-SESSIONS.md): durable investigation
   branches and dependency blockers, revisioned checkpoint edits, session-first
   indexed archive retrieval, host summary fallback, readable MEMORY.md views,

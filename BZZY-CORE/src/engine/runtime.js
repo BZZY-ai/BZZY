@@ -38,6 +38,7 @@ import { sessionInvocations } from './invocation-state.js';
 import { createExecutionObserver } from './execution-observation.js';
 import { sessionMetricsFamily } from './session-metrics.js';
 import { deepseekSpendingVisible, sessionSpending } from './session-cost.js';
+import { submitBackgroundJob, backgroundJob, listBackgroundJobs, backgroundJobEvents, cancelBackgroundJob, pumpBackgroundJobs, stopBackgroundJobs } from './background-jobs.js';
 
 const observeExecution = createExecutionObserver();
 
@@ -154,6 +155,7 @@ export async function serveRuntime() {
   superviseExecutions();
   recoverLearningJobs();
   recoverSessionCompactions();
+  pumpBackgroundJobs({ launch: false });
   const send = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(JSON.stringify(value)); };
   let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise, learningPump, memoryPump; const streams = new Set();
   const metrics = new HostMetricsSampler(), knowledge = new CoreKnowledge();
@@ -184,7 +186,8 @@ export async function serveRuntime() {
         const input = await readBody(request);
         if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'shutdown') || input.shutdown !== undefined && typeof input.shutdown !== 'boolean') throw new Error('Choose only the operator shutdown mode.');
         persistOperatorStopIntent(); quiescing = true; pauseAllLearning('host_operator_stop'); pauseAllSessionCompactions('host_operator_stop');
-        if (!operatorStopPromise) operatorStopPromise = pauseRuntimeExecutions().catch(error => { operatorStopPromise = undefined; throw error; });
+        if (!operatorStopPromise) operatorStopPromise = Promise.all([pauseRuntimeExecutions(), stopBackgroundJobs()])
+          .then(([result]) => result).catch(error => { operatorStopPromise = undefined; throw error; });
         const result = await operatorStopPromise;
         // Queue the durable pause outcome before stopping connectivity. A slow
         // or offline Relay cannot indefinitely hold up an explicit Core stop.
@@ -193,8 +196,58 @@ export async function serveRuntime() {
         if (input.shutdown !== false) setImmediate(() => shutdown());
         return;
       }
-      if (quiescing && !['/health', '/shutdown'].includes(pathname)) {
+      if (quiescing && !['/health', '/shutdown'].includes(pathname) && !(request.method === 'GET' && /^\/jobs(?:\/|$)/.test(pathname))) {
         throw Object.assign(new Error('Core was stopped by the local operator. Start Core explicitly before submitting new work.'), { code: 'CORE_STOPPED', status: 409 });
+      }
+      if (/^\/jobs(?:\/|$)/.test(pathname)) {
+        // Host jobs are not session capabilities. A scoped observer, friend or
+        // phone session token must never become arbitrary local script access.
+        if (!rootToken) { send(response, 403, { error: 'Background jobs require local owner authentication.', code: 'FORBIDDEN' }); return; }
+        if (request.method === 'GET' && pathname === '/jobs/schema') { send(response, 200, readJson(path.join(root, 'assets', 'job-events.schema.json'))); return; }
+        if (pathname === '/jobs') {
+          if (request.method === 'POST') {
+            const body = await readBody(request);
+            const { requestId, ...input } = body;
+            send(response, 202, submitBackgroundJob(input, request.headers['idempotency-key'] || requestId)); return;
+          }
+          if (request.method === 'GET') {
+            send(response, 200, listBackgroundJobs({ before: Number(url.searchParams.get('before') || Number.MAX_SAFE_INTEGER),
+              limit: Number(url.searchParams.get('limit') || 100), state: url.searchParams.get('state') || undefined })); return;
+          }
+        }
+        const match = pathname.match(/^\/jobs\/([a-f0-9-]{36})(?:\/(logs|events|cancel))?$/i);
+        if (!match) { send(response, 404, { error: 'Unknown job endpoint.' }); return; }
+        const [, id, action] = match;
+        const job = backgroundJob(id);
+        if (request.method === 'POST' && action === 'cancel') {
+          const body = await readBody(request);
+          if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'requestId')) throw new Error('Job cancellation accepts only a requestId.');
+          send(response, 202, cancelBackgroundJob(id, request.headers['idempotency-key'] || body.requestId)); return;
+        }
+        if (request.method !== 'GET') { send(response, 405, { error: 'Method not allowed.' }); return; }
+        if (!action) { send(response, 200, job); return; }
+        if (!['events', 'logs'].includes(action)) { send(response, 404, { error: 'Unknown job endpoint.' }); return; }
+        let cursor = Number(url.searchParams.get('after') || request.headers['last-event-id'] || 0);
+        const logs = action === 'logs', limit = Number(url.searchParams.get('limit') || 200);
+        const read = count => backgroundJobEvents(id, cursor, count, { logs });
+        read(limit);
+        if (url.searchParams.get('stream') === '1' || request.headers.accept === 'text/event-stream') {
+          response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+          response.flushHeaders(); streams.add(response); let blocked = false;
+          const pump = () => {
+            if (response.destroyed || blocked) return;
+            for (const event of read(100)) {
+              cursor = event.seq;
+              if (!response.write(`id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)) { blocked = true; break; }
+            }
+          };
+          response.on('drain', () => { blocked = false; pump(); });
+          const timer = guardedInterval(pump, 150, { label: 'Job events', onError: () => response.destroy() });
+          const heartbeat = guardedInterval(() => { if (!blocked) response.write(': heartbeat\n\n'); }, 10000, { label: 'Job heartbeat', onError: () => response.destroy() });
+          response.on('close', () => { clearInterval(timer); clearInterval(heartbeat); streams.delete(response); }); pump(); return;
+        }
+        const items = read(limit);
+        send(response, 200, { events: items, nextCursor: items.at(-1)?.seq || cursor, hasMore: items.length === limit, state: job.state, logsTruncated: job.logsTruncated }); return;
       }
       if (pathname.startsWith('/knowledge/')) {
         if (!rootToken) { send(response, 403, { error: 'Only the local owner can administer knowledge and learning.' }); return; }
@@ -217,7 +270,7 @@ export async function serveRuntime() {
       if (request.method === 'GET' && pathname === '/metrics') { send(response, 200, metrics.read()); return; }
       if (request.method === 'GET' && pathname === '/schema') { send(response, 200, readJson(path.join(root, 'assets', 'events.schema.json'))); return; }
       if (request.method === 'GET' && pathname === '/capabilities') { send(response, 200, { apiVersion: 1, managedExecutions: true, durableEvents: true, idempotentCommands: true, inputSubmission: true,
-        scopedSessionAccess: true, revocableAccess: true, permissions: access?.permissions || sessionPermissions,
+        backgroundJobs: rootToken, jobEvents: rootToken, scopedSessionAccess: true, revocableAccess: true, permissions: access?.permissions || sessionPermissions,
         isolation: { platform: process.platform, enforcedPolicies: sandboxSupport(), backendReadConfidentiality: false }, relay: false, portableSharing: false }); return; }
       if (request.method === 'GET' && pathname === '/sessions') { send(response, 200, listRecords('session').filter(s => !sessionDeleted(s.id) && (access ? s.id === access.sessionId : !s.parentSessionId))); return; }
       if (request.method === 'GET' && pathname === '/tokens') {
@@ -441,9 +494,10 @@ export async function serveRuntime() {
       });
     }
   }, 100, { label: 'Runtime scheduler' });
+  const backgroundScheduler = guardedInterval(() => pumpBackgroundJobs({ launch: !stopping && !quiescing && !operatorStopRequested() }), 1000, { label: 'Background jobs' });
   const shutdown = () => {
     if (stopping) return; stopping = true; clearInterval(scheduler); pauseAllLearning('host_shutdown'); pauseAllSessionCompactions('host_shutdown');
-    pushWorker.close(); updateWatcher.close();
+    clearInterval(backgroundScheduler); pushWorker.close(); updateWatcher.close();
     metrics.close();
     if (runtimeInfo()?.token === token) fs.rmSync(runtimeFile(), { force: true });
     for (const response of streams) response.end();

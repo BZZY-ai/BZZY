@@ -10,6 +10,21 @@ export class BzzyClient {
   schema() { return this.request('GET', '/v1/schema'); }
   metrics() { return this.request('GET', '/v1/metrics'); }
   sessions() { return this.request('GET', '/sessions'); }
+  submitJob({ requestId, ...input }) {
+    if (!requestId) throw new Error('Job submission requires a stable requestId.');
+    return this.request('POST', '/v1/jobs', input, requestId);
+  }
+  jobs({ before = Number.MAX_SAFE_INTEGER, limit = 100, state } = {}) {
+    return this.request('GET', `/v1/jobs?before=${before}&limit=${limit}${state ? `&state=${encodeURIComponent(state)}` : ''}`);
+  }
+  job(id) { return this.request('GET', `/v1/jobs/${id}`); }
+  jobLogs(id, { after = 0, limit = 200 } = {}) { return this.request('GET', `/v1/jobs/${id}/logs?after=${after}&limit=${limit}`); }
+  jobEvents(id, { after = 0, limit = 200 } = {}) { return this.request('GET', `/v1/jobs/${id}/events?after=${after}&limit=${limit}`); }
+  cancelJob(id, { requestId } = {}) {
+    if (!requestId) throw new Error('Job cancellation requires a stable requestId.');
+    return this.request('POST', `/v1/jobs/${id}/cancel`, {}, requestId);
+  }
+  streamJob(id, options = {}) { return this.stream(id, { ...options, resource: 'jobs' }); }
   session(id) { return this.request('GET', `/sessions/${id}`); }
   deleteConversation(id, { requestId } = {}) {
     if (!requestId) throw new Error('Deleting a chat requires a stable requestId.');
@@ -41,14 +56,15 @@ export class BzzyClient {
   }
   grants() { return this.request('GET', '/v1/tokens'); }
   revokeToken(grantId) { return this.request('DELETE', `/v1/tokens/${grantId}`); }
-  async *stream(id, { after = 0, signal, types, reconnectDelayMs = 1000 } = {}) {
+  async *stream(id, { after = 0, signal, types, reconnectDelayMs = 1000, resource = 'sessions' } = {}) {
+    if (!['sessions', 'jobs'].includes(resource)) throw new Error('Invalid event resource.');
     if (!Number.isSafeInteger(after) || after < 0) throw new Error('Event cursor must be a nonnegative integer.');
     if (!Number.isSafeInteger(reconnectDelayMs) || reconnectDelayMs < 0 || reconnectDelayMs > 30000) throw new Error('Reconnect delay must be 0–30000 ms.');
     if (types && (!Array.isArray(types) || types.some(type => typeof type !== 'string'))) throw new Error('Event types must be an array of strings.');
     let cursor = after;
     while (!signal?.aborted) {
       try {
-        const response = await this.fetch(`${this.url}/sessions/${id}/events?stream=1&after=${cursor}`, { headers: { authorization: `Bearer ${this.token}`, accept: 'text/event-stream' }, signal });
+        const response = await this.fetch(`${this.url}/v1/${resource}/${id}/events?stream=1&after=${cursor}`, { headers: { authorization: `Bearer ${this.token}`, accept: 'text/event-stream' }, signal });
         if (!response.ok) throw Object.assign(new Error(`Event stream HTTP ${response.status}`), { status: response.status });
         const reader = response.body.getReader(), decoder = new TextDecoder(); let buffer = '';
         try {
@@ -63,7 +79,7 @@ export class BzzyClient {
               if (!lines.length) continue;
               let event;
               try { event = JSON.parse(lines.join('\n')); } catch { throw Object.assign(new Error('Invalid event JSON.'), { code: 'INVALID_EVENT' }); }
-              if (event.sessionId !== id || !Number.isSafeInteger(event.seq) || event.seq < 1 || typeof event.type !== 'string') throw Object.assign(new Error('Invalid session event envelope.'), { code: 'INVALID_EVENT' });
+              if (event[resource === 'jobs' ? 'jobId' : 'sessionId'] !== id || !Number.isSafeInteger(event.seq) || event.seq < 1 || typeof event.type !== 'string') throw Object.assign(new Error('Invalid event envelope.'), { code: 'INVALID_EVENT' });
               if (event.seq <= cursor) continue;
               cursor = event.seq;
               if (!types || types.some(t => event.type === t || t.endsWith('*') && event.type.startsWith(t.slice(0, -1)))) yield event;
