@@ -1,3 +1,4 @@
+import { assignmentHandoff } from './assignment-handoff.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -540,7 +541,8 @@ export async function runAssignment(id, number) {
     if (!childSession.usage) childSession.usage = { tokens: 0, available: true, accountingComplete: true, source: 'host-before-model-request' };
     saveSession(childSession); job = { ...getRecord('assignment', id), workerSessionId: childSession.id }; putRecord('assignment', id, job);
     if (parentStopped(loadSession(parent.id), job) || getRecord('assignment-control', id)?.action === 'cancel') {
-      putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), state: 'paused', stopReason: 'parent_stopped', finishedAt: now() });
+      putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), state: 'paused', stopReason: 'parent_stopped',
+        missingReport: true, hostHandoff: assignmentHandoff(job, childSession, number, { stopReason: 'parent_stopped' }), finishedAt: now() });
       appendEvent(parent.id, 'assignment.paused', { id, round: number, reason: 'Parent stopped before the model request; workspace preparation was retained.' }); return 0;
     }
     removeRecord('worker-report', childSession.id);
@@ -567,6 +569,7 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
       report: report || null, contextRequest: request, artifacts: [...outputs, patch].map(a => ({ id: a.id, label: a.label, size: a.size, sha256: a.sha256 })),
       missingReport: !report, changes, workspaceOmissions: changes.omissions, uninspectedPaths: changes.uninspected,
       usage: childSession.usage ? { ...childSession.usage, elapsedSeconds: childSession.elapsedSeconds } : null, exitCode: code, finishedAt: now() };
+    if (!report || report.status === 'partial') result.hostHandoff = assignmentHandoff(job, childSession, number, result);
     const fullReport = artifact(childSession, JSON.stringify(result, null, 2), 'assignment-report', 'application/json');
     result.reportArtifactId = fullReport.id;
     result.artifacts.push({ id: fullReport.id, label: fullReport.label, size: fullReport.size, sha256: fullReport.sha256 });
@@ -576,9 +579,39 @@ CONTRACT:\n${JSON.stringify(job.contract)}\nFOLLOW-UP:\n${JSON.stringify({ objec
       appendEvent(parent.id, 'assignment.finished', { id, round: number, state: result.state, report: { ...result, changes: undefined, report: undefined } }, db);
     });
   } catch (error) {
-    putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), state: error.code === 'WORKER_PREPARATION_LIMIT' ? 'timed_out' : 'failed',
-      ...(error.code === 'WORKER_PREPARATION_LIMIT' ? { stopReason: 'runtime_limit' } : {}), error: error.message, finishedAt: now() });
-    if (job) appendEvent(job.parentSessionId, 'assignment.failed', { id, round: number, error: error.message });
+    // Reporting/workspace inspection can fail after useful work was saved. Keep
+    // those references and the current round's claim, never a prior round's
+    // report or an invented completion. Persistence failure itself cannot be
+    // repaired by dispatching the worker again.
+    const savedReport = childSession && getRecord('worker-report', childSession.id);
+    const report = savedReport?.round === number ? savedReport : null;
+    const result = { assignmentId: id, round: number, state: error.code === 'WORKER_PREPARATION_LIMIT' ? 'timed_out' : 'failed',
+      stopReason: error.code === 'WORKER_PREPARATION_LIMIT' ? 'runtime_limit' : error.code || childSession?.stopReason || 'worker-failed',
+      missingReport: !report, workerClaim: report?.status || 'unknown', report,
+      artifacts: childSession ? artifactsFor(childSession.id).map(({ id, label, size, sha256 }) => ({ id, label, size, sha256 })) : [],
+      workspaceInspection: 'unavailable', usage: childSession?.usage ? { ...childSession.usage, elapsedSeconds: childSession.elapsedSeconds } : null,
+      summary: 'Worker stopped; inspect the retained partial handoff and evidence before considering a continuation.', error: error.message, finishedAt: now() };
+    if (childSession) {
+      try {
+        const snapshot = job.snapshotId && getRecord('snapshot', job.snapshotId);
+        if (snapshot && job.workspace) {
+          result.changes = inspectWorkspace(snapshot, job.workspace);
+          result.workspaceInspection = 'recorded'; result.workspaceOmissions = result.changes.omissions; result.uninspectedPaths = result.changes.uninspected;
+        }
+      } catch { /* Failed inspection leaves its status explicit; saved evidence still survives. */ }
+      result.hostHandoff = assignmentHandoff(job, childSession, number, result);
+      try {
+        const fullReport = artifact(childSession, JSON.stringify(result, null, 2), 'assignment-report', 'application/json');
+        result.reportArtifactId = fullReport.id;
+        result.artifacts.push({ id: fullReport.id, label: fullReport.label, size: fullReport.size, sha256: fullReport.sha256 });
+      } catch { /* The round record still preserves the receipt if artifact storage is unavailable. */ }
+    }
+    transaction(db => {
+      putRecord('round', `${id}:${number}`, { ...getRecord('round', `${id}:${number}`), ...result }, db);
+      putRecord('assignment', id, { ...getRecord('assignment', id), latestReport: result }, db);
+      appendEvent(job.parentSessionId, 'assignment.failed', { id, round: number, error: error.message,
+        report: compactAssignmentRound(result) }, db);
+    });
   }
   return 0;
 }

@@ -431,6 +431,11 @@ export class CodexEngine {
     this.inputSource = goal ? this.session.goal.objective : prompt;
     this.progress.setPrompt(goal ? this.session.goal.objective : prompt);
     try {
+      // The adapter controls this initial dispatch, but cannot gate requests
+      // inside a native turn. Never dispatch a known exhausted worker allowance.
+      if (!goal && this.options.tokenBudget != null && this.session.usage?.tokens >= this.options.tokenBudget) {
+        await this.interrupt('token_limit'); return;
+      }
       await this.open();
       if (this.interrupted) return;
       beginSessionCost(this.session, { threadId: this.threadId, resumed: this.resumedThread });
@@ -568,7 +573,15 @@ export class CodexEngine {
     if (['item/started', 'item/completed', 'item/commandExecution/outputDelta', 'turn/started', 'turn/completed', 'thread/compacted'].includes(method) && params.item?.type !== 'reasoning') this.ui.event('backend', { method, params });
     if (method === 'thread/tokenUsage/updated') {
       const spending = this.spendingArmed ? observeSessionCost(this.session, { threadId: this.threadId || params.threadId, tokenUsage: params.tokenUsage }) : null;
-      this.session.usage = { ...(this.session.usage || {}), tokens: (this.session.engineTokenOffset || 0) + (params.tokenUsage?.total?.totalTokens || 0), available: true, source: 'backend-reported' };
+      const detail = params.tokenUsage?.total, last = params.tokenUsage?.last;
+      const usageThreadRef = digest(params.threadId || this.threadId || '');
+      const input = Number.isSafeInteger(detail?.inputTokens) && detail.inputTokens >= 0 ? detail.inputTokens : null;
+      const previousInput = this.session.usage?.inputThreadRef === usageThreadRef ? this.session.usage?.inputTokens : null;
+      const lastInput = Number.isSafeInteger(last?.inputTokens) && last.inputTokens >= 0 ? last.inputTokens
+        : input != null ? Math.max(0, input - (Number.isSafeInteger(previousInput) && previousInput <= input ? previousInput : 0)) : null;
+      this.session.usage = { ...(this.session.usage || {}), ...(input != null ? { inputTokens: input, inputThreadRef: usageThreadRef } : {}),
+        ...(lastInput > 0 ? { lastRequestInputTokens: lastInput } : {}),
+        ...(Number.isSafeInteger(detail?.outputTokens) && detail.outputTokens >= 0 ? { outputTokens: detail.outputTokens } : {}), tokens: (this.session.engineTokenOffset || 0) + (params.tokenUsage?.total?.totalTokens || 0), available: true, source: 'backend-reported' };
       observeRunUsage(this.session, this.options.toolHost?.context?.runId);
       this.ui.event('usage.updated', { provider: this.session.provider, model: this.session.model, ...this.session.usage, detail: params.tokenUsage?.total || null,
         ...(this.session.provider === 'deepseek' ? this.spendingArmed ? { spendingTracked: true, spendingReceiptId: spending?.id || null } : { spendingBaseline: true } : {}) });

@@ -167,6 +167,12 @@ completeness. A near-limit warning asks the worker to save evidence and return a
 partial handoff before the hard allocation ends. An adaptive partial handoff
 stops that round for supervisor review. Warning delivery and timely reports
 depend on backend support and available usage signals; the hard stop remains.
+The warning reserves the latest observed request input plus report headroom,
+when that telemetry is available, instead of assuming only a small output
+reserve. This is an estimate: Core can reject an already exhausted allowance
+before an exposed dispatch, but cannot gate each backend-internal request.
+One native request can overshoot the ceiling before usage is reported. That
+consumption remains charged; neither a handoff nor a follow-up resets it.
 The parent alone can call `extend_assignment_budget`, using an idempotent
 request, the current allocation revision, bounded token/time increments and
 intact progress evidence it actually inspected. Extensions recheck the live
@@ -180,6 +186,13 @@ its runtime ended. Saved partial text, artifacts and workspace changes remain
 available, but a structured worker report may be missing. Neither status proves
 the task succeeded or the tested behavior is safe. The parent reviews and
 replans; it does not reset spent usage or blindly retry an exhausted worker.
+If a report is missing or partial, Core also saves a host receipt bounded to
+8 KiB with assignment/round IDs, observed completed tool calls, checkpoint
+progress, evidence references and remaining checks. Exception paths retain the
+receipt and any saved evidence too, even if workspace inspection failed. The
+receipt is explicitly incomplete: it is neither a worker-authored report nor
+verification, and missing checks remain unknown. Worker-session artifacts may
+come from earlier rounds; the supervisor inspects their original provenance.
 
 Existing assignment operations provide status, bounded waits, cancellation,
 missing-context questions, explicit follow-ups, evidence inspection and review.

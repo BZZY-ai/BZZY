@@ -103,10 +103,14 @@ export function assignmentBudgetView(job) {
   const elapsedSeconds = (count(usage.elapsedSeconds) || 0) + liveSeconds;
   const tokenLimit = count(job.contract?.limits?.tokenBudget), runtimeLimitSeconds = count(job.contract?.limits?.runtimeSeconds);
   const mode = job.workerBudget?.mode === 'adaptive' ? 'adaptive' : 'fixed', reserve = count(job.workerBudget?.reportReserveTokens) ?? Math.min(2000, Math.floor((tokenLimit || 20000) / 5));
-  const softReached = tokenLimit != null && (count(usage.tokens) || 0) >= Math.max(0, tokenLimit - reserve)
+  const nextInput = count(worker?.usage?.lastRequestInputTokens);
+  const handoffReserve = Math.min(Number.MAX_SAFE_INTEGER, Math.max(reserve, nextInput == null ? reserve : Math.ceil(nextInput * 1.1) + reserve));
+  const softReached = tokenLimit != null && (count(usage.tokens) || 0) >= Math.max(0, tokenLimit - handoffReserve)
     || runtimeLimitSeconds != null && elapsedSeconds >= Math.max(0, runtimeLimitSeconds - Math.min(30, runtimeLimitSeconds / 5));
   return { revision: count(job.workerBudget?.revision) || 0, mode, tokensUsed: count(usage.tokens), tokensCharged: count(usage.chargedTokens ?? usage.tokens),
-    tokenLimit, initialTokenBudget: count(job.workerBudget?.initialTokenBudget) ?? tokenLimit, elapsedSeconds, runtimeLimitSeconds,
+    tokenLimit, nextRequestInputEstimate: nextInput, reportReserveTokens: reserve, handoffReserveTokens: handoffReserve,
+    requestAdmission: 'Backend-internal requests cannot be gated; input-based headroom is an estimate and warnings may arrive after dispatch.',
+    initialTokenBudget: count(job.workerBudget?.initialTokenBudget) ?? tokenLimit, elapsedSeconds, runtimeLimitSeconds,
     hardTokenLimit: job.workerBudget ? count(job.workerBudget.hardTokenLimit) : tokenLimit, hardRuntimeLimitSeconds: job.workerBudget ? count(job.workerBudget.hardRuntimeLimitSeconds) : runtimeLimitSeconds,
     complete: Boolean(usage.available) && usage.accountingComplete !== false && count(usage.tokens) !== null, softReached,
     canRequestExtension: mode === 'adaptive' && job.closure === 'open' && !job.importProvenance
