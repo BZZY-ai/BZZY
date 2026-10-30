@@ -16,12 +16,14 @@ successfully through Xcode Organizer using **App Store Connect** distribution.
 The archive and exported IPA passed production APNs, permission-description,
 privacy-manifest and signature checks; the IPA also has an App Store provisioning
 profile with debugger access disabled. The Release UI test confirms that preview
-arguments cannot bypass approved Core pairing. Upload acceptance is separate from
-Apple processing, export compliance, Beta App Review and availability to friends;
-external testing has not yet been enabled. The beta description is saved in App
-Store Connect, and an empty **BZZY Internal** group is prepared without automatic
-distribution. Feedback/review contacts and the remaining external-review setup
-still need completion.
+arguments cannot bypass approved Core pairing. Apple processing has completed;
+build 26 currently reports **Missing Export Compliance**, and external testing
+has not yet been enabled. The encryption declaration is awaiting the owner's
+France-availability decision before submission. Empty **BZZY Friends** external
+and **BZZY Internal** groups are prepared; the internal group has no automatic
+distribution. The beta description, feedback/review contacts and companion setup
+instructions are saved privately in App Store Connect. Beta App Review and
+availability to friends remain pending.
 
 For friends, distribute through an **external TestFlight group** after Apple's
 required review; **TestFlight Internal Only** does not support that audience.
