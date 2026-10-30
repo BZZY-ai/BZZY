@@ -33,4 +33,3 @@ export function assertKnowledgeText(value, maximum = 12000) {
     || /<(?:think|analysis|reasoning)\b/i.test(value)) throw new Error('Knowledge cannot contain authentication bindings or private reasoning.');
   return value.trim();
 }
-
