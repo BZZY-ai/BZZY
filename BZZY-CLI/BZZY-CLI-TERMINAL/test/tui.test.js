@@ -96,7 +96,7 @@ test('minimal chat uses the full terminal and retains conversation, input, mouse
       Object.assign(output, { columns, rows }); ui.tui.value = 'Unsent draft'; ui.tui.cursor = 12; ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /A minimal question/); assert.match(frame, /A visible answer/); assert.match(frame, /Unsent draft/);
-      assert.match(frame, /BZZY/); assert.match(frame, /CPU/); assert.equal(ui.tui.workspace.left, 0); assert.equal(ui.tui.workspace.right, 0);
+      assert.match(frame, /BZZY/); assert.doesNotMatch(frame, /CPU|RAM/); assert.equal(ui.tui.workspace.left, 0); assert.equal(ui.tui.workspace.right, 0);
       assert.ok(ui.tui.textRegion.top >= 5);
       assert.match(frame, /Session \.bzzy/);
       assert.match(frame, /● (?:BZZY )?Core.*● Relay/);
@@ -343,8 +343,8 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       assert.match(chat[0], /BZZY/);
       assert.match(chat[0], /Nav ▾.*Sessions ▾/);
       assert.doesNotMatch(chat[0], /\+ New/);
-      assert.match(chat.slice(0, ui.tui.sceneHeaderLength).join(' '), /CPU\s*12%.*4\.0\/16(?: GB|G)/);
-      assert.match(chat.join('\n'), /chosen-model.*effort high/);
+      assert.doesNotMatch(chat[0], /CPU|RAM|chosen-model|tokens/); assert.match(chat.join('\n'), /CPU.*12%[\s\S]*RAM.*4\.0\/16G/);
+      assert.match(chat.join('\n'), /chosen-model/); assert.match(chat.join('\n'), /Effort\s+high/);
       assert.match(chat.join('\n'), /1,234 tokens/); assert.match(chat.join('\n'), /\d{2}:\d{2}:\d{2}/);
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-sessions'));
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'session-new'), Boolean(ui.tui.workspace.left));
@@ -358,7 +358,7 @@ test('the chat keeps top actions and runtime context while Settings replaces the
       const settings = ui.tui.lastFrame.map(clean);
       assert.match(settings[0], /BZZY/);
       assert.match(settings.join('\n'), /Chat[\s\S]*Skills[\s\S]*Settings/);
-      assert.match(settings.join(' '), /CPU.*12.*4\.0\/16(?: GB|G)/);
+      assert.match(settings.join(' '), /CPU.*12.*RAM.*4\.0\/16G/);
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'top-chat'));
       assert.match(settings.join('\n'), /API key.*Default BZZY folder.*Pair iPhone.*BZZY Core/s);
       assert.doesNotMatch(settings.join('\n'), /Question in the transcript|Answer in the transcript|Ask BZZY to do anything/);
@@ -662,7 +662,7 @@ test('multiline tool descriptions stay out of the composer and the header always
     for (const rows of [32, 24, 18]) {
       Object.assign(output, { columns: 80, rows }); ui.tui.render();
       for (const line of ui.tui.lastFrame) assert.doesNotMatch(clean(line), /[\r\n]/);
-      const frame = ui.tui.lastFrame.map(clean).join('\n'); assert.match(frame, /my unsent message/); assert.match(frame, /effort high/);
+      const frame = ui.tui.lastFrame.map(clean).join('\n'); assert.match(frame, /my unsent message/); assert.equal(ui.tui.effort, 'high'); if (ui.tui.workspace.left) assert.match(frame, /Effort\s+high/);
       assert.match(frame, /\d{2}:\d{2}:\d{2}/);
     }
     ui.reader.close(); await answer;

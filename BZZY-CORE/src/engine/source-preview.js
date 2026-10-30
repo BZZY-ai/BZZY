@@ -3,13 +3,14 @@ import path from 'node:path';
 import { privateWorkspacePath } from './private-paths.js';
 import { diagnosticRedactor } from './diagnostic-redaction.js';
 import { safeCommandSource } from './source-stream.js';
+import { launchedSourceFile } from './command-source-file.js';
 
 const sourceExtensions = /\.(?:[cm]?[jt]sx?|py|rb|go|rs|c|cc|cpp|h|hpp|java|kt|swift|sh|bash|zsh|ps1|sql|html?|css|scss|sass|vue|svelte|xml|ya?ml|toml|json|md|txt)$/i;
 const inside = (root, target) => target !== root && !path.relative(root, target).startsWith('..' + path.sep) && path.relative(root, target) !== '..' && !path.isAbsolute(path.relative(root, target));
 const maximumBytes = 256 * 1024;
 
-// Owner-terminal presentation only. Never read a path inferred from prose or
-// commands. Native edit metadata identifies candidates; canonical containment,
+// Owner-terminal presentation only. Native edits and explicit interpreter
+// arguments identify candidates; never infer paths from prose or stdout. Containment,
 // private-path exclusions and a bounded regular-file read gate their preview.
 // No recursive watcher, inference, execution or permission changes occur here.
 export function sourcePreview(session, filename, { phase = 'completed', failed = false, callId, diff } = {}) {
@@ -44,12 +45,24 @@ export function createSourceObserver(session, emit) {
     const nativeCommand = ['item/started', 'item/completed'].includes(data.method) && item?.type === 'commandExecution';
     if (nativeCommand || data.method === 'tool.started' && params.name === 'Bash' || data.method === 'tool.completed' && commands.has(params.id)) {
       const id = nativeCommand ? item.id : params.id;
-      const command = nativeCommand ? item.command : data.method === 'tool.started' ? params.input?.command : commands.get(id);
+      const prior = commands.get(id);
+      const command = nativeCommand ? item.command ?? prior?.command : data.method === 'tool.started' ? params.input?.command : prior?.command;
+      const commandCwd = nativeCommand && typeof item.cwd === 'string' ? item.cwd : prior?.cwd || session.cwd;
       const done = nativeCommand ? data.method === 'item/completed' : data.method === 'tool.completed';
       const failed = nativeCommand ? item.status === 'failed' || Number.isInteger(item.exitCode) && item.exitCode !== 0 : params.failed;
       const preview = safeCommandSource(session, command, { callId: id, phase: failed ? 'failed' : done ? 'completed' : 'started' });
       if (preview) emit('source.changed', preview);
-      if (!done) { if (commands.size >= 64) commands.delete(commands.keys().next().value); commands.set(id, command); } else commands.delete(id);
+      const filename = launchedSourceFile(command);
+      if (filename) {
+        try {
+          const root = fs.realpathSync(session.cwd), cwd = fs.realpathSync(path.resolve(session.cwd, commandCwd));
+          const target = path.isAbsolute(filename) && inside(path.resolve(session.cwd), filename)
+            ? path.resolve(root, path.relative(session.cwd, filename)) : path.resolve(cwd, filename);
+          const file = sourcePreview(session, target, { callId: id });
+          if (file) emit('source.changed', { ...file, sourceKind: 'executed-file', phase: failed ? 'failed' : done ? 'completed' : 'running', provenance: 'native-script-launch' });
+        } catch { /* Missing source cannot change command execution or hide its input preview. */ }
+      }
+      if (!done) { if (commands.size >= 64) commands.delete(commands.keys().next().value); commands.set(id, { command, cwd: commandCwd }); } else commands.delete(id);
       return;
     }
     if (['item/started', 'item/completed'].includes(data.method) && item?.type === 'fileChange') {

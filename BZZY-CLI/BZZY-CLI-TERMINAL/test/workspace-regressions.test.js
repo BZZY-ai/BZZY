@@ -10,6 +10,10 @@ import { hostMetricsRows } from '../src/host-metrics.js';
 import { canControlSession } from '../src/session-controls.js';
 import { createSession } from '../src/store.js';
 import { BUILTINS } from '../src/providers.js';
+import { saveWorkflow, selectWorkflow } from '@bzzy/core/engine/workflows.js';
+import { ActivityMonitor } from '../src/activity-monitor.js';
+import { sliceCells } from '../src/terminal-surface.js';
+import { palette, createTerminalTheme } from '../src/terminal-theme.js';
 
 let directory, previous;
 test.beforeEach(() => { previous = process.env.BZZY_HOME; directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-front-regression-')); process.env.BZZY_HOME = path.join(directory, 'private'); });
@@ -128,4 +132,68 @@ test('agent/skill rows remain newest first and source deltas replay only actual 
     assert.equal(tui.monitor.files.size, 1); assert.equal(tui.monitor.files.values().next().value.sourceText, 'print(1)');
     assert.equal(tui.entries.some(entry => /^source\./.test(entry.kind)), false);
   } finally { ui.close(); }
+});
+test('header has no duplicate stats and the composer ends with only goal/workflow state on a black background', () => {
+  const { ui, tui, output, session } = terminal();
+  try {
+    saveWorkflow({ name: 'source-review', instructions: 'Review only supplied source and retain its original evidence.' }, { cwd: directory });
+    selectWorkflow(session, 'source-review', { expectedRevision: 0 });
+    ui.hostMetrics = { host: { cpuPercent: 19, memory: { usedBytes: 12.5 * 1024 ** 3, totalBytes: 32 * 1024 ** 3 } } };
+    ui.updateSession({ ...session, model: 'unique-current-model', selectedEffort: 'high', usage: { available: true, tokens: 12345 }, goal: { status: 'complete', objective: 'Review supplied evidence.' } });
+    tui.theme = createTerminalTheme(output, { FORCE_COLOR: '3' });
+    for (const [columns, rows] of [[160, 44], [100, 32], [80, 24], [40, 18]]) {
+      Object.assign(output, { columns, rows }); tui.render();
+      assert.equal(tui.workspace.y, 1); assert.match(clean(tui.lastFrame[0]), /BZZY/);
+      assert.doesNotMatch(clean(tui.lastFrame[0]), /unique-current-model|effort|tokens|CPU|RAM/i);
+      const center = tui.lastFrame.map(line => sliceCells(line, tui.workspace.x, tui.workspace.x + tui.workspace.center));
+      const afterInput = center.slice(tui.composerRow + 1);
+      assert.match(afterInput.map(clean).join('\n'), /Goal achieved/); assert.match(afterInput.map(clean).join('\n'), /Workflow: source-review/);
+      assert.doesNotMatch(afterInput.map(clean).join('\n'), /Paste|Model|Effort|Tools|Live|Pause|Actions/);
+      for (const line of afterInput) {
+        let background = null;
+        for (const token of line.matchAll(/\x1b\[([0-9;]+)m|([^\x1b]+)/g)) {
+          if (token[2]) { assert.equal(background, '0;0;0', 'visible footer cells remain black'); continue; }
+          const parts = token[1].split(';').map(Number);
+          for (let i = 0; i < parts.length; i++) {
+            if (parts[i] === 0 || parts[i] === 49) background = null;
+            else if ((parts[i] === 38 || parts[i] === 48) && parts[i + 1] === 2) { if (parts[i] === 48) background = parts.slice(i + 2, i + 5).join(';'); i += 4; }
+          }
+        }
+      }
+      assert.ok(tui.lastFrame.every(line => cellWidth(line) < columns));
+    }
+  } finally { ui.close(); }
+});
+test('the HTTP capture control retains the chat reader and arms actual capture only for subsequent execution', async () => {
+  const { ui, tui, session } = terminal();
+  try {
+    const pending = ui.ask('bzzy › '); await tick(); tui.value = 'Unsent HTTP draft'; tui.cursor = 6;
+    const reader = ui.reader;
+    assert.equal(ui.executionOptions({}, session).captureNetwork, undefined);
+    assert.match(tui.monitor.rows('http', 70, tui).lines.map(clean).join('\n'), /capture OFF/);
+    const menu = tui.monitorMenu('http'); await tick();
+    assert.ok(tui.selection.choices.some(choice => choice.value === '@capture'));
+    tui.finishSelection('@capture'); await menu;
+    assert.equal(ui.reader, reader); assert.equal(tui.value, 'Unsent HTTP draft'); assert.equal(tui.cursor, 6);
+    assert.equal(ui.executionOptions({}, session).captureNetwork, true); assert.match(tui.monitor.captureLabel(tui), /next run/);
+    assert.deepEqual(tui.traffic, []); assert.deepEqual(tui.inputQueue, []);
+    const disabling = tui.monitorMenu('http'); await tick(); tui.finishSelection('@capture'); await disabling;
+    assert.equal(ui.executionOptions({ captureNetwork: true }, session).captureNetwork, false, 'an explicit menu disable wins over the original launch flag');
+    ui.reader.close(); await pending;
+  } finally { ui.close(); }
+});
+test('fast code reveal uses the actual snapshot and leaves execution state, copy data and real deltas intact', () => {
+  let clock = 0;
+  const monitor = new ActivityMonitor({ now: () => clock, revealMs: 240 });
+  const source = { path: 'recon/probe.py', content: 'import requests\nprint("actual source")', phase: 'running', sourceKind: 'executed-file' };
+  monitor.event('source.changed', source, null, 'fixture');
+  const file = monitor.files.get(monitor.activeFile);
+  assert.equal(monitor.animating(), true); assert.equal(file.phase, 'running');
+  assert.equal(file.sourceText, source.content); assert.equal(monitor.visibleSource(file).join('\n'), 'i');
+  clock = 120;
+  const halfway = monitor.visibleSource(file).join('\n'); assert.ok(source.content.startsWith(halfway)); assert.ok(halfway.length > 1 && halfway.length < source.content.length);
+  clock = 240; assert.equal(monitor.animating(), false); assert.equal(monitor.visibleSource(file).join('\n'), source.content);
+  monitor.event('source.delta', { ...source, sourceId: 'stream', revision: 1, replaceFrom: 0, text: 'print(' }, null, 'fixture');
+  assert.equal(monitor.animating(), false); assert.equal(monitor.files.get(monitor.activeFile).sourceText, 'print(');
+  assert.equal(source.phase, 'running');
 });

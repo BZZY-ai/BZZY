@@ -53,7 +53,7 @@ test('the singular workflow command is discoverable and all workflow administrat
   assert.equal(ui.tui.history.length, 0); return answer;
 });
 
-test('workflow rows keep terminal branding, model, host metrics and safe geometry without a Send control', () => {
+test('workflow rows keep shared branding, sidebar metrics and compact navigation without a Send control', () => {
   saveWorkflow({ name: 'response-process', description: 'Review supplied responses.', instructions: body }, { cwd: directory });
   for (const columns of [40, 80, 140]) {
     output.columns = columns; ui.tui.setPanel('chat'); ui.tui.render();
@@ -61,8 +61,8 @@ test('workflow rows keep terminal branding, model, host metrics and safe geometr
     openWorkflows(ui); ui.tui.render();
     assert.equal(clean(ui.tui.lastFrame[0]), originalHeader, 'Opening Workflows preserves the current terminal header.');
     assert.ok(ui.tui.lastFrame.every(line => cellWidth(clean(line)) <= columns - 1));
-    assert.match(frame(), /fixture/);
-    if (columns >= 80) { assert.match(frame(), /Sessions|SESSIONS/); assert.match(frame(), /fixture-model/); assert.match(frame(), /CPU\s*12%/); }
+    assert.equal(ui.tui.model, 'fixture-model'); assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'));
+    if (columns >= 80) { assert.match(frame(), /Sessions|SESSIONS/); assert.match(frame(), /fixture-model/); assert.match(frame(), /CPU.*12%/); }
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workflow-action'));
     assert.ok(!ui.tui.hitTargets.some(hit => hit.type === 'confirm'));
     assert.equal(ui.tui.canCompose(), false); assertDraft();

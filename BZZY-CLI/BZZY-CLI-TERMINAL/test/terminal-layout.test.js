@@ -22,10 +22,10 @@ test('terminal chat retains branding, menus, history and composer across compact
       Object.assign(output, { columns, rows }); ui.tui.value = 'Keep this unsent draft'; ui.tui.cursor = 9; ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /BZZY/);
-      if (columns >= 72) assert.match(frame, /terminal-fixture/);
+      assert.equal(ui.tui.model, 'terminal-fixture'); if (ui.tui.workspace.left) assert.match(frame, /terminal-fixture/);
       assert.match(frame, /Original user request/); assert.match(frame, /Preserved assistant answer/); assert.match(frame, /Keep this unsent draft/);
       for (const type of ['top-sessions', 'top-skills', 'top-agents', 'top-workflows', 'top-goals', 'top-settings', 'model-control', 'confirm']) {
-        assert.ok(ui.tui.hitTargets.some(hit => hit.type === type) || type.startsWith('top-') && ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'), `${type} remains accessible directly or through Nav at ${columns} columns`);
+        assert.ok(ui.tui.hitTargets.some(hit => hit.type === type) || (type.startsWith('top-') || type === 'model-control') && ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'), `${type} remains accessible directly or through Nav at ${columns} columns`);
       }
       const dispatched = [], originalDispatch = ui.tui.localCommand;
       ui.tui.localCommand = command => dispatched.push(command);
@@ -70,9 +70,9 @@ test('private Import and generated-code screens keep a compact header at every s
         const answer = ui.ask(title + ' · Esc goes back'); await Promise.resolve();
         ui.tui.render(); const frame = clean(written);
         assert.match(frame, /BZZY/); assert.match(frame, columns < 56 ? /●C.*●R/ : /Core.*Relay/);
-        assert.match(frame, /transfer-model/); assert.ok(frame.includes(title)); assert.ok(frame.includes(code.slice(0, 25)));
+        assert.doesNotMatch(frame, /transfer-model|CPU|RAM|1,234 tokens/); assert.ok(frame.includes(title)); assert.ok(frame.includes(code.slice(0, 25)));
         assert.doesNotMatch(frame, /CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save|bzzy\s+\/\s+/u);
-        if (columns >= 80) { assert.match(frame, /1,234 tokens/); assert.match(frame, /CPU 12%/); }
+        assert.equal(ui.tui.model, 'transfer-model'); assert.equal(ui.tui.tokens, 1234);
         assert.equal(ui.tui.lastFrame.length, 0); assert.equal(ui.tui.textRegion, null);
         assert.ok(!JSON.stringify(ui.tui.entries).includes(code)); assert.ok(!JSON.stringify(ui.tui.history).includes(code));
         const back = ui.tui.hitTargets.find(hit => hit.type === 'private-cancel'); assert.ok(back);

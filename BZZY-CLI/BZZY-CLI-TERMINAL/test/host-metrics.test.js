@@ -19,13 +19,14 @@ test('Core telemetry is rendered as host CPU/RAM and never confused with a goal 
     ui.setSession('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
     await new Promise(resolve => setTimeout(resolve, 10)); ui.tui.render();
     assert.equal(reads, 1);
-    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /CPU\s*19%.*12\.5\/32(?: GB|G)/);
+    assert.match(ui.tui.lastFrame.map(clean).join('\n'), /CPU.*19%[\s\S]*RAM.*12\.5\/32G/);
     assert.equal(ui.tui.entries.length, 0, 'telemetry does not become transcript/history');
     for (const columns of [48, 22]) {
       output.columns = columns; ui.tui.render();
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) <= columns));
-      if (columns >= 40) assert.match(ui.tui.lastFrame.map(clean).join('\n'), /CPU\s*19%/);
-      else assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /RAM/);
+      assert.doesNotMatch(ui.tui.lastFrame.map(clean).join('\n'), /CPU|RAM/);
+      assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'));
+      assert.equal(ui.hostMetrics.host.cpuPercent, 18.75);
     }
   } finally { ui.close(); }
 });

@@ -414,8 +414,10 @@ for compatibility. Core's daemon and workers run without this CLI installed.
 
 `bzzy` opens a black neon terminal workspace with clickable navigation, a chat
 column and compact live **AGENTS / SKILLS**, **HTTP PROBE**, and **CODE** views.
-The header keeps branding, current model, usage, host measurements and Core/Relay
-dots visible above every view. Thin column separators can be dragged; compact
+The single-row header keeps branding, navigation and Core/Relay dots visible.
+Model/effort, token counts and CPU/RAM stay in their dedicated sidebar sections;
+compact layouts retain these through Nav. The composer footer keeps goal status
+and Workflow, with other actions in visible menus. Thin column separators can be dragged; compact
 and minimal layouts use the same frame with visible navigation menus. Settings
 and Library screens replace the center transcript while preserving its draft.
 Esc closes the innermost prompt or picker first. Saved sessions require an

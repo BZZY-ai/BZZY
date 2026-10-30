@@ -29,14 +29,16 @@ export function highlightSource(text, theme) {
 }
 
 export class ActivityMonitor {
-  constructor() {
+  constructor({ now = () => performance.now(), revealMs = 240 } = {}) {
     this.feed = []; this.files = new Map(); this.pending = new Map(); this.seen = new Set(); this.revision = 0;
     this.offsets = { agents: 0, http: 0, code: 0 }; this.collapsed = new Set(); this.maxima = {}; this.followCode = true;
     this.redactor = null;
+    this.now = now; this.revealMs = revealMs;
   }
   scrub(value) { this.redactor ||= diagnosticRedactor({ maxString: 4096, maxItems: 32 }); return this.redactor.scrub(value); }
   event(type, data, actors, sessionId) {
     if (data.seq != null) { const key = `${data.eventSessionId || sessionId}:${data.seq}`; if (this.seen.has(key)) return; this.seen.add(key); if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value); }
+    if (type === 'network.capture' && typeof data.enabled === 'boolean') { this.captureEnabled = data.enabled; this.revision++; return; }
     if (['source.changed', 'source.delta'].includes(type) && typeof data.path === 'string') {
       const key = `${data.actorSessionId || sessionId}:${data.sourceId || data.path}`, previous = this.files.get(key);
       if (type === 'source.delta') {
@@ -48,6 +50,12 @@ export class ActivityMonitor {
       const changed = new Set();
       if (typeof data.content === 'string' && previous?.lines) for (let i = 0; i < lines.length; i++) if (lines[i] !== previous.lines[i]) changed.add(i);
       const file = { ...previous, ...data, key, sourceText: typeof data.content === 'string' ? data.content.slice(0, 256 * 1024) : previous?.sourceText, lines, changed, clipped: typeof data.content === 'string' && data.content.split('\n').length > 5000 };
+      if (type === 'source.delta') file.revealAt = null;
+      else if (typeof data.content === 'string' && file.sourceText !== previous?.sourceText) {
+        let common = 0;
+        while (common < (previous?.sourceText?.length || 0) && common < file.sourceText.length && previous.sourceText[common] === file.sourceText[common]) common++;
+        file.revealFrom = common; file.revealAt = this.now();
+      }
       delete file.content;
       this.files.delete(key); this.files.set(key, file);
       if (this.files.size > 24) this.files.delete(this.files.keys().next().value);
@@ -76,6 +84,20 @@ export class ActivityMonitor {
     else if (this.httpFilter && this.httpFilter !== 'all') rows = rows.filter(row => row.method === this.httpFilter);
     if (this.httpSort === 'status') rows = rows.slice().sort((a, b) => (a.status || 0) - (b.status || 0));
     return rows;
+  }
+  captureLabel(tui) {
+    if (!tui.busy) return tui.ui.launchCaptureNetwork ? 'Shell capture ON · next run' : 'Shell capture OFF';
+    return (typeof tui.captureNetwork === 'boolean' ? tui.captureNetwork : this.captureEnabled) ? 'Shell capture ON' : 'Shell capture OFF';
+  }
+  animating() {
+    const file = this.files.get(this.activeFile);
+    return Boolean(this.followCode && file?.revealAt != null && this.now() - file.revealAt < this.revealMs && file.revealFrom < file.sourceText.length);
+  }
+  visibleSource(file) {
+    if (!this.animating()) return file.lines;
+    const fraction = Math.max(0, Math.min(1, (this.now() - file.revealAt) / this.revealMs));
+    const count = file.revealFrom + Math.max(1, Math.ceil((file.sourceText.length - file.revealFrom) * fraction));
+    return clean(file.sourceText.slice(0, count).replace(/[\ud800-\udbff]$/, '')).split('\n').slice(0, 5000);
   }
   rows(kind, width, tui) {
     const { theme } = tui, c = theme.color, lines = [], hits = [];
@@ -121,18 +143,22 @@ export class ActivityMonitor {
         hits.push({ type: 'monitor-detail', kind, item: row, row: lines.length, left: 1, right: width });
         lines.push(c(clip(row.method || '?', 6).padEnd(7), methodTone(row.method)) + c(String(row.status || (row.type === 'network.error' ? 'ERR' : '…')).padEnd(4), row.type === 'network.error' ? palette.danger : statusTone(row.status)) + c(clip(endpoint, Math.max(1, width - 11)), palette.text));
       }
-      if (!lines.length) { put('No observed HTTP requests.'); put('http_request records automatically.'); put('--capture-network captures proxy clients.'); }
+      if (!lines.length) {
+        put('No observed HTTP requests.'); put(this.captureLabel(tui), palette.warning);
+        put('Enable capture in the Filter menu.'); put('Core HTTP-tool calls record automatically.');
+      }
     } else {
       const file = this.files.get(this.activeFile);
       if (!file) { put('Waiting for code or file edits.'); put('Native input and saved source appear here.'); return { lines, hits }; }
       if (file.unavailable) put(file.unavailable, palette.warning);
       if (!file.lines.length) put(file.phase === 'started' ? 'Edit started · waiting for file contents.' : 'No readable source available.');
       const digits = Math.max(3, String(file.lines.length).length);
-      for (const [index, source] of file.lines.entries()) {
+      const visible = this.visibleSource(file), revealing = this.animating();
+      for (const [index, source] of visible.entries()) {
         hits.push({ type: 'monitor-line', file, index, row: lines.length, left: 1, right: width });
         const mark = file.changed.has(index) ? '~' : ' ';
         lines.push(c(mark + String(index + 1).padStart(digits) + ' ', mark === '~' ? palette.warning : palette.muted)
-          + highlightSource(clip(source.replaceAll('\t', '  '), Math.max(1, width - digits - 2), ''), theme));
+          + highlightSource(clip(source.replaceAll('\t', '  ') + (revealing && index === visible.length - 1 ? '▏' : ''), Math.max(1, width - digits - 2), ''), theme));
       }
       if (file.clipped) put('Preview limited to 5,000 lines.', palette.warning);
     }

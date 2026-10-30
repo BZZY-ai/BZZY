@@ -18,9 +18,12 @@ A green/red dot beside **BZZY Core** reflects a fresh Core response,
 independently of Relay. **Working dir** and **Session .bzzy** copy their complete
 paths when clicked; both use the selected saved session, including its original
 cwd and legacy memory binding. Below 18 rows **Session folders** in Nav/Actions
-retains both copy actions. The header retains host measurements, and a compact
-**HOST USAGE** footer below Sessions shows Core's real CPU and RAM sample. The
-session list scrolls without moving those meters.
+retains both copy actions. The single-row header contains branding, navigation,
+Actions and connection dots. Model/effort, session/compactor tokens and host
+measurements stay in their dedicated sidebar sections. A compact **HOST USAGE**
+footer below Sessions shows Core's real CPU/RAM sample, independently of the
+session list's scroll. Compact/minimal terminals retain model controls and
+**Usage / host** through the visible Nav menu.
 
 ## Controls
 
@@ -29,8 +32,12 @@ session list scrolls without moving those meters.
 - Drag the vertical column separators. Drag the last two cells of a live-section
   footer to resize adjacent section heights. Click a section title to collapse
   it or **↗** to inspect it in the center, then **Close** to return to chat.
+- The composer has no permanent shortcut toolbar beneath its input. Goal state
+  and the selected Workflow remain there as colored text on the normal black
+  surface. Paste, models, tools and pause/cancel remain in visible menus.
 - Each activity section and the saved-session list scroll independently under
-  the mouse. Chat stops following when scrolled up; **↓ Latest** follows again.
+  the mouse. Chat stops following when scrolled up; **↓ Latest** in the composer
+  caption follows again.
   Source has an explicit **Follow ON/OFF** control. Expanded source lines copy
   individually; the filename menu selects recent files or copies all source.
 - **AGENTS / SKILLS** shows only invocation time and name, newest first. Click
@@ -41,7 +48,10 @@ session list scrolls without moving those meters.
 - **HTTP PROBE** rows open redacted headers, status, duration, originating actor
   and a response preview when capture supplies one. Its menu filters by method
   or errors, sorts by status/time, and opens existing HTTP history, which also
-  retains backend-reported web visits.
+  retains backend-reported web visits. **Enable shell capture for next run**
+  arms the existing recorder for subsequent messages/goals and their workers;
+  **Disable** overrides an original launch flag for subsequent work. The control
+  does not alter an already running process. Empty views show capture status.
 - Click a saved session, then explicitly choose **Open** or **Cancel** before
   history loads. Cancel preserves the active reader, transcript, draft and scroll.
   Opening returns to the actual chat in its original cwd. Only
@@ -84,7 +94,9 @@ recent feed rows, and HTTP uses the existing 1,000-record client window. Durable
 history remains in Core. A status row never establishes goal completion.
 
 HTTP PROBE includes host-observed `http_request` exchanges and proxy-observed
-traffic from the existing opt-in `--capture-network` path. Backend-reported web
+traffic from the existing opt-in `--capture-network` path or the HTTP Filter
+menu's next-run capture control. The option survives ordinary chat follow-ups
+and reopening an existing saved session with the flag. Backend-reported web
 visits remain labelled in HTTP history, without invented methods, status codes
 or request timings. Proxy coverage is limited to clients honoring its proxy/CA;
 direct sockets and excluded provider/model traffic are not captured. The proxy
@@ -100,10 +112,21 @@ including source passed in interpreter heredocs, labelled **shell input** rather
 than inventing a file path. Claude's native tool-input chunks update the preview
 as received, with **preparing / prepared** distinguishing proposed tool input
 from a completed file. Codex currently supplies whole command inputs, so these
-appear immediately; stdout is never mistaken for source. No timer fabricates
-letter-by-letter typing. Uninstrumented shell file writes, external editors and
-direct diagnostic backend runs do not gain automatic file attribution. Updating/reopening a frontend cannot recover missing historical
-previews or patch an already running runner.
+arrive as complete snapshots; stdout is never mistaken for source. Direct
+interpreter launches such as `python3 recon/probe.py` also load that actual
+project file at command start and completion. Native argv, simple shell wrappers
+and explicit working directories are supported; dynamic expansions and unknown
+interpreter flags do not establish a source path.
+
+The frontend gives complete snapshots a fast 240 ms type-on reveal with a source
+cursor. This is a visual presentation of already captured content: the full
+source stays available for copying, and no typing events or execution progress
+are added to history. Real input deltas display as they arrive. Manual source
+scrolling disables the reveal. Uninstrumented shell file writes, external
+editors and direct diagnostic backend runs do not gain automatic file attribution.
+Updating/reopening a frontend cannot recover missing historical previews or
+patch an already running runner. Reuse the same saved chat after updating;
+subsequent executions use the new hooks. A new conversation is unnecessary.
 
 Core bounds previews to 256 KiB, 16 files per native edit event and recognized
 source/text extensions; the client retains 24 recent files and 5,000 lines per

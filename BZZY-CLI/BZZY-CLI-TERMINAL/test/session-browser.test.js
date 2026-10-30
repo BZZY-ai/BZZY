@@ -189,6 +189,28 @@ test('a restored chat changes provider through the visible control and real Core
     ui.tui.localCommand('/exit'); assert.equal(await watching, 0);
   } finally { ui.reader?.close(); ui.close(); await watching; }
 });
+test('capture-network remains enabled for successive ordinary chat messages in an existing session', { timeout: 20000 }, async () => {
+  const session = createSession(BUILTINS.codex, work, 'fixture-model', 'Capture follow-ups');
+  let sent = 0, captures = 0;
+  const waitForRuns = async count => {
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+      const rows = listRecords('execution', { sessionId: session.id });
+      if (rows.length === count && rows.every(row => !['queued', 'launching', 'running'].includes(row.state))) return;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.fail('Fixture chat runs did not settle.');
+  };
+  const ui = { interactive: true, cursors: new Map(), setSession(id) { this.sessionId = id; }, updateSession() {}, clearHistory() {},
+    event(type) { if (type === 'network.capture') captures++; },
+    async ask() { if (sent) await waitForRuns(sent); if (sent === 2) return '/exit'; return 'Capture fixture message ' + (++sent); },
+    async settingsCommand() { return false; } };
+  assert.equal(await attachSession(session, { captureNetwork: true }, ui), 0);
+  const executions = listRecords('execution', { sessionId: session.id });
+  assert.equal(executions.length, 2); assert.ok(executions.every(row => row.options.captureNetwork === true));
+  assert.ok(captures >= 2, 'both actual runners initialized the existing HTTP recorder');
+  assert.equal(loadSession(session.id).cwd, work);
+});
 
 test('real arrow keys and Enter open the chosen alias without leaking directories into the picker', async () => {
   const original = createSession(BUILTINS.codex, work, null, 'First alias');

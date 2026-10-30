@@ -17,7 +17,7 @@ export function workspaceGeometry(width, height, options = {}) {
   if (right && width - right - 1 < minimumCenter) right = 0;
   if (left && right && width - left - right - 2 < minimumCenter) { if (options.showRight) left = 0; else right = 0; }
   if (left && width - left - 1 < minimumCenter) left = 0;
-  return { width, height, left, right, center: width - left - right - (left ? 1 : 0) - (right ? 1 : 0), x: left ? left + 1 : 0, y: 2, bodyHeight: Math.max(1, height - 2) };
+  return { width, height, left, right, center: width - left - right - (left ? 1 : 0) - (right ? 1 : 0), x: left ? left + 1 : 0, y: 1, bodyHeight: Math.max(1, height - 1) };
 }
 const fit = padSurface;
 const smallTokens = value => Number.isFinite(value) ? Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value) : '—';
@@ -26,29 +26,29 @@ const sessionTime = value => {
   return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
 export function workspaceChrome(tui, geometry) {
-  const { width, height, left, right, bodyHeight, x } = geometry, theme = tui.theme, c = theme.color, hits = [], regions = [];
+  const { width, height, left, right, bodyHeight, x, y } = geometry, theme = tui.theme, c = theme.color, hits = [], regions = [];
   const chrome = workspaceHeader(tui, width), header = chrome.lines; hits.push(...chrome.hits);
   const sidebar = [];
   if (left) {
     const put = (text = '', tone = palette.text, bold = false, hit) => {
-      if (hit) hits.push({ ...hit, row: sidebar.length + 3, left: 2, right: left - 1 });
+      if (hit) hits.push({ ...hit, row: sidebar.length + y + 1, left: 2, right: left - 1 });
       sidebar.push(outlinedRow(text, left, theme, { tone }));
     };
     sidebar.push(sectionHeading('NAVIGATION', left, theme));
     for (const [label, panel] of workspaceNavigation) {
       const selected = tui.panel === panel;
-      const row = sidebar.length + 3;
+      const row = sidebar.length + y + 1;
       sidebar.push(outlinedRow(` ${selected ? '›' : ' '} ${label}`, left, theme, { selected }));
       hits.push({ type: `top-${panel}`, row, left: 1, right: left });
     }
     sidebar.push(sectionHeading('MODEL', left, theme, palette.agent));
-    const savedRow = sidebar.length + 3;
+    const savedRow = sidebar.length + y + 1;
     sidebar.push(outlinedRow(' ' + clip(tui.modelSelectionRequired ? 'Select / save model ▾' : tui.model + ' ▾', left - 3), left, theme, { tone: palette.main }));
     hits.push({ type: 'model-control', command: '/providers @saved', disabled: tui.busy || !canControlSession(tui.ui), row: savedRow, left: 2, right: left - 1 });
     const modelDisabled = tui.busy || !canControlSession(tui.ui);
     put(` Provider  ${tui.provider || 'Select'} ▾`, palette.agent, false, { type: 'model-control', command: '/providers @provider', disabled: modelDisabled });
     if (bodyHeight >= 24) put(` Model     ${tui.model} ▾`, palette.main, true, { type: 'model-control', command: '/models', disabled: modelDisabled });
-    put(` Effort    ${(tui.effort || 'default').replace(/^effort /, '')} ▾`, palette.agent, false, { type: 'model-control', command: '/effort', disabled: modelDisabled || tui.modelSelectionRequired });
+    put(` Effort  ${(tui.effort || 'default').replace(/^effort /, '')} ▾`, palette.agent, false, { type: 'model-control', command: '/effort', disabled: modelDisabled || tui.modelSelectionRequired });
     if (bodyHeight >= 29) {
       const cap = tui.modelCapabilities || {};
       put(` Context   ${cap.contextWindow ? smallTokens(cap.contextWindow) : 'unavailable'}`, palette.muted);
@@ -56,7 +56,7 @@ export function workspaceChrome(tui, geometry) {
       const price = cap.pricing || {};
       put(` In / Out  ${price.input != null ? price.input : '—'} / ${price.output != null ? price.output : '—'}`, palette.muted);
     }
-    const usageRow = sidebar.length + 3; sidebar.push(sectionHeading('USAGE', left, theme, palette.accent, '↗'));
+    const usageRow = sidebar.length + y + 1; sidebar.push(sectionHeading('USAGE', left, theme, palette.accent, '↗'));
     hits.push({ type: 'top-metrics', row: usageRow, left: 1, right: left });
     put(` ${tui.tokenLabel()}`, palette.success, true, { type: 'top-metrics' });
     const usage = tui.compactorUsage;
@@ -67,25 +67,25 @@ export function workspaceChrome(tui, geometry) {
       const balance = accountStatusLabels(tui.ui.accountStatus).find(item => item.label === 'DeepSeek');
       if (balance && bodyHeight >= 24) put(` Balance ${balance.value} · provider`, palette.muted, false, { type: 'usage-balance' });
     }
-    const sessionHeader = sidebar.length + 3;
+    const sessionHeader = sidebar.length + y + 1;
     sidebar.push(sectionHeading('SESSIONS', left, theme, palette.accent, '+'));
     hits.push({ type: 'top-sessions', row: sessionHeader, left: 1, right: left - 4 }, { type: 'session-new', row: sessionHeader, left: left - 4, right: left });
     if (!tui.recentCache || Date.now() - tui.recentCache.at > 2000) tui.recentCache = { at: Date.now(), sessions: namedTerminalSessions() };
     const saved = tui.recentCache.sessions, footerRows = 3, visible = Math.max(0, bodyHeight - sidebar.length - footerRows - (bodyHeight >= 22 ? 1 : 0));
     tui.sidebarMaximum = Math.max(0, saved.length - visible); tui.sidebarOffset = Math.min(tui.sidebarMaximum, tui.sidebarOffset || 0);
-    const regionTop = sidebar.length + 3;
+    const regionTop = sidebar.length + y + 1;
     for (const session of saved.slice(tui.sidebarOffset, tui.sidebarOffset + visible)) {
       const selected = session.id === tui.ui.sessionId, stamp = sessionTime(session.updatedAt || session.createdAt), active = session.id === tui.ui.sessionId && tui.busy || ['running', 'waiting_for_input', 'verifying'].includes(session.executionState);
       const label = ` ${active ? '●' : '·'} ` + clip(session.alias, Math.max(1, left - stamp.length - 6));
       const row = label + ' '.repeat(Math.max(1, left - cellWidth(label) - stamp.length - 2)) + stamp;
-      hits.push({ type: 'saved-session', id: session.id, row: sidebar.length + 3, left: 1, right: left });
+      hits.push({ type: 'saved-session', id: session.id, row: sidebar.length + y + 1, left: 1, right: left });
       sidebar.push(outlinedRow(row, left, theme, { selected, tone: active ? palette.success : palette.text }));
     }
     if (!saved.length && visible) put(' Name a chat with /alias', palette.muted);
     while (sidebar.length < bodyHeight - footerRows - 1) put();
     if (sidebar.length < bodyHeight - footerRows) put(` ${saved.length} saved · scroll ↕`, palette.muted);
-    regions.push({ kind: 'sessions', left: 1, right: left, top: regionTop, bottom: bodyHeight - footerRows + 2 });
-    const hostRow = sidebar.length + 3;
+    regions.push({ kind: 'sessions', left: 1, right: left, top: regionTop, bottom: bodyHeight - footerRows + y });
+    const hostRow = sidebar.length + y + 1;
     sidebar.push(sectionHeading('HOST USAGE', left, theme, palette.accent, '↗'));
     hits.push({ type: 'top-metrics', row: hostRow, left: 1, right: left });
     for (const row of hostMetricsRows(tui.ui.hostMetrics, left - 2)) put(' ' + row, palette.success, false, { type: 'top-metrics' });
@@ -101,7 +101,7 @@ export function workspaceChrome(tui, geometry) {
     const heights = kinds.map((kind, index) => 2 + (monitor.collapsed.has(kind) ? 0 : Math.floor(extra * weights[index] / (sum || 1))));
     if (open) heights[kinds.findLastIndex(kind => !monitor.collapsed.has(kind))] += bodyHeight - heights.reduce((a, b) => a + b, 0);
     for (const [index, kind] of kinds.entries()) {
-      const size = heights[index], top = activity.length + 3, collapsed = monitor.collapsed.has(kind), title = kind === 'agents' ? 'AGENTS / SKILLS' : kind === 'http' ? 'HTTP PROBE' : 'CODE';
+      const size = heights[index], top = activity.length + y + 1, collapsed = monitor.collapsed.has(kind), title = kind === 'agents' ? 'AGENTS / SKILLS' : kind === 'http' ? 'HTTP PROBE' : 'CODE';
       const contentWidth = right - 2;
       let label = `${collapsed ? '▸' : '▾'} ${title}`;
       if (kind === 'http') label += ` · ${monitor.requests(tui.traffic).length}`;
@@ -127,7 +127,7 @@ export function workspaceChrome(tui, geometry) {
         activity.push(c('│', palette.border) + fit(line, right - 2, theme) + c(mark === ' ' ? '│' : mark, palette.border));
       }
       for (const hit of layout.hits) if (hit.row >= start && hit.row < start + rows) hits.push({ ...hit, row: top + 2 + metadataRows + hit.row - start, left: monitorLeft + hit.left, right: Math.min(width - 1, monitorLeft + hit.right) });
-      const footer = kind === 'agents' ? 'Newest first · scroll ↕' : monitor.offsets[kind] ? '↓ Latest · scroll ↕' : kind === 'code' ? `[Follow ${monitor.followCode ? 'ON' : 'OFF'}] · ↓ Latest` : 'Live · scroll ↕';
+      const footer = kind === 'agents' ? 'Newest first · scroll ↕' : monitor.offsets[kind] ? '↓ Latest · scroll ↕' : kind === 'code' ? `[Follow ${monitor.followCode ? 'ON' : 'OFF'}] · ↓ Latest` : monitor.captureLabel(tui) + ' · ↕';
       const tail = clip(' ' + footer + ' ', right - 4);
       activity.push(c('└─', palette.border) + c(tail, monitor.offsets[kind] ? palette.accent : palette.muted) + c('─'.repeat(Math.max(0, right - cellWidth(tail) - 3)) + '┘', palette.border));
       hits.push({ type: 'monitor-latest', kind, row: top + size - 1, left: monitorLeft, right: width - 2 });
@@ -139,7 +139,7 @@ export function workspaceChrome(tui, geometry) {
   const lines = header;
   for (let row = 0; row < bodyHeight; row++) lines.push((left ? fit(sidebar[row] || '', left, theme, palette.surface) + c('│', palette.border) : '')
     + fit(tui.lastFrame[row] || '', geometry.center, theme) + (right ? c('│', palette.border) + fit(activity[row] || '', right, theme) : ''));
-  if (left) regions.push({ kind: 'width', side: 'left', left: left + 1, right: left + 1, top: 3, bottom: height });
-  if (right) regions.push({ kind: 'width', side: 'right', left: width - right, right: width - right, top: 3, bottom: height });
+  if (left) regions.push({ kind: 'width', side: 'left', left: left + 1, right: left + 1, top: y + 1, bottom: height });
+  if (right) regions.push({ kind: 'width', side: 'right', left: width - right, right: width - right, top: y + 1, bottom: height });
   return { lines, hits, regions, x };
 }

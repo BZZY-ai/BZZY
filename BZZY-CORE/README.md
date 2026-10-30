@@ -61,7 +61,9 @@ Implemented:
 
 - Owner terminal source previews use actual native file edits and shell inputs.
   Claude tool-input chunks emit redacted, revisioned display patches; complete
-  native commands and atomic file writes appear immediately. Proposed input is
+  native commands and atomic file writes appear immediately. Direct interpreter
+  launches can also preview their actual project script at start/completion,
+  using the existing private-path, containment and bounded-read checks. Proposed input is
   labelled separately from completed source and never grants execution rights.
   Owner session snapshots include measured background-compactor token usage,
   independently of pricing; scoped observers gain no new accounting surface.

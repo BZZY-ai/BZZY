@@ -2,11 +2,13 @@ import path from 'node:path';
 import { diagnosticRedactor } from './diagnostic-redaction.js';
 import { privateWorkspacePath } from './private-paths.js';
 import { sharedSecrets } from './share-bundle-policy.js';
+import { commandInputText } from './command-source-file.js';
 
 const limit = 256 * 1024;
 // Display command INPUT, never infer source from command stdout or execute a
 // parser/shell. A heredoc body is code even when no source file is created.
 export function commandSource(command) {
+  command = commandInputText(command);
   if (typeof command !== 'string' || !command.trim() || command.length > limit) return null;
   const heredoc = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n([\s\S]*)/m.exec(command);
   const interpreter = heredoc && [...command.slice(0, heredoc.index).split('\n').at(-1).matchAll(/\b(python[\d.]*|node|ruby|perl|php|bash|sh)\b/g)].at(-1)?.[1];

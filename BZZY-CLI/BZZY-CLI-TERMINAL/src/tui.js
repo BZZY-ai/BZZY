@@ -12,6 +12,7 @@ import { commandSuggestions, privateChatCommand } from './terminal-commands.js';
 import { referenceToken, referenceCatalog, insertReference } from './reference-completions.js';
 import { backendVisit } from './backend-traffic.js';
 import { accountStatusLabels } from './account-status.js';
+import { hostMetricsLabel } from './host-metrics.js';
 import { copyText, readClipboard } from './clipboard.js';
 import { palette, createTerminalTheme } from './terminal-theme.js';
 import { messageBodyToPlainText, parseMessageBody } from '@bzzy/core/message-format';
@@ -91,10 +92,11 @@ export class TerminalChat {
       if (this.closed) return;
       const instant = performance.now(), previous = this.frame;
       this.animationTime = (instant - this.animationStarted) / 1000; this.frame = Math.floor(this.animationTime * 10);
+      const sourceAnimating = this.monitor?.animating();
       if (!this.copyMode && !this.outputBlocked) {
-        if (previous !== this.frame && (this.historyRestoreDepth || this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated || goalValidationIndicator(this.goal, this.goalValidation, this.frame)?.animated)) this.schedule();
+        if (sourceAnimating || previous !== this.frame && (this.historyRestoreDepth || this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated || goalValidationIndicator(this.goal, this.goalValidation, this.frame)?.animated)) this.schedule();
       }
-      const interval = this.ui.pet === false ? 100 : animationInterval;
+      const interval = sourceAnimating ? 1000 / 30 : this.ui.pet === false ? 100 : animationInterval;
       deadline += interval;
       if (deadline <= instant) deadline = instant + interval;
       this.timer = setTimeout(tick, Math.max(1, deadline - performance.now())); this.timer.unref();
@@ -119,6 +121,7 @@ export class TerminalChat {
     const session = snapshot.session || snapshot;
     this.provider = session.provider || this.provider;
     this.modelCapabilities = session.modelCapabilities;
+    this.captureNetwork = session.captureNetwork;
     this.modelSelectionRequired = Boolean(session.modelSelectionRequired);
     this.model = this.modelSelectionRequired ? 'Select model' : session.resolvedModel || session.model || 'Provider default';
     this.effort = session.selectedEffort === 'default' ? 'effort default' : session.selectedEffort || session.reasoningEffort || '';
@@ -1460,7 +1463,7 @@ export class TerminalChat {
     if (!primary && !showEmpty) return { line: '', extra: [] };
     const badge = (indicator, maximum) => {
       const text = ' ' + clip(indicator.label, Math.max(1, maximum - 2)) + ' ';
-      return fillSurface(text, cellWidth(text), this.theme, indicator.tone, indicator.empty ? palette.muted : palette.background, true, surface);
+      return this.theme.background(surface) + this.theme.color(text, indicator.empty ? palette.muted : indicator.tone, true) + this.theme.background(surface);
     };
     const available = Math.max(3, width - reserved - 2), extra = [];
     let line = '  ' + badge(primary || { label: 'Goal · none', tone: palette.elevated, empty: true }, available);
@@ -1694,7 +1697,7 @@ export class TerminalChat {
       ...workspaceNavigation.map(([label, panel]) => ({ value: ':' + panel, label, selected: this.panel === panel })),
       { value: '/sessions', label: 'Sessions…' }, { value: '/new', label: 'New session' },
       { value: '@models', label: 'Model configuration…' }, { value: '@live', label: 'Live activity…' },
-      { value: '@paths', label: 'Session folders…' }, { value: '/exit', label: 'Exit BZZY' },
+      { value: '@paths', label: 'Session folders…' }, { value: '@usage', label: 'Usage / host…' }, { value: '@actions', label: 'Actions…' }, { value: '/exit', label: 'Exit BZZY' },
     ] : [
       { value: ':chat', label: 'Back to chat' }, { value: '@models', label: 'Model configuration…' },
       { value: '@live', label: 'Live activity…' }, { value: '@paths', label: 'Session folders…' },
@@ -1705,8 +1708,12 @@ export class TerminalChat {
     const title = kind === 'models' ? 'MODEL · provider, model and effort' : kind === 'live' ? 'LIVE ACTIVITY' : kind === 'navigation' ? 'NAVIGATION' : 'ACTIONS';
     const chosen = await this.localChoice(title, choices);
     if (!chosen) return;
-    if (chosen === '@models' || chosen === '@live') { await this.openWorkspaceMenu(chosen.slice(1)); return; }
-    if (chosen === '@paths') {
+    if (['@models', '@live', '@actions'].includes(chosen)) { await this.openWorkspaceMenu(chosen.slice(1)); return; }
+    if (chosen === '@usage') {
+      const usage = this.compactorUsage, compactor = usage?.available && Number.isSafeInteger(usage.tokens) ? (usage.complete ? '' : '≥') + usage.tokens.toLocaleString() : 'unavailable';
+      const selected = await this.localChoice('USAGE / HOST', { description: this.tokenLabel() + '\nCompactor tokens: ' + compactor + '\n' + hostMetricsLabel(this.ui.hostMetrics, this.output.columns || 80), descriptionRows: 6, choices: [{ value: 'metrics', label: 'Detailed Metrics' }, { value: 'close', label: 'Close' }] });
+      if (selected === 'metrics') this.setPanel('metrics');
+    } else if (chosen === '@paths') {
       const cwd = this.ui.sessionWorkingDirectory, memory = this.ui.sessionProjectLocation?.path;
       const value = await this.localChoice('SESSION FOLDERS · click to copy', [
         { value: cwd, label: 'Working directory', description: cwd || 'Unavailable', disabled: !cwd },
@@ -1785,7 +1792,9 @@ export class TerminalChat {
     const sessionId = this.ui.activeTab || this.ui.sessionId, monitor = this.monitor;
     const choices = kind === 'code' ? [...[...monitor.files.values()].reverse().map(file => ({ value: file.key, label: file.path, description: `${this.actors.for(file.actorSessionId, sessionId).label} · ${file.language} · ${file.phase}` })),
       ...(monitor.activeFile ? [{ value: '@copy', label: 'Copy current source' }, { value: '@diff', label: 'Inspect captured edit diff' }] : [])]
-      : [{ value: 'all', label: 'All observed requests' }, { value: 'errors', label: 'Errors (4xx / 5xx)' }, ...['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map(value => ({ value, label: value })), { value: '@status', label: 'Sort by status' }, { value: '@time', label: 'Sort by capture time' }, { value: '@history', label: 'Open HTTP history (includes web visits)' }];
+      : [{ value: '@capture', label: this.ui.launchCaptureNetwork ? 'Disable shell capture for next run' : 'Enable shell capture for next run', disabled: !canControlSession(this.ui), description: 'Applies to your next message or goal, including its workers. Current processes keep their existing capture settings.' },
+        { value: '@coverage', label: 'How HTTP capture works…' },
+        { value: 'all', label: 'All observed requests' }, { value: 'errors', label: 'Errors (4xx / 5xx)' }, ...['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map(value => ({ value, label: value })), { value: '@status', label: 'Sort by status' }, { value: '@time', label: 'Sort by capture time' }, { value: '@history', label: 'Open HTTP history (includes web visits)' }];
     const selected = await this.localChoice(kind === 'code' ? 'Recent source / files' : 'HTTP filters', choices, { presentation: 'dropdown' });
     if ((this.ui.activeTab || this.ui.sessionId) !== sessionId || this.monitor !== monitor) return;
     if (kind === 'code') {
@@ -1793,6 +1802,12 @@ export class TerminalChat {
       if (selected === '@copy' && file) this.clipboardTask = this.copySelection(file.lines.join('\n'));
       else if (selected === '@diff' && file) { monitor.detail = { kind: 'agents', row: { actorId: file.actorSessionId, summary: file.diff || 'No edit diff was exposed by this backend. Changed lines compare the captured source versions.', type: 'source.changed', at: file.observedAt } }; monitor.expanded = 'code'; this.setPanel('monitor'); }
       else if (monitor.files.has(selected)) { monitor.activeFile = selected; monitor.offsets.code = 0; }
+    } else if (selected === '@capture' && canControlSession(this.ui)) {
+      this.ui.launchCaptureNetwork = !this.ui.launchCaptureNetwork;
+      this.ui.captureNetworkOverride = this.ui.launchCaptureNetwork;
+      this.notice(`Shell capture ${this.ui.launchCaptureNetwork ? 'enabled' : 'disabled'} for the next execution. Existing processes keep their capture settings.`);
+    } else if (selected === '@coverage') {
+      await this.localChoice('HTTP PROBE · capture coverage', { description: 'Core HTTP-tool requests appear automatically.\nShell/Python requests require shell capture enabled before execution. Proxy-aware clients are covered; direct sockets and clients ignoring proxy/CA settings are not.\nProvider/model traffic is excluded. Missing historical traffic cannot be recovered. Keep your saved session; enable capture for its next execution.', descriptionRows: 12, choices: [{ value: 'close', label: 'Close' }] });
     } else if (selected === '@history') this.setPanel('http');
     else if (selected === '@status' || selected === '@time') monitor.httpSort = selected.slice(1);
     else if (selected) { monitor.httpFilter = selected; monitor.offsets.http = 0; monitor.detail = null; }
@@ -2012,7 +2027,7 @@ export class TerminalChat {
     let bottom = composer.lines, bottomHits = composer.hits, inputIndex = composer.inputIndex;
     const composerTextLeft = composer.textLeft, composerOffset = composer.offset;
     const composerBackgroundTop = composer.backgroundTop, composerBackgroundBottom = composer.backgroundBottom;
-        // Keep the host header in place; constrained terminals spend their
+    // Keep the host header in place; constrained terminals spend their
     // remaining rows on the current screen and composer.
     const overflow = Math.max(0, header.length + bottom.length - height);
     if (overflow) bottom.splice(Math.max(0, bottom.length - overflow), overflow);

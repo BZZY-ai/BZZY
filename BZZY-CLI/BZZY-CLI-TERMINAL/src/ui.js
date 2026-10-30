@@ -32,7 +32,7 @@ import { ActorProjection } from './actor-ui.js';
 export { clean } from './terminal-format.js';
 
 export class UI {
-  constructor({ json = false, pet = true, minimal = false, cwd = process.cwd(), input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, sessionDebugExporter, sessionFullDebugExporter, updateHandoff, yolo, readOnly = false } = {}) {
+  constructor({ json = false, pet = true, minimal = false, cwd = process.cwd(), input = process.stdin, output = process.stdout, error = process.stderr, hostMetrics = false, metricsLoader, sessionMetricsLoader, sessionDebugExporter, sessionFullDebugExporter, updateHandoff, yolo, readOnly = false, captureNetwork = false } = {}) {
     this.extensions = new NativeExtensions(this);
     this.json = json;
     this.pet = pet;
@@ -55,7 +55,7 @@ export class UI {
     this.cursors = new Map();
     this.messageStreams = new Map();
     this.actors = new ActorProjection();
-    this.launchYolo = yolo; this.readOnlyExecution = readOnly; this.sessionPermissionStates = new Map();
+    this.launchCaptureNetwork = captureNetwork === true; this.launchYolo = yolo; this.readOnlyExecution = readOnly; this.sessionPermissionStates = new Map();
     this.updateHandoff = updateHandoff;
     if (updateHandoff) { this.sessionId = updateHandoff.sessionId; this.activeTab = updateHandoff.activeTab; }
   }
@@ -83,7 +83,7 @@ export class UI {
   }
   executionOptions(options, session) {
     this.launchYolo ??= Boolean(options.yolo);
-    return { ...options, yolo: terminalYolo(session.id) ?? this.yoloEnabled(session.id) };
+    return { ...options, ...(typeof this.captureNetworkOverride === 'boolean' ? { captureNetwork: this.captureNetworkOverride } : options.captureNetwork === undefined && this.launchCaptureNetwork ? { captureNetwork: true } : {}), yolo: terminalYolo(session.id) ?? this.yoloEnabled(session.id) };
   }
   async toggleYolo() {
     const tui = this.tui, id = this.sessionId;

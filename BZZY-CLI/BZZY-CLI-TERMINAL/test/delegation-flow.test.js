@@ -86,7 +86,7 @@ test('delegate handoffs and attributed activity stay readable without exposing r
       Object.assign(output, { columns, rows }); ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /Supervisor reviewing/); assert.match(frame, /Type a message/);
-      assert.match(frame, /❯ \/goal Solve this CTF/); assert.match(frame, /strong-model.*effort high/);
+      assert.match(frame, /❯ \/goal Solve this CTF/); assert.match(frame, /strong-model/); assert.match(frame, /Effort\s+high/);
     }
   } finally { ui.close(); }
 });
@@ -151,7 +151,7 @@ test('terminal navigation keeps top session actions, model controls and composer
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'session-new'), Boolean(ui.tui.workspace.left));
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'model-control' && hit.command === '/providers @saved'));
       assert.doesNotMatch(frame, /TELEGRAM/);
-      assert.match(frame, /Type a message/); assert.match(frame, /fixture-brain.*effort default/);
+      assert.match(frame, /Type a message/); assert.match(frame, /fixture-brain/); assert.match(frame, /Effort\s+default/);
       assert.doesNotMatch(frame, /Ctrl\+S|Wheel\/PgUp|COPY/);
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'copy'), false);
     }

@@ -85,7 +85,7 @@ test('chat spending and account balance appear only for direct DeepSeek Solo or 
     ui.minimal = false;
     Object.assign(ui.output, { columns: 40, rows: 32 }); ui.tui.render();
     assert.equal(ui.tui.spending.chat.estimatedUsd.min, 0.01);
-    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workspace-actions'));
+    assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'));
     assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < 40));
   } finally { ui.close(); }
 });

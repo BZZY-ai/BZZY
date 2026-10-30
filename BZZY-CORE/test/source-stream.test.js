@@ -15,6 +15,7 @@ test('shell previews display actual interpreter input, never stdout or invented 
   assert.equal(source.language, 'python'); assert.equal(source.content, "import requests\nprint('actual input')");
   assert.equal(source.sourceKind, 'command'); assert.equal(source.path, 'python · shell input');
   assert.equal(commandSource('node <<JS\nconsole.log(1);\nJS').content, 'console.log(1);');
+  assert.equal(commandSource(['/bin/bash', '-c', "python3 - <<'PY'\nprint('actual argv input')\nPY"]).content, "print('actual argv input')");
   assert.equal(commandSource('curl https://example.test').language, 'sh');
   assert.equal(commandSource('x'.repeat(256 * 1024 + 1)), null);
   assert.equal(safeCommandSource({ ...session, agentId: 'persistent' }, command), null);

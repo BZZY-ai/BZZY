@@ -38,10 +38,10 @@ export function workspaceComposer(tui, width, height, completions) {
   }
   const backgroundTop = lines.length;
   const title = tui.promptDraft ? clean(tui.question || 'Confirm') : tui.panel === 'skills' ? 'Codex skills directory' : (tui.panel === 'room' ? 'Message all agents' : 'Message') + ' · ' + tui.elapsedClock();
-  const back = tui.promptDraft ? ' [← Back] ' : '';
+  const back = tui.promptDraft ? ' [← Back] ' : tui.scroll ? ' [↓ Latest] ' : '';
   const caption = clip(' ' + title + ' ', Math.max(1, width - cellWidth(back) - 3));
   let top = edge('┌─') + c(caption, palette.accent) + edge('─'.repeat(Math.max(0, width - cellWidth(caption) - cellWidth(back) - 3)));
-  if (back) { const left = width - cellWidth(back); hits.push({ type: 'back', back: true, row: lines.length, left, right: width - 1 }); top += c(back, palette.accent); }
+  if (back) { const left = width - cellWidth(back); hits.push({ type: tui.promptDraft ? 'back' : 'latest', back: Boolean(tui.promptDraft), row: lines.length, left, right: width - 1 }); top += c(back, palette.accent); }
   lines.push(top + edge('┐'));
   const hasSubmit = Boolean(tui.resolveInput || tui.ui.sessionId) && (tui.promptDraft || canControlSession(tui.ui));
   const send = tui.promptDraft ? ' Confirm ' : tui.panel === 'skills' && tui.ui.skillView === 'import' ? ' Save & refresh ' : width < 38 ? ' ↑ ' : ' Send ↑ ';
@@ -60,26 +60,16 @@ export function workspaceComposer(tui, width, height, completions) {
   lines.push(input + edge(' │'));
   const inputIndex = lines.length - 1;
   lines.push(edge('└' + '─'.repeat(Math.max(0, width - 2)) + '┘'));
-  if (!tui.promptDraft && height >= 14) {
-    lines.push('');
-    const controls = [[' Paste ', 'paste'], [' Model ▾ ', 'workspace-models'], [' Effort ▾ ', 'model-control', '/effort'], [' Tools ', 'tools'], [tui.scroll ? ' ↓ Latest ' : ' ↓ Live ', 'latest'], ...(tui.busy ? [[' Pause ', 'model-control', '/pause']] : [])];
-    const more = ' ⋯ ';
-    for (const [text, type, command] of controls) {
-      if (cellWidth(lines.at(-1)) + cellWidth(text) + cellWidth(more) > width) break;
-      button(text, type, { command, disabled: command === '/effort' && (tui.busy || tui.modelSelectionRequired || !canControlSession(tui.ui)), tone: type === 'latest' && tui.scroll ? palette.accent : palette.muted });
-    }
-    button(more, 'workspace-actions');
-  }
   if (!tui.promptDraft && height >= 12) {
     const badge = tui.goalBadgeLayout(width, { showEmpty: false });
     if (badge.line) lines.push(badge.line, ...badge.extra);
   }
   if (tui.copyMode) lines.push(c(clip(' COPY MODE · Esc returns', width), palette.warning));
-  if (!tui.promptDraft && tui.panel === 'chat' && height >= 18) {
+  if (!tui.promptDraft && tui.panel === 'chat' && height >= 14) {
     const name = workflowChatLabel(tui.ui);
     if (name !== 'None' && name !== 'Unavailable') {
       hits.push({ type: 'workflow-open', row: lines.length, left: 2, right: width });
-      lines.push(c(clip(' Workflow: ' + name, width), palette.agent));
+      lines.push(tui.theme.background(palette.background) + c(clip(' Workflow: ' + name, width), palette.agent) + tui.theme.background(palette.background));
     }
   }
   return { lines, hits, inputIndex, textLeft: 5, offset, backgroundTop, backgroundBottom: inputIndex };

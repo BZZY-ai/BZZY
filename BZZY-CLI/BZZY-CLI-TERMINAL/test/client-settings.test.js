@@ -140,7 +140,7 @@ test('Settings takes over the full screen and keeps all requested choices at nor
     const frame = ui.tui.lastFrame.map(clean).join('\n');
     for (const label of ['DeepSeek API key', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
     assert.match(frame, /Settings/); assert.doesNotMatch(frame, /◉◉/);
-    assert.match(frame, /fixture-model-banner/); assert.match(frame, /987,654 tokens/);
+    assert.equal(ui.tui.model, 'fixture-model-banner'); assert.match(frame, /fixture-model/); assert.match(frame, /987,654 tokens/);
     assert.ok(frame.includes(ui.sessionWorkingDirectory)); assert.doesNotMatch(frame, /Ask BZZY to do anything/);
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'settings'));
     assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'confirm'), false);
@@ -843,7 +843,7 @@ test('a compact pairing QR renders completely inside an 80 by 24 TUI', async () 
   ui.hostMetrics = { host: { cpuPercent: 12, memory: { totalBytes: 16 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 } } };
   assert.equal(ui.settings.qrLines().length, 18);
   const start = term.written.length; ui.tui.render(); const frame = term.written.slice(start);
-  assert.match(clean(frame), /BZZY.*qr-model/); assert.match(clean(frame), /1,234 tokens.*CPU.*RAM/); assert.match(frame, /\x1b\[47m/);
+  assert.match(clean(frame), /BZZY/); assert.doesNotMatch(clean(frame), /qr-model|1,234 tokens|CPU|RAM/); assert.match(frame, /\x1b\[47m/);
   assert.doesNotMatch(clean(frame), /CHAT ACTIVITY HTTP SESSIONS|Effort:.*Save/u, 'pairing never restores the obsolete dashboard');
   assert.match(clean(frame), /BZZY/);
   assert.doesNotMatch(clean(frame), /Open the QR image to scan|QR needs|\d+ columns/);
