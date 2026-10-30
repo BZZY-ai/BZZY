@@ -62,7 +62,7 @@ test('workflow rows keep shared branding, sidebar metrics and compact navigation
     assert.equal(clean(ui.tui.lastFrame[0]), originalHeader, 'Opening Workflows preserves the current terminal header.');
     assert.ok(ui.tui.lastFrame.every(line => cellWidth(clean(line)) <= columns - 1));
     assert.equal(ui.tui.model, 'fixture-model'); assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'));
-    if (columns >= 80) { assert.match(frame(), /Sessions|SESSIONS/); assert.match(frame(), /fixture-model/); assert.match(frame(), /CPU.*12%/); }
+    if (columns >= 80) { assert.match(frame(), /Sessions|SESSIONS/); assert.match(frame(), /fixture-mod/); assert.match(frame(), /CPU.*12%/); }
     assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'workflow-action'));
     assert.ok(!ui.tui.hitTargets.some(hit => hit.type === 'confirm'));
     assert.equal(ui.tui.canCompose(), false); assertDraft();

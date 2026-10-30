@@ -8,7 +8,7 @@ export async function changeConversationProvider(source, argument, ui, connectio
   if (source.parentSessionId || source.mode === 'parallel') throw new Error('Choose providers before starting a group. Use /models to change the selected agent’s model.');
   assertModelIdle(source);
   if (!argument || argument === '@saved') {
-    const selected = await (argument === '@saved' ? chooseSavedModel : chooseUnifiedModel)(source, ui);
+    const selected = await (argument === '@saved' ? chooseSavedModel(source, ui, { selectionOnly: true }) : chooseUnifiedModel(source, ui));
     if (!selected) return null;
     if (argument === '@saved') {
       const capabilities = await modelEffortCapabilities({ ...source, provider: selected.provider, model: selected.model,

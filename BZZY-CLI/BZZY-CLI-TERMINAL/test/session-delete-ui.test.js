@@ -45,7 +45,9 @@ test('right-click and F10 expose Delete chat for the root terminal and preserve 
     assert.equal(ui.tui.value, 'Unsent thought'); assert.equal(ui.tui.history.length, 0);
     const picking = ui.chooseOne('Sessions', [{ value: source.id, label: source.alias }], { scope: 'sessions' });
     await ready(); ui.tui.key('', { name: 'f10' });
-    ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'return' });
+    const deleteIndex = ui.tui.selection.choices.findIndex(choice => choice.value === 'delete');
+    for (let i = 0; i < deleteIndex; i++) ui.tui.key('', { name: 'down' });
+    ui.tui.key('', { name: 'return' });
     assert.deepEqual(await picking, { value: source.id, action: 'delete' });
     assert.equal(listRecords('execution').length, 0);
   } finally { ui.close(); }

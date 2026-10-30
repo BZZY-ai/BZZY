@@ -37,7 +37,7 @@ export function sourcePreview(session, filename, { phase = 'completed', failed =
   finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
 }
 
-export function createSourceObserver(session, emit) {
+export function createSourceObserver(session, emit, { commandsOnly = false } = {}) {
   const pending = new Map(), commands = new Map();
   return data => {
     const params = data.params || {}, item = params.item;
@@ -51,9 +51,16 @@ export function createSourceObserver(session, emit) {
       const done = nativeCommand ? data.method === 'item/completed' : data.method === 'tool.completed';
       const failed = nativeCommand ? item.status === 'failed' || Number.isInteger(item.exitCode) && item.exitCode !== 0 : params.failed;
       const preview = safeCommandSource(session, command, { callId: id, phase: failed ? 'failed' : done ? 'completed' : 'started' });
-      if (preview) emit('source.changed', preview);
+      if (preview) {
+        const { command: fullCommand, content, ...metadata } = preview;
+        emit('command.observed', { ...metadata, command: fullCommand, runId: data.runId,
+          observedAt: data.occurredAt || preview.observedAt,
+          ...(Number.isInteger(item?.exitCode) ? { exitCode: item.exitCode } : {}),
+          ...(Number.isFinite(item?.durationMs ?? params.durationMs) ? { durationMs: item?.durationMs ?? params.durationMs } : {}) });
+        if (!commandsOnly) emit('source.changed', { ...metadata, content });
+      }
       const filename = launchedSourceFile(command);
-      if (filename) {
+      if (filename && !commandsOnly) {
         try {
           const root = fs.realpathSync(session.cwd), cwd = fs.realpathSync(path.resolve(session.cwd, commandCwd));
           const target = path.isAbsolute(filename) && inside(path.resolve(session.cwd), filename)
@@ -65,6 +72,7 @@ export function createSourceObserver(session, emit) {
       if (!done) { if (commands.size >= 64) commands.delete(commands.keys().next().value); commands.set(id, { command, cwd: commandCwd }); } else commands.delete(id);
       return;
     }
+    if (commandsOnly) return;
     if (['item/started', 'item/completed'].includes(data.method) && item?.type === 'fileChange') {
       changes = item.changes || []; callId = item.id; phase = data.method === 'item/started' ? 'started' : 'completed'; failed = item.status === 'failed';
     } else if (data.method === 'tool.started' && /^(?:Write|Edit|MultiEdit)$/.test(params.name || '')) {

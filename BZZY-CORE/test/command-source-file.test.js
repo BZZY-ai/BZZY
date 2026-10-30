@@ -52,7 +52,7 @@ test('CODE receives actual file contents immediately at native command start, wi
     fs.symlinkSync(path.join(directory, 'outside.py'), path.join(cwd, 'link.py')); launch(['python3', 'link.py']);
     assert.doesNotMatch(JSON.stringify(events), /PRIVATE_OUTSIDE_CONTENT/);
     const before = events.length; launch(['python3', 'missing.py']);
-    assert.equal(events.length, before + 1, 'missing scripts retain the actual command input without fabricated source');
+    assert.deepEqual(events.slice(before).map(row => row.type), ['command.observed', 'source.changed'], 'missing scripts retain only actual command input, without fabricated file contents');
     observe({ method: 'tool.started', params: { id: 'claude-launch', name: 'Bash', input: { command: 'python3 recon/probe.py' } } });
     assert.equal(events.at(-1).data.provenance, 'native-script-launch');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }

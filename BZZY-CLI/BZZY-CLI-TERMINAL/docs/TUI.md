@@ -19,7 +19,9 @@ independently of Relay. The header’s **dir** and **.bzzy** fields copy their c
 paths when clicked; both use the selected saved session, including its original
 cwd and legacy memory binding. **Session folders** in the navigation/actions
 menus retains both copy actions. The single-row header contains branding, both
-paths and connection dots; navigation controls live inside the workspace. Model/effort, session/compactor tokens and host
+paths, connection dots and an HH:MM clock using the CLI host timezone. This
+keeps a VPS clock consistent with its invocation timestamps. Navigation controls
+live inside the workspace. Model/effort, session/compactor tokens and host
 measurements stay in their dedicated sidebar sections. A compact **HOST USAGE**
 footer below Sessions shows Core's real CPU/RAM sample, independently of the
 session list's scroll. Compact/minimal terminals retain model controls and
@@ -39,15 +41,21 @@ session list's scroll. Compact/minimal terminals retain model controls and
 - Each activity section and the saved-session list scroll independently under
   the mouse. Chat stops following when scrolled up; **↓ Latest** in the composer
   caption follows again.
-  Source has an explicit **Follow ON/OFF** control. Expanded source lines copy
-  individually; the filename menu selects recent files or copies all source.
+  CODE lists commands newest first; click a row for the full redacted command
+  in the center, with soft wrapping, Copy and Start/End controls. Its menu also
+  opens actual source/file previews; those retain Follow and copy controls.
 - **AGENTS / SKILLS** shows only invocation time and name, newest first. Click
   a row for its recorded status/details; ongoing tool logs stay in their existing
   chat trees. Expanded Agents exposes the existing **Pause session / Cancel session**
   commands while working. These affect the selected session. Existing Core
   permissions and control ownership still apply.
-- **HTTP PROBE** rows open redacted headers, status, duration, originating actor
-  and a response preview when capture supplies one. Its menu filters by method
+- **HTTP PROBE** remains a request table when a row is selected. Selection opens
+  REQUEST above RESPONSE in the center, each independently scrollable. Headers,
+  method/status and captured JSON have semantic colors; Copy uses the redacted
+  view. Missing bodies stay explicitly uncaptured. The center updates a pending
+  response as real telemetry arrives. Esc, Back or Close returns to session chat
+  for both HTTP and command inspectors, preserving the draft and sidebar tables.
+  Its menu filters by method
   or errors, sorts by status/time, and opens existing HTTP history, which also
   retains backend-reported web visits. Shell capture is enabled automatically for
   new executions in both new and existing chats, including workers. The filter
@@ -57,13 +65,16 @@ session list's scroll. Compact/minimal terminals retain model controls and
   history loads. Cancel preserves the active reader, transcript, draft and scroll.
   Opening returns to the actual chat in its original cwd. Only
   nonblank aliases appear, newest saved activity first. **＋** creates an idle
-  chat through `/new`; right-click exposes Open, Rename, Share and Delete.
+  chat through `/new`; right-click exposes Rename, Share and Delete.
   Core still confirms deletion and rejects live work. No archive capability is
   invented. Session navigation never replays previous model work.
 - **MODEL → configure**, **Provider**, **Model** and **Effort** use Core catalogs
   and existing selectors. **Saved combinations** stores named provider/model/
-  effort tuples in Core's locked private configuration. Only saved tuples and
-  explicit Save/Configure/Remove actions appear there. Selecting one discovers
+  effort tuples in Core's locked private configuration. The compact dropdown
+  contains saved tuples only and requires an idle response. The adjacent **+**
+  prompts for a name immediately, including while working; an existing tuple
+  opens **Combination already exists** instead of creating a duplicate. Context
+  and input/output pricing rows are omitted from MODEL. Selecting one discovers
   capabilities for that provider, validates supported effort, and uses existing
   ownership/idle checks. Saved tuples contain no account credentials and do not
   change Core's independent assistant model or any mode defaults. Naming/removing
@@ -113,7 +124,14 @@ retains body hashes and counts, not body text. `http_request` can additionally
 supply a redacted textual response preview (8 KiB); full evidence retains its
 existing access rules. Request bodies are not newly collected by the viewer.
 
-CODE consumes Core's `source.changed` and revisioned `source.delta` events.
+CODE lists Core's actual `command.observed` native invocations. Start and
+completion update the same row, with actor/run/call identity and recorded status.
+The client retains up to 500 commands within an 8 MiB text budget. Opening a row
+shows its full redacted input in the center, independently of the live command
+list. There is no permanent raw-command dump in the narrow sidebar.
+
+Source/file inspectors consume Core's `source.changed` and revisioned
+`source.delta` events.
 Managed Codex native `fileChange` and Claude `Write/Edit/MultiEdit` metadata
 identify changed files. Core reads the actual regular file after completion and
 emits its resulting source immediately. Actual shell command inputs also appear,
@@ -127,15 +145,18 @@ project file at command start and completion. Native argv, simple shell wrappers
 and explicit working directories are supported; dynamic expansions and unknown
 interpreter flags do not establish a source path.
 
-The frontend gives complete snapshots a fast 240 ms type-on reveal with a source
-cursor. This is a visual presentation of already captured content: the full
+The center gives complete command/source snapshots a fast 650 ms reveal with
+a cursor. The reveal starts at first visible paint, so history/event loading
+cannot consume it off screen; a live cursor remains while the command is active.
+This is a visual presentation of already captured content: the full
 source stays available for copying, and no typing events or execution progress
 are added to history. Real input deltas display as they arrive. Manual source
 scrolling disables the reveal. Uninstrumented shell file writes, external
 editors and direct diagnostic backend runs do not gain automatic file attribution.
 On restore, an owner-local compatibility projection reads at most 48 recent
 native command/edit records per actor across at most 17 related sessions when
-exact source events are absent. Recorded shell input is labelled **recorded**;
+exact source events are absent. Older native logs also recover command rows
+without file reads or execution, preserving their recorded timestamps. Recorded shell input is labelled **recorded**;
 current files read from a recorded launch/edit are labelled **observed**, never
 claimed as historical bytes. Live native events from older runners use the same
 Core source observer. Private/persistent/unrelated actors stay excluded. This

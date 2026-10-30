@@ -14,7 +14,7 @@ export function actorColor(actor) {
   let hash = 0; for (const char of name) hash = (hash * 31 + char.codePointAt(0)) >>> 0;
   return identityColors[hash % identityColors.length];
 }
-const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '--:--';
+const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : '--:--';
 const methodTone = method => /^(POST)$/.test(method) ? palette.tool : /^(PUT|PATCH)$/.test(method) ? palette.agent : method === 'DELETE' ? palette.danger : palette.accent;
 const statusTone = status => status >= 500 ? palette.danger : status >= 400 ? palette.warning : status >= 300 ? '#5B8CFF' : status >= 200 ? palette.success : palette.muted;
 const syntax = /(?:\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:import|from|export|const|let|var|async|await|function|return|if|else|for|while|class|new|def|in|try|catch|throw|public|private|func|package|use|fn|true|false|null|None|self)\b|\b[A-Za-z_$][\w$]*(?=\s*\())/g;
@@ -29,9 +29,9 @@ export function highlightSource(text, theme) {
 }
 
 export class ActivityMonitor {
-  constructor({ now = () => performance.now(), revealMs = 240 } = {}) {
-    this.feed = []; this.files = new Map(); this.pending = new Map(); this.seen = new Set(); this.revision = 0;
-    this.offsets = { agents: 0, http: 0, code: 0 }; this.collapsed = new Set(); this.maxima = {}; this.followCode = true;
+  constructor({ now = () => performance.now(), revealMs = 650 } = {}) {
+    this.feed = []; this.files = new Map(); this.commands = new Map(); this.commandChars = 0; this.pending = new Map(); this.seen = new Set(); this.revision = 0;
+    this.offsets = { agents: 0, http: 0, code: 0, source: 0, command: 0 }; this.collapsed = new Set(); this.maxima = {}; this.followCode = true;
     this.redactor = null;
     this.now = now; this.revealMs = revealMs;
   }
@@ -39,6 +39,15 @@ export class ActivityMonitor {
   event(type, data, actors, sessionId) {
     if (data.seq != null) { const key = `${data.eventSessionId || sessionId}:${data.seq}`; if (this.seen.has(key)) return; this.seen.add(key); if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value); }
     if (type === 'network.capture' && typeof data.enabled === 'boolean') { this.captureEnabled = data.enabled; this.captureUnavailable = data.reason === 'unavailable'; this.revision++; return; }
+    if (type === 'command.observed' && typeof data.command === 'string' && typeof data.callId === 'string') {
+      const key = `${data.actorSessionId || sessionId}:${data.runId || ''}:${data.callId}`, previous = this.commands.get(key);
+      const command = clean(data.command).slice(0, 256 * 1024);
+      this.commandChars += command.length - (previous?.command.length || 0);
+      this.commands.set(key, { ...previous, ...data, key, command, at: previous?.at || data.occurredAt || data.observedAt });
+      while (this.commands.size > 500 || this.commandChars > 8 * 1024 * 1024) { const first = this.commands.keys().next().value; this.commandChars -= this.commands.get(first).command.length; this.commands.delete(first); }
+      if (!previous && this.offsets.code) this.offsets.code++;
+      this.revision++; return;
+    }
     if (['source.changed', 'source.delta'].includes(type) && typeof data.path === 'string') {
       const key = `${data.actorSessionId || sessionId}:${data.sourceId || data.path}`, previous = this.files.get(key);
       if (type === 'source.delta') {
@@ -50,17 +59,19 @@ export class ActivityMonitor {
       const changed = new Set();
       if (typeof data.content === 'string' && previous?.lines) for (let i = 0; i < lines.length; i++) if (lines[i] !== previous.lines[i]) changed.add(i);
       const file = { ...previous, ...data, key, sourceText: typeof data.content === 'string' ? data.content.slice(0, 256 * 1024) : previous?.sourceText, lines, changed, clipped: typeof data.content === 'string' && data.content.split('\n').length > 5000 };
-      if (type === 'source.delta') file.revealAt = null;
+      if (type === 'source.delta') { file.revealAt = null; file.revealPending = false; }
       else if (typeof data.content === 'string' && file.sourceText !== previous?.sourceText) {
         let common = 0;
         while (common < (previous?.sourceText?.length || 0) && common < file.sourceText.length && previous.sourceText[common] === file.sourceText[common]) common++;
-        file.revealFrom = common; file.revealAt = this.now();
+        // Event replay/polling can take longer than a reveal. Start its clock
+        // when CODE is actually painted, so a batch cannot consume every frame.
+        file.revealFrom = common; file.revealAt = null; file.revealPending = this.followCode;
       }
       delete file.content;
       this.files.delete(key); this.files.set(key, file);
       if (this.files.size > 24) this.files.delete(this.files.keys().next().value);
       if (this.followCode || !this.activeFile) this.activeFile = key;
-      else if (this.activeFile === key && previous) this.offsets.code = Math.max(0, this.offsets.code + lines.length - previous.lines.length);
+      else if (this.activeFile === key && previous) this.offsets.source = Math.max(0, this.offsets.source + lines.length - previous.lines.length);
       this.revision++; return;
     }
   }
@@ -90,38 +101,24 @@ export class ActivityMonitor {
     if (!tui.busy) return tui.ui.launchCaptureNetwork ? 'Shell capture ON · next run' : 'Shell capture OFF';
     return (typeof tui.captureNetwork === 'boolean' ? tui.captureNetwork : this.captureEnabled) ? 'Shell capture ON' : 'Shell capture OFF';
   }
-  animating() {
-    const file = this.files.get(this.activeFile);
-    return Boolean(this.followCode && file?.revealAt != null && this.now() - file.revealAt < this.revealMs && file.revealFrom < file.sourceText.length);
+  animating(file = this.detail?.kind === 'command' ? this.commandPreview : this.files.get(this.activeFile)) {
+    return Boolean((file === this.commandPreview || this.followCode) && file?.sourceText && file.revealFrom < file.sourceText.length
+      && (file.revealPending || file.revealAt != null && this.now() - file.revealAt < this.revealMs));
   }
   visibleSource(file) {
-    if (!this.animating()) return file.lines;
+    if (!this.animating(file)) return file.lines;
+    if (file.revealPending) { file.revealAt = this.now(); file.revealPending = false; }
     const fraction = Math.max(0, Math.min(1, (this.now() - file.revealAt) / this.revealMs));
     const count = file.revealFrom + Math.max(1, Math.ceil((file.sourceText.length - file.revealFrom) * fraction));
     return clean(file.sourceText.slice(0, count).replace(/[\ud800-\udbff]$/, '')).split('\n').slice(0, 5000);
   }
-  rows(kind, width, tui) {
+  rows(kind, width, tui, { detail = false } = {}) {
     const { theme } = tui, c = theme.color, lines = [], hits = [];
     const put = (text, tone = palette.muted) => lines.push(c(clip(text, width), tone));
-    if (this.detail && this.expanded === kind) {
+    if (detail && kind === 'code' && this.detail?.kind === 'source') return this.sourceRows(width, tui, this.files.get(this.activeFile));
+    if (detail && kind !== 'http' && this.detail && this.expanded === kind) {
       const detail = this.detail;
-      if (detail.kind === 'http') {
-        put(`${detail.row.method || '?'} ${detail.row.status || 'pending'} · ${detail.row.durationMs ?? '—'} ms`, statusTone(detail.row.status));
-        const row = detail.row;
-        let url; try { url = redactedUrl(row.url); } catch { url = '[invalid URL]'; }
-        for (const line of wrap(url, width)) put(line, palette.text);
-        put(`Origin: ${tui.actors.for(row.actorSessionId || row.sessionId, tui.ui.sessionId).label}`);
-        put(`Source: ${row.provenance || 'observed'}`);
-        for (const field of ['requestHeaders', 'responseHeaders']) {
-          put(field, palette.accent);
-          const safe = this.scrub(redactedHeaders(row[field] || {}));
-          for (const [key, value] of Object.entries(safe)) for (const line of wrap(`${key}: ${value}`, width)) put(line, palette.text);
-        }
-        put('Body capture: ' + (row.evidence ? `recorded evidence ${row.evidence}` : 'not exposed by this capture'));
-        if (typeof row.responsePreview === 'string') for (const line of wrap(this.scrub(row.responsePreview), width)) put(line, palette.text);
-        if (row.responseBytes != null) put(`${row.responseBytes} response bytes`);
-        if (row.message) put(this.scrub(row.message), palette.warning);
-      } else if (detail.row.entry) {
+      if (detail.row.entry) {
         return tui.entryLayout(detail.row.entry, width);
       } else {
         put(tui.actors.for(detail.row.actorId, tui.ui.sessionId).label, palette.agent);
@@ -139,28 +136,49 @@ export class ActivityMonitor {
       }
     } else if (kind === 'http') {
       for (const row of this.requests(tui.traffic)) {
-        let endpoint; try { const url = new URL(redactedUrl(row.url)); endpoint = (width >= 60 ? url.host : '') + url.pathname + url.search; } catch { endpoint = '[invalid URL]'; }
+        let endpoint; try { const url = new URL(redactedUrl(row.url)); endpoint = row.method === 'CONNECT' ? url.host : (width >= 60 ? url.host : '') + url.pathname + url.search; } catch { endpoint = '[invalid URL]'; }
         hits.push({ type: 'monitor-detail', kind, item: row, row: lines.length, left: 1, right: width });
         lines.push(c(clip(row.method || '?', 6).padEnd(7), methodTone(row.method)) + c(String(row.status || (row.type === 'network.error' ? 'ERR' : '…')).padEnd(4), row.type === 'network.error' ? palette.danger : statusTone(row.status)) + c(clip(endpoint, Math.max(1, width - 11)), palette.text));
       }
     } else {
-      const file = this.files.get(this.activeFile);
-      if (!file) return { lines, hits };
-      if (file.unavailable) put(file.unavailable, palette.warning);
-      const digits = Math.max(3, String(file.lines.length).length);
-      const visible = this.visibleSource(file), revealing = this.animating();
-      for (const [index, source] of visible.entries()) {
-        hits.push({ type: 'monitor-line', file, index, row: lines.length, left: 1, right: width });
-        const mark = file.changed.has(index) ? '~' : ' ';
-        lines.push(c(mark + String(index + 1).padStart(digits) + ' ', mark === '~' ? palette.warning : palette.muted)
-          + highlightSource(clip(source.replaceAll('\t', '  ') + (revealing && index === visible.length - 1 ? '▏' : ''), Math.max(1, width - digits - 2), ''), theme));
+      for (const row of [...this.commands.values()].reverse()) {
+        const actor = tui.actors.for(row.actorSessionId || tui.ui.sessionId, tui.ui.sessionId), stamp = time(row.at);
+        const done = row.phase === 'completed', failed = row.phase === 'failed', mark = failed ? '✕' : done ? '✓' : row.phase === 'started' ? '●' : '·';
+        const name = width >= 36 ? clip(actor.name, 9).padEnd(10) : '';
+        const prefix = stamp + ' ' + mark + ' ' + name;
+        hits.push({ type: 'monitor-command', key: row.key, row: lines.length, left: 1, right: width });
+        lines.push(c(stamp + ' ', palette.muted) + c(mark + ' ', failed ? palette.danger : done ? palette.success : palette.tool)
+          + c(name, actorColor(actor)) + c(clip(row.command.replace(/\s+/g, ' '), Math.max(1, width - cellWidth(prefix))), palette.tool));
       }
-      if (file.clipped) put('Preview limited to 5,000 lines.', palette.warning);
     }
     return { lines, hits };
   }
+  sourceRows(width, tui, file, { wrapLines = false } = {}) {
+      const { theme } = tui, c = theme.color, lines = [], hits = [];
+      if (!file) return { lines, hits };
+      if (file.unavailable) lines.push(c(clip(file.unavailable, width), palette.warning));
+      const digits = Math.max(3, String(file.lines.length).length);
+      const visible = this.visibleSource(file), revealing = this.animating(file);
+      const cursor = revealing || tui.busy && ['started', 'running', 'preparing', 'prepared'].includes(file.phase) && Math.floor(this.now() / 400) % 2 === 0;
+      for (const [index, source] of visible.entries()) {
+        const text = source.replaceAll('\t', '  ') + (cursor && index === visible.length - 1 ? '▏' : '');
+        const chunks = wrapLines ? wrap(text, Math.max(1, width - digits - 2)) : [clip(text, Math.max(1, width - digits - 2), '')];
+        for (const [part, chunk] of chunks.entries()) {
+          hits.push({ type: 'monitor-line', file, index, row: lines.length, left: 1, right: width });
+          const mark = file.changed?.has(index) ? '~' : ' ';
+          lines.push(c(mark + (part ? '·'.padStart(digits) : String(index + 1).padStart(digits)) + ' ', mark === '~' ? palette.warning : palette.muted) + highlightSource(chunk, theme));
+        }
+      }
+      if (file.clipped) lines.push(c('Preview limited to 5,000 lines.', palette.warning));
+    return { lines, hits };
+  }
   scroll(kind, delta) {
-    this.offsets[kind] = Math.max(0, Math.min(this.maxima[kind] || 0, this.offsets[kind] + (kind === 'agents' ? delta : -delta)));
-    if (kind === 'code') this.followCode = this.offsets.code === 0;
+    this.offsets[kind] = kind === 'command' ? Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, this.offsets.command + delta))
+      : Math.max(0, Math.min(this.maxima[kind] || 0, this.offsets[kind] + (['agents', 'code'].includes(kind) ? delta : -delta)));
+    if (kind === 'source' || kind === 'command') {
+      if (kind === 'source') this.followCode = this.offsets.source === 0;
+      const file = kind === 'command' ? this.commandPreview : this.files.get(this.activeFile);
+      if (file) { file.revealPending = false; file.revealAt = null; }
+    }
   }
 }

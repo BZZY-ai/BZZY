@@ -57,10 +57,37 @@ export function launchedSourceFile(command, depth = 0) {
   return null;
 }
 
-export function commandInputText(command) {
+// An inline interpreter argument is source already present in native tool input.
+// Decode shell quoting only; never expand variables or evaluate that source.
+export function inlineCommandSource(command, depth = 0) {
+  if (depth > 2) return null;
+  const args = Array.isArray(command) && command.length <= 256 && command.every(arg => typeof arg === 'string' && arg.length <= 256 * 1024)
+    ? command.slice() : words(command);
+  if (!args?.length) return null;
+  if (args[0] === 'exec') args.shift();
+  if (path.basename(args[0] || '') === 'env') { args.shift(); while (/^[A-Za-z_][\w]*=/.test(args[0] || '')) args.shift(); }
+  const executable = path.basename(args.shift() || '');
+  if (/^(?:bash|sh|zsh)$/.test(executable) && /^-[A-Za-z]*c[A-Za-z]*$/.test(args[0] || '')) return inlineCommandSource(args[1], depth + 1);
+  const python = /^python(?:\d+(?:\.\d+)*)?$/.test(executable), node = /^(?:node|nodejs)$/.test(executable);
+  if (!python && !node) return null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (python && arg === '-c' || node && ['-e', '--eval', '-p', '--print'].includes(arg)) {
+      if (typeof args[i + 1] !== 'string') return null;
+      return { language: python ? 'python' : 'javascript', content: args[i + 1] };
+    }
+    if (node && /^--(?:eval|print)=/.test(arg)) return { language: 'javascript', content: arg.slice(arg.indexOf('=') + 1) };
+    if (python && ['-W', '-X'].includes(arg)) { i++; continue; }
+    if (!(python && /^(?:-u|-B|-E|-s|-S|-I|-O|-OO|-q|-v|-vv|-x|-W.+|-X.+)$/.test(arg)
+      || node && /^(?:--enable-source-maps|--no-warnings|--trace-warnings)$/.test(arg))) return null;
+  }
+  return null;
+}
+
+export function commandInputText(command, { unwrap = true } = {}) {
   if (typeof command === 'string') return command;
   if (!Array.isArray(command) || !command.length || command.length > 256 || !command.every(arg => typeof arg === 'string' && arg.length <= 256 * 1024) || command.reduce((size, arg) => size + arg.length, 0) > 256 * 1024) return null;
-  if (/^(?:bash|sh|zsh)$/.test(path.basename(command[0])) && /^-[A-Za-z]*c[A-Za-z]*$/.test(command[1] || '') && typeof command[2] === 'string') return command[2];
+  if (unwrap && /^(?:bash|sh|zsh)$/.test(path.basename(command[0])) && /^-[A-Za-z]*c[A-Za-z]*$/.test(command[1] || '') && typeof command[2] === 'string') return command[2];
   const text = command.map(arg => /^[\w./=-]+$/.test(arg) ? arg : "'" + arg.replaceAll("'", "'\\''") + "'").join(' ');
   return text.length <= 256 * 1024 ? text : null;
 }

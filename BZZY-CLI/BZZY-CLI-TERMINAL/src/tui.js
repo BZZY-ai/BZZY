@@ -34,9 +34,10 @@ import { workspaceGeometry, workspaceChrome } from './workspace-layout.js';
 import { workspaceHeader, workspaceNavigation, sectionHeading } from './workspace-header.js';
 import { workspaceComposer, workspacePanelFooter } from './workspace-composer.js';
 import { responseResources, openTerminalLink } from './response-actions.js';
-import { chooseSavedModel } from './model-controls.js';
+import { saveModelCombination } from './model-controls.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { createTerminalSourceProjection } from '@bzzy/core/engine/terminal-source.js';
+import { httpExchange, httpExchangeLayout } from './http-inspector.js';
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const animationInterval = 1000 / 60;
@@ -95,9 +96,12 @@ export class TerminalChat {
       if (this.closed) return;
       const instant = performance.now(), previous = this.frame;
       this.animationTime = (instant - this.animationStarted) / 1000; this.frame = Math.floor(this.animationTime * 10);
-      const sourceAnimating = this.monitor?.animating();
+      const sourceVisible = this.panel === 'monitor' && this.monitor.expanded === 'code' && ['command', 'source'].includes(this.monitor.detail?.kind);
+      const sourceAnimating = sourceVisible && this.monitor?.animating();
+      const minute = Math.floor(Date.now() / 60000), clockChanged = this.headerMinute !== minute;
+      this.headerMinute = minute;
       if (!this.copyMode && !this.outputBlocked) {
-        if (sourceAnimating || previous !== this.frame && (this.historyRestoreDepth || this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated || goalValidationIndicator(this.goal, this.goalValidation, this.frame)?.animated)) this.schedule();
+        if (clockChanged || sourceAnimating || previous !== this.frame && (this.historyRestoreDepth || this.busy || this.selection?.loading || goalIndicator(this.goal, this.frame)?.animated || goalValidationIndicator(this.goal, this.goalValidation, this.frame)?.animated)) this.schedule();
       }
       const interval = sourceAnimating ? 1000 / 30 : this.ui.pet === false ? 100 : animationInterval;
       deadline += interval;
@@ -281,7 +285,7 @@ export class TerminalChat {
       this.delegationUsage = data;
     } else if (type === 'besties.usage' || type === 'parallel.usage') {
       this.acceptGroupUsage(data);
-    } else if (type.startsWith('network.') && data.url) {
+    } else if (type.startsWith('network.') && (data.url || data.id && this.traffic.some(row => row.id === data.id))) {
       const index = data.id ? this.traffic.findIndex(item => item.id === data.id || data.backendCallId && item.backendCallId === data.backendCallId && item.url === data.url) : -1;
       if (index >= 0) this.traffic[index] = { ...this.traffic[index], ...data, type }; else this.traffic.push({ ...data, type });
     }
@@ -447,16 +451,15 @@ export class TerminalChat {
     this.textSelection = null;
     this.selection = { title: session.alias, presentation: 'context', scope: 'session-menu', anchor: { left: x, row: y },
       backgroundFrame, single: true, loading: false, focus: 0, query: '', choices: [
-        { value: 'open', label: 'Open terminal', description: 'Open the saved chat in its original project.' },
         { value: 'share', label: 'Share full context', description: !canControlSession(this.ui) ? 'Attach with control to share.' : 'Full project and saved chats · QR / expiring code · recipient approval', disabled: !canControlSession(this.ui) },
         { value: 'delete', label: 'Delete chat', description: 'Remove this saved chat from BZZY. Project files are kept.', disabled: /VIEW/.test(this.ui.sessionMode || '') && !this.ui.permissionConnection?.acquire },
         { value: 'rename', label: 'Rename terminal', disabled: !canControlSession(this.ui) },
         { value: 'cancel', label: 'Cancel' },
       ], resolve: action => {
         this.selection = parent; this.ui.reader = reader;
-        if (!['open', 'share', 'delete', 'rename'].includes(action)) return;
-        if (parent) this.finishSelection(action === 'open' ? id : { value: id, action });
-        else this.localCommand(action === 'open' ? '/open-session ' + id : '/session-action ' + action + ' ' + id);
+        if (!['share', 'delete', 'rename'].includes(action)) return;
+        if (parent) this.finishSelection({ value: id, action });
+        else this.localCommand('/session-action ' + action + ' ' + id);
       } };
     this.ui.reader = { close: () => this.finishSelection(null) }; this.schedule(); return true;
   }
@@ -566,6 +569,7 @@ export class TerminalChat {
   }
   panels() { return this.mode === 'besties' || this.bestiesGroupId || this.sharedRoom.length ? ['chat', 'room', 'activity', 'http', 'sessions', 'skills', 'agents', 'workflows', 'goals', 'metrics', 'settings'] : ['chat', 'activity', 'http', 'sessions', 'skills', 'agents', 'workflows', 'goals', 'metrics', 'settings']; }
   setPanel(panel) {
+    this.httpInspectorRegions = [];
     if (this.ui.coreLifecycleInterrupted && !['settings', 'metrics', 'chat'].includes(panel)) return;
     if (this.promptDraft || this.selection) return;
     if (panel === 'room' && !this.panels().includes('room')) { this.ui.event('info', { message: 'The shared room is available in a besties conversation. Start with bzzy --besties.' }); return; }
@@ -806,9 +810,12 @@ export class TerminalChat {
     if (hit?.type === 'alias-cancel') { this.aliasEdit = null; this.schedule(); return; }
     if (this.aliasEdit && hit?.type !== 'alias') { this.aliasEdit = null; this.schedule(); }
     if (hit?.type === 'panel') this.setPanel(hit.panel);
+    else if (hit?.type === 'model-save') {
+      if (hit.disabled) this.notice(!canControlSession(this.ui) ? 'This terminal is read-only.' : 'Select a model first.', true);
+      else this.modelSaveTask = this.saveCurrentModelCombination();
+    }
     else if (hit?.type === 'model-control') {
       if (hit.disabled) this.notice(!canControlSession(this.ui) ? 'This terminal is read-only.' : this.busy ? 'Pause the current response before changing its model.' : 'Select a model first.', true);
-      else if (hit.command === '/providers @saved' && this.busy) { this.modelAnchor = { left: hit.left, row: hit.row }; this.modelSaveTask = this.saveModelWhileWorking(); }
       else if (hit.command === '/settings core') { this.ui.openSettings(); this.settingsAction('core'); }
       else { this.modelAnchor = { left: hit.left, row: hit.row }; this.localCommand(hit.command); }
     }
@@ -900,6 +907,7 @@ export class TerminalChat {
     this.metricsTopRequested = true; this.bodyCache = null; this.schedule();
   }
   escapeMenu() {
+    if (this.panel === 'monitor' && ['http', 'command', 'source'].includes(this.monitor.detail?.kind)) { this.closeInspector(); return true; }
     if (this.ui.cancelDefinitionAuthoring) { this.ui.cancelDefinitionAuthoring(); this.schedule(); return true; }
     if (this.ui.privateView && !this.resolveInput) { this.ui.privateView.onCancel?.(); return true; }
     if (this.aliasEdit) { this.aliasEdit = null; this.schedule(); return true; }
@@ -1090,6 +1098,18 @@ export class TerminalChat {
         this.ui.settings.focus = next.focus; this.settingsColumn = next.column; this.settingsEnsureFocus = true; this.schedule();
       } else if (key.name === 'return') this.settingsAction(actions[this.ui.settings.focus]?.action);
       return;
+    }
+    if (this.panel === 'monitor' && this.monitor.detail?.kind === 'command' && !this.promptDraft && ['up', 'down', 'pageup', 'pagedown', 'home', 'end'].includes(key.name)) {
+      key.bzzyHandled = true;
+      this.monitor.scroll('command', key.name === 'home' ? -Infinity : key.name === 'end' ? Infinity : (['up', 'pageup'].includes(key.name) ? -1 : 1) * (['pageup', 'pagedown'].includes(key.name) ? 8 : 1));
+      this.schedule(); return;
+    }
+    if (this.panel === 'monitor' && this.monitor.detail?.kind === 'http' && !this.promptDraft && ['up', 'down', 'pageup', 'pagedown', 'home', 'end', 'tab'].includes(key.name)) {
+      key.bzzyHandled = true;
+      const section = this.monitor.httpDetailFocus || 'request';
+      if (key.name === 'tab') this.monitor.httpDetailFocus = section === 'request' ? 'response' : 'request';
+      else this.scrollHttpInspector(section, key.name === 'home' ? -Infinity : key.name === 'end' ? Infinity : (['up', 'pageup'].includes(key.name) ? -1 : 1) * (['pageup', 'pagedown'].includes(key.name) ? 8 : 1));
+      this.schedule(); return;
     }
     if (this.panel === 'metrics' && !this.promptDraft) {
       key.bzzyHandled = true;
@@ -1684,6 +1704,7 @@ export class TerminalChat {
     const centerHits = this.hitTargets.map(hit => ({ ...hit, row: hit.row + geometry.y, left: hit.left + geometry.x, right: Math.min(geometry.width, hit.right + geometry.x) }));
     if (this.scrollbar) this.scrollbar = { ...this.scrollbar, top: this.scrollbar.top + geometry.y, thumbTop: this.scrollbar.thumbTop + geometry.y, column: this.scrollbar.column + geometry.x };
     if (this.textRegion) this.textRegion = { ...this.textRegion, top: this.textRegion.top + geometry.y, bottom: this.textRegion.bottom + geometry.y, left: this.textRegion.left + geometry.x, right: this.textRegion.right + geometry.x };
+    this.httpInspectorRegions = (this.httpInspectorRegions || []).map(region => ({ ...region, top: region.top + geometry.y, bottom: region.bottom + geometry.y, left: region.left + geometry.x, right: region.right + geometry.x }));
     this.composerLeft = geometry.x; if (this.composerRow) this.composerRow += geometry.y; this.sceneHeaderLength += geometry.y;
     const chrome = workspaceChrome(this, geometry);
     this.lastFrame = chrome.lines; this.hitTargets = [...centerHits, ...chrome.hits].filter(hit => hit.row >= 1 && hit.row <= height && hit.left <= hit.right); this.workspaceRegions = chrome.regions;
@@ -1705,21 +1726,23 @@ export class TerminalChat {
       } else saved.resolveInput?.(null);
     }
   }
-  async saveModelWhileWorking() {
+  async saveCurrentModelCombination() {
     if (this.selection || this.promptDraft || this.hidden || !canControlSession(this.ui)) return;
     const current = loadSession(this.ui.activeTab || this.ui.sessionId);
     if (!current) return;
     try {
       // Naming a tuple writes only private presets: no input claim, execution
       // control or model mutation. Suspend the chat reader while naming it.
-      await chooseSavedModel(current, { chooseOne: (...args) => this.localChoice(...args), ask: (...args) => this.localAsk(...args) }, { allowSelection: false });
+      const saved = await saveModelCombination(current, { chooseOne: (...args) => this.localChoice(...args), ask: (...args) => this.localAsk(...args) });
+      if (saved) this.notice('Saved combination · ' + saved.name);
     } catch (error) { this.notice(error.message, true); }
   }
   async openWorkspaceMenu(kind) {
     if (this.selection || this.promptDraft || this.hidden || this.ui.privateView || this.historyRestoreDepth) return;
     const blocked = this.busy || !canControlSession(this.ui);
     const choices = kind === 'models' ? [
-      { value: '/providers @saved', label: 'Saved combinations ▾', description: `${this.provider} · ${this.model} · ${this.effort || 'default'}. Use, name or save this combination.`, disabled: !canControlSession(this.ui) },
+      { value: '/providers @saved', label: 'Saved combinations ▾', disabled: blocked },
+      { value: '@save-model', label: '＋ Save current combination', disabled: !canControlSession(this.ui) || this.modelSelectionRequired },
       { value: '/providers @provider', label: 'Provider…', disabled: blocked },
       { value: '/models', label: 'Model…', disabled: blocked },
       { value: '/effort', label: 'Reasoning effort…', disabled: blocked || this.modelSelectionRequired },
@@ -1745,7 +1768,7 @@ export class TerminalChat {
     const title = kind === 'models' ? 'MODEL · provider, model and effort' : kind === 'live' ? 'LIVE ACTIVITY' : kind === 'navigation' ? 'NAVIGATION' : 'ACTIONS';
     const chosen = await this.localChoice(title, choices);
     if (!chosen) return;
-    if (chosen === '/providers @saved' && this.busy) { await this.saveModelWhileWorking(); return; }
+    if (chosen === '@save-model') { await this.saveCurrentModelCombination(); return; }
     if (['@models', '@live', '@actions'].includes(chosen)) { await this.openWorkspaceMenu(chosen.slice(1)); return; }
     if (chosen === '@usage') {
       const usage = this.compactorUsage, compactor = usage?.available && Number.isSafeInteger(usage.tokens) ? (usage.complete ? '' : '≥') + usage.tokens.toLocaleString() : 'unavailable';
@@ -1776,6 +1799,10 @@ export class TerminalChat {
     if (released) return false;
     if (this.selection || this.promptDraft || this.ui.privateView || this.hidden) return false;
     const motion = button & 32, wheel = button & 64;
+    if (wheel && this.panel === 'monitor' && this.monitor.detail?.kind === 'http') {
+      const block = this.httpInspectorRegions?.find(region => x >= region.left && x <= region.right && y >= region.top && y <= region.bottom);
+      if (block) { this.scrollHttpInspector(block.section, button & 1 ? 3 : -3); return true; }
+    }
     const region = this.workspaceRegions?.findLast(item => x >= item.left && x <= item.right && y >= item.top && y <= item.bottom);
     if (motion && this.workspaceDrag) {
       const drag = this.workspaceDrag;
@@ -1792,7 +1819,7 @@ export class TerminalChat {
     if (wheel && (region && !['height', 'width'].includes(region.kind) || this.panel === 'monitor' && this.textRegion && x >= this.textRegion.left && x <= this.textRegion.right && y >= this.textRegion.top && y <= this.textRegion.bottom)) {
       const delta = button & 1 ? 3 : -3;
       if (region?.kind === 'sessions') this.sidebarOffset = Math.max(0, Math.min(this.sidebarMaximum || 0, (this.sidebarOffset || 0) + delta));
-      else this.monitor.scroll(region?.kind || this.monitor.expanded, delta);
+      else this.monitor.scroll(region?.kind || (this.monitor.detail?.kind === 'command' ? 'command' : this.monitor.detail?.kind === 'source' ? 'source' : this.monitor.expanded), delta);
       this.schedule(); return true;
     }
     if (motion || wheel) return false;
@@ -1818,30 +1845,42 @@ export class TerminalChat {
       if (this.monitor.collapsed.has(hit.kind)) this.monitor.collapsed.delete(hit.kind); else this.monitor.collapsed.add(hit.kind);
     } else if (hit.type === 'monitor-expand') { this.monitor.expanded = hit.kind; this.monitor.detail = null; this.setPanel('monitor'); }
     else if (hit.type === 'monitor-menu') { void this.monitorMenu(hit.kind); }
-    else if (hit.type === 'monitor-latest') { this.monitor.offsets[hit.kind] = 0; if (hit.kind === 'code') this.monitor.followCode = true; }
-    else if (hit.type === 'monitor-follow') { this.monitor.followCode = !this.monitor.followCode; if (this.monitor.followCode) this.monitor.offsets.code = 0; }
-    else if (hit.type === 'monitor-detail') { this.monitor.detail = { kind: hit.kind, row: hit.item }; this.monitor.expanded = hit.kind; this.monitor.offsets[hit.kind] = 0; this.setPanel('monitor'); }
+    else if (hit.type === 'monitor-latest') { this.monitor.offsets[hit.kind] = 0; if (hit.kind === 'source') this.monitor.followCode = true; }
+    else if (hit.type === 'monitor-follow') { this.monitor.followCode = !this.monitor.followCode; if (this.monitor.followCode) this.monitor.offsets[hit.kind] = 0; }
+    else if (hit.type === 'monitor-command') this.openCommandInspector(hit.key);
+    else if (hit.type === 'monitor-command-copy') this.clipboardTask = this.copySelection(this.monitor.commandPreview?.sourceText || '');
+    else if (hit.type === 'monitor-command-start' || hit.type === 'monitor-command-end') this.monitor.scroll('command', hit.type === 'monitor-command-start' ? -Infinity : Infinity);
+    else if (hit.type === 'monitor-detail') {
+      if (hit.kind === 'http' && this.panel === 'chat') this.inspectorChatScroll = this.scroll;
+      this.monitor.detail = { kind: hit.kind, row: hit.item }; this.monitor.expanded = hit.kind;
+      if (hit.kind !== 'http') this.monitor.offsets[hit.kind] = 0;
+      if (hit.kind === 'http') { this.monitor.httpDetailOffsets = { request: 0, response: 0 }; this.monitor.httpDetailFocus = 'request'; }
+      this.setPanel('monitor');
+    }
+    else if (hit.type === 'monitor-http-copy') this.clipboardTask = this.copySelection(this.httpInspectorCache?.exchange.copy[hit.section] || '');
     else if (hit.type === 'monitor-line') { this.clipboardTask = this.copySelection(hit.file.lines[hit.index]); }
-    else if (hit.type === 'monitor-close') { this.monitor.detail = null; this.setPanel('chat'); }
-    else if (hit.type === 'monitor-back') { this.monitor.detail = null; this.monitor.offsets[hit.kind] = 0; }
+    else if (hit.type === 'monitor-close') { if (['http', 'command', 'source'].includes(this.monitor.detail?.kind)) this.closeInspector(); else { this.monitor.detail = null; this.setPanel('chat'); } }
+    else if (hit.type === 'monitor-back') { if (['http', 'command', 'source'].includes(this.monitor.detail?.kind)) this.closeInspector(); else { this.monitor.detail = null; this.monitor.offsets[hit.kind] = 0; } }
     this.schedule(); return true;
   }
   async monitorMenu(kind) {
     if (this.selection || this.promptDraft || this.hidden || this.ui.privateView) return;
     if (kind === 'agents') { this.monitor.detail = null; this.monitor.offsets.agents = 0; this.schedule(); return; }
     const sessionId = this.ui.activeTab || this.ui.sessionId, monitor = this.monitor;
-    const choices = kind === 'code' ? [...[...monitor.files.values()].reverse().map(file => ({ value: file.key, label: file.path, description: `${this.actors.for(file.actorSessionId, sessionId).label} · ${file.language} · ${file.phase}` })),
+    const choices = kind === 'code' ? [...[...monitor.commands.values()].reverse().slice(0, 50).map(command => ({ value: 'command:' + command.key, label: clip(command.command.replace(/\s+/g, ' '), 100), description: this.actors.for(command.actorSessionId, sessionId).label + ' · ' + command.phase })),
+      ...[...monitor.files.values()].reverse().map(file => ({ value: file.key, label: 'Source · ' + file.path, description: `${this.actors.for(file.actorSessionId, sessionId).label} · ${file.language} · ${file.phase}` })),
       ...(monitor.activeFile ? [{ value: '@copy', label: 'Copy current source' }, { value: '@diff', label: 'Inspect captured edit diff' }] : [])]
       : [{ value: '@capture', label: this.ui.launchCaptureNetwork ? 'Disable shell capture for next run' : 'Enable shell capture for next run', disabled: !canControlSession(this.ui), description: 'Applies to your next message or goal, including its workers. Current processes keep their existing capture settings.' },
         { value: '@coverage', label: 'How HTTP capture works…', description: monitor.captureLabel(this) },
         { value: 'all', label: 'All observed requests' }, { value: 'errors', label: 'Errors (4xx / 5xx)' }, ...['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map(value => ({ value, label: value })), { value: '@status', label: 'Sort by status' }, { value: '@time', label: 'Sort by capture time' }, { value: '@history', label: 'Open HTTP history (includes web visits)' }];
-    const selected = await this.localChoice(kind === 'code' ? 'Recent source / files' : 'HTTP filters', choices, { presentation: 'dropdown' });
+    const selected = await this.localChoice(kind === 'code' ? 'Commands / source files' : 'HTTP filters', choices, { presentation: 'dropdown' });
     if ((this.ui.activeTab || this.ui.sessionId) !== sessionId || this.monitor !== monitor) return;
     if (kind === 'code') {
       const file = monitor.files.get(monitor.activeFile);
-      if (selected === '@copy' && file) this.clipboardTask = this.copySelection(file.lines.join('\n'));
+      if (selected?.startsWith('command:')) this.openCommandInspector(selected.slice(8));
+      else if (selected === '@copy' && file) this.clipboardTask = this.copySelection(file.lines.join('\n'));
       else if (selected === '@diff' && file) { monitor.detail = { kind: 'agents', row: { actorId: file.actorSessionId, summary: file.diff || 'No edit diff was exposed by this backend. Changed lines compare the captured source versions.', type: 'source.changed', at: file.observedAt } }; monitor.expanded = 'code'; this.setPanel('monitor'); }
-      else if (monitor.files.has(selected)) { monitor.activeFile = selected; monitor.offsets.code = 0; }
+      else if (monitor.files.has(selected)) { if (this.panel === 'chat') this.inspectorChatScroll = this.scroll; monitor.activeFile = selected; monitor.offsets.source = 0; monitor.commandPreview = null; monitor.detail = { kind: 'source', key: selected }; monitor.expanded = 'code'; this.setPanel('monitor'); }
     } else if (selected === '@capture' && canControlSession(this.ui)) {
       this.ui.launchCaptureNetwork = !this.ui.launchCaptureNetwork;
       this.ui.captureNetworkOverride = this.ui.launchCaptureNetwork;
@@ -1853,9 +1892,69 @@ export class TerminalChat {
     else if (selected) { monitor.httpFilter = selected; monitor.offsets.http = 0; monitor.detail = null; }
     this.schedule();
   }
+  closeInspector() {
+    this.monitor.detail = null; this.monitor.commandPreview = null;
+    this.setPanel('chat'); this.scroll = this.inspectorChatScroll || 0;
+    this.schedule();
+  }
+  openCommandInspector(key) {
+    const command = this.monitor.commands.get(key);
+    if (!command) return;
+    if (this.panel === 'chat') this.inspectorChatScroll = this.scroll;
+    this.monitor.detail = { kind: 'command', key, row: command }; this.monitor.expanded = 'code'; this.monitor.offsets.command = 0;
+    const lines = command.command.split('\n');
+    this.monitor.commandPreview = { sourceText: command.command, lines: lines.slice(0, 5000), clipped: lines.length > 5000, phase: command.phase, changed: new Set(), revealFrom: 0, revealAt: null, revealPending: true };
+    this.setPanel('monitor');
+  }
+  renderCommandInspector(width, height, header) {
+    const detail = this.monitor.detail, command = this.monitor.commands.get(detail.key) || detail.row, preview = this.monitor.commandPreview;
+    preview.phase = command.phase;
+    const controls = ' [← Chat] ', copy = ' [Copy] ', actor = this.actors.for(command.actorSessionId, this.ui.sessionId).label;
+    const text = clip(actor + ' · ' + command.phase + (Number.isInteger(command.exitCode) ? ' · exit ' + command.exitCode : '') + (command.redacted ? ' · redacted' : ''), Math.max(0, width - cellWidth(controls + copy)));
+    const row = this.theme.color(controls, palette.accent) + this.theme.color(text, palette.tool);
+    header.push(row + ' '.repeat(Math.max(0, width - cellWidth(row + copy))) + this.theme.color(copy, palette.accent));
+    this.hitTargets.push({ type: 'monitor-close', row: header.length, left: 1, right: cellWidth(controls) }, { type: 'monitor-command-copy', row: header.length, left: width - cellWidth(copy) + 1, right: width });
+    header.push(sectionHeading('COMMAND', width, this.theme, palette.tool));
+    const available = Math.max(0, height - header.length - 1), layout = this.monitor.sourceRows(width - 1, this, preview, { wrapLines: true });
+    this.monitor.maxima.command = Math.max(0, layout.lines.length - available);
+    this.monitor.offsets.command = Math.min(this.monitor.maxima.command, this.monitor.offsets.command);
+    const start = this.monitor.offsets.command, body = layout.lines.slice(start, start + available); while (body.length < available) body.push('');
+    const footer = this.theme.color(' [↑ Start] [↓ End] · scroll ↕', palette.accent);
+    this.hitTargets.push({ type: 'monitor-command-start', row: height, left: 1, right: 10 }, { type: 'monitor-command-end', row: height, left: 11, right: 18 });
+    this.textRegion = { left: 1, right: width, top: header.length + 1, bottom: height - 1 };
+    this.sceneHeaderLength = header.length; this.scrollbar = null; this.composerRow = 0;
+    this.lastFrame = [...header, ...body, footer].slice(0, height);
+  }
+  scrollHttpInspector(section, delta) {
+    this.monitor.httpDetailOffsets ||= { request: 0, response: 0 };
+    this.monitor.httpDetailFocus = section;
+    this.monitor.httpDetailOffsets[section] = Math.max(0, Math.min(this.monitor.httpDetailMaxima?.[section] || 0, this.monitor.httpDetailOffsets[section] + delta));
+    this.schedule();
+  }
+  renderHttpInspector(width, height, header) {
+    const detail = this.monitor.detail, current = detail.row.id && this.traffic.find(row => row.id === detail.row.id);
+    const row = current || detail.row; detail.row = row;
+    const actor = this.actors.for(row.actorSessionId || row.sessionId, this.ui.sessionId).label;
+    const back = ' [← Back] ', close = ' [Close] ', summary = clip('HTTP · ' + actor, Math.max(0, width - cellWidth(back + close)));
+    const line = this.theme.color(back, palette.accent) + this.theme.color(summary, palette.muted);
+    header.push(line + ' '.repeat(Math.max(0, width - cellWidth(line + close))) + this.theme.color(close, palette.accent));
+    this.hitTargets.push({ type: 'monitor-back', kind: 'http', row: header.length, left: 1, right: cellWidth(back) },
+      { type: 'monitor-close', row: header.length, left: width - cellWidth(close) + 1, right: width });
+    this.sceneHeaderLength = header.length;
+    if (this.httpInspectorCache?.row !== row || this.httpInspectorCache.width !== width || this.httpInspectorCache.theme !== this.theme) this.httpInspectorCache = { row, width, theme: this.theme, exchange: httpExchange(row, Math.max(1, width - 2), this.theme) };
+    const layout = httpExchangeLayout(this.httpInspectorCache.exchange, width, Math.max(0, height - header.length), this.theme, this.monitor.httpDetailOffsets ||= { request: 0, response: 0 });
+    this.monitor.httpDetailMaxima = layout.maxima;
+    this.hitTargets.push(...layout.hits.map(hit => ({ ...hit, row: hit.row + header.length })));
+    this.httpInspectorRegions = layout.regions.map(region => ({ ...region, top: region.top + header.length, bottom: region.bottom + header.length }));
+    this.textRegion = null; this.scrollbar = null; this.composerRow = 0;
+    this.lastFrame = [...header, ...layout.lines].slice(0, height);
+  }
   renderMonitorScene(width, height, header) {
+    this.httpInspectorRegions = [];
+    if (this.monitor.expanded === 'http' && this.monitor.detail?.kind === 'http') { this.renderHttpInspector(width, height, header); return; }
+    if (this.monitor.expanded === 'code' && this.monitor.detail?.kind === 'command') { this.renderCommandInspector(width, height, header); return; }
     const { color } = this.theme, kind = this.monitor.expanded || 'agents';
-    const label = ` ${kind === 'http' ? 'HTTP PROBE' : kind.toUpperCase()}  [ ${kind === 'code' ? 'Sources ▾' : kind === 'http' ? 'Filter ▾' : 'Newest first'} ]`;
+    const label = ` ${kind === 'http' ? 'HTTP PROBE' : kind.toUpperCase()}  [ ${kind === 'code' ? 'Commands ▾' : kind === 'http' ? 'Filter ▾' : 'Newest first'} ]`;
     const row = header.length + 1;
     header.push(color(clip(label, width - 12), palette.accent, true) + color('  [ Close ]', palette.accent));
     this.hitTargets.push({ type: 'monitor-menu', kind, row, left: 2, right: Math.min(width - 13, cellWidth(label)) }, { type: 'monitor-close', row, left: Math.min(width - 11, cellWidth(label) + 1), right: Math.min(width, cellWidth(label) + 12) });
@@ -1869,14 +1968,15 @@ export class TerminalChat {
       this.hitTargets.push({ type: 'model-control', command: '/pause', row: controlsRow, left: 2, right: 18 }, { type: 'model-control', command: '/cancel', row: controlsRow, left: 21, right: Math.min(width, 39) });
     }
     const file = this.monitor.files.get(this.monitor.activeFile);
-    if (kind === 'code' && file && !this.monitor.detail) header.push(color(clip(` ${file.path} · ${this.actors.for(file.actorSessionId, this.ui.sessionId).label} · ${file.language} · ${file.phase}${file.redacted ? ' · redacted' : ''}`, width), palette.tool));
-    const available = Math.max(1, height - header.length - 1), layout = this.monitor.rows(kind, width - 2, this);
-    const maximum = Math.max(0, layout.lines.length - available); this.monitor.maxima[kind] = maximum; this.monitor.offsets[kind] = Math.min(maximum, this.monitor.offsets[kind]);
-    const start = kind === 'agents' ? this.monitor.offsets[kind] : Math.max(0, layout.lines.length - available - this.monitor.offsets[kind]);
+    if (kind === 'code' && file && this.monitor.detail?.kind === 'source') header.push(color(clip(` ${file.path} · ${this.actors.for(file.actorSessionId, this.ui.sessionId).label} · ${file.language} · ${file.phase}${file.redacted ? ' · redacted' : ''}`, width), palette.tool));
+    const available = Math.max(1, height - header.length - 1), layout = this.monitor.rows(kind, width - 2, this, { detail: true });
+    const scrollKind = kind === 'code' && this.monitor.detail?.kind === 'source' ? 'source' : kind;
+    const maximum = Math.max(0, layout.lines.length - available); this.monitor.maxima[scrollKind] = maximum; this.monitor.offsets[scrollKind] = Math.min(maximum, this.monitor.offsets[scrollKind]);
+    const start = ['agents', 'code'].includes(scrollKind) ? this.monitor.offsets[scrollKind] : Math.max(0, layout.lines.length - available - this.monitor.offsets[scrollKind]);
     const body = layout.lines.slice(start, start + available); while (body.length < available) body.push('');
-    const footer = color(` [ ↓ Latest ]  ${kind === 'code' ? '[ Follow '+ (this.monitor.followCode ? 'ON' : 'OFF') + ' ]' : this.monitor.offsets[kind] ? 'Follow paused' : 'Following'} · scroll ↕`, palette.accent);
-    this.hitTargets.push({ type: 'monitor-latest', kind, row: height, left: 2, right: 14 });
-    if (kind === 'code') this.hitTargets.push({ type: 'monitor-follow', kind, row: height, left: 16, right: Math.min(width, 31) });
+    const footer = color(` [ ↓ Latest ]  ${scrollKind === 'source' ? '[ Follow '+ (this.monitor.followCode ? 'ON' : 'OFF') + ' ]' : ['agents', 'code'].includes(scrollKind) ? 'Newest first' : this.monitor.offsets[kind] ? 'Follow paused' : 'Following'} · scroll ↕`, palette.accent);
+    this.hitTargets.push({ type: 'monitor-latest', kind: scrollKind, row: height, left: 2, right: 14 });
+    if (scrollKind === 'source') this.hitTargets.push({ type: 'monitor-follow', kind: scrollKind, row: height, left: 16, right: Math.min(width, 31) });
     this.hitTargets.push(...layout.hits.filter(hit => hit.row >= start && hit.row < start + available).map(hit => ({ ...hit, row: header.length + hit.row - start + 1 })));
     this.textRegion = { left: 1, right: width - 1, top: header.length + 1, bottom: height - 1 };
     this.scrollbar = null; this.composerRow = 0;
@@ -2023,14 +2123,15 @@ export class TerminalChat {
     this.hitTargets = [];
     const completions = this.completions();
     const header = this.navigationHeader(width);
-    if (this.panel !== 'chat' && this.panel !== 'settings' && !this.promptDraft) {
+    const inspecting = this.panel === 'monitor' && ['http', 'command', 'source'].includes(this.monitor.detail?.kind);
+    if (this.panel !== 'chat' && this.panel !== 'settings' && !this.promptDraft && !inspecting) {
       this.hitTargets.push({ type: 'back', row: header.length + 1, left: 3, right: 9 });
       header.push(color('  ← Back', palette.accent, true) + color(clip('  ' + this.panel[0].toUpperCase() + this.panel.slice(1), Math.max(0, width - 8)), palette.muted));
     }
     if (this.panel === 'activity' && this.ui.accountStatusEnabled) {
       for (const line of wrapProse(accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width - 4)) header.push(color('  ' + line, palette.muted));
     }
-    if (this.mode === 'delegate') {
+    if (this.mode === 'delegate' && !inspecting) {
       header.push(...this.delegateHeader(width));
       const phase = this.busy ? this.delegationPhase || 'Supervisor planning'
         : this.goal?.status === 'complete' ? 'Goal complete' : 'Delegation';

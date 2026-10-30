@@ -46,10 +46,11 @@ test('right-click and F10 offer a named terminal menu without attaching, executi
     ui.tui.render(); const alias = ui.tui.hitTargets.find(hit => hit.type === 'alias');
     ui.tui.mouse(2, alias.left, alias.row); ui.tui.render();
     assert.equal(ui.tui.selection.scope, 'session-menu'); assert.equal(ui.tui.inputQueue.length, 0);
+    assert.equal(ui.tui.selection.choices.some(choice => choice.value === 'open' || choice.label === 'Open terminal'), false);
     assert.equal(ui.tui.value, 'unsent draft'); assert.equal(listRecords('execution').length, 0);
     ui.tui.key('', { name: 'escape' }); assert.equal(ui.tui.selection == null, true);
     ui.tui.key('', { name: 'f10' }); ui.tui.render();
-    const share = ui.tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 1);
+    const share = ui.tui.hitTargets.find(hit => hit.type === 'choice' && ui.tui.selection.choices[hit.index]?.value === 'share');
     ui.tui.mouse(0, share.left, share.row);
     assert.equal(await answer, `/session-action share ${selected.id}`);
     assert.equal(ui.tui.history.some(item => item.startsWith('/session-action')), false);
@@ -64,7 +65,7 @@ test('right-click and F10 offer a named terminal menu without attaching, executi
     await Promise.resolve(); ui.tui.render(); const parent = ui.tui.selection;
     ui.tui.key('', { name: 'f10' }); ui.tui.render(); assert.equal(ui.tui.selection.scope, 'session-menu');
     ui.tui.mouse(0, 1, 1); assert.equal(ui.tui.selection, parent);
-    ui.tui.key('', { name: 'f10' }); ui.tui.key('', { name: 'down' }); ui.tui.key('', { name: 'return' });
+    ui.tui.key('', { name: 'f10' }); ui.tui.key('', { name: 'return' });
     assert.deepEqual(await picker, { value: selected.id, action: 'share' });
   } finally { ui.close(); }
 });
@@ -239,6 +240,8 @@ test('ordinary execution in a reopened chat automatically populates HTTP PROBE a
     assert.equal(requests, 1);
     const row = ui.tui.monitor.requests(ui.tui.traffic)[0]; assert.equal(row.method, 'GET'); assert.equal(row.status, 201); assert.match(row.url, /api_key=\[redacted\]|api_key=%5Bredacted%5D/);
     assert.ok([...ui.tui.monitor.files.values()].some(file => file.path === 'live_probe.py' && /import urllib\.request/.test(file.sourceText)));
+    assert.equal(ui.tui.monitor.commands.size, 1);
+    assert.ok([...ui.tui.monitor.commands.values()].every(command => /live_probe\.py/.test(command.command) && command.phase === 'completed'));
     assert.ok(ui.tui.entries.some(entry => /Keep the older findings/.test(entry.text)));
     assert.equal(listRecords('execution', { sessionId: session.id }).length, 1); assert.equal(loadSession(session.id).cwd, work);
     assert.equal(parseArgs(['--no-capture-network']).options.captureNetwork, false);

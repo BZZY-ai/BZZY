@@ -22,8 +22,10 @@ test('older saved chats recover real command input and current launched source w
   const projection = createTerminalSourceProjection(parent.id, (type, data) => seen.push({ type, data }));
   projection.restore();
   assert.ok(seen.some(row => row.data.content === "print('recorded input')" && row.data.phase === 'recorded'));
-  assert.equal(seen.at(-1).data.content, 'print("current actual source")');
-  assert.equal(seen.at(-1).data.actorSessionId, child.id); assert.equal(seen.at(-1).data.phase, 'observed');
+  const source = seen.findLast(row => row.type === 'source.changed');
+  assert.equal(source.data.content, 'print("current actual source")');
+  assert.equal(source.data.actorSessionId, child.id); assert.equal(source.data.phase, 'observed');
+  assert.equal(seen.filter(row => row.type === 'command.observed').length, 2);
   assert.deepEqual(events(parent.id), before);
   const count = seen.length; projection.restore(); assert.equal(seen.length, count);
   fs.writeFileSync(path.join(directory, 'probe.py'), 'print("real changes during the run")');
@@ -38,8 +40,10 @@ test('recorded source stays authoritative while newer legacy native commands fil
   appendEvent(parent.id, 'backend', command('earlier', 'echo old'));
   appendEvent(parent.id, 'source.changed', { path: 'Shell command', sourceId: 'command:earlier', content: 'echo old' });
   appendEvent(parent.id, 'backend', command('newer', "python3 - <<'PY'\nprint('newer saved input')\nPY"));
-  createTerminalSourceProjection(parent.id, (type, data) => seen.push(data)).restore();
-  assert.equal(seen.length, 1); assert.equal(seen[0].content, "print('newer saved input')");
+  createTerminalSourceProjection(parent.id, (type, data) => seen.push({ type, data })).restore();
+  const sources = seen.filter(row => row.type === 'source.changed');
+  assert.equal(sources.length, 1); assert.equal(sources[0].data.content, "print('newer saved input')");
+  assert.equal(seen.filter(row => row.type === 'command.observed').length, 2);
 });
 test('unrelated or private actors and paths never cross the owner source projection', () => {
   const parent = createSession(BUILTINS.codex, directory), stranger = createSession(BUILTINS.codex, directory), child = createSession(BUILTINS.codex, directory);
@@ -50,5 +54,5 @@ test('unrelated or private actors and paths never cross the owner source project
   assert.equal(seen.length, 0);
   fs.mkdirSync(path.join(directory, '.bzzy')); fs.writeFileSync(path.join(directory, '.bzzy', 'private.py'), 'hidden');
   projection.event('backend', command('private-file', 'python3 .bzzy/private.py'));
-  assert.equal(seen.length, 1); assert.equal(seen[0].sourceKind, 'command'); assert.doesNotMatch(JSON.stringify(seen), /hidden/);
+  assert.equal(seen.length, 2); assert.ok(seen.every(row => row.sourceKind === 'command')); assert.doesNotMatch(JSON.stringify(seen), /hidden/);
 });

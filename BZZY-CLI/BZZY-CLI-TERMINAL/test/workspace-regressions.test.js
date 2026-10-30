@@ -196,19 +196,20 @@ test('saving a model combination while busy preserves the live chat reader, draf
     tui.busy = true; tui.value = 'Keep my live draft'; tui.cursor = 7;
     const reader = ui.reader, resolver = tui.resolveInput, before = loadSession(session.id), commands = [];
     tui.localCommand = command => commands.push(command); tui.render();
-    const hit = tui.hitTargets.find(hit => hit.command === '/providers @saved'); assert.equal(hit.disabled, false);
+    const dropdown = tui.hitTargets.find(hit => hit.command === '/providers @saved'); assert.equal(dropdown.disabled, true);
+    const hit = tui.hitTargets.find(hit => hit.type === 'model-save'); assert.equal(hit.disabled, false);
     tui.mouse(0, hit.left, hit.row); await tick();
-    assert.equal(tui.selection.choices.find(row => row.value === '@configure').disabled, true);
-    assert.equal(Boolean(tui.selection.choices.find(row => row.value === '@save').disabled), false);
-    tui.finishSelection('@save'); await tick();
     assert.ok(tui.promptDraft); ui.event('text', { text: 'Background output keeps arriving', itemId: 'live' });
     tui.finish('My running combination'); await tick();
-    assert.equal(tui.selection.choices[0].disabled, true);
-    tui.finishSelection(null); await tui.modelSaveTask;
+    await tui.modelSaveTask;
     assert.equal(ui.reader, reader); assert.equal(tui.resolveInput, resolver); assert.equal(tui.value, 'Keep my live draft'); assert.equal(tui.cursor, 7);
     assert.deepEqual(savedModelCombinations()[0], { name: 'My running combination', provider: session.provider, model: session.model, effort: session.selectedEffort || 'default' });
     assert.deepEqual(loadSession(session.id), before); assert.deepEqual(commands, []); assert.equal(listRecords('execution').length, 0);
     assert.equal(tui.busy, true); assert.ok(tui.entries.some(entry => /Background output/.test(entry.text)));
+    tui.render(); tui.mouse(0, hit.left, hit.row); await tick();
+    assert.equal(tui.selection.title, 'Combination already exists'); assert.equal(Boolean(tui.promptDraft), false);
+    tui.finishSelection('close'); await tui.modelSaveTask;
+    assert.equal(savedModelCombinations().length, 1); assert.equal(ui.reader, reader); assert.equal(tui.value, 'Keep my live draft');
     ui.reader.close(); await pending;
   } finally { ui.close(); }
 });
@@ -255,12 +256,40 @@ test('fast code reveal uses the actual snapshot and leaves execution state, copy
   const source = { path: 'recon/probe.py', content: 'import requests\nprint("actual source")', phase: 'running', sourceKind: 'executed-file' };
   monitor.event('source.changed', source, null, 'fixture');
   const file = monitor.files.get(monitor.activeFile);
+  clock = 1000; // A slow event batch must not consume the visible reveal.
   assert.equal(monitor.animating(), true); assert.equal(file.phase, 'running');
   assert.equal(file.sourceText, source.content); assert.equal(monitor.visibleSource(file).join('\n'), 'i');
-  clock = 120;
+  clock = 1120;
   const halfway = monitor.visibleSource(file).join('\n'); assert.ok(source.content.startsWith(halfway)); assert.ok(halfway.length > 1 && halfway.length < source.content.length);
-  clock = 240; assert.equal(monitor.animating(), false); assert.equal(monitor.visibleSource(file).join('\n'), source.content);
+  clock = 1240; assert.equal(monitor.animating(), false); assert.equal(monitor.visibleSource(file).join('\n'), source.content);
   monitor.event('source.delta', { ...source, sourceId: 'stream', revision: 1, replaceFrom: 0, text: 'print(' }, null, 'fixture');
   assert.equal(monitor.animating(), false); assert.equal(monitor.files.get(monitor.activeFile).sourceText, 'print(');
   assert.equal(source.phase, 'running');
+});
+test('MODEL reserves separate selection/save controls and omits context and pricing at every sidebar size', () => {
+  const { ui, tui, output } = terminal();
+  try {
+    tui.model = 'deepseek-v4.1-flash-1017'; tui.modelCapabilities = { contextWindow: 1000000, pricing: { input: 2, output: 3 } };
+    for (const [columns, rows] of [[80, 24], [120, 36], [160, 44]]) {
+      Object.assign(output, { columns, rows }); tui.render();
+      const save = tui.hitTargets.find(hit => hit.type === 'model-save'), select = tui.hitTargets.find(hit => hit.command === '/providers @saved');
+      assert.ok(save && select); assert.equal(save.row, select.row); assert.ok(save.left > select.right);
+      const line = clean(sliceCells(tui.lastFrame[save.row - 1], 0, tui.workspace.left)); assert.match(line, /▾\s+\+/);
+      assert.doesNotMatch(frame(tui), /Context\s+1M|In \/ Out/);
+      assert.ok(tui.hitTargets.some(hit => hit.command === '/models'));
+    }
+  } finally { ui.close(); }
+});
+test('header clock uses host local time and refreshes while idle', async t => {
+  const { ui, tui } = terminal();
+  try {
+    const instant = Date.now(); t.mock.timers.enable({ apis: ['Date'], now: instant });
+    tui.render();
+    const expected = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    assert.ok(clean(tui.lastFrame[0]).endsWith('Relay ' + expected()));
+    t.mock.timers.setTime(instant + 60000);
+    const deadline = performance.now() + 500;
+    while (!clean(tui.lastFrame[0]).endsWith('Relay ' + expected()) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(clean(tui.lastFrame[0]).endsWith('Relay ' + expected())); assert.equal(tui.busy, false);
+  } finally { ui.close(); }
 });

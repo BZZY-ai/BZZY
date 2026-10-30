@@ -22,7 +22,7 @@ test('terminal chat retains branding, menus, history and composer across compact
       Object.assign(output, { columns, rows }); ui.tui.value = 'Keep this unsent draft'; ui.tui.cursor = 9; ui.tui.render();
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /BZZY/);
-      assert.equal(ui.tui.model, 'terminal-fixture'); if (ui.tui.workspace.left) assert.match(frame, /terminal-fixture/);
+      assert.equal(ui.tui.model, 'terminal-fixture'); if (ui.tui.workspace.left) assert.match(frame, /terminal-fi/);
       assert.match(frame, /Original user request/); assert.match(frame, /Preserved assistant answer/); assert.match(frame, /Keep this unsent draft/);
       for (const type of ['top-sessions', 'top-skills', 'top-agents', 'top-workflows', 'top-goals', 'top-settings', 'model-control', 'confirm']) {
         assert.ok(ui.tui.hitTargets.some(hit => hit.type === type) || (type.startsWith('top-') || type === 'model-control') && ui.tui.hitTargets.some(hit => hit.type === 'workspace-toggle' && hit.side === 'left'), `${type} remains accessible directly or through Nav at ${columns} columns`);

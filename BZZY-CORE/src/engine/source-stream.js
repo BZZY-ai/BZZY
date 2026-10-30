@@ -2,20 +2,25 @@ import path from 'node:path';
 import { diagnosticRedactor } from './diagnostic-redaction.js';
 import { privateWorkspacePath } from './private-paths.js';
 import { sharedSecrets } from './share-bundle-policy.js';
-import { commandInputText } from './command-source-file.js';
+import { commandInputText, inlineCommandSource } from './command-source-file.js';
 
 const limit = 256 * 1024;
 // Display command INPUT, never infer source from command stdout or execute a
 // parser/shell. A heredoc body is code even when no source file is created.
 export function commandSource(command) {
+  const inline = inlineCommandSource(command);
+  if (inline) return { ...inline, path: inline.language + ' · shell input', sourceKind: 'command' };
   command = commandInputText(command);
   if (typeof command !== 'string' || !command.trim() || command.length > limit) return null;
   const heredoc = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n([\s\S]*)/m.exec(command);
   const interpreter = heredoc && [...command.slice(0, heredoc.index).split('\n').at(-1).matchAll(/\b(python[\d.]*|node|ruby|perl|php|bash|sh)\b/g)].at(-1)?.[1];
-  if (heredoc && interpreter) {
+  const declaration = heredoc && command.slice(command.lastIndexOf('\n', heredoc.index - 1) + 1, command.indexOf('\n', heredoc.index));
+  const destination = declaration && /(?:^|[^<])>{1,2}[ \t]*['"]?([^\s'"<>;|]+)/.exec(declaration)?.[1];
+  const writtenLanguage = destination && { '.py': 'python', '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.ts': 'typescript', '.sh': 'sh', '.sql': 'sql', '.rb': 'ruby', '.go': 'go', '.rs': 'rust', '.json': 'json' }[path.extname(destination)];
+  if (heredoc && (interpreter || writtenLanguage && /\bcat\b/.test(declaration))) {
     const end = new RegExp('(?:^|\\n)[ \\t]*' + heredoc[2] + '(?:[ \\t]*[;"\']?[ \\t]*$|\\r?\\n)').exec(heredoc[3]);
     const content = end ? heredoc[3].slice(0, end.index) : heredoc[3];
-    const language = /^python/.test(interpreter) ? 'python' : interpreter === 'node' ? 'javascript' : interpreter;
+    const language = interpreter ? /^python/.test(interpreter) ? 'python' : interpreter === 'node' ? 'javascript' : interpreter : writtenLanguage;
     return { path: language + ' · shell input', language, content, sourceKind: 'command' };
   }
   return { path: 'Shell command', language: 'sh', content: command, sourceKind: 'command' };
@@ -24,7 +29,7 @@ export function safeCommandSource(session, command, { callId, phase = 'started' 
   if (session.agentId || session.importedUntrusted) return null;
   const source = commandSource(command); if (!source) return null;
   const redactor = diagnosticRedactor({ maxString: limit });
-  return { ...source, sourceId: 'command:' + callId, callId, phase, content: redactor.scrub(source.content),
+  return { ...source, sourceId: 'command:' + callId, callId, phase, content: redactor.scrub(source.content), command: redactor.scrub(commandInputText(command, { unwrap: false })),
     actorSessionId: session.id, observedAt: new Date().toISOString(), provenance: 'native-command-input', redacted: redactor.stats.redactedValues > 0 };
 }
 

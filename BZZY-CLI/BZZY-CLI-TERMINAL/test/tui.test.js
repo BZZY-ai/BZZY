@@ -314,7 +314,7 @@ test('weekly quotas stay in the header and Activity shows readable progress with
       const frame = ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /Codex 7d: 75% left[\s\S]*Claude 7d: 65% left[\s\S]*DeepSeek: \$12.34/);
       assert.match(frame, /Checking the footer/); assert.match(frame, /opening paypal.com/);
-      assert.doesNotMatch(frame, /curl -sSL|╭─ Message|CHAT ACTIVITY HTTP SESSIONS/); assert.match(frame, /fixture-brain/); assert.match(frame, /Send ↑/);
+      assert.doesNotMatch(frame, /curl -sSL|╭─ Message|CHAT ACTIVITY HTTP SESSIONS/); assert.equal(ui.tui.model, 'fixture-brain'); assert.match(frame, /fixture-bra/); assert.match(frame, /Send ↑/);
       assert.equal(ui.tui.activities.length, 1);
     }
   } finally { ui.close(); }

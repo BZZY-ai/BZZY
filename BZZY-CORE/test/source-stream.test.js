@@ -17,10 +17,18 @@ test('shell previews display actual interpreter input, never stdout or invented 
   assert.equal(commandSource('node <<JS\nconsole.log(1);\nJS').content, 'console.log(1);');
   assert.equal(commandSource(['/bin/bash', '-c', "python3 - <<'PY'\nprint('actual argv input')\nPY"]).content, "print('actual argv input')");
   assert.equal(commandSource('curl https://example.test').language, 'sh');
+  assert.equal(commandSource(['python3', '-u', '-c', 'print("actual inline code")']).content, 'print("actual inline code")');
+  assert.equal(commandSource('/bin/bash -c \'node -e "console.log(1)"\'').content, 'console.log(1)');
+  const created = commandSource("cat > recon/probe.py <<'PY'\nimport requests\nprint('actual script input')\nPY");
+  assert.equal(created.language, 'python'); assert.equal(created.content, "import requests\nprint('actual script input')");
+  assert.equal(commandSource("python3 - <<'PY' > output.json\nprint(1)\nPY").language, 'python');
   assert.equal(commandSource('x'.repeat(256 * 1024 + 1)), null);
   assert.equal(safeCommandSource({ ...session, agentId: 'persistent' }, command), null);
   assert.equal(safeCommandSource({ ...session, importedUntrusted: true }, command), null);
   assert.doesNotMatch(safeCommandSource(session, 'API_KEY="fixture-never-show" curl example.test').content, /fixture-never-show/);
+  for (const command of ['API_KEY="fixture-never-show" curl example.test', ['/bin/bash', '-c', 'API_KEY="fixture-never-show" curl example.test'], ['python3', '-c', "API_KEY='fixture-never-show'"]]) {
+    assert.doesNotMatch(JSON.stringify(safeCommandSource(session, command)), /fixture-never-show/, 'both projected source and full command exclude credential values');
+  }
 });
 test('real tool-input chunks produce replayable source patches, including escapes and changed heredoc projections', () => {
   const events = [], observe = createStreamingSourceObserver(session, (type, data) => events.push({ type, data }));

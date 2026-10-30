@@ -60,6 +60,9 @@ Implemented:
   recorded detail. This adds no model-memory or compactor behavior.
 
 - Owner terminal source previews use actual native file edits and shell inputs.
+  Native commands also emit redacted `command.observed` start/completion records
+  with actual actor/run identities, mirrored to their parent terminal. These
+  support the CLI command table and full-input inspector without parsing stdout.
   Claude tool-input chunks emit redacted, revisioned display patches; complete
   native commands and atomic file writes appear immediately. Direct interpreter
   launches can also preview their actual project script at start/completion,

@@ -2,7 +2,8 @@
 
 The terminal now uses a black neon workspace with clickable navigation and model
 controls, a dominant chat, and independently scrolling **AGENTS**, **HTTP PROBE**
-and **CODE** feeds. Drag column separators to resize; use the center **≡** menu
+and **CODE** command lists. Click a request or command to inspect it in the center;
+Esc returns to chat. Drag column separators to resize; use the center **≡** menu
 and sidebar **⋯** actions to reopen hidden panels. The same frame and palette surround Library, Metrics,
 Settings and their submenus. Smaller terminals and minimal mode use the same modern frame; private
 QR screens retain their full width and quiet zone.
@@ -416,7 +417,8 @@ for compatibility. Core's daemon and workers run without this CLI installed.
 
 `bzzy` opens a black neon terminal workspace with clickable navigation, a chat
 column and compact live **AGENTS / SKILLS**, **HTTP PROBE**, and **CODE** views.
-The single-row header keeps branding, the saved working/memory paths and Core/Relay dots visible.
+The single-row header keeps branding, the saved working/memory paths, Core/Relay
+dots and the CLI host's HH:MM clock visible.
 Model/effort, token counts and CPU/RAM stay in their dedicated sidebar sections;
 compact layouts retain these through **≡**. The composer footer keeps goal status,
 enabled YOLO at its right, and Workflow, with other actions in visible menus. Thin column separators can be dragged; compact
@@ -428,12 +430,19 @@ chat in its original cwd without replaying work. Normal attached chats can claim
 control through existing Core APIs when changing models; explicit read-only
 views remain locked. See [workspace behavior and telemetry limits](docs/TUI.md).
 
+MODEL contains saved combinations with a separate **+** button that immediately
+asks for a name. The dropdown switches saved combinations only while idle;
+saving remains available during execution and rejects duplicate selections.
+Context-window and input/output price rows are omitted from this compact section.
+
 Shell HTTP/HTTPS capture is automatic for CLI executions and resumed work in
 existing chats; `--no-capture-network` opts out. Existing processes retain their
 launch environment. CODE can recover real native command input from older saved
 history and show current source for its recorded script launches, without
-replaying work. Saving a named model combination remains available while busy;
-switching the active provider/model/effort still requires an idle response.
+replaying work. HTTP inspection keeps REQUEST above RESPONSE in independently
+scrolling blocks, with colored headers and formatted captured JSON. CODE lists
+real native shell invocations with their status; the center opens the full redacted
+command, with wrapping and copying. Both lists remain visible while inspecting.
 
 Chat keeps its **Cooking…**, Pursuing, Verifying and Validating badges and adds
 an animated activity row beside the current action: waiting for model output,

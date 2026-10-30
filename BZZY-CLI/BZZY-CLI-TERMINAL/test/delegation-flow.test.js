@@ -151,7 +151,7 @@ test('terminal navigation keeps top session actions, model controls and composer
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'session-new'), Boolean(ui.tui.workspace.left));
       assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'model-control' && hit.command === '/providers @saved'));
       assert.doesNotMatch(frame, /TELEGRAM/);
-      assert.match(frame, /Type a message/); assert.match(frame, /fixture-brain/); assert.match(frame, /Effort\s+default/);
+      assert.match(frame, /Type a message/); assert.equal(ui.tui.model, 'fixture-brain'); assert.match(frame, /fixture-bra/); assert.match(frame, /Effort\s+default/);
       assert.doesNotMatch(frame, /Ctrl\+S|Wheel\/PgUp|COPY/);
       assert.equal(ui.tui.hitTargets.some(hit => hit.type === 'copy'), false);
     }

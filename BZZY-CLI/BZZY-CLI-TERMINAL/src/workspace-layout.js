@@ -20,7 +20,6 @@ export function workspaceGeometry(width, height, options = {}) {
   return { width, height, left, right, center: width - left - right - (left ? 1 : 0) - (right ? 1 : 0), x: left ? left + 1 : 0, y: 1, bodyHeight: Math.max(1, height - 1) };
 }
 const fit = padSurface;
-const smallTokens = value => Number.isFinite(value) ? Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value) : '—';
 const sessionTime = value => {
   const date = new Date(value); if (!Number.isFinite(date.getTime())) return '';
   return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -45,19 +44,19 @@ export function workspaceChrome(tui, geometry) {
     }
     sidebar.push(sectionHeading('MODEL', left, theme, palette.agent));
     const savedRow = sidebar.length + y + 1;
-    sidebar.push(outlinedRow(' ' + clip(tui.modelSelectionRequired ? 'Select / save model ▾' : tui.model + ' ▾', left - 3), left, theme, { tone: palette.main }));
-    hits.push({ type: 'model-control', command: '/providers @saved', disabled: !canControlSession(tui.ui), row: savedRow, left: 2, right: left - 1 });
     const modelDisabled = tui.busy || !canControlSession(tui.ui);
-    put(` Provider  ${tui.provider || 'Select'} ▾`, palette.agent, false, { type: 'model-control', command: '/providers @provider', disabled: modelDisabled });
-    if (bodyHeight >= 24) put(` Model     ${tui.model} ▾`, palette.main, true, { type: 'model-control', command: '/models', disabled: modelDisabled });
-    put(` Effort  ${(tui.effort || 'default').replace(/^effort /, '')} ▾`, palette.agent, false, { type: 'model-control', command: '/effort', disabled: modelDisabled || tui.modelSelectionRequired });
-    if (bodyHeight >= 29) {
-      const cap = tui.modelCapabilities || {};
-      put(` Context   ${cap.contextWindow ? smallTokens(cap.contextWindow) : 'unavailable'}`, palette.muted);
-      // Pricing is shown only when the catalog actually supplies a rate.
-      const price = cap.pricing || {};
-      put(` In / Out  ${price.input != null ? price.input : '—'} / ${price.output != null ? price.output : '—'}`, palette.muted);
-    }
+    const selection = ' ' + clip(tui.modelSelectionRequired ? 'Select model' : tui.model, left - 8) + ' ▾';
+    sidebar.push(outlinedRow(selection + ' '.repeat(Math.max(0, left - 5 - cellWidth(selection))) + ' + ', left, theme, { tone: palette.main }));
+    hits.push({ type: 'model-control', command: '/providers @saved', disabled: modelDisabled, row: savedRow, left: 2, right: left - 4 },
+      { type: 'model-save', disabled: !canControlSession(tui.ui) || tui.modelSelectionRequired, row: savedRow, left: left - 3, right: left - 1 });
+    const selector = (name, value) => {
+      const prefix = ' ' + name + ' ', room = Math.max(1, left - cellWidth(prefix) - 4);
+      const text = clip(value, room);
+      return prefix + text + ' '.repeat(Math.max(0, room - cellWidth(text))) + ' ▾';
+    };
+    put(selector('Provider', tui.provider || 'Select'), palette.agent, false, { type: 'model-control', command: '/providers @provider', disabled: modelDisabled });
+    put(selector('Model', tui.model), palette.main, true, { type: 'model-control', command: '/models', disabled: modelDisabled });
+    put(selector('Effort', (tui.effort || 'default').replace(/^effort /, '')), palette.agent, false, { type: 'model-control', command: '/effort', disabled: modelDisabled || tui.modelSelectionRequired });
     const usageRow = sidebar.length + y + 1; sidebar.push(sectionHeading('USAGE', left, theme, palette.accent, '↗'));
     hits.push({ type: 'top-metrics', row: usageRow, left: 1, right: left });
     put(` ${tui.tokenLabel()}`, palette.success, true, { type: 'top-metrics' });
@@ -114,26 +113,23 @@ export function workspaceChrome(tui, geometry) {
       if (collapsed) { activity.push(c('└' + '─'.repeat(right - 2) + '┘', palette.border)); continue; }
       let sub = kind === 'agents' ? 'TIME  AGENT / SKILL'
         : kind === 'http' ? `METHOD STATUS · ${monitor.httpFilter || 'all'} ▾`
-          : monitor.files.get(monitor.activeFile)?.path || 'Recent files ▾';
+          : `TIME  COMMAND · ${monitor.commands.size} ▾`;
       activity.push(outlinedRow(' ' + sub, right, theme, { tone: kind === 'code' ? palette.accent : palette.muted }));
       hits.push({ type: 'monitor-menu', kind, row: top + 1, left: monitorLeft, right: width });
-      const file = kind === 'code' && monitor.files.get(monitor.activeFile);
-      if (file && size >= 5) activity.push(outlinedRow(' ' + `${tui.actors.for(file.actorSessionId, tui.ui.sessionId).name} · ${file.language || 'source'} · ${file.phase}`, right, theme, { tone: palette.muted }));
-      const metadataRows = file && size >= 5 ? 1 : 0;
+      const metadataRows = 0;
       const layout = monitor.rows(kind, contentWidth, tui), rows = Math.max(0, size - 3 - metadataRows);
       const maximum = Math.max(0, layout.lines.length - rows); monitor.maxima[kind] = maximum;
       monitor.offsets[kind] = Math.min(maximum, monitor.offsets[kind]);
-      const start = kind === 'agents' ? monitor.offsets[kind] : Math.max(0, layout.lines.length - rows - monitor.offsets[kind]);
+      const start = kind !== 'http' ? monitor.offsets[kind] : Math.max(0, layout.lines.length - rows - monitor.offsets[kind]);
       for (let i = 0; i < rows; i++) {
         const line = layout.lines[start + i] || '', mark = maximum ? i === Math.round((rows - 1) * start / maximum) ? '┃' : '│' : ' ';
         activity.push(c('│', palette.border) + fit(line, right - 2, theme) + c(mark === ' ' ? '│' : mark, palette.border));
       }
       for (const hit of layout.hits) if (hit.row >= start && hit.row < start + rows) hits.push({ ...hit, row: top + 2 + metadataRows + hit.row - start, left: monitorLeft + hit.left, right: Math.min(width - 1, monitorLeft + hit.right) });
-      const footer = kind === 'agents' ? 'Newest first · scroll ↕' : monitor.offsets[kind] ? '↓ Latest · scroll ↕' : kind === 'code' ? `[Follow ${monitor.followCode ? 'ON' : 'OFF'}] · ↓ Latest` : 'scroll ↕';
+      const footer = kind !== 'http' ? 'Newest first · scroll ↕' : monitor.offsets[kind] ? '↓ Latest · scroll ↕' : 'scroll ↕';
       const tail = clip(' ' + footer + ' ', right - 4);
       activity.push(c('└─', palette.border) + c(tail, monitor.offsets[kind] ? palette.accent : palette.muted) + c('─'.repeat(Math.max(0, right - cellWidth(tail) - 3)) + '┘', palette.border));
       hits.push({ type: 'monitor-latest', kind, row: top + size - 1, left: monitorLeft, right: width - 2 });
-      if (kind === 'code') hits.push({ type: 'monitor-follow', kind, row: top + size - 1, left: monitorLeft, right: monitorLeft + 11 });
       regions.push({ kind, left: monitorLeft, right: width, top: top + 1, bottom: top + size - 1 });
       if (index < 2) regions.push({ kind: 'height', index, left: width - 1, right: width, top: top + size - 1, bottom: top + size - 1 });
     }

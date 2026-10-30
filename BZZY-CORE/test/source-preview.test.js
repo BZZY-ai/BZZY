@@ -39,7 +39,8 @@ test('native observers correlate edit completion and return atomic writes immedi
     assert.equal(emitted.at(-1).data.provenance, 'native-file-edit'); assert.match(emitted.at(-1).data.diff, /actual file/);
     const count = emitted.length;
     observer({ method: 'item/completed', params: { item: { id: 'shell-1', type: 'commandExecution', command: 'echo example > other.js' } } });
-    assert.equal(emitted.length, count + 1);
+    assert.deepEqual(emitted.slice(count).map(row => row.type), ['command.observed', 'source.changed']);
+    assert.equal(emitted[count].data.command, 'echo example > other.js');
     assert.equal(emitted.at(-1).data.sourceKind, 'command');
     assert.equal(emitted.at(-1).data.content, 'echo example > other.js');
     assert.equal(fs.existsSync(path.join(cwd, 'other.js')), false, 'observing command input never executes it');
@@ -60,6 +61,11 @@ test('managed runners durably mirror safe source previews with their worker iden
     const source = events(parent.id).filter(row => row.type === 'source.changed');
     assert.equal(source.length, 1); assert.equal(source[0].data.actorSessionId, worker.id); assert.equal(source[0].data.actorName, 'source-reviewer');
     assert.equal(source[0].data.content, 'export const observed = true;');
+    runner.event('backend', { method: 'item/started', runId: 'fixture-run', params: { item: { id: 'real-command', type: 'commandExecution', command: 'echo observed' } } });
+    runner.event('backend', { method: 'item/completed', runId: 'fixture-run', params: { item: { id: 'real-command', type: 'commandExecution', status: 'completed', exitCode: 0 } } });
+    const commands = events(parent.id).filter(row => row.type === 'command.observed');
+    assert.equal(commands.length, 2); assert.ok(commands.every(row => row.data.actorSessionId === worker.id && row.data.actorName === 'source-reviewer'));
+    assert.equal(commands[0].data.runId, 'fixture-run'); assert.equal(commands[1].data.command, 'echo observed'); assert.equal(commands[1].data.phase, 'completed');
     runner.close();
   } finally { if (previous === undefined) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous; fs.rmSync(cwd, { recursive: true, force: true }); }
 });

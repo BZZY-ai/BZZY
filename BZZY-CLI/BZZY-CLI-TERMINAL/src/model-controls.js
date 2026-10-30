@@ -9,34 +9,49 @@ export function savedModelCombinations() {
     && typeof item.effort === 'string' && /^[a-z][a-z0-9_-]{0,23}$/.test(item.effort)).slice(0, 50);
 }
 
+const sameCombination = (a, b) => a.provider === b.provider && (a.model ?? null) === (b.model ?? null) && (a.effort || 'default') === (b.effort || 'default');
+export async function saveModelCombination(current, ui) {
+  if (current.modelSelectionRequired) throw new Error('Select a model before saving a combination.');
+  const { provider, model, effort } = selectionFromSession(current), selection = { provider, model, effort };
+  const duplicate = () => ui.chooseOne('Combination already exists', [{ value: 'close', label: 'Close' }], { presentation: 'context', description: 'This provider, model and effort are already saved.' });
+  if (savedModelCombinations().some(item => sameCombination(item, selection))) { await duplicate(); return null; }
+  const label = await ui.ask('Save combination as · Esc cancels', { initialValue: `${selection.provider} ${selection.model || 'default'} ${selection.effort}` });
+  if (label == null) return null;
+  const name = label.trim();
+  if (!name || name.length > 80 || /[\x00-\x1f\x7f-\x9f]/u.test(name)) throw new Error('Use a name of 1–80 printable characters.');
+  try {
+    updateConfig(value => {
+      const rows = Array.isArray(value.terminalModelCombinations) ? value.terminalModelCombinations : [];
+      if (rows.some(item => sameCombination(item, selection))) throw Object.assign(new Error('Combination already exists.'), { code: 'DUPLICATE_COMBINATION' });
+      if (rows.some(item => item.name === name)) throw new Error('A combination already has that name. Choose another name.');
+      if (rows.length >= 50) throw new Error('Remove a saved combination before adding another.');
+      value.terminalModelCombinations = [...rows, { name, ...selection }]; return value;
+    });
+  } catch (error) {
+    if (error.code !== 'DUPLICATE_COMBINATION') throw error;
+    await duplicate(); return null;
+  }
+  return { name, ...selection };
+}
+
 // Uses Core's locked private configuration writer. Presets contain selection
 // identifiers only; account bindings and credentials never enter this list.
-export async function chooseSavedModel(current, ui, { allowSelection = true } = {}) {
+export async function chooseSavedModel(current, ui, { allowSelection = true, selectionOnly = false } = {}) {
   while (true) {
     const saved = savedModelCombinations();
     const selected = await ui.chooseOne('Saved model combinations', [
       ...saved.map((item, index) => ({ value: String(index), label: item.name, disabled: !allowSelection, description: `${item.provider} · ${item.model || 'Provider default'} · ${item.effort}` })),
-      { value: '@save', label: '＋ Save current combination', disabled: current.modelSelectionRequired, description: 'Give this provider, model and effort a reusable name.' },
+      ...(!selectionOnly ? [{ value: '@save', label: '＋ Save current combination', disabled: current.modelSelectionRequired, description: 'Give this provider, model and effort a reusable name.' },
       { value: '@configure', label: 'Choose another provider / model…', disabled: !allowSelection, description: allowSelection ? '' : 'Pause the response before switching. Saving stays available.' },
-      ...(saved.length ? [{ value: '@remove', label: 'Remove saved combination…' }] : []),
+      ...(saved.length ? [{ value: '@remove', label: 'Remove saved combination…' }] : [])] : []),
     ], { presentation: 'dropdown', kind: 'model', scope: 'chat' });
     if (selected == null) return null;
-    if (selected === '@configure' && allowSelection) return chooseUnifiedModel(current, ui);
-    if (selected === '@save') {
-      const label = await ui.ask('Save combination as · Esc cancels', { initialValue: `${current.provider} ${current.model || 'default'} ${current.selectedEffort || 'default'}` });
-      if (label == null) continue;
-      const name = label.trim();
-      if (!name || name.length > 80 || /[\x00-\x1f\x7f-\x9f]/u.test(name)) throw new Error('Use a name of 1–80 printable characters.');
-      const { provider, model, effort } = selectionFromSession(current);
-      updateConfig(value => {
-        const rows = Array.isArray(value.terminalModelCombinations) ? value.terminalModelCombinations : [];
-        if (rows.some(item => item.name === name)) throw new Error('A combination already has that name. Remove it first or choose another name.');
-        if (rows.length >= 50) throw new Error('Remove a saved combination before adding another.');
-        value.terminalModelCombinations = [...rows, { name, provider, model, effort }]; return value;
-      });
+    if (selected === '@configure' && allowSelection && !selectionOnly) return chooseUnifiedModel(current, ui);
+    if (selected === '@save' && !selectionOnly) {
+      await saveModelCombination(current, ui);
       continue;
     }
-    if (selected === '@remove') {
+    if (selected === '@remove' && !selectionOnly) {
       const name = await ui.chooseOne('Remove saved combination', saved.map(item => ({ value: item.name, label: item.name })), { presentation: 'dropdown' });
       if (name) updateConfig(value => { value.terminalModelCombinations = (value.terminalModelCombinations || []).filter(item => item.name !== name); return value; });
       continue;

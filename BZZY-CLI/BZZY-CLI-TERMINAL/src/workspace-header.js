@@ -28,8 +28,9 @@ export function workspaceHeader(tui, width, { privateMode = false, controls = ''
   const eyes = eyeWidth ? eyeSamples.get(eyeKey).map(cells => mascotLine(cells, tui.theme)) : ['', ''];
   const coreOn = tui.ui.connectionStatus?.core === true, relayOn = coreOn && tui.ui.connectionStatus?.relay === true;
   const dot = online => c('●', online ? palette.success : palette.danger, true);
+  const clock = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   const status = dot(coreOn) + c(tiny ? 'C ' : width < 100 ? ' Core  ' : ' BZZY Core  ', palette.muted)
-    + dot(relayOn) + c(tiny ? 'R' : ' Relay', palette.muted);
+    + dot(relayOn) + c(tiny ? 'R' : ' Relay', palette.muted) + c(' ' + clock, palette.text);
   const brand = eyes[0] + c(tiny ? ' BZZY ' : ` BZZY ${terminalVersion} `, palette.accent, true);
   let line = brand;
   const control = (label, hit, tone = palette.muted) => {
