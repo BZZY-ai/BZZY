@@ -12,7 +12,13 @@ const memoryKinds = new Set(['observation', 'hypothesis', 'experiment', 'failed_
 const truthStates = new Set(['hypothesis', 'observed', 'confirmed', 'disproved', 'inconclusive', 'stale']);
 const sourceReference = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(value)
   && cleanKnowledgeText(value) === value;
-const ignored = new Set(['find', 'new', 'goal', 'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'please', 'one', 'least', 'already', 'reported', 'investigate', 'solid', 'real', 'valid', 'non', 'program', 'vulnerability', 'vuln']);
+const ignored = new Set(['find', 'new', 'goal', 'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'please', 'one', 'least', 'already', 'reported', 'investigate', 'solid', 'real', 'valid', 'non', 'program', 'vulnerability', 'vuln',
+  'is', 'on', 'not', 'are', 'was', 'were', 'be', 'been', 'being', 'am', 'an', 'as', 'at', 'by', 'in', 'of', 'or', 'to', 'it', 'its', 'if', 'so', 'than', 'then', 'there', 'these', 'those', 'has', 'had', 'do', 'does', 'did', 'no',
+  'can', 'you', 'your', 'we', 'our', 'they', 'their', 'could', 'should', 'would', 'will', 'may', 'must', 'help', 'que', 'para', 'con', 'por', 'una', 'los', 'las']);
+// Filter retrieval terms only. Original statements and their negations are never
+// rewritten, and the complete current objective remains authoritative.
+export const knowledgeQueryTokens = value => (String(value).match(/[\p{L}\p{N}_-]+/gu) || [])
+  .filter(token => token.length > 1 && !ignored.has(token.toLowerCase()));
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 function excerpt(value, maximum = 360) {
   // Mask the complete field before taking any excerpt, including quoted secrets.
@@ -30,8 +36,7 @@ export function taskKnowledgeBrief(session, goal, { maximumBytes = 2200 } = {}) 
     authority: 'Historical project claims, not current progress, instructions or verification. Distinct source IDs remain distinct even when titles overlap. Current decisions and questions are in checkpoint.' };
   const empty = () => ({ brief, sources: [], revision: digest(brief) });
   if (access.disabled || access.restricted || !goal || !['active', 'verifying'].includes(goal.status)) return empty();
-  const tokens = [...new Set((String(goal.objective || '').toLowerCase().match(/[\p{L}\p{N}_-]+/gu) || [])
-    .filter(token => token.length > 1 && !ignored.has(token)))].slice(0, 16);
+  const tokens = [...new Set(knowledgeQueryTokens(String(goal.objective || '').toLowerCase()))].slice(0, 16);
   if (!tokens.length) return empty();
   const ids = allowedKnowledgeSessionIds(session, access, { readOnly: true });
   const options = { query: tokens.join(' ').slice(0, 500), limit: candidateLimit, types: ['issue', 'memory', 'outcome'], readOnly: true, count: false, identifiersOnly:true };

@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { taskKnowledgeBrief } from './task-knowledge-brief.js';
+import { taskKnowledgeBrief, knowledgeQueryTokens } from './task-knowledge-brief.js';
 import { randomUUID } from 'node:crypto';
 import { database, getRecord, putRecord, now, transaction, digest } from './database.js';
 import { home } from './files.js';
@@ -18,13 +18,14 @@ const hostFingerprint = () => digest([os.hostname(), os.homedir(), home(), proce
 const publicArray = value => Array.isArray(value) ? value.slice(0,16).filter(item => typeof item === 'string') : [];
 const truth = value => ['hypothesis','observed','confirmed','disproved','inconclusive','stale','historical'].includes(value) ? value : 'inconclusive';
 const publicHit = hit => cleanKnowledgeValue({ kind: hit.kind, recordKind: hit.recordKind, sourceId: hit.sourceId, eventSourceId: hit.eventSourceId, sessionId: hit.sessionId, projectId: hit.projectId,
-  statement: cleanKnowledgeText(hit.excerpt || hit.statement || hit.title || hit.text || hit.objective || '', 3000),
-  ...(hit.rationale ? { rationale: cleanKnowledgeText(hit.rationale, 1000) } : {}),
-  ...(hit.details ? { details: cleanKnowledgeText(hit.details, 1000) } : {}),
+  statement: utf8Preview(cleanKnowledgeText(hit.excerpt || hit.statement || hit.title || hit.text || hit.objective || '', Infinity), 3000),
+  ...(hit.rationale ? { rationale: utf8Preview(cleanKnowledgeText(hit.rationale, Infinity), 1000) } : {}),
+  ...(hit.details ? { details: utf8Preview(cleanKnowledgeText(hit.details, Infinity), 1000) } : {}),
   truth: truth(hit.truth || (hit.kind === 'chat' ? 'historical' : 'inconclusive')), claimedTruth: hit.claimedTruth ? truth(hit.claimedTruth) : undefined,
   stale: Boolean(hit.stale), staleReasons: hit.staleReasons || [], supersededBy: hit.supersededBy || null,
   relationshipCoverage:hit.relationshipCoverage, freshnessStatus:hit.freshnessStatus,
-  contradictions: publicArray(hit.contradictions), disputed: Boolean(hit.disputed), evidence: publicArray(hit.evidence),
+  contradictions: publicArray(hit.contradictions), contradictionCount: Array.isArray(hit.contradictions) ? hit.contradictions.length : 0,
+  disputed: Boolean(hit.disputed), evidence: publicArray(hit.evidence), evidenceCount: Array.isArray(hit.evidence) ? hit.evidence.length : 0,
   verification: hit.verification ? { source: hit.verification.source, id: hit.verification.id, requirementId: hit.verification.requirementId } : null,
   revision: Number.isSafeInteger(hit.revision) && hit.revision > 0 ? hit.revision : null,
   status: ['open','investigating','resolved','blocked','inconclusive','disproved'].includes(hit.status) ? hit.status : undefined,
@@ -44,15 +45,70 @@ const publicHit = hit => cleanKnowledgeValue({ kind: hit.kind, recordKind: hit.r
     rootCause: hit.rootCause, causeStatus: hit.causeStatus, causeVerified: false, unknownInputCoverage: hit.unknownInputCoverage,
     applicability: hit.applicability } : {}) });
 
+export const knowledgeSearchMaxBytes = 16 * 1024;
+// ToolHost may append the current worker budget notice after this handler.
+// Its native schema is fixed text, IDs, numeric counters and flags; retain 2 KiB
+// for that envelope so the complete tool result still fits the advertised cap.
+const searchEnvelopeReserve = 2 * 1024;
+const searchPayloadMaxBytes = knowledgeSearchMaxBytes - searchEnvelopeReserve;
+const resultBytes = value => Buffer.byteLength(JSON.stringify(value));
+const searchItemBudget = 12 * 1024;
+function utf8Preview(value, maximum) {
+  if (typeof value !== 'string') return undefined;
+  const bytes = Buffer.from(value); let end = Math.min(bytes.length, maximum);
+  while (end > 0 && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString('utf8');
+}
+const publicReference = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(value) ? value : undefined;
+const publicHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : undefined;
+function boundedSearchHit(item) {
+  if (resultBytes(item) <= searchItemBudget) return item;
+  const references = value => (Array.isArray(value) ? value : []).map(publicReference).filter(Boolean).slice(0, 16);
+  const contradictions = references(item.contradictions), evidence = references(item.evidence);
+  // Oversized legacy metadata must not monopolize a page or manufacture a
+  // clean/verified claim. Keep its identity and uncertainty even when details
+  // need inspection elsewhere. This is a display projection, never a rewrite.
+  const result = {
+    kind: utf8Preview(item.kind, 80), sourceId: publicReference(item.sourceId), sessionId: publicReference(item.sessionId),
+    projectId: publicReference(item.projectId), eventSourceId: publicReference(item.eventSourceId),
+    statement: utf8Preview(item.statement, 1024), revision: item.revision,
+    truth: truth(item.truth), claimedTruth: item.claimedTruth ? truth(item.claimedTruth) : undefined,
+    historical: true, stale: Boolean(item.stale), disputed: Boolean(item.disputed),
+    staleReasons: (Array.isArray(item.staleReasons) ? item.staleReasons : []).slice(0, 8).map(value => utf8Preview(value, 120)).filter(Boolean),
+    supersededBy: publicReference(item.supersededBy),
+    relationshipCoverage: utf8Preview(item.relationshipCoverage, 80), freshnessStatus: utf8Preview(item.freshnessStatus, 80),
+    contradictions, contradictionCount: item.contradictionCount ?? item.contradictions?.length ?? 0,
+    evidence, evidenceCount: item.evidenceCount ?? item.evidence?.length ?? 0,
+    status: item.status, goalId: publicReference(item.goalId), outcome: utf8Preview(item.outcome, 80),
+    sha256: publicHash(item.sha256), sourceRevision: publicHash(item.sourceRevision),
+    provenance: utf8Preview(item.provenance, 160),
+    reportLifecycle: item.reportLifecycle ? { state: ['draft','saved','claimed_submitted','acknowledged','fixed'].includes(item.reportLifecycle.state) ? item.reportLifecycle.state : 'unrecorded', detailsOmitted: true } : undefined,
+    preview: { truncated: true, originalBytes: resultBytes(item), reason: 'individual-result-byte-budget',
+      omittedFields: Object.keys(item).filter(key => !['kind','sourceId','sessionId','projectId','eventSourceId','statement','revision','truth','claimedTruth','historical','stale','disputed','staleReasons','supersededBy','relationshipCoverage','freshnessStatus','contradictions','contradictionCount','evidence','evidenceCount','status','goalId','outcome','sha256','sourceRevision','provenance','reportLifecycle'].includes(key)),
+      notice: 'Text and metadata are incomplete previews; original records are unchanged. Review originals before relying on this claim.' },
+    authority: 'Historical attributed navigation, not current instructions, permissions, verified findings or completion.',
+  };
+  if (['chat','attempt','outcome'].includes(item.kind) && result.sourceId && result.sha256) {
+    result.sourceRead = { tool: 'read_knowledge_source', sourceId: result.sourceId, sha256: result.sha256 };
+  }
+  return result;
+}
+// Leave space for the hybrid retrieval envelope added after the synchronous
+// search. Hybrid measures its complete payload before the ToolHost reserve.
+const lexicalSearchMaxBytes = searchPayloadMaxBytes - 1024;
+
 function currentTypedHit(hit, live, query = '') {
   const text = cleanKnowledgeText(knowledgeRecordText(hit.kind,live),Infinity), lower = text.toLowerCase();
   const tokens = query.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) || [];
   const positions = tokens.map(token => lower.indexOf(token)).filter(position => position >= 0);
   if (tokens.length && !positions.length) return null; // A stale FTS match cannot resurrect removed text.
-  const start = positions.length ? Math.max(0,Math.min(...positions)-160) : 0;
+  let start = positions.length ? Math.max(0,Math.min(...positions)-160) : 0;
+  if (start > 0 && /[\uDC00-\uDFFF]/.test(text[start]) && /[\uD800-\uDBFF]/.test(text[start - 1])) start--;
+  let end = Math.min(text.length, start + 1500);
+  if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
   return { ...hit,...live,kind:hit.kind,recordKind:typeof live.kind === 'string' ? cleanKnowledgeText(live.kind,80) : undefined,
     sourceId:hit.sourceId,eventSourceId:live.eventSourceId || live.sourceId,sessionId:hit.sessionId,projectId:hit.projectId,
-    excerpt:text.slice(start,start+1500),historical:true };
+    excerpt:text.slice(start,end),historical:true };
 }
 
 function recordsFor(project, kind) {
@@ -101,13 +157,19 @@ export function searchProjectKnowledge(session, { query = '', limit = 12, offset
   if (typeof includeStale !== 'boolean' || typeof query !== 'string' || query.length > 500 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50
     || !Number.isSafeInteger(offset) || offset < 0 || !Array.isArray(types) || types.some(type => !knowledgeTypes.includes(type))) throw new Error('Invalid project knowledge search.');
   const { access, ids, remaining } = refreshProjectKnowledge(session);
-  const budget = knowledgeVerificationBudget(), items = []; let cursor = offset, page, scanned = 0;
+  const budget = knowledgeVerificationBudget(), items = []; let cursor = offset, page, scanned = 0, byteLimited = false;
+  const result = () => ({ projectId: access.project.id, items, total: page.total, totalIsCandidateCount: true, nextOffset: cursor < page.total ? cursor : null,
+    indexing: { remaining, verificationBounded: budget.files <= 0 || budget.bytes < 0 }, scope: access.restricted ? 'session' : 'project',
+    pageBudget: { maximumBytes: knowledgeSearchMaxBytes, payloadMaximumBytes: searchPayloadMaxBytes, reservedEnvelopeBytes: searchEnvelopeReserve,
+      byteLimited, truncatedItems: items.filter(item => item.preview?.truncated).length,
+      authority: 'Search excerpts are navigation. Use nextOffset for remaining candidates; original records are unchanged.' } });
   do {
     page = searchKnowledgeIndex(access, ids, { query, limit: Math.min(50, Math.max(limit, 20)), offset: cursor, types, includeStale: true, ...(omitCurrentChat ? { excludeChatSessionId: session.id } : {}) });
     for (const hit of page.items) {
-      cursor++; scanned++;
+      const candidateOffset = cursor; cursor++; scanned++;
       const typed = ['memory', 'issue', 'checkpoint', 'goal', 'artifact','attempt','outcome'].includes(hit.kind);
-      const live = typed ? canonicalKnowledgeSource(access, hit, ids) : null;
+      let live;
+      try { live = typed ? canonicalKnowledgeSource(access, hit, ids) : null; } catch { continue; }
       if (typed && !live) continue;
       if (live && !ids.includes(live.sessionId)) continue;
       let resolution;
@@ -115,25 +177,34 @@ export function searchProjectKnowledge(session, { query = '', limit = 12, offset
       const material = resolution ? { ...hit, ...resolution, kind: 'resolution', sourceId: hit.sourceId } : live ? currentTypedHit(hit,live,query) : hit;
       if (!material) continue;
       let current; try { current = ['memory', 'issue'].includes(hit.kind) ? memoryFreshness(material, access.project, session, { budget }) : material; } catch { continue; }
-      if (includeStale || !current.stale) items.push(publicHit(current));
+      if (includeStale || !current.stale) {
+        items.push(boundedSearchHit(publicHit(current)));
+        if (resultBytes(result()) > lexicalSearchMaxBytes) {
+          items.pop(); cursor = candidateOffset; byteLimited = true; break;
+        }
+      }
       if (items.length >= limit || scanned >= 200) break;
     }
-  } while (page.nextOffset != null && items.length < limit && scanned < 200);
-  recordRetrievalMetric(session, { mode: 'fts', latencyMs: performance.now() - startedAt, returned: items.length, deliveredBytes: Buffer.byteLength(JSON.stringify(items)) });
-  return { projectId: access.project.id, items, total: page.total, totalIsCandidateCount: true, nextOffset: cursor < page.total ? cursor : null,
-    indexing: { remaining, verificationBounded: budget.files <= 0 || budget.bytes < 0 }, scope: access.restricted ? 'session' : 'project' };
+  } while (page.nextOffset != null && items.length < limit && scanned < 200 && !byteLimited);
+  const response = result();
+  recordRetrievalMetric(session, { mode: 'fts', latencyMs: performance.now() - startedAt, returned: items.length, deliveredBytes: resultBytes(response) });
+  return response;
 }
 
 // Optional async owner/client route. Ordinary and offline prompt construction
 // retain the synchronous FTS path; a missing local capability falls back to it.
 export async function searchProjectKnowledgeHybrid(session, options = {}) {
   const startedAt = performance.now(); let lexical = searchProjectKnowledge(session, options);
-  if (options.offset) return { ...lexical, retrieval: { mode: 'fts', fallback: 'paged-fts' } };
+  const fallback = reason => ({ ...lexical, retrieval: { mode: 'fts', fallback: reason } });
+  if (lexical.pageBudget.byteLimited) return fallback('response-byte-budget');
+  if (options.offset || lexical.nextOffset != null) return fallback('paged-fts');
   const semantic = await localSemanticCandidates(session, options.query || '', { limit: options.limit || 12, types: options.types || knowledgeTypes,
     ...(options.omitCurrentChat ? { excludeChatSessionId: session.id } : {}) });
   // Local inference yields execution; re-read scope, freshness and deletions.
   lexical = searchProjectKnowledge(session, options);
-  if (!semantic.items.length) return { ...lexical, retrieval: { mode: 'fts', fallback: semantic.fallback || 'no-local-candidates' } };
+  if (lexical.pageBudget.byteLimited) return fallback('response-byte-budget');
+  if (lexical.nextOffset != null) return fallback('paged-fts');
+  if (!semantic.items.length) return fallback(semantic.fallback || 'no-local-candidates');
   const access = knowledgeAccess(session), ids = allowedKnowledgeSessionIds(session, access), budget = knowledgeVerificationBudget(), merged = new Map();
   lexical.items.forEach((item, index) => merged.set(`${item.kind}:${item.sourceId}`, { item, rank: 1 / (60 + index + 1) }));
   for (const [index, hit] of semantic.items.entries()) {
@@ -147,19 +218,31 @@ export async function searchProjectKnowledgeHybrid(session, options = {}) {
     }
     if (!ids.includes(current.sessionId) || getRecord('session-deletion', current.sessionId) || !options.includeStale && (current.stale || current.disputed)) continue;
     const key = `${hit.kind}:${hit.sourceId}`, prior = merged.get(key);
-    merged.set(key, { item: prior?.item || publicHit(current), rank: (prior?.rank || 0) + 1 / (60 + index + 1) });
+    merged.set(key, { item: prior?.item || boundedSearchHit(publicHit(current)), rank: (prior?.rank || 0) + 1 / (60 + index + 1) });
   }
-  const items = [...merged.values()].sort((a, b) => b.rank - a.rank).slice(0, options.limit || 12).map(value => value.item);
-  recordRetrievalMetric(session, { mode: 'local-hybrid', latencyMs: performance.now() - startedAt, returned: items.length, deliveredBytes: Buffer.byteLength(JSON.stringify(items)) });
-  return { ...lexical, items, retrieval: { mode: 'local-hybrid', local: true, generation: semantic.generation,
+  const ranked = [...merged.values()].sort((a, b) => b.rank - a.rank), items = [];
+  const response = { ...lexical, items, pageBudget: { ...lexical.pageBudget }, retrieval: { mode: 'local-hybrid', local: true, generation: semantic.generation,
     candidateWindowBounded: !semantic.complete, scanned: semantic.scanned, complete: semantic.complete,
+    omittedCandidates: ranked.length, pagination: 'Semantic candidates are bounded; nextOffset covers lexical candidates only.',
     ...(semantic.fallback ? { fallback: semantic.fallback } : {}), semanticSimilarityIsVerification: false } };
+  for (const candidate of ranked.slice(0, options.limit || 12)) {
+    items.push(candidate.item);
+    response.pageBudget.truncatedItems = items.filter(item => item.preview?.truncated).length;
+    if (resultBytes(response) > searchPayloadMaxBytes) { items.pop(); response.pageBudget.byteLimited = true; break; }
+  }
+  // A hybrid ranking has no stable continuation for displaced lexical rows.
+  // Preserve the lexical page and its cursor rather than silently skipping them.
+  const included = new Set(items.map(item => `${item.kind}:${item.sourceId}`));
+  if (lexical.items.some(item => !included.has(`${item.kind}:${item.sourceId}`))) return fallback('lexical-page-preserved');
+  response.retrieval.omittedCandidates = ranked.length - items.length;
+  response.pageBudget.truncatedItems = items.filter(item => item.preview?.truncated).length;
+  recordRetrievalMetric(session, { mode: 'local-hybrid', latencyMs: performance.now() - startedAt, returned: items.length, deliveredBytes: resultBytes(response) });
+  return response;
 }
 
 export function enrichKnowledgeQuery(session, request = '', { activeSignatures = [] } = {}) {
   const run = getRecord('run', session.id), goal = run?.goalMode === false ? '' : session.goal?.status === 'active' ? session.goal.objective : '';
-  const ignored = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'from', 'have', 'please', 'can', 'you', 'could', 'should', 'would', 'help', 'find', 'new', 'goal', 'que', 'para', 'con', 'por', 'una', 'los', 'las']);
-  const tokens = value => (String(value).match(/[\p{L}\p{N}_-]+/gu) || []).filter(token => token.length > 1 && !ignored.has(token.toLowerCase()));
+  const tokens = knowledgeQueryTokens;
   const prioritized = activeSignatures.slice(0, 3).flatMap(signature => [signature.errorClass, signature.errorCode, signature.ecosystem].filter(Boolean));
   return [...new Set([...prioritized.flatMap(tokens), ...tokens(request), ...tokens(goal)])].slice(0, 24).join(' ').slice(0, 500);
 }

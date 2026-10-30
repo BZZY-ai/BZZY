@@ -1,3 +1,30 @@
+# Memory pause lifecycle and bounded retrieval corrections (2026-10-30)
+
+New admitted source runs reopen local summary maintenance after a goal pause,
+cancel or Core stop. Explicit compactor owner pauses/cancels remain independent
+and sticky. The 30 new lifecycle cases include the actual runtime routes, both
+callback orders, late callbacks, idle/status reads, and preservation of old paid
+jobs, uncertain dispatch receipts and charges. Core Start alone does not replay
+paused work. The combined compactor/runtime group passed **107 tests**.
+
+Checkpoint regressions exercise canonical versus derived failure, null outcome
+projections, nested transactions and an A/B/A request retry. A saved checkpoint
+remains successful when its navigation views fail, and an older receipt cannot
+replace newer project/search views. The checkpoint group passed **16 tests**.
+Retrieval fixtures cover irrelevant common words, preserved negation, Unicode,
+oversized legacy metadata, exact paging, hybrid fallback and project/worker
+isolation. Search payloads reserve space for the actual worker budget notice;
+the complete result stays within 16 KiB. After that final envelope adjustment,
+the focused retrieval group passed **42 tests**.
+
+Node 24/macOS full Core run before the final envelope adjustment: **1,490 passed,
+4 skipped, 0 failed** out of 1,494. Core syntax and whitespace checks passed.
+All tests used isolated temporary homes. No live installation, target, account,
+Relay or phone was changed. These regressions establish local lifecycle and
+retrieval behavior; live review quality and 5–15-hour model use still require a
+Linux run and its debug export. Earlier benchmark/soak figures below were not
+rerun for this correction.
+
 # Permanent-session memory continuity (2026-10-30)
 
 The six changes reuse canonical checkpoints/revisions, the event log, source

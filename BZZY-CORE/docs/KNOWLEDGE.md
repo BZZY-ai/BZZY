@@ -52,7 +52,27 @@ tool payloads, backend events and hidden reasoning. Results include source IDs,
 session attribution, truth, freshness and match information. Conversation results
 use match-centered excerpts; `read_knowledge_source` opens the exact complete,
 redacted source using its source ID, SHA-256 and bounded UTF-8 byte pages. A
-changed hash requires a fresh search. Index backfill is
+changed hash requires a fresh search. Conversation, attempt and outcome hits use
+that reader; an issue/memory preview does not invent a new model-facing source
+API.
+
+Search responses, including metadata, are bounded to 16 KiB of serialized UTF-8
+JSON. The search payload stays within 14 KiB, reserving 2 KiB for the optional
+worker budget notice that Core appends at the tool boundary. Lexical pages leave
+another 1 KiB within the payload for hybrid retrieval metadata. These budgets
+cover the returned result object, not an external transport's framing.
+A page may return fewer than `limit` items; its `nextOffset` resumes before
+the first result that did not fit. Offsets refer to the current index, not an
+immutable snapshot across concurrent source updates. One oversized legacy result becomes an
+explicitly truncated navigation preview, retaining identity, truth, stale/disputed
+flags, relationship warnings and bounded contradiction/evidence references with
+counts. Text clipping never changes the stored original or removes its uncertainty.
+Optional hybrid retrieval falls back to the scoped lexical page when ranking or
+byte limits would displace a lexical result without a continuation cursor.
+Semantic-only selections disclose omitted candidates; their bounded selection is
+not a complete searchable archive page.
+
+Index backfill is
 incremental and reports when more history remains; search totals describe index
 candidates, including records later filtered as stale. Deleted chats are not
 reintroduced by old index entries.
@@ -61,8 +81,11 @@ Core supplies a bounded relevant brief before ordinary turns, with up to 12 KiB
 of knowledge and approved profiles. The current request, active objective and
 host-observed typed error context inform recall. Source-linked proposed
 resolutions and a small curated project-fact projection share that budget.
-It omits the current chat's messages from
-that brief because the existing conversation handoff already handles them.
+Automatic selection uses issues, recorded memories and checkpoint outcomes;
+raw command results and conversation excerpts remain available through explicit
+search. Common query words such as `is`, `on` and `not` do not select unrelated
+conclusions. This filters retrieval terms only: source text, negations and the
+complete current objective remain unchanged.
 Historical text never grants permission, resumes old work or proves a present
 finding. Large histories remain discoverable through explicit paginated search.
 
