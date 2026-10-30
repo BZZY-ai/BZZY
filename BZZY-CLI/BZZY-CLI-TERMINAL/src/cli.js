@@ -49,6 +49,7 @@ import { workflowsCLI } from '@bzzy/core/engine/workflows-cli.js';
 import { workflowSelection } from '@bzzy/core/engine/workflows.js';
 import { resolveInteractiveGoal } from './goal-controls.js';
 import { createDebugExportProgressReporter, debugExportContextNotice, debugExportSummary } from './debug-export-progress.js';
+import { customNotificationCLI } from './custom-notification-command.js';
 import { backgroundCLI } from './background-command.js';
 import { selectedProvider, authenticateSubscription, applyLaunchDefault, createChatSession, openOrCreateChatSession, newConversation, startConversationGoal,
   prepareConversationTurn, controlSavedGoal, prepareResume, recordProjectMemory, createTaskSession, activateTaskGoal } from '@bzzy/core/engine/host-commands.js';
@@ -142,6 +143,7 @@ Options:
   --goal OBJECTIVE      Start a persistent goal; quoted positional text is sent first as context
   --context-file FILE   UTF-8 task instructions (up to 1 MiB), relative to --cwd; no initialization chat
   --preprompt FILE      Alias for --context-file; full instructions saved before work
+  --custom-notification TEXT  Queue a custom iPhone push alert (up to 180 characters)
   --background SCRIPT   Run a script through Core and immediately return its job ID
   --timeout SECONDS     Script deadline (1–604800); omitted means no deadline
   --notif               Opt in to iPhone completion/failure alerts for this script
@@ -245,7 +247,7 @@ API providers must support the Responses protocol in this version.
 export function parseArgs(argv) {
   const options = { cwd: process.cwd(), pet: true, yolo: false, json: false, captureNetwork: true };
   const args = [];
-  const values = { '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile', '--preprompt': 'contextFile', '--background': 'backgroundScript', '--timeout': 'timeoutSeconds', '--workflow': 'workflow',
+  const values = { '--custom-notification': 'customNotification', '--provider': 'provider', '--model': 'model', '--cwd': 'cwd', '--alias': 'alias', '--import': 'importFile', '--goal': 'goal', '--context-file': 'contextFile', '--preprompt': 'contextFile', '--background': 'backgroundScript', '--timeout': 'timeoutSeconds', '--workflow': 'workflow',
     '--token-budget': 'tokenBudget', '--max-turns': 'maxTurns', '--effort': 'effort',
     '--base-url': 'baseUrl', '--env-key': 'envKey', '--context-window': 'contextWindow',
     '--view': 'view', '--attach': 'attach', '--atach': 'attach', '--resume': 'resume', '--mode': 'mode', '--supervisor': 'supervisor', '--executor': 'executor',
@@ -326,6 +328,9 @@ export function parseArgs(argv) {
       options[key] = Number(options[key]);
     }
   }
+  if (options.customNotification !== undefined && (args.length || Object.keys(options).some(key =>
+      !['cwd', 'pet', 'yolo', 'json', 'captureNetwork', 'customNotification', 'requestId'].includes(key))
+      || !options.pet || options.yolo || !options.captureNetwork)) throw new Error('Use --custom-notification TEXT with only --json, --request-id and optional --cwd.');
   if ((options.notify || options.timeoutSeconds) && !options.backgroundScript) throw new Error('--notif and --timeout require --background SCRIPT.');
   if (options.timeoutSeconds > 604800) throw new Error('--timeout cannot exceed 604800 seconds.');
   if (options.backgroundScript && (args.length || ['goal', 'contextFile', 'workflow', 'provider', 'model', 'effort', 'mode', 'view', 'attach', 'resume', 'contract', 'readOnly', 'yolo', 'alias', 'importFile'].some(key => options[key])))
@@ -607,6 +612,7 @@ export async function main(argv) {
     if (argv.length !== 1) throw new Error('Run bzzy --update by itself.');
     return updateCoreAndCLI();
   }
+  if (options.customNotification !== undefined) return customNotificationCLI(options);
   try { if (!fs.statSync(options.cwd).isDirectory()) throw new Error('not a directory'); }
   catch { throw new Error(`--cwd must name an existing directory: ${options.cwd}`); }
   options.cwd = fs.realpathSync(options.cwd);
@@ -753,7 +759,7 @@ export async function main(argv) {
       if (rest[0] === 'status') { const status = (await import('@bzzy/core/engine/push-status.js')).notificationDeliveryStatus(); ui.event('info', { ...status, message: status.message + '\n' + JSON.stringify(status, null, 2) }); return 0; }
       const hub = new NotificationHub({ ui });
       if (rest[0] === 'retry') await hub.retry();
-      else if (!rest[0] || rest[0] === 'list') for (const { event, deliveries } of hub.records()) ui.event('notification', { event, deliveries, message: `${event.type} · ${event.sessionId.slice(0, 8)} · ${JSON.stringify(deliveries)}` });
+      else if (!rest[0] || rest[0] === 'list') for (const { event, deliveries } of hub.records()) ui.event('notification', { event, deliveries, message: `${event.type} · ${event.sessionId?.slice(0, 8) || 'host'} · ${JSON.stringify(deliveries)}` });
       else throw new Error('Use bzzy notifications status|list|retry.');
       return 0;
     }

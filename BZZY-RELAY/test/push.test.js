@@ -296,3 +296,19 @@ for (const blockedBy of ['backoff', 'unconfigured environment']) {
       'Backoff and missing-environment entries must not create native connection attempts');
   });
 }
+
+test('custom alerts accept only a fixed title and host-only Terminal hint', async t => {
+  const f = await fixture(t), host = await f.client({ host: true }), phone = await f.client(), { grant } = await pair(host, phone);
+  const worker = new RelayPushService({ store: f.store }); t.after(() => worker.close());
+  worker.register(grant.recipientId, { enabled: true, deviceToken: token, environment: 'sandbox', grantIds: [grant.id] });
+  const value = { aps: { alert: { title: 'BZZY notification', body: 'hey' }, sound: 'default', category: 'BZZY_UPDATE', 'thread-id': 'custom' },
+    bzzy: { v: 1, eventId: 'custom', hostId: grant.hostId, destination: 'terminal' } };
+  const input = { grantId: grant.id, id: 'custom', occurredAt: Date.now(), environment: 'sandbox', payload: value };
+  assert.equal(worker.enqueue(grant.hostId, input).state, 'queued');
+  assert.equal(worker.enqueue(grant.hostId, input).state, 'queued');
+  for (const hint of [{ destination: 'agents' }, { destination: 'updates' }, { resource: grant.spec.resource, sessionId: randomUUID() }, { agentId: randomUUID() }]) {
+    assert.throws(() => worker.enqueue(grant.hostId, { ...input, id: randomUUID(), payload: { ...value, bzzy: { ...value.bzzy, ...hint } } }), { code: 'INVALID_PUSH' });
+  }
+  for (const body of ['', 'x'.repeat(181), 'control\u0000text']) assert.throws(() => worker.enqueue(grant.hostId, { ...input, id: randomUUID(),
+    payload: { ...value, aps: { ...value.aps, alert: { title: 'BZZY notification', body } } } }), { code: 'INVALID_PUSH' });
+});

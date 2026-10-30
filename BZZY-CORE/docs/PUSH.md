@@ -1,5 +1,16 @@
 # Core activity notifications through Relay and APNs
 
+Owner custom alerts: `bzzy --custom-notification "hey"` (optional --json and
+--request-id) queues a fixed **BZZY notification** title and normalized body up
+to 180 characters. Core's owner-only POST /v1/notifications validates approval,
+text and rate, then atomically saves the request receipt and outbox. Credentials
+are rejected; no model/session work starts. Dispatch pins eligible registrations,
+rechecks grants and reuses the existing uncertain-delivery policy. No eligible
+enabled full own-phone registration yields PUSH_REGISTRATION_REQUIRED. This
+needs the matching Relay title allowlist deployed; current iOS host-only Terminal
+navigation is reused. Queued is not a delivered/displayed receipt.
+
+
 Current clients register the phone with Relay and register its approved scope
 with each Core over the encrypted Core protocol. Core saves each outcome and
 outbox record transactionally, then submits a bounded alert to Relay. Relay

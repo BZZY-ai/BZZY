@@ -35,6 +35,13 @@ it does not establish capacity on the intended 2 GB VPS.
 
 ## Implemented
 
+- Custom owner alerts accept the fixed **BZZY notification** title and a bounded
+  180-character body through the existing authenticated PAIR push queue. Only
+  host-level Terminal routing is allowed, with no arbitrary resource/session or
+  Agent/update target. Core sanitizes and authorizes text before submission.
+  Deploy this Relay version for `bzzy --custom-notification "hey"`; iOS retains
+  its existing notification format.
+
 - Opt-in Core script completion/failure alerts reuse the bounded PAIR-only push
   queue. Named `Completed script.py` / `Failed script.py` alerts carry fixed
   outcome text and a job ID; host paths, arguments and logs are excluded. They use

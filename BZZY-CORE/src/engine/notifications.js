@@ -68,7 +68,7 @@ export class NotificationHub {
   records() {
     const dir = path.join(home(), 'notifications');
     if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.json'))) if (!getRecord('outbox', f.slice(0, -5))) putRecord('outbox', f.slice(0, -5), readJson(path.join(dir, f)));
-    return listRecords('outbox').map(record => ({ file: path.join(dir, `${record.event.sessionId}-${record.event.goalId}-${record.event.epoch}-${record.event.type}.json`), ...record }));
+    return listRecords('outbox').map(record => ({ file: path.join(dir, `${record.event.goalId ? `${record.event.sessionId}-${record.event.goalId}-${record.event.epoch}-${record.event.type}` : record.event.id}.json`), ...record }));
   }
 
   async retry() { for (const { file, ...record } of this.records()) await this.deliver(file, record); }

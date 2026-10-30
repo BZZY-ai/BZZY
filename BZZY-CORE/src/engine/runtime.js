@@ -1,3 +1,4 @@
+import { queueCustomNotification } from './custom-notifications.js';
 import { sessionCompactorUsage } from './compaction-cost.js';
 import { coreUpdates } from './updates.js';
 import { guardedInterval } from './interval.js';
@@ -249,6 +250,11 @@ export async function serveRuntime() {
         const items = read(limit);
         send(response, 200, { events: items, nextCursor: items.at(-1)?.seq || cursor, hasMore: items.length === limit, state: job.state, logsTruncated: job.logsTruncated }); return;
       }
+      if (pathname === '/notifications' && request.method === 'POST') {
+        if (!rootToken) { send(response, 403, { error: 'Custom notifications require local owner authentication.', code: 'FORBIDDEN' }); return; }
+        const { requestId, ...input } = await readBody(request);
+        send(response, 202, queueCustomNotification(input, request.headers['idempotency-key'] || requestId)); return;
+      }
       if (pathname.startsWith('/knowledge/')) {
         if (!rootToken) { send(response, 403, { error: 'Only the local owner can administer knowledge and learning.' }); return; }
         if (request.method !== 'POST') { send(response, 405, { error: 'Use an explicit knowledge operation.' }); return; }
@@ -270,7 +276,7 @@ export async function serveRuntime() {
       if (request.method === 'GET' && pathname === '/metrics') { send(response, 200, metrics.read()); return; }
       if (request.method === 'GET' && pathname === '/schema') { send(response, 200, readJson(path.join(root, 'assets', 'events.schema.json'))); return; }
       if (request.method === 'GET' && pathname === '/capabilities') { send(response, 200, { apiVersion: 1, managedExecutions: true, durableEvents: true, idempotentCommands: true, inputSubmission: true,
-        backgroundJobs: rootToken, jobEvents: rootToken, scopedSessionAccess: true, revocableAccess: true, permissions: access?.permissions || sessionPermissions,
+        backgroundJobs: rootToken, jobEvents: rootToken, customNotifications: rootToken, scopedSessionAccess: true, revocableAccess: true, permissions: access?.permissions || sessionPermissions,
         isolation: { platform: process.platform, enforcedPolicies: sandboxSupport(), backendReadConfidentiality: false }, relay: false, portableSharing: false }); return; }
       if (request.method === 'GET' && pathname === '/sessions') { send(response, 200, listRecords('session').filter(s => !sessionDeleted(s.id) && (access ? s.id === access.sessionId : !s.parentSessionId))); return; }
       if (request.method === 'GET' && pathname === '/tokens') {

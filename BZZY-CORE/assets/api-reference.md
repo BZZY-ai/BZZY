@@ -415,7 +415,7 @@ identity or device pairing. includeChildren false denies direct child access;
 the parent stream can still carry explicitly mirrored results. The token is
 returned only at creation; store it privately. Revoke/expiry closes streams on
 subsequent checks and prevents new commands; prior side effects remain.
-Session grants cannot submit jobs or administer knowledge, Relay, deletion or
+Session grants cannot send custom notifications, submit jobs or administer knowledge, Relay, deletion or
 host lifecycle. Use separate owner backend code for those operations.
 
 ## 8. Knowledge, memory and learning administration (owner only)
@@ -513,7 +513,33 @@ are separate from this dispatcher's top-level field lists. Scope approval is
 owner authorization, never inferred from remembered scope text. Unknown dispatch
 operations/settings fail instead of granting additional capabilities.
 
-## 9. Relay and Core lifecycle administration (owner only)
+## 9. Relay, custom notifications and Core lifecycle administration (owner only)
+
+Queue your own iPhone alert with `bzzy --custom-notification "hey"`. Optional
+`--json` returns `{id,state:"queued",recipientCount}`; `--request-id ID` makes
+retries idempotent. This command starts Core if needed, creates no session/model
+work and does not require a project. The fixed title is **BZZY notification**;
+the normalized plain-text body is limited to 180 characters. Empty/credential-like
+content is rejected before persistence. Rate limit: 60 new notifications/minute;
+identical retries do not consume another slot. With no enabled fully approved own
+phone registration the request fails with PUSH_REGISTRATION_REQUIRED.
+
+`POST /v1/notifications` takes `{message}` with a stable Idempotency-Key (or body
+requestId). It returns 202 with the same queued receipt on retries; changed
+content under the same key conflicts. The capability customNotifications is
+owner-only. `client.sendNotification({message,requestId})` and
+`core.sendNotification({message,requestId})` use this route. No arbitrary title,
+recipient, token or navigation target is accepted. Only the phones eligible at
+submission can receive it, and approval/preferences are checked again at delivery.
+Queued is not proof of Apple acceptance or phone display. Inspect
+`bzzy notifications status` for delivery health. The existing 24-hour delivery
+window, uncertain-request handling and Relay/APNs retry rules apply.
+
+Custom titles require this Relay build deployed on the server; updating only
+CLI/Core does not update Relay. The existing iOS host-only Terminal routing hint
+is reused, with no new iOS payload fields. Tapping opens that host's Terminal
+catalog. This iPhone alert command is independent of local session SSE consumers.
+
 
 These routes administer the existing gateway; local Huntr monitoring needs none
 of them. They do not make Relay a model runner or transfer owner keys. GET /relay/
@@ -522,6 +548,7 @@ use /health for a minimal connectivity probe.
 
 | Method and path | Input / result |
 | --- | --- |
+| `POST /v1/notifications` | message (+ idempotency key) → queued custom iPhone alert |
 | `GET /v1/relay/status` | Gateway snapshot, pending pairings and grant metadata |
 | `POST /v1/relay/init` | `{}` → local public identity certificate |
 | `POST /v1/relay/connect` | `{}` → connect existing gateway |
@@ -576,6 +603,7 @@ are surfaced to the caller.
 | `observerToken` | id,expiresInSeconds=86400 |
 | `sessionToken` | id,{permissions?,recipient?,expiresInSeconds?,includeChildren?} |
 | `revokeToken` | grantId |
+| `sendNotification` | {message,requestId} (owner only) |
 | `submitJob` | {script,cwd,args?,timeoutSeconds?,notify?,requestId} |
 | `jobs` | {before?,limit?,state?} |
 | `job` | id |
@@ -598,6 +626,7 @@ privileged facade to a model, browser or arbitrary scoped-session caller.
 | --- | --- |
 | `BzzyCore` from @bzzy/core | start(),status(),sessions(),session(id),usage(id),events(id,after,limit),claim(id,owner,takeover),release(id,owner),execute(id,input),answer(id,input),control(id,input),deleteConversation(id,{requestId}) |
 | `BzzyCore` creation | createConversation({provider,cwd,model?,effort?,alias?},{requestId}); returns the saved ordinary session without starting execution; cwd is an existing absolute non-private directory |
+| `BzzyCore` custom alerts | sendNotification({message,requestId}) |
 | `BzzyCore` scripts | submitJob(input),jobs(options),job(id),jobLogs(id,options),jobEvents(id,options),cancelJob(id,options) |
 | `BzzyCore` grants/cursors | grantSession(input),revokeSession(id),processedCursor(consumerId,sessionId),processEvents(sessionId,{consumerId,handle,limit?,signal?}) |
 | `CoreAssistant` from @bzzy/core | providers(),settings(),configure({source,provider?,model?,effort?},{requestId,expectedRevision}),createContext({cwd},{requestId}); independent Core defaults; source:cli explicitly copies once |

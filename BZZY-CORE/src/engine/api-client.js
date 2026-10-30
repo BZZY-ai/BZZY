@@ -10,6 +10,10 @@ export class BzzyClient {
   schema() { return this.request('GET', '/v1/schema'); }
   metrics() { return this.request('GET', '/v1/metrics'); }
   sessions() { return this.request('GET', '/sessions'); }
+  sendNotification({ requestId, ...input }) {
+    if (!requestId) throw new Error('Custom notifications require a stable requestId.');
+    return this.request('POST', '/v1/notifications', input, requestId);
+  }
   submitJob({ requestId, ...input }) {
     if (!requestId) throw new Error('Job submission requires a stable requestId.');
     return this.request('POST', '/v1/jobs', input, requestId);

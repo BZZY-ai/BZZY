@@ -10,9 +10,10 @@ import { libraryNotificationTypes, currentLibraryCreation, libraryCreationAlert 
 import { debugExportNotificationTypes, currentDebugExportOutcome, reconcileDebugExportJobs } from '../engine/debug-export-jobs.js';
 import { debugExportAlert } from '../engine/debug-export-notifications.js';
 import { backgroundNotificationTypes, currentBackgroundOutcome } from '../engine/background-jobs.js';
+import { customNotificationType, customNotificationRecipient, currentCustomNotification, customNotificationAlert } from '../engine/custom-notifications.js';
 import { APNsClient, loadAPNsConfiguration } from './apns.js';
 
-const types = new Set(['goal.completed', 'goal.stalled', 'goal.paused', 'goal.cancelled', 'goal.waiting_for_input', 'system.update_available', ...libraryNotificationTypes, ...debugExportNotificationTypes, ...backgroundNotificationTypes]);
+const types = new Set(['goal.completed', 'goal.stalled', 'goal.paused', 'goal.cancelled', 'goal.waiting_for_input', 'system.update_available', customNotificationType, ...libraryNotificationTypes, ...debugExportNotificationTypes, ...backgroundNotificationTypes]);
 export function goalAlert(event, session, secrets = []) {
   const safe = (value, maximum = 180) => notificationPreview(value, maximum, secrets);
   const state = { 'goal.completed': 'Goal achieved', 'goal.waiting_for_input': 'Input needed', 'goal.paused': 'Goal paused', 'goal.cancelled': 'Goal cancelled' }[event.type] || 'Goal stalled';
@@ -70,14 +71,16 @@ export class CorePushWorker {
       const secrets = sharedSecrets();
       for (const row of records) {
         const record = JSON.parse(row.data);
-        const event = record.event, isUpdate = event?.type === 'system.update_available', isLibrary = libraryNotificationTypes.has(event?.type), isDebug = debugExportNotificationTypes.has(event?.type), isJob = backgroundNotificationTypes.has(event?.type),
-          hostWide = isUpdate || isLibrary || isJob, occurred = Date.parse(event?.occurredAt);
+        const event = record.event, isUpdate = event?.type === 'system.update_available', isLibrary = libraryNotificationTypes.has(event?.type), isDebug = debugExportNotificationTypes.has(event?.type), isJob = backgroundNotificationTypes.has(event?.type), isCustom = event?.type === customNotificationType,
+          hostWide = isUpdate || isLibrary || isJob || isCustom, occurred = Date.parse(event?.occurredAt);
         if (!event || typeof event.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(event.id) ||
           (!hostWide && (typeof event.sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(event.sessionId))) ||
           !types.has(event.type) || !Number.isFinite(occurred) || occurred < this.clock() - 24 * 3600_000) continue;
         if (isLibrary && !currentLibraryCreation(event)) continue;
         if (isDebug && !currentDebugExportOutcome(event)) continue;
         if (isJob && !currentBackgroundOutcome(event)) continue;
+        const custom = isCustom ? currentCustomNotification(event) : null, customAlert = isCustom ? customNotificationAlert(event, secrets) : null;
+        if (isCustom && (!custom || !customAlert)) continue;
         if (isUpdate) {
           const update = getRecord('core.update.status', 'default');
           if (update?.phase !== 'ready' || update.available !== true || update.blocked || update.target !== event.target) continue;
@@ -88,6 +91,7 @@ export class CorePushWorker {
           if (isLibrary && !authorizedUpdateGrant(registration.relayGrantId)) continue;
           if (isDebug && !authorizedUpdateGrant(registration.relayGrantId)) continue;
           if (isJob && !authorizedUpdateGrant(registration.relayGrantId)) continue;
+          if (isCustom && (!custom.recipientIds.includes(registration.id) || !customNotificationRecipient(registration))) continue;
           if (isUpdate && (!authorizedUpdateGrant(registration.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(registration.relayGrantId)).notificationsEnabled === false)) continue;
           const id = digest({ hostId, peer: registration.peerId, token: registration.tokenDigest, event: event.id });
           let delivery = getRecord('core.push.delivery', id);
@@ -112,6 +116,7 @@ export class CorePushWorker {
                 isLibrary && (!authorizedUpdateGrant(current.relayGrantId) || !currentLibraryCreation(event)) ||
                 isDebug && (!authorizedUpdateGrant(current.relayGrantId) || !currentDebugExportOutcome(event)) ||
                 isJob && (!authorizedUpdateGrant(current.relayGrantId) || !currentBackgroundOutcome(event)) ||
+                isCustom && (!custom.recipientIds.includes(current.id) || !customNotificationRecipient(current) || !currentCustomNotification(event)) ||
                 isUpdate && (!authorizedUpdateGrant(current.relayGrantId) || updateDevicePreferences(authorizedUpdateGrant(current.relayGrantId)).notificationsEnabled === false)) {
               putRecord('core.push.delivery', id, { ...delivery, state: 'failed', code: 'FORBIDDEN', updatedAt: now() }); continue;
             }
@@ -123,14 +128,14 @@ export class CorePushWorker {
             // device binding; pre-capability registrations retain their shape.
             const hostHint = current.hostHints === true || viaRelay ? { hostId: current.hostId } : {};
             const payload = delivery.payload || { aps: { alert: isUpdate ? { title: 'BZZY update available', body: 'Update CLI and Core from Settings on your iPhone.' }
-                  : isLibrary ? libraryCreationAlert(event, secrets) : isDebug ? debugExportAlert(event, secrets)
+                  : isCustom ? customAlert : isLibrary ? libraryCreationAlert(event, secrets) : isDebug ? debugExportAlert(event, secrets)
                   : isJob ? { title: `${event.type === 'job.completed' ? 'Completed' : 'Failed'} ${notificationPreview(currentBackgroundOutcome(event)?.notificationName, 64, secrets) || 'script'}`, body: `Job ${event.jobId} ${event.type.slice(4).replace('_', ' ')}. Check status on your host.` }
                   : goalAlert(event, session, secrets), sound: 'default', category: 'BZZY_UPDATE',
-                  'thread-id': digest({ hostId, resource: current.resource, sessionId: event.sessionId, ...(isLibrary ? { library: event.definitionKind } : {}), ...(isJob ? { jobId: event.jobId } : {}) }) },
+                  'thread-id': digest({ hostId, resource: current.resource, sessionId: event.sessionId, ...(isLibrary ? { library: event.definitionKind } : {}), ...(isJob ? { jobId: event.jobId } : {}), ...(isCustom ? { notificationId: event.id } : {}) }) },
                 // This public routing hint comes from the reauthorized private
                 // binding, never from a model reply or the queued event. Clients
                 // still authenticate the selected Core before opening details.
-                bzzy: isUpdate ? { v: 1, eventId: id, ...hostHint, destination: 'updates' } : isJob ? { v: 1, eventId: id, ...hostHint, destination: 'terminal' } : isLibrary ? { ...libraryRoute, ...hostHint } : { v: 1, eventId: id, ...hostHint, destination: isAgent ? 'agents' : 'terminal', resource: current.resource, sessionId: event.sessionId,
+                bzzy: isUpdate ? { v: 1, eventId: id, ...hostHint, destination: 'updates' } : isJob || isCustom ? { v: 1, eventId: id, ...hostHint, destination: 'terminal' } : isLibrary ? { ...libraryRoute, ...hostHint } : { v: 1, eventId: id, ...hostHint, destination: isAgent ? 'agents' : 'terminal', resource: current.resource, sessionId: event.sessionId,
                   ...(isAgent ? { agentId: session.agentId } : {}) } };
             if (viaRelay) {
               // Persist the exact request before transport. Repeating this ID

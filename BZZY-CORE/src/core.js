@@ -45,6 +45,7 @@ export class BzzyCore {
     return conversationExport(result.sessionId);
   }
   async sessions() { return (await this.#connection()).sessions(); }
+  async sendNotification(input) { return (await this.#connection()).sendNotification(input); }
   async submitJob(input) { return (await this.#connection()).submitJob(input); }
   async jobs(options) { return (await this.#connection()).jobs(options); }
   async job(id) { return (await this.#connection()).job(uuid(id)); }

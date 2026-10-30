@@ -24,6 +24,12 @@ starts no service, model or network request.
 
 Implemented:
 
+- Owner-only custom iPhone alerts through `POST /v1/notifications` and
+  `bzzy --custom-notification "hey"`, with bounded sanitized text, request-ID
+  deduplication and the existing durable push queue. Only fully approved enabled
+  phone registrations are eligible, rechecked at dispatch. Requires the matching
+  Relay title support; queued receipts do not assert Apple acceptance/display.
+
 - [External execution API](docs/EXECUTION-API.md): durable owner-only script jobs,
   literal argv, deadlines, cancellation, bounded redacted logs, request-ID
   deduplication and replayable events. `bzzy --background SCRIPT` returns a job ID;

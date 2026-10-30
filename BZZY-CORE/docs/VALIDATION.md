@@ -1,3 +1,22 @@
+# Custom owner iPhone notifications (2026-10-30)
+
+`bzzy --custom-notification "hey"` queues a bounded plain-text custom alert
+through the existing durable Core/Relay/APNs pipeline. The owner-only HTTP/SDK
+route shares request-ID deduplication. Submission requires an enabled full
+own-phone registration, pins eligible recipients and rechecks authorization at
+dispatch. A fixed title and host-only Terminal hint preserve existing iOS parsing.
+The Relay title allowlist must be deployed for this feature; no live server or
+phone was updated. Queued receipts do not assert Apple acceptance/display.
+
+Node 24/macOS: **39 Core tests**, **8 CLI command/transport tests**, the full
+**59-test Relay suite**, and **5 notification/packaging regressions** passed
+(**111 total**, no failures). Coverage includes actual CLI/HTTP submission,
+invalid/private text, scoped-token rejection, rate limits, lost-receipt
+deduplication, revocation/new-recipient exclusion, and a real authenticated
+loopback Core-to-Relay push with a simulated offline phone and fake APNs sender.
+Core, CLI and Relay syntax checks and whitespace checks passed. No model work,
+real notification, live deployment or running-installation update was performed.
+
 # Installed Core API reference (2026-10-30)
 
 `bzzy --help-api` and `bzzy-core --help-api` print the installed local HTTP/SDK

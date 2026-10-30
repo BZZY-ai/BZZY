@@ -1,5 +1,13 @@
 # bzzy 🐝
 
+Send a custom alert to your approved paired iPhone with
+`bzzy --custom-notification "hey"`. Optional `--json` returns its queued receipt;
+`--request-id ID` deduplicates retries. The title is **BZZY notification**, with
+up to 180 characters of normalized body text. Core queues delivery in the
+background without starting a chat/model. Enable phone notifications first;
+queued does not guarantee display. This feature needs the matching Relay server
+update; the existing iOS app format is compatible.
+
 Run a script independently of the terminal with
 `bzzy --background /path/task.py --cwd /path/project --timeout 300 --json -- ARG...`.
 Core returns a durable job ID immediately; inspect it with
