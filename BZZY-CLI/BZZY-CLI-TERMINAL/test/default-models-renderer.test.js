@@ -94,5 +94,5 @@ test('main Settings keeps all four rows visible at 80 by 24', t => {
   const { ui, tui } = terminal(t); ui.openSettings(); tui.render();
   for (const action of ['deepseek', 'workspace-root', 'pair', 'core'])
     assert.ok(tui.hitTargets.some(hit => hit.type === 'settings' && hit.action === action && hit.row <= 24), action);
-  assert.match(tui.lastFrame.map(clean).join('\n'), /DeepSeek API key/);
+  assert.match(tui.lastFrame.map(clean).join('\n'), /API keys/);
 });

@@ -27,9 +27,10 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   const put = (text = '', tone = palette.text, bold = false, background = palette.surface) => lines.push(edge('│') + fillSurface(clip(text, inner), inner, theme, background, tone, bold) + edge('│'));
   lines.push(edge('┌' + '─'.repeat(inner) + '┐'));
   const locked = picker.locked && picker.loading;
-  const close = locked ? '   ' : ' ← Back ', title = ' ' + clip(picker.title, Math.max(1, inner - cellWidth(close) - 2));
+  const hasBackChoice = filtered.slice(offset, offset + rows).some(({ choice }) => choice.value === 'back' && /^← Back/.test(choice.label));
+  const close = locked || hasBackChoice ? '   ' : ' ← Back ', title = ' ' + clip(picker.title, Math.max(1, inner - cellWidth(close) - 2));
   put(title + ' '.repeat(Math.max(0, inner - cellWidth(title) - cellWidth(close))) + close, palette.accent, true);
-  if (!locked) hits.push({ type: 'cancel', back: true, row: 1, left: size - cellWidth(close) - 1, right: size - 2 });
+  if (!locked && !hasBackChoice) hits.push({ type: 'cancel', back: true, row: 1, left: size - cellWidth(close) - 1, right: size - 2 });
   if (searchable) {
     put(' / ' + (picker.query || 'Search models and providers…'), picker.query ? palette.text : palette.muted);
     hits.push({ type: 'picker-search', row: lines.length - 1, left: 2, right: size - 3 });
@@ -58,10 +59,8 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   put(' ' + clip((dropdown ? 'Click select · ↑↓ · Esc' : picker.hint || (picker.single ? '↑↓ choose · Enter confirm · Esc cancel' : 'Space selects · Enter confirms')) + (count ? '  ' + count : ''), inner - 1), palette.muted);
   if (!dropdown && !locked) {
     const confirm = ` [ ${picker.confirmLabel || 'Confirm'} ] `;
-    put(confirm + '  [ ← Back ]', palette.accent, true);
-    const cancelLeft = cellWidth(confirm) + 3;
-    hits.push({ type: 'confirm', row: lines.length - 1, left: 2, right: cellWidth(confirm) },
-      { type: 'cancel', back: true, row: lines.length - 1, left: cancelLeft, right: cancelLeft + 10 });
+    put(confirm, palette.accent, true);
+    hits.push({ type: 'confirm', row: lines.length - 1, left: 2, right: cellWidth(confirm) });
   }
   lines.push(edge('└' + '─'.repeat(inner) + '┘'));
   // Keep a dropdown attached to its control, including on small terminals and

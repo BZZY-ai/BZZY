@@ -101,7 +101,7 @@ test('Send, top Settings and Back controls react to actual SGR clicks', async t 
   else { click(tui.hitTargets.find(hit => hit.type === 'workspace-toggle' && hit.side === 'left')); await Promise.resolve(); tui.finishSelection(':settings'); await tui.menuTask; }
   assert.equal(await next, '/settings');
   ui.openSettings(); tui.render();
-  click(tui.hitTargets.find(hit => hit.type === 'settings-back')); assert.equal(tui.panel, 'chat');
+  click(tui.hitTargets.find(hit => hit.type === 'back')); assert.equal(tui.panel, 'chat');
   const help = ui.ask('bzzy › '); await Promise.resolve(); tui.render();
   click(tui.hitTargets.find(hit => hit.type === 'workspace-actions')); await Promise.resolve();
   assert.ok(tui.selection.choices.some(choice => choice.value === '/help')); tui.finishSelection('/help'); await tui.menuTask;

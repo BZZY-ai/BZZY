@@ -143,12 +143,12 @@ export class ClientSettings {
   rows() {
     const rows = [], put = (text = '', tone = 'text', action) => rows.push({ text, tone, action });
     if (this.page === 'extensions') return extensionSettingsRows();
-    if (this.page === 'default-models') return [...this.defaults.rows(), { text: '← Back', action: 'back', tone: 'muted' }];
-    if (this.page === 'worker-budget') return [...this.workerBudget.rows(), { text: '← Back', action: 'back', tone: 'muted' }];
+    if (this.page === 'default-models') return this.defaults.rows();
+    if (this.page === 'worker-budget') return this.workerBudget.rows();
     if (this.page === 'main') {
       const keyProviders = this.keyProviders(), statuses = keyProviders?.map(provider => this.keyStatus(provider.id));
       const configured = statuses?.filter(status => status.saved || status.environment).length;
-      rows.push({ text: 'DeepSeek API key', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
+      rows.push({ text: 'API keys', action: 'deepseek', icon: '⌘', card: true, tone: 'accent',
         detail: !keyProviders ? 'Provider catalog unavailable' : keyProviders.map(provider => provider.name).join(' · ') + ' · ' +
           (statuses.some(status => status.unavailable) ? 'Key status unavailable' : configured ? `${configured}/${keyProviders.length} configured · replace securely` : 'Add your key securely') });
       let folder; try { folder = this.workspaces.settings().root?.path || 'Choose a folder'; } catch { folder = 'Unavailable'; }
@@ -166,7 +166,7 @@ export class ClientSettings {
         rows.push({ text: provider.name + ' API key', action: 'key:' + provider.id, card: true, icon: '⌘',
           detail: status.unavailable ? 'Unavailable' : status.environment ? 'Environment key · replace securely' : status.saved ? 'Configured · replace securely' : 'Add your key securely' });
       }
-      put('← Back', 'muted', 'back'); return rows;
+      return rows;
     }
     if (this.page === 'core') {
       rows.push({ text: 'Background service', section: true });
@@ -194,7 +194,6 @@ export class ClientSettings {
       const push = notificationDeliveryStatus();
       put(); put(!push.configured ? 'iPhone push alerts · Apple setup needed' : push.message, 'muted');
       if (!push.configured) put('Core model and voice chat still work.', 'muted');
-      put(); put('← Back', 'muted', 'back');
       return rows;
     }
     if (['signup-aliases', 'email-access'].includes(this.page)) {
@@ -236,7 +235,6 @@ export class ClientSettings {
       put(`Access expires ${new Date(grant.expiresAt).toLocaleString()}`, 'muted');
       put('Unpair device', 'warning', `revoke:${grant.id}`);
     }
-    put(); put('← Back', 'muted', 'back');
     return rows;
   }
   invitationCode() { return this.#invitation?.code; }
@@ -286,7 +284,7 @@ export class ClientSettings {
       this.focusAction('approve'); return;
     }
     if (!fresh && this.grants().length) {
-      this.qrView = false; this.message = 'Your iPhone is paired.'; this.focusAction('back'); return;
+      this.qrView = false; this.message = 'Your iPhone is paired.'; this.focus = 0; return;
     }
     let id = this.ui.activeTab || this.ui.sessionId;
     // The seed is a Core protocol detail; this phone always gets the full catalog.
@@ -556,7 +554,7 @@ export class ClientSettings {
   }
   async run(action) {
     if (!this.ui.interactive || !this.ui.tui || this.ui.closed || this.closed || this.busy) return;
-    if (!['modes', 'default-models', 'extensions'].includes(action) && !settingsActions(this.rows()).some(row => row.action === action)) return;
+    if (!['back', 'modes', 'default-models', 'extensions'].includes(action) && !settingsActions(this.rows()).some(row => row.action === action)) return;
     this.busy = true; this.message = ''; this.warning = false; this.changed();
     try {
       if (action === 'update-bzzy') {
@@ -616,7 +614,7 @@ export class ClientSettings {
         await this.gateway.approvePairing({ claimId: request.claimId, confirmedCertificate: request.certificate, confirmedFingerprint: request.deviceId });
         this.#approvalRequest = undefined; this.page = 'pair'; this.qrView = false;
         if (request.resource === this.#invitation?.resource) this.clearInvitation();
-        this.message = 'iPhone paired. Your phone can now connect to Core.'; this.focusAction('back');
+        this.message = 'iPhone paired. Your phone can now connect to Core.'; this.focus = 0;
       }
       else if (action === 'approve' || action === 'deny') {
         const request = this.pending()[0];

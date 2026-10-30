@@ -119,7 +119,7 @@ test('Settings presents the requested options and preserves the chat draft', asy
   assert.equal(ui.settings.page, 'main');
   assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), mainSettingsActions);
   const frame = ui.tui.lastFrame.map(clean).join('\n');
-  assert.match(frame, /DeepSeek API key/); assert.match(frame, /BZZY folder/); assert.match(frame, /Pair iPhone/);
+  assert.match(frame, /API keys/); assert.match(frame, /BZZY folder/); assert.match(frame, /Pair iPhone/);
   assert.doesNotMatch(frame, /Core coordinator|Prepare host identity|Copy public host certificate|Restart Core|Stop Core/);
   assert.equal(ui.tui.value, '');
   ui.settings.focusAction('deepseek');
@@ -138,7 +138,7 @@ test('Settings takes over the full screen and keeps all requested choices at nor
   for (const rows of [24, 32]) {
     Object.assign(output, { rows, columns: 100 }); ui.tui.render();
     const frame = ui.tui.lastFrame.map(clean).join('\n');
-    for (const label of ['DeepSeek API key', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
+    for (const label of ['API keys', 'Default BZZY folder', 'Pair iPhone', 'BZZY Core']) assert.ok(frame.includes(label), `${rows} rows must show ${label}`);
     assert.match(frame, /Settings/); assert.doesNotMatch(frame, /◉◉/);
     assert.equal(ui.tui.model, 'fixture-model-banner'); assert.match(frame, /fixture-model/); assert.match(frame, /987,654 tokens/);
     assert.equal(ui.tui.hitTargets.find(hit => hit.type === 'working-directory')?.path, ui.sessionWorkingDirectory);
@@ -712,7 +712,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   await ui.settings.run('core');
   assert.deepEqual(calls, ['status']); assert.equal(ui.coreLifecycleInterrupted, undefined);
   assert.equal(ui.settings.page, 'core');
-  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'email-access', 'worker-budget', 'update-bzzy', 'extensions', 'default-models', 'back']);
+  assert.deepEqual(ui.settings.rows().filter(row => row.action).map(row => row.action), ['core-status', 'core-start', 'core-stop', 'core-restart', 'library-export', 'library-import', 'email-access', 'worker-budget', 'update-bzzy', 'extensions', 'default-models']);
   for (const action of ['core-stop', 'core-status', 'core-start', 'core-restart']) {
     await ui.settings.run(action); assert.equal(ui.settings.warning, false, ui.settings.message);
     assert.equal(ui.settings.hostLabel(), action === 'core-stop' || action === 'core-status' ? 'Stopped' : 'Running');
@@ -722,7 +722,7 @@ test('Core controls use the owner lifecycle API on a secondary page without exec
   Object.assign(output, { rows: 24, columns: 80 }); ui.tui.render();
   const frame = ui.tui.lastFrame.map(clean).join('\n');
   for (const label of ['BZZY Core', 'Status · Running', 'Start', 'Stop', 'Restart']) assert.ok(frame.includes(label));
-  ui.settings.focusAction('back'); ui.tui.settingsEnsureFocus = true; ui.tui.render();
+  ui.settings.focusAction('default-models'); ui.tui.settingsEnsureFocus = true; ui.tui.render();
   assert.match(ui.tui.lastFrame.map(clean).join('\n'), /Back/);
   assert.equal(listRecords('execution').length, 0);
   assert.equal(ui.tui.entries.some(entry => entry.kind === 'user'), false);
@@ -766,7 +766,8 @@ test('Pair iPhone uses maximum access without pickers and its secondary screen r
   assert.equal(fixture.calls.length, 1);
   assert.deepEqual(fixture.calls[0], { sessionId: ui.sessionId, permissions: fullPermissions,
     sessionAccess: true, shareAccess: true, agentAccess: true, ttlSeconds: 600, grantTtlSeconds: 30 * 86400 });
-  assert.ok(ui.settings.rows().some(row => row.action === 'back')); assert.ok(ui.settings.rows().some(row => row.action === 'copy-code'));
+  ui.settings.qrView = false; ui.tui.render();
+  assert.ok(ui.tui.hitTargets.some(hit => hit.type === 'back')); assert.ok(ui.settings.rows().some(row => row.action === 'copy-code'));
   assert.ok(ui.settings.rows().some(row => /^BZZY-PAIR-/.test(row.text)));
   // Escape closes an optional QR and returns directly to chat.
   ui.tui.key('', { name: 'escape' });
@@ -912,7 +913,7 @@ test('a small Pair viewport scrolls back to host identity and expiry after actio
   await ui.settings.run('pair');
   await ui.settings.run('new-pair');
   ui.tui.key('', { name: 'return' });
-  ui.settings.focusAction('back'); ui.settings.changed(); ui.tui.render();
+  ui.settings.focusAction('revoke:' + ui.settings.grants().at(-1).id); ui.settings.changed(); ui.tui.render();
   const frame = () => ui.tui.lastFrame.map(clean).join('\n');
   assert.ok(ui.tui.settingsOffset > 0); assert.match(frame(), /Back/); assert.doesNotMatch(frame(), /Host fingerprint:/);
   const fromBottom = ui.tui.settingsOffset;

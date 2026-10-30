@@ -183,7 +183,7 @@ export function extensionSettingsRows() {
   try { const list = listExtensions(); if (!list.length) rows.push({ text: 'No extensions installed.', tone: 'muted' });
     for (const item of list) rows.push({ text: `[${item.enabled ? 'x' : ' '}] ${item.title}`, detail: item.description, action: 'extensions-toggle:' + item.id, tone: item.enabled ? 'accent' : 'muted' });
   } catch { rows.push({ text: 'Extension catalog unavailable.', tone: 'warning' }); }
-  rows.push({ text: 'Definitions only · private credentials stay on this host', tone: 'muted' }, { text: '← Back', action: 'back', tone: 'muted' }); return rows;
+  rows.push({ text: 'Definitions only · private credentials stay on this host', tone: 'muted' }); return rows;
 }
 export async function extensionSettingsAction(action, ui, { transfer = transferLibraryTab } = {}) {
   const session = loadSession(ui.sessionId), cwd = session?.cwd || ui.launchCwd || process.cwd();

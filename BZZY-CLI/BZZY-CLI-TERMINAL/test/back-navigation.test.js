@@ -92,3 +92,34 @@ test('Back discards secret and editable prompt input without persisting temporar
   back(tui, input); assert.equal(await question, null); assert.equal(tui.value, 'unsent chat text');
   assert.equal(tui.entries.some(entry => /discarded/.test(entry.text)), false); assert.equal(tui.history.some(text => /discarded/.test(text)), false);
 });
+
+test('every Settings page has one sticky Back at compact and tall sizes', t => {
+  const { ui, tui, input } = terminal(t); ui.openSettings();
+  for (const columns of [50, 100]) for (const rows of [20, 24, 50]) {
+    Object.assign(tui.output, { columns, rows });
+    for (const page of ['main', 'keys', 'core', 'default-models', 'worker-budget', 'extensions', 'pair', 'approve']) {
+      ui.settings.page = page; ui.settings.focus = 0; tui.settingsOffset = 0; tui.render();
+      const frame = tui.lastFrame.map(clean).join('\n');
+      assert.equal((frame.match(/← Back/g) || []).length, 1, `${page} at ${columns}×${rows}`);
+      assert.equal(tui.hitTargets.filter(hit => ['back', 'settings-back'].includes(hit.type) || hit.type === 'settings' && hit.action === 'back').length, 1);
+      assert.ok(tui.hitTargets.some(hit => hit.type === 'back'));
+      assert.ok(tui.lastFrame.length <= rows);
+    }
+  }
+  ui.settings.page = 'core'; back(tui, input); assert.equal(ui.settings.page, 'main');
+});
+
+test('selection dialogs offer one Back, including menus with their own Back choice', async t => {
+  const { ui, tui, input } = terminal(t);
+  const ordinary = ui.chooseOne('Choose an option', [{ value: 'one', label: 'One' }]);
+  await Promise.resolve(); tui.render();
+  assert.equal(tui.hitTargets.filter(hit => hit.type === 'cancel' && hit.back).length, 1);
+  click(input, tui.hitTargets.find(hit => hit.type === 'cancel' && hit.back));
+  assert.equal(await ordinary, null);
+  const explicit = ui.chooseOne('Library submenu', [{ value: 'back', label: '← Back to review', selected: true }, { value: 'save', label: 'Save' }]);
+  await Promise.resolve(); tui.render();
+  assert.equal(tui.hitTargets.filter(hit => hit.type === 'cancel' && hit.back).length, 0);
+  const choice = tui.hitTargets.find(hit => hit.type === 'choice' && hit.index === 0); click(input, choice);
+  tui.key('', { name: 'return' });
+  assert.equal(await explicit, 'back');
+});

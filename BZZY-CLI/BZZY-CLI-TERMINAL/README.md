@@ -895,7 +895,7 @@ Open **Settings** from the top-right gear, use `/settings`, run `bzzy settings`,
 or launch `bzzy --settings` directly. It includes hidden API-key save/replacement
 for Core's API-key providers, including Experiential Labs, and device
 pairing using the bundled Core Relay gateway. The main menu includes
-**DeepSeek API key**, **Default BZZY folder**, **Pair iPhone** and **BZZY Core**.
+**API keys**, **Default BZZY folder**, **Pair iPhone** and **BZZY Core**.
 The API-key entry opens Core’s configured API providers. **Default models** and
 **Extensions** live inside BZZY Core.
 Open BZZY Core for status, Start, Stop, Restart, **Agent execution**, **Gmail / email access** and **Export Library / Import Library**.

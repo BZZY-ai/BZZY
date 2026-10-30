@@ -95,9 +95,11 @@ session list's scroll. Compact/minimal terminals retain model controls and
   Opening occurs only on an owner click, with argument-based process launch and
   no shell. Original assistant bodies remain unchanged in history.
 
-Main Settings stays at four entries: **DeepSeek API key**, **Default BZZY folder**,
+Main Settings stays at four entries: **API keys**, **Default BZZY folder**,
 **Pair iPhone**, **BZZY Core**. The API-key screen discovers Core's configured
-providers. Default models, Extensions, lifecycle, email, worker budgets, Library
+providers. Settings pages keep one sticky **← Back** control in the header;
+page content and footers do not repeat it. Selection dialogs also show one Back
+control, preserving their existing cancellation behavior. Default models, Extensions, lifecycle, email, worker budgets, Library
 transfer and updater controls remain available inside BZZY Core. Sharing still
 uses encrypted Relay QR/expiring codes and its existing authorization flow.
 

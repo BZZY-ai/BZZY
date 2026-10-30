@@ -1560,11 +1560,10 @@ export class TerminalChat {
     const footer = compact ? [] : [''];
     if (settings.busy) footer.push(color('  Working…', palette.muted));
     if (settings.message) for (const line of wrap(settings.message, width - 4, 3)) footer.push(color('  ' + line, settings.warning ? palette.warning : palette.accent));
-    const exit = settings.page !== 'main' ? 'back' : this.ui.settingsOnly ? 'close' : 'chat';
     if (!compact) footer.push('');
     const exitRow = footer.length;
-    const backLabel = '  [← ' + (exit === 'back' ? 'Back' : exit === 'close' ? 'Close' : 'Chat') + ']';
-    footer.push(color(clip(backLabel + '   [Actions ⋯]', width), palette.accent));
+    const actionsLabel = '  [Actions ⋯]';
+    footer.push(color(clip(actionsLabel, width), palette.accent));
     if (!compact) footer.push('');
     if (height < 14) footer.length = 0;
     const bodyHeight = Math.max(1, height - header.length - footer.length);
@@ -1590,7 +1589,7 @@ export class TerminalChat {
       .map(hit => ({ ...hit, row: header.length + hit.row - this.settingsOffset + 1 })));
     if (footer.length) {
       const row = header.length + bodyHeight + exitRow + 1;
-      this.hitTargets.push({ type: 'settings-back', row, left: 3, right: cellWidth(backLabel) }, { type: 'workspace-actions', row, left: cellWidth(backLabel) + 3, right: Math.min(width, cellWidth(backLabel) + 16) });
+      this.hitTargets.push({ type: 'workspace-actions', row, left: 3, right: Math.min(width, cellWidth(actionsLabel)) });
     }
     const lines = [...header, ...visible, ...footer];
     let frame = '\x1b[?25l';

@@ -328,7 +328,7 @@ test('the chat keeps top actions and runtime context while Settings replaces the
     ui.hostMetricsMonitor = { close() {} };
     ui.hostMetrics = { host: { cpuPercent: 12, memory: { totalBytes: 16 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 } }, core: { rssBytes: 80 * 1024 ** 2 } };
     ui.settings = { page: 'main', pageTitle: 'Settings', pageSubtitle: 'Your workspace, connections and defaults', focus: 0, message: '', close() {}, rows: () => [
-      { text: 'DeepSeek API key', action: 'deepseek' },
+      { text: 'API keys', action: 'deepseek' },
       { text: 'Default BZZY folder', action: 'workspace-root' },
       { text: 'Pair iPhone', action: 'pair' },
       { text: 'BZZY Core', action: 'core' },
