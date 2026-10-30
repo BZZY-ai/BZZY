@@ -1,247 +1,46 @@
-# BZZY
+# Install BZZY CLI and Core
 
-Self-hosted AI workspaces with a terminal client and a native iPhone app.
-Core owns execution and durable state; clients supervise the same sessions.
+## macOS 15+ — Apple Silicon or Intel
 
-```text
-BZZY CLI ↔ BZZY Core ↔ BZZY Relay ↔ BZZY iOS
-```
+```bash
+# Use a GitHub account with access to BZZY-ai/BZZY.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
-| Product | Implementation |
-| --- | --- |
-| [Core](BZZY-CORE/README.md) | Sessions, providers/auth, tools, goals, persistent Agents, sharing and the host Relay gateway. |
-| [CLI](BZZY-CLI/BZZY-CLI-TERMINAL/README.md) | Terminal chat, model goals, aliased sessions, Settings, pairing and local Core controls. |
-| [Relay](BZZY-RELAY/README.md) | Authenticated encrypted transport and expiring QR/import codes; no model execution or provider credentials. |
-| [iOS](BZZY-IOS/README.md) | Pairing, Agent management, cached terminal history, read-only Core Chat, activity, on-device dictation and voice chat. |
-
-Keep this directory layout when cloning: the Node packages use sibling file
-dependencies. Agent and sharing implementations live in Core and their clients.
-There is no separate Agent or sharing daemon.
-
-Launching a new `bzzy` terminal in `/projects/nasa` immediately creates
-`/projects/nasa/.bzzy` and makes that exact directory its workspace, even when a
-parent folder already has `.bzzy`. `/alias nasa` names the saved chat there;
-reopening that alias keeps its original directory and history. Project notes,
-memory files and evidence use `/projects/nasa/.bzzy`;
-Core retains durable chat/runtime state in its private home, normally `~/.bzzy`.
-Chat's **Session .bzzy** row shows its saved Core project binding; click to copy
-the full path, or use `/session-folder` to inspect its location and availability.
-Existing folders such as `findings/`, APKs and application binaries can stay in
-place. Snapshot copies are best effort: files that exceed the copy budget are
-skipped with a notice, while the goal continues in its original directory.
-Isolated workers receive explicit coverage information and the original input
-location as a reference subject to their existing tools and permissions.
-
-CLI **Agents** manages [reusable specialist subagents](BZZY-CORE/docs/SUBAGENTS.md),
-such as HTTP analysts or finding reviewers. Core invokes them from normal chats
-and goals across supported models, with separate contexts, bounded parallelism
-and evidence review. Persistent iPhone Agents remain a separate resource type.
-
-For native Library authoring, run `bzzy --help-skills`, `bzzy --help-agents`,
-`bzzy --help-workflows`, `bzzy --help-goals` or `bzzy --help-extensions`. Each prints a self-contained
-reference another AI can read: exact formats, complete examples, installation,
-verification and portable export/import. These commands work offline without
-starting Core or reading account settings. Standalone `bzzy-core` exposes the
-same flags.
-
-CLI **Settings → BZZY Core → Extensions** imports/exports native extension definitions from
-local JSON files or encrypted Relay Library codes and lists enabled checkboxes.
-Enabled extensions add tabs below the main navigation, above pricing; **Chat**,
-immediately before Skills, returns to the conversation from ordinary panels.
-Core owns validated form/table state, private credentials and bounded HTTPS GET
-actions. Chat tools can inspect nonsecret elements and invoke declared AI actions.
-See [extensions](BZZY-CORE/docs/EXTENSIONS.md) and the complete offline guide above.
-
-Chat identifies **Main**, named **Agents** and other **Workers** independently
-of their model. Activity, tool trees and skill-load rows retain that attribution
-when history is replayed or compacted, including in minimal chat. Worker rows
-show Core's available token/runtime allowances, incomplete usage, saved or
-missing reports and the main session's recorded state. A partial report handoff
-does not establish goal completion.
-
-iPhone **Chat** asks Core about saved terminal and goal status using its own
-assistant model. It can only assess a bounded snapshot; it cannot control a
-session or change a goal. Replies show when Core checked the saved state.
-Recent terminal messages are cached on the phone for immediate reopening;
-offline history never grants execution permissions. Remote notification readiness
-is shown separately from iOS permission and on-device notification previews.
-
-Use **Settings → BZZY Core → Agent execution** for initial token/runtime
-allocations, adaptive or fixed mode, and optional hard ceilings. Adaptive
-allocations can be renewed within the owner's ceilings and parent budget;
-**Unlimited host ceiling** leaves the goal's overall budget and explicit
-specialist-definition limits in force. Save changes defaults for new goals and
-starts no work. Existing goals keep their pinned policy unless the owner
-explicitly chooses **Apply saved settings to current goal** while paused or idle.
-That action affects future workers, preserving current worker allowances,
-permissions, scope and the goal's overall budget. After updating and reloading
-the CLI, pause an existing goal before applying and resuming it; an already
-running process keeps its loaded code until it stops. Updating does not patch
-or resume an active runner automatically.
-
-While writing a chat message or `/goal`, type `$` to choose an enabled skill or
-specialist agent from the current workspace's catalog. Type to filter, then use
-Enter, Tab or a click to insert its reference without sending the draft.
-
-Core also owns [project knowledge and reviewed learning](BZZY-CORE/docs/KNOWLEDGE.md):
-attributed recall, evidence freshness, scoped skills, private approved profiles
-and bounded reviews with explicit candidate evaluation and owner-governed activation.
-CLI `/memory` and `/learn` open its review controls in the existing Skills panel.
-
-[Permanent program sessions](BZZY-CORE/docs/PERMANENT-SESSIONS.md) retain durable
-investigation branches, blockers and prior attempts beneath the same saved chat.
-`bzzy session-memory document SESSION` reads a generated view; `export` writes it
-to `.bzzy/sessions/<session-id>/MEMORY.md`. Scope successors and evaluated automatic
-procedure updates use separate explicit owner policies and preserve old history.
-
-Reusable [workflows](BZZY-CORE/docs/WORKFLOWS.md) supply a goal's operating
-instructions. Create or load one from the **Workflows** top tab. `/workflow`
-opens a quick picker with **None** and the available workflows for this terminal.
-Core pins its full text before the next `/goal` starts;
-existing goals retain their original workflow across resume and model changes.
-`bzzy --workflow NAME` selects it at launch, including with `--attach NAME`;
-`--workflow none` clears it without starting work.
-
-[Session history memory](BZZY-CORE/docs/SESSION-MEMORY.md) adds a bounded index of
-each terminal's own conversation across model and mode changes. Its background
-compactor shares one configurable model with validation consensus, inheriting the
-BZZY Core model by default. `/create-skill` and `/create-agent` use the terminal's
-current model and publish validated global definitions enabled for use. The
-Skills and Agents tabs show names and ON/OFF controls, with plain Import and
-Export actions. Select names once and copy the generated code. On another BZZY,
-Import asks **ENTER CODE**, then downloads, checks and installs missing entries
-with visible progress. Completion lists only newly installed names.
-The **Goals** top tab saves reusable objectives manually, including the current
-goal when explicitly chosen. Running `/goal <objective>` never adds it to this
-Library; execution history stays available for recovery and metrics. Bare `/goal`
-opens the saved-objective quick picker. Goals and Workflows provide the same
-Import/Export flow. Goal exports show readable objective text; imports save
-templates without starting goals or changing the selected workflow.
-
-CLI chat shows the current action with an animated indicator, its own timer,
-last-output age and a recent Core process observation. Quiet periods, approval
-waits and lost connections remain explicit; process liveness does not claim
-model progress. Skills, Agents, Workflows and Goals share spaced button toolbars
-and visible keyboard focus. Right-click an entry or press F10 for confirmed
-removal from Library, preserving chat history, evidence and pinned running work.
-
-Achieved goals can carry a separate [validation badge](BZZY-CORE/docs/GOAL-VALIDATION.md)
-after `/validate` checks the original requirements and recorded evidence. The
-consensus explanation cannot change the host-checked outcome.
-
-CLI **Metrics** shows recorded skill and specialist-agent use for the current
-goal, earlier goals and the whole chat, including its workers and linked reviews.
-Counts persist in Core; reopening a chat does not count as another invocation.
-See [usage metrics](BZZY-CORE/docs/METRICS.md).
-
-Use **Metrics → Export debug**, `/debug`, or `bzzy debug export SESSION` for a
-single `session-name_debug_ddmmyyyy.md` file in the current terminal folder.
-It combines saved session/worker activity with full skill text resources and
-specialist definitions to inspect BZZY's prompt delivery, discovery and worker
-orchestration. Existing running sessions export their saved history; newer
-pipeline diagnostics start with updated runners. See
-[session debugging](BZZY-CORE/docs/SESSION-DEBUG.md).
-
-For a deeper investigation, `/full_debug_export`, **Metrics → Full debug ZIP**
-or `bzzy debug full SESSION` creates `session-name_full_debug_ddmmyyyy.zip`.
-`bzzy --full-debug-export SESSION` detaches the capture and returns a job ID;
-`bzzy debug status JOB_ID` shows progress, its ZIP path or failure. Completion and
-failure queue an own-phone notification through Core's existing push service.
-It adds complete scoped record/event/message streams, memory and learning state,
-project files/notes/ledgers, referenced evidence and safe binary skill resources.
-Complete capture supports multi-gigabyte ZIP64 archives without aggregate capture
-caps; large individual files use disk-backed redaction and binary scanning.
-`--bounded` opts into a size-limited project capture. Processing details and source
-exclusions are documented in [session debugging](BZZY-CORE/docs/SESSION-DEBUG.md).
-Start with [GUIDE_TO_BZZY_DEBUGGER.txt](GUIDE_TO_BZZY_DEBUGGER.txt); that detailed
-read-first guide is also included in every full ZIP. Credential/private-store
-exclusions and capture gaps remain explicit in its manifest.
-
-[Long-run reliability](BZZY-CORE/docs/LONG-RUN-RELIABILITY.md) adds goal-scoped
-checkpoints, compact paged task state, rolling completed-message indexes, native
-context diagnostics and explicit workflow consultation receipts. The bug-bounty
-pack includes a structured JSON workflow for new goals. Existing goals retain
-their original workflow on resume; source updates do not patch live runners.
-Core resolves a gateway model's exact context metadata before planning, keeps
-its total and input allowances separate, and labels an unavailable capacity as
-a local assumption. Updated Codex goal runners detect sustained compaction or
-repeated coordination reads without new host-observed work. A detected loop
-stops as **Stalled · no progress**, preserves the saved goal/evidence and owner
-budget limits, and requires explicit resume. Active work and new source/evidence
-coverage defer the safeguard; model plans and repeated reads do not establish
-progress. An unacknowledged forced stop retains uncertain usage conservatively.
-
-Transfer the [BZZY Library](BZZY-CORE/docs/LIBRARY-SHARING.md) between Mac and
-Linux from **Settings → BZZY Core → Export Library / Import Library**.
-Export starts with all skills, specialist agents, workflows and saved goals
-checked in one list; import uses the same paste-once code flow as each Library tab.
-`bzzy library share` and `bzzy library import` remain available. Expiring Relay codes
-carry skills, specialist agents, workflows and saved goal text; the receiver
-validates and installs only missing entries. `/share` separately transfers a full
-terminal project and its saved context/history; later imports preserve existing chats.
-
-## Install Core and CLI
-
-On macOS or Linux, run the bundled installer from the terminal package:
-
-```sh
-cd BZZY-CLI/BZZY-CLI-TERMINAL
-./install.sh
+if ! command -v brew >/dev/null 2>&1; then
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi &&
+brew install git python3 gh &&
+gh auth login --hostname github.com --git-protocol https --web &&
+gh auth setup-git --hostname github.com &&
+mkdir -p "$HOME/Developer" &&
+git clone https://github.com/BZZY-ai/BZZY.git "$HOME/Developer/BZZY" &&
+bash "$HOME/Developer/BZZY/BZZY-CLI/BZZY-CLI-TERMINAL/install.sh" &&
+export PATH="$HOME/.local/bin:$PATH" &&
+mkdir -p "$HOME/BZZY-Workspace" &&
+cd "$HOME/BZZY-Workspace" &&
 bzzy
+
+# Keep ~/Developer/BZZY: the installed launchers and Core service use it.
+# Opening bzzy starts Core's supervised background service automatically.
 ```
 
-The installer prepares Node 24+ if needed and requires Python 3.9+ for project
-ZIP sharing and native read-only Gmail. Core runs as a user service. Use `bzzy-core start|status|stop|restart`
-or **CLI Settings → BZZY Core**. Stop pauses work durably; Start/Restart do not
-automatically replay paused goals.
+## Debian 12+ / Ubuntu 24.04+ — x86_64 or ARM64
 
-On an owner-selected Linux test server, a fresh root-owned checkout can use
-`./install.sh --allow-root` from its terminal package.
-This prepares root's own system service and direct launchers, keeping each launch
-cwd and existing non-root state separate. See [root installation](BZZY-CORE/docs/HOST-SERVICE.md#explicit-linux-root-installation).
+```bash
+# Run as your normal user; sudo is only for installing system packages.
+# Use a GitHub account with access to BZZY-ai/BZZY.
+sudo apt-get update &&
+sudo apt-get install -y git python3 curl ca-certificates openssl bubblewrap gh &&
+gh auth login --hostname github.com --git-protocol https --web &&
+gh auth setup-git --hostname github.com &&
+mkdir -p "$HOME/Developer" &&
+git clone https://github.com/BZZY-ai/BZZY.git "$HOME/Developer/BZZY" &&
+bash "$HOME/Developer/BZZY/BZZY-CLI/BZZY-CLI-TERMINAL/install.sh" &&
+export PATH="$HOME/.local/bin:$PATH" &&
+mkdir -p "$HOME/BZZY-Workspace" &&
+cd "$HOME/BZZY-Workspace" &&
+bzzy
 
-CLI **Settings → BZZY Core → Default models** brings Solo, Core, Validate, Delegate,
-Parallel, Besties and the shared Consensus & Compactor selection into one table.
-The four main Settings entries are DeepSeek API key, Default BZZY folder, Pair iPhone and BZZY Core; the API-key screen discovers all configured API providers.
-iPhone Settings → Models and defaults edits independent solo CLI, Core assistant,
-Besties, Parallel, Validate and Delegate presets. Mode flags reuse their saved setup
-automatically; a missing preset opens setup. Terminal projects keep their original working directory. Use `/alias NAME` to
-show a session in CLI/iOS; both lists put the most recent activity first.
-History saves automatically. `bzzy --attach NAME` opens that saved chat, or creates
-an idle named chat here when no match exists. Existing chats keep their original
-directory, model, history and goal; attachment starts no model work.
-
-## iPhone and Relay
-
-Open `BZZY-IOS/BZZY.xcodeproj` in Xcode, choose your development team and iPhone,
-then build/run. First use requires Pair; compare fingerprints and approve on the
-host. The app holds device-scoped authorization, never Core's owner credentials.
-See the [iOS guide](BZZY-IOS/README.md) and [Core Relay setup](BZZY-CORE/docs/RELAY.md).
-
-For a Relay you operate, use the [deployment guide](BZZY-RELAY/deploy/README.md).
-Core registers its public host identity automatically with the updated Relay. Normal reinstalls reuse the private identity in `~/.bzzy/relay/host.identity.json`; keep that directory to retain the same computer and pairing. Keep private deployment configuration,
-keys, account bindings and notification credentials outside this repository.
-
-## Development
-
-Use Node 24+ and install the locked workspace dependencies:
-
-```sh
-cd BZZY-RELAY && npm ci --ignore-scripts
-cd ../BZZY-CORE && npm ci --ignore-scripts --install-links=true
-cd ../BZZY-CLI/BZZY-CLI-TERMINAL && npm ci --ignore-scripts --install-links=false
+# Keep ~/Developer/BZZY: the installed launchers and Core service use it.
+# Opening bzzy starts Core's supervised background service automatically.
 ```
-
-Each Node product provides `npm run check` and `npm test`. CLI fixtures run
-through `scripts/test.mjs`. On macOS, run `BZZY-IOS/tools/check.sh` from the iOS
-directory for model, formatting and native Swift checks. Product validation
-records describe test scope and outstanding device/platform limitations.
-
-Read [AGENTS.md](AGENTS.md) and [SECURITY.md](SECURITY.md) before changing the
-workspace. The canonical assistant presentation contract is
-[message_format.txt](BZZY-IOS/message_format.txt), used by CLI and iOS. Formatting
-does not grant permissions or prove completion. Optional scheduling and production
-account connectors for persistent Agents remain future work. Owner terminal chats
-and goals support native read-only Gmail through **Settings → BZZY Core → Gmail /
-email access**, with private mailbox credentials and separate login/signup aliases;
-see the product implementation guides.
