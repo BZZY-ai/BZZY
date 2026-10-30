@@ -144,8 +144,12 @@ export function episodeMaterial(session, options = {}) {
     if (!fits(selected)) { result.coverage.truncated = true; continue; }
     result.transitions.push(transition); result.attempts.push(...selected); for (const item of selected) included.add(item.id);
   }
-  const prioritized = [...attempts].filter(item => !included.has(item.id)).sort((a, b) => b.sourceSeq - a.sourceSeq);
+  const prioritized = [...attempts].filter(item => !included.has(item.id)).sort((a, b) => Number(b.outcome === 'failed') - Number(a.outcome === 'failed') || b.sourceSeq - a.sourceSeq);
+  const repeated = new Set();
   for (const attempt of prioritized) {
+    const key = digest([attempt.operationFingerprint || attempt.id, attempt.outcome, attempt.summary]);
+    if (repeated.has(key)) continue;
+    repeated.add(key);
     const next = { ...result, attempts: [...result.attempts, attempt] };
     if (Buffer.byteLength(JSON.stringify(next)) > maxBytes - 150) { result.coverage.truncated = true; continue; }
     result.attempts.push(attempt);

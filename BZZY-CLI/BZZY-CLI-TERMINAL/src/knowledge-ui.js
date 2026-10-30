@@ -336,6 +336,7 @@ export async function knowledgeAction(command, ui) {
     show(ui, 'settings', request(ui, 'status'));
   } else if (verb === 'learning-model') {
     const source = await prompt(ui, 'chooseOne', 'Learning model route · queued jobs keep their existing selection', [
+      { value: 'bounded_source', label: 'Use the source model with low or medium effort when supported (default)' },
       { value: 'source', label: 'Use the source conversation’s model at queue time' }, { value: 'background', label: 'Use the configured Core background model' }, { value: 'custom', label: 'Use an explicit installed provider and model' }]);
     if (!source) return;
     const route = { source };

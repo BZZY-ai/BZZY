@@ -12,8 +12,8 @@ export function learningProviderFingerprint(id) {
     baseUrl: provider.baseUrl || null, envKey: provider.envKey || null, defaultModel: provider.model || null });
 }
 export function normalizeLearningModelRoute(value = { source: 'source' }) {
-  if (!plain(value) || !['source', 'background', 'custom'].includes(value.source) ||
-    Object.keys(value).some(key => !['source', 'provider', 'model', 'effort'].includes(key))) fail('Choose the source, shared background, or an explicit learning model.');
+  if (!plain(value) || !['source', 'bounded_source', 'background', 'custom'].includes(value.source) ||
+    Object.keys(value).some(key => !['source', 'provider', 'model', 'effort'].includes(key))) fail('Choose bounded_source, source, shared background, or an explicit learning model.');
   if (value.source !== 'custom') {
     if (Object.keys(value).length !== 1) fail('Inherited learning model routes cannot include provider overrides.');
     return { source: value.source };
@@ -37,9 +37,17 @@ export function resolveLearningModel(session, settings) {
     const background = backgroundModelSettings();
     selection = background.configured ? validateSelection(background.selection) : null;
     metadata = { backgroundModelRevision: background.revision, coordinatorRevision: background.coordinatorRevision };
-  } else selection = validateSelection(route.source === 'custom' ? route : { provider: session.provider, model: session.model, effort: session.selectedEffort || 'default' });
+  } else selection = validateSelection(route.source === 'custom' ? route : { provider: session.provider, model: session.model,
+    // Bounded reviews do not inherit a foreground effort that may be expensive
+    // or no longer supported by this model. Select from its capabilities below.
+    effort: route.source === 'bounded_source' ? 'default' : session.selectedEffort || 'default' });
+  if (route.source === 'bounded_source' && selection) {
+    const provider = getProvider(selection.provider);
+    const efforts = providerEffortCapabilities(provider, selection.model, session.modelCapabilities).supportedEfforts;
+    selection.effort = efforts?.includes('low') ? 'low' : efforts?.includes('medium') ? 'medium' : 'default';
+  }
   const capabilities = selection ? providerModelCapabilities(getProvider(selection.provider), selection.model,
-    route.source === 'source' ? session.modelCapabilities : undefined) : null;
+    ['source', 'bounded_source'].includes(route.source) ? session.modelCapabilities : undefined) : null;
   return { selection, selectionSource: route.source, modelSettingsRevision: settings.revision,
     providerFingerprint: selection ? learningProviderFingerprint(selection.provider) : null, ...metadata,
     selectionResolution: !selection ? 'unconfigured' : selection.model ? 'explicit-model' : 'backend-default-unresolved',

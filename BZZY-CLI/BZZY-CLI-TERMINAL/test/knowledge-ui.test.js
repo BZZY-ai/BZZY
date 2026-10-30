@@ -107,6 +107,26 @@ test('reviewed skill policy updates use the displayed owner revision and preserv
   } finally { ui.close(); }
 });
 
+test('learning settings can return to the bounded source route without dispatching work', async () => {
+  const { ui } = terminal();
+  try {
+    await knowledgeCommand('/learn settings', ui);
+    const picks = ['source', 'yes', 'bounded_source', 'yes'];
+    ui.chooseOne = async (_title, options) => {
+      const pick = picks.shift();
+      assert.ok(options.some(option => option.value === pick));
+      return pick;
+    };
+    await knowledgeAction('learning-model', ui);
+    assert.equal(ui.knowledgeState.settings.modelRoute.source, 'source');
+    await knowledgeAction('learning-model', ui);
+    assert.equal(ui.knowledgeState.settings.modelRoute.source, 'bounded_source');
+    assert.equal(ui.knowledgeState.settings.revision, 2);
+    assert.equal(listRecords('core.learning.job').length, 0);
+    assert.equal(listRecords('execution').length, 0);
+  } finally { ui.close(); }
+});
+
 test('opening memory, learning and candidates preserves the composer and performs no model work', async () => {
   const { ui, session, events } = terminal();
   try {

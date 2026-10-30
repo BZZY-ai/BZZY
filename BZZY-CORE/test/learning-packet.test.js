@@ -16,7 +16,7 @@ import { ToolHost } from '../src/engine/tools.js';
 import { configureSkillEvolution } from '../src/engine/skill-evolution-policy.js';
 import { configureBackgroundModel } from '../src/engine/background-model.js';
 import { queueLearningReview, learningMaterial, configureLearning, runLearningJob, processLearningReviews,
-  deferLearningForSession, pauseLearningForSession, inspectLearningJob, learningUsage } from '../src/engine/learning.js';
+  deferLearningForSession, pauseLearningForSession, inspectLearningJob, learningUsage, learningSettings } from '../src/engine/learning.js';
 
 let root, prior, session;
 function source(name = 'project') {
@@ -337,4 +337,64 @@ test('minimum-sized packets budget their wrappers and retain a failure, change a
   assert.ok(packet.episode.attempts.some(attempt => attempt.changedFiles?.length));
   assert.ok(Buffer.byteLength(JSON.stringify(packet.material)) <= 4100);
   assert.equal(packet.coverage.truncated, true);
+});
+
+
+test('new learning defaults bound inherited effort while explicit source selection remains pinned', () => {
+  session.selectedEffort = 'max'; session.modelCapabilities = { supportedEfforts: ['low', 'medium', 'max'] }; saveSession(session);
+  assert.deepEqual(learningSettings().modelRoute, { source: 'bounded_source' });
+  const bounded = queue(); assert.equal(bounded.selectionSource, 'bounded_source'); assert.equal(bounded.selection.effort, 'low');
+  assert.equal(bounded.budget.runtimeSeconds, 90);
+  configureLearning({ modelRoute: { source: 'source' }, runtimeSeconds: 45 }, { expectedRevision: 0 });
+  const explicit = queue(); assert.equal(explicit.selection.effort, 'max'); assert.equal(explicit.budget.runtimeSeconds, 45);
+  assert.deepEqual(inspectLearningJob(bounded.id).selection, bounded.selection);
+});
+
+test('bounded review routing ignores unsupported foreground effort and follows advertised review capabilities', () => {
+  session.provider = 'orcarouter'; session.model = 'orca/orcacyber-zero-1.5'; session.selectedEffort = 'max'; saveSession(session);
+  assert.equal(queue().selection.effort, 'low', 'An unsupported foreground effort must not reject a bounded review.');
+  session.modelCapabilities = { supportedEfforts: ['medium', 'high'] }; saveSession(session);
+  assert.equal(queue().selection.effort, 'medium');
+  session.modelCapabilities = { supportedEfforts: [] }; saveSession(session);
+  assert.equal(queue().selection.effort, 'default', 'Unknown effort support must not invent an advertised capability.');
+});
+
+test('repeated identical successful commands do not create complex-work reviews', () => {
+  const runId = run();
+  for (let i = 0; i < 20; i++) observation(runId, 'repeat-' + i, { command: 'cat unchanged.json', output: 'unchanged' });
+  const episode = captureEpisode(session, { runId, goalId: null });
+  assert.equal(episode.counts.attempts, 20);
+  assert.equal(episode.attempts.length, 1);
+  assert.equal(episode.coverage.omittedAttempts, 19);
+  assert.equal(learningForEpisode(session, episode, { runId, goalMode: false }), null);
+});
+
+test('opted-in foreground review finishes its pinned packet across new foreground work', async () => {
+  configureLearning({ duringForeground: true }, { expectedRevision: 0 });
+  const job = queue(); let began, release;
+  const started = new Promise(resolve => { began = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const pending = runLearningJob(job.id, { runReview: async () => { began(); return held; } });
+  await started; run(); deferLearningForSession(session.id);
+  assert.equal(inspectLearningJob(job.id).state, 'running');
+  release(await noChange()); assert.equal((await pending).state, 'completed');
+});
+
+test('review timeout is explicit, conservatively accounted and backs off fresh automatic work', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const job = queue(); let began; const started = new Promise(resolve => { began = resolve; });
+  const pending = runLearningJob(job.id, { runReview: async ({ signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true }); began();
+  }) });
+  await started; t.mock.timers.tick(90001);
+  const failed = await pending;
+  assert.equal(failed.state, 'budget_limited'); assert.equal(failed.failureKind, 'timeout'); assert.equal(failed.requestOutcome, 'uncertain');
+  assert.equal(learningUsage().tokensUsed, 12000);
+  const event = appendEvent(session.id, 'message.user', { text: 'A fresh unrelated correction.' });
+  const next = queueLearningReview(session, { reason: 'user_correction', sourceId: event.id });
+  assert.deepEqual(await processLearningReviews({ runReview: () => assert.fail('Route failure backoff must defer fresh automatic inference') }), []);
+  assert.equal(inspectLearningJob(next.id).scheduleReason, 'review_failure_backoff');
+  const explicit = queue();
+  assert.equal((await runLearningJob(explicit.id, { runReview: noChange })).state, 'completed');
+  assert.equal((await processLearningReviews({ runReview: noChange }))[0].id, next.id, 'A successful explicit review clears route backoff.');
+  assert.equal(inspectLearningJob(job.id).state, 'budget_limited', 'Fresh work never replays the uncertain paid request.');
 });

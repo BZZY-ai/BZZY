@@ -35,9 +35,9 @@ const definition = (name = 'compare-recorded-controls') => ({ name, description:
 function publicationOptions(session = source, jobId = randomUUID()) {
   return { session, requestId: `${jobId}:skill:0`, provenance: { kind: 'learning', jobId, sourceSessionId: session.id } };
 }
-async function review(name = 'compare-recorded-controls', edit = value => value) {
+async function review(name = 'compare-recorded-controls', edit = value => value, reason = 'user_correction') {
   const event = appendEvent(source.id, 'message.user', { text: 'Use recorded controls and preserve uncertainty when decisive evidence is missing.' });
-  const job = queueLearningReview(source, { reason: 'user_correction', sourceId: event.id });
+  const job = queueLearningReview(source, { reason, sourceId: event.id });
   const output = edit({ lessons: [], skills: [{ ...definition(name), sourceIds: [event.id] }], profiles: [] });
   return runLearningJob(job.id, { runReview: async () => ({ tokens: 100, text: JSON.stringify(output) }) });
 }
@@ -135,9 +135,11 @@ test('publication and enablement roll back together and reject conflicting repla
 });
 
 test('foreign source references, credentials and invalid publication identity cannot create Library entries', async () => {
-  const failed = await review('unsafe-output', output => { output.skills[0].instructions += ' password=synthetic-private-binding'; return output; });
+  // Explicit independent checks bypass automatic route backoff so both output
+  // validators execute, rather than mistaking a deferred job for a rejection.
+  const failed = await review('unsafe-output', output => { output.skills[0].instructions += ' password=synthetic-private-binding'; return output; }, 'explicit');
   assert.equal(failed.state, 'failed'); assert.equal(listSkills({ session: source }).total, 0);
-  const foreign = await review('foreign-source', output => { output.skills[0].sourceIds = [randomUUID()]; return output; });
+  const foreign = await review('foreign-source', output => { output.skills[0].sourceIds = [randomUUID()]; return output; }, 'explicit');
   assert.equal(foreign.state, 'failed'); assert.equal(listSkills({ session: source }).total, 0);
   assert.throws(() => publishLearnedSkill(definition(), { ...publicationOptions(), provenance: { kind: 'owner' } }), /provenance/);
   assert.equal(listRecords('core.learning.skill-publication').length, 0);

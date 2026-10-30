@@ -48,7 +48,9 @@ export function learningForEpisode(session, episode, { runId, goalMode } = {}) {
   if (!settings.enabled) return null;
   const count = episode.counts?.attempts ?? episode.attempts?.length ?? 0;
   const solved = (episode.transitions || []).some(item => item.relation === 'candidate-fix' && item.authority === 'temporal-sequence-only');
-  const reason = solved ? 'solved_problem' : count >= settings.complexTurnAttempts ? 'complex_turn' : null;
+  const distinct = new Set((episode.attempts || []).map(item => item.operationFingerprint || item.id)).size;
+  const meaningful = distinct >= Math.min(3, settings.complexTurnAttempts) || episode.counts?.failed > 0 || episode.counts?.workerReviews > 0;
+  const reason = solved ? 'solved_problem' : count >= settings.complexTurnAttempts && meaningful ? 'complex_turn' : null;
   if (!reason) return null;
   const key = digest([session.id, episode.goalId || null, runId, reason]);
   const previous = getRecord('core.learning.trigger', key);

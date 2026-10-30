@@ -60,8 +60,8 @@ const bounded = (value, maximum, name) => {
   return value.trim();
 };
 export function learningSettings() {
-  return { enabled: true, duringForeground: false, foregroundCooldownSeconds: 300, tokenBudget: 12000, runtimeSeconds: 45, dailyTokenBudget: 50000, maxPendingPerProject: 4,
-    modelRoute: { source: 'source' }, maxForegroundExecutions: 4, packetMaxBytes: 16000, complexTurnAttempts: 12, minReviewIntervalSeconds: 300,
+  return { enabled: true, duringForeground: false, foregroundCooldownSeconds: 300, tokenBudget: 12000, runtimeSeconds: 90, dailyTokenBudget: 50000, maxPendingPerProject: 4,
+    modelRoute: { source: 'bounded_source' }, maxForegroundExecutions: 4, packetMaxBytes: 16000, complexTurnAttempts: 12, minReviewIntervalSeconds: 300,
     revision: 0, ...getRecord('core.learning.settings', 'owner') };
 }
 export function configureLearning(input, { expectedRevision } = {}) {
@@ -426,12 +426,15 @@ function sourceStopRequested(sessionId) {
     .some(execution => ['pause', 'cancel'].includes(execution.stopAction));
 }
 
+const routeKey = job => digest([job.providerFingerprint, job.selection]);
 function scheduleReason(job, source, settings = learningSettings()) {
   if (!job.packetId) return 'snapshot_required';
   if (getRecord(job.reason === 'evaluation' ? 'core.learning.evaluation' : 'core.learning.output', job.id)) return null;
   if (listRecords('core.session.compactor.job', { state: 'running', limit: 1 }).length) return 'maintenance_capacity';
   if (listRecords(kind, { state: 'running', limit: 2 }).some(item => item.id !== job.id)) return 'maintenance_capacity';
   if (!job.selection?.provider) return 'model_configuration';
+  const health = getRecord('core.learning.route-health', routeKey(job));
+  if (!['explicit','evaluation'].includes(job.reason) && Date.parse(health?.nextReviewAfter) > Date.now()) return 'review_failure_backoff';
   const busy = ['running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState) ||
     listRecords('execution', { sessionId: source.id, states: ['queued', 'launching', 'starting', 'running', 'waiting_for_input'] }).length > 0;
   if (busy && !settings.duringForeground) return 'source_foreground';
@@ -517,7 +520,7 @@ export async function executeLearningOperation(id, { session, signal, runReview 
   const abort = () => controller.abort(signal.reason || error('LEARNING_PAUSED', 'Learning was stopped.'));
   signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
   const cancelled = new Promise((_, reject) => { controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true }); });
-  timer = setTimeout(() => controller.abort(error('LEARNING_BUDGET', 'Learning time budget reached.')), job.attemptBudget.runtimeSeconds * 1000);
+  timer = setTimeout(() => controller.abort(error('LEARNING_TIMEOUT', 'Learning time budget reached.')), job.attemptBudget.runtimeSeconds * 1000);
   monitor = setInterval(() => {
     try {
       const current = getRecord(kind, id);
@@ -571,16 +574,23 @@ export async function executeLearningOperation(id, { session, signal, runReview 
     const message = job.reason === 'evaluation' ? 'Offline skill evaluation completed. Inspect its recorded results before activation.'
       : result?.noChange ? 'Learning review completed; no new reusable change was needed.'
         : `Learning review saved ${result?.lessonIds?.length || 0} lessons, ${result?.resolutionIds?.length || 0} proposed resolutions and ${result?.candidateIds?.length || 0} staged skill candidates${result?.skillIds?.length ? `; ${result.skillIds.length} new project skills published under owner policy` : ''}. Inspect /learn for sources and review.`;
+    putRecord('core.learning.route-health', routeKey(job), { selection: job.selection, consecutiveFailures: 0, lastCompletedAt: now() });
     putRecord(kind, id, completed); appendEvent(job.sessionId, 'learning.completed', { id, result, tokensUsed: measuredTokens, message });
     return publicJob(completed);
   } catch (failure) {
     settleUsage(job, unknownUsage ? undefined : measuredTokens);
     const current = getRecord(kind, id);
     if (current?.state === 'running' && current.lease === job.lease) {
-      const code = ['LEARNING_BUDGET', 'LEARNING_PAUSED', 'LEARNING_SCOPE', 'INVALID_LEARNING_OUTPUT'].includes(failure?.code) ? failure.code : 'LEARNING_REVIEW_FAILED';
-      const state = code === 'LEARNING_BUDGET' ? 'budget_limited' : ['LEARNING_PAUSED', 'LEARNING_SCOPE'].includes(code) ? 'paused' : 'failed';
+      const code = ['LEARNING_BUDGET', 'LEARNING_TIMEOUT', 'LEARNING_PAUSED', 'LEARNING_SCOPE', 'INVALID_LEARNING_OUTPUT'].includes(failure?.code) ? failure.code : 'LEARNING_REVIEW_FAILED';
+      const state = ['LEARNING_BUDGET','LEARNING_TIMEOUT'].includes(code) ? 'budget_limited' : ['LEARNING_PAUSED', 'LEARNING_SCOPE'].includes(code) ? 'paused' : 'failed';
       const backendFailure = backendStartupFailure(failure);
-      const stopped = { ...current, state, error: code, ...(backendFailure ? { backendFailure } : {}), reasonPaused: state === 'paused' ? code : null, updatedAt: now(), revision: current.revision + 1 };
+      const failureKind = code === 'LEARNING_TIMEOUT' ? 'timeout' : code === 'LEARNING_BUDGET' ? 'budget_or_usage' : code === 'INVALID_LEARNING_OUTPUT' ? 'invalid_output' : backendFailure ? 'startup' : state === 'paused' ? 'interrupted' : 'backend';
+      if (state !== 'paused') {
+        const key = routeKey(job), prior = getRecord('core.learning.route-health', key), failures = (prior?.consecutiveFailures || 0) + 1;
+        putRecord('core.learning.route-health', key, { selection: job.selection, consecutiveFailures: failures, failureKind,
+          nextReviewAfter: new Date(Date.now() + Math.min(3600, 60 * 2 ** Math.min(failures,6)) * 1000).toISOString(), lastFailedAt: now() });
+      }
+      const stopped = { ...current, state, error: code, failureKind, requestOutcome: unknownUsage ? 'uncertain' : 'known', ...(backendFailure ? { backendFailure } : {}), reasonPaused: state === 'paused' ? code : null, updatedAt: now(), revision: current.revision + 1 };
       delete stopped.runner; delete stopped.lease; putRecord(kind, id, stopped);
       appendEvent(job.sessionId, 'learning.' + state, { id, error: code, ...(backendFailure ? { backendFailure } : {}) });
     }

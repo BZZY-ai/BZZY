@@ -108,11 +108,17 @@ job; they cannot change a packet already sent to a reviewer.
 Opening a chat, memory view or Skills panel does not queue inference. Explicit
 `/learn review` queues a bounded review of the selected saved conversation.
 
-Default learning limits are 12,000 tokens and 45 seconds per job, 50,000 tokens
+Default learning limits are 12,000 tokens and 90 seconds per job, 50,000 tokens
 per UTC day, and four pending jobs per project. Core reserves budget before
 inference and charges conservatively when usage cannot be recovered. Review
 usage counts toward its own bounded ledger. Compatible backend usage reporting
-is required; unsupported isolation or missing usage fails closed.
+is required; unsupported isolation or missing usage fails closed. Timeouts,
+token/usage limits, rejected output and backend failures are recorded separately.
+Failed reviews back off fresh automatic jobs using the same pinned model route
+for two minutes initially, increasing to at most one hour on consecutive failures.
+A fresh explicit review or evaluation can bypass this scheduler delay; owner
+pauses, capacity and budget limits still apply. Success resets the delay. The
+failed paid request is never automatically replayed.
 
 Each queued job pins its event cutoff, source scope, goal/run identity, mutable
 record revisions, complete redacted messages, loaded skill bases, and reviewer
@@ -127,8 +133,11 @@ defers an undispatched queued review; it does not turn that deferral into an
 owner pause. Another busy conversation no longer prevents all learning. Host
 capacity defaults to four foreground executions and a source must be idle unless
 `duringForeground` is explicitly enabled. Foreground reviews retain a durable
-cooldown. Model routing can use the pinned source model, the configured Core
-background model, or an explicit installed provider/model/effort. Missing
+cooldown. New learning settings default to `bounded_source`: the source provider
+and model with advertised low effort, then medium if low is unavailable, or the
+backend default when neither is advertised. Explicit source routing retains the
+source effort; configured background and custom provider/model/effort routes
+remain available. Existing saved settings and queued-job pins are preserved. Missing
 background configuration visibly defers work; there is no hidden fallback.
 Conversation/goal pause or cancel stops associated
 reviews and host stop stops all reviews. Daemon recovery can requeue only
@@ -177,6 +186,10 @@ Library entry, including its live deleted state. These records have no monthly
 expiration; they remain in Core's private storage across terminal restarts.
 Publication is not a measured improvement claim or a verification of
 the source goal. Model tools still enforce their normal permissions.
+Offline fixtures exercise review, candidate staging, independent semantic and
+continuation evaluation, activation and the later goal's immutable skill-load
+receipt. Their synthetic model responses establish lifecycle behavior, not live
+review quality or a measured improvement on an unattended engagement.
 
 ## Automatic capture and resolution reuse
 
@@ -199,7 +212,10 @@ when meaningful observations change, and at run completion. They preserve
 observed progress separately from model-authored checkpoints. The source model
 still needs to record decisions, constraints, unresolved questions and evidence.
 Twelve completed meaningful attempts make an episode eligible for a complex-work
-review by default. A failed command followed by the same command succeeding is
+review by default; repeated identical successful operations alone do not qualify.
+Review packets prioritize failures and omit repeated operation/outcome/summary
+tuples with coverage counts. Original observations remain in the event log.
+A failed command followed by the same command succeeding is
 only a temporal candidate for a fix. Trigger cooldown defaults to five minutes;
 compaction and routine state polls alone do not create a review storm.
 

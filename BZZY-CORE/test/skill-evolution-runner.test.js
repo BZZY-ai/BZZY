@@ -9,9 +9,8 @@ import { getProvider } from '../src/engine/providers.js';
 import { projectIdentityForSession } from '../src/engine/project-identity.js';
 import { database, getRecord, putRecord, listRecords, appendEvent, digest } from '../src/engine/database.js';
 import { createSkill, setSkillEnabled, inspectSkill, inspectSkillCandidate } from '../src/engine/skills.js';
-import { queueLearningReview, processLearningReviews } from '../src/engine/learning.js';
+import { queueLearningReview, processLearningReviews, runLearningJob } from '../src/engine/learning.js';
 import { registerLearningFixtures, revokeLearningFixtures } from '../src/engine/learning-evaluation.js';
-import { stageLearningSkillUpdates } from '../src/engine/skill-updates.js';
 import { configureSkillEvolution, skillEvolutionSettings } from '../src/engine/skill-evolution-policy.js';
 import { processSkillEvolution } from '../src/engine/skill-evolution-runner.js';
 import { assertHeldOutSources } from '../src/engine/learning-fixture-contract.js';
@@ -34,12 +33,15 @@ test.beforeEach(async () => {
   await new ToolHost(session, { event() {} }, context).call('read_skill', { name: skill.id });
   const event = appendEvent(session.id, 'message.user', { text: 'A fictional training case requires checking the original observation.' });
   const job = queueLearningReview(session, { reason: 'explicit', sourceId: event.id, runId: context.runId, goalMode: false });
-  putRecord('core.learning.job', job.id, { ...getRecord('core.learning.job', job.id), state: 'running' });
   const packet = getRecord('core.learning.packet', job.packetId), base = packet.skills[0];
-  [receipt] = stageLearningSkillUpdates(session, [{ skillId: skill.id, baseVersion: skill.version, baseRevision: skill.revision,
+  session.executionState = 'idle'; saveSession(session);
+  const learned = await runLearningJob(job.id, { runReview: async () => ({ tokens: 100, text: JSON.stringify({ lessons: [], skills: [], skillUpdates: [{
+    skillId: skill.id, baseVersion: skill.version, baseRevision: skill.revision,
     rationale: 'Preserve the original observation.', sourceIds: [base.sourceId],
-    ops: [{ op: 'append_section', heading: 'Original observation', text: 'Read the original observation before selecting the next authorized action.' }] }], { jobId: job.id, packet });
-  putRecord('core.learning.job', job.id, { ...getRecord('core.learning.job', job.id), state: 'completed' });
+    ops: [{ op: 'append_section', heading: 'Original observation', text: 'Read the original observation before selecting the next authorized action.' }]
+  }] }) }) });
+  assert.equal(learned.state, 'completed');
+  receipt = getRecord('core.skill.update', learned.result.skillUpdateIds[0]);
   session.executionState = 'idle'; saveSession(session);
   putRecord('run', session.id, { id: context.runId, sessionId: session.id, state: 'completed', goalMode: false });
   semanticCases = ['real', 'false_positive', 'inconclusive'].map((expected, index) => ({ id: `s${index}`, sourceGroup: `heldout-s${index}`,
@@ -193,4 +195,26 @@ test('held-out checks include session provenance and packet sources; unknown pro
   const learned = getRecord('core.skill.candidate', receipt.candidateId), packet = getRecord('core.learning.packet', receipt.packetId);
   const changed = { ...learned, update: { ...learned.update, sourceGroups: [], sourceIds: [] } };
   assert.throws(() => assertHeldOutSources(changed, { sourceGroups: [packet.runId], cases: [{ sourceGroup: packet.runId }] }), /separate from the authoring episode/);
+});
+
+
+test('an evaluated improvement is loaded in a later goal with its new immutable version', async () => {
+  assert.equal((await ready()).state, 'activation-ready');
+  assert.equal(processSkillEvolution()[0].state, 'activated');
+  const active = inspectSkill(skill.id, { session });
+  session.goal = newGoal('Continue the offline program with recorded controls.');
+  session.executionState = 'running'; saveSession(session);
+  const context = { runId: randomUUID(), goalMode: true };
+  putRecord('run', session.id, { id: context.runId, sessionId: session.id, goalId: session.goal.id, goalMode: true, state: 'running' });
+  const host = new ToolHost(session, { event() {} }, context);
+  try {
+    const loaded = await host.call('read_skill', { name: skill.id });
+    assert.match(JSON.stringify(loaded), /Read the original observation/);
+    const uses = listRecords('core.usage').filter(item => item.kind === 'skill' && item.runId === context.runId);
+    assert.equal(uses.length, 1);
+    assert.equal(uses[0].skillId, skill.id);
+    assert.equal(uses[0].skillVersion, active.version);
+    assert.equal(uses[0].goalId, session.goal.id);
+    assert.notEqual(active.version, skill.version);
+  } finally { await host.close(); }
 });
