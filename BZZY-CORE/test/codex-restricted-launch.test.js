@@ -42,20 +42,21 @@ test.afterEach(() => {
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-function prepare(mode, providerId = 'codex', effort = 'default', { simpleScope = false } = {}) {
-  if (simpleScope) { process.env.BZZY_HOME = path.join(directory, 'scope-private'); fs.mkdirSync(process.env.BZZY_HOME, { mode: 0o700 }); }
+function prepare(mode, providerId = 'codex', effort = 'default', { simpleScope = false, privateHome, scopeCwd } = {}) {
+  if (simpleScope) { process.env.BZZY_HOME = privateHome || path.join(directory, 'scope-private'); fs.mkdirSync(process.env.BZZY_HOME, { mode: 0o700, recursive: true }); }
   const provider = providers[providerId]; let session = createSession(provider, process.env.BZZY_HOME, provider.model || 'gpt-6.1-sol');
   const options = { yolo: false, tokenBudget: 12000, policy: { mode: 'read-only', network: 'disabled', writablePaths: [] }, maxTurns: 1 };
   if (mode === 'agent') {
     session.cwd = path.join(directory, 'agent .bzzy "資料" work', session.id); fs.mkdirSync(session.cwd, { mode: 0o700, recursive: true });
     options.agentScope = { agentId: 'fixture-agent', cwd: session.cwd, projectRoot: session.cwd };
   } else if (mode === 'scope') {
-    session.cwd = path.join(directory, simpleScope ? 'scope-work' : 'scope .bzzy "資料" work', session.id); fs.mkdirSync(session.cwd, { mode: 0o700, recursive: true });
+    session.cwd = scopeCwd || path.join(directory, simpleScope ? 'scope-work' : 'scope .bzzy "資料" work', session.id); fs.mkdirSync(session.cwd, { mode: 0o700, recursive: true });
     initializeProject(session); session.goal = newGoal('Review synthetic scope.', 1000); session.contract = normalizeContract({}, session.goal.objective); session.policy = session.contract.policy; saveSession(session);
-    const proposal = programScopeOperation('scope.propose', { reviewed: true, requestId: 'proposal', expectedRevision: 0,
+    const revision = programScopeOperation('scope.status', {}, { session }).revision;
+    const proposal = programScopeOperation('scope.propose', { reviewed: true, requestId: `proposal-${session.id}`, expectedRevision: revision,
       scope: { allowedTargets: ['test.invalid'], allowedActions: ['GET'], networkMode: 'mediated' }, sources: [{ reference: 'synthetic source', sha256: 'a'.repeat(64) }] }, { session });
-    const approval = programScopeOperation('scope.approve', { reviewed: true, requestId: 'approve', expectedRevision: 1, proposalId: proposal.proposal.id }, { session });
-    programScopeOperation('scope.continue', { reviewed: true, requestId: 'continue', expectedRevision: 2, approvalId: approval.approval.id, expectedGoalId: session.goal.id }, { session });
+    const approval = programScopeOperation('scope.approve', { reviewed: true, requestId: `approve-${session.id}`, expectedRevision: revision + 1, proposalId: proposal.proposal.id }, { session });
+    programScopeOperation('scope.continue', { reviewed: true, requestId: `continue-${session.id}`, expectedRevision: revision + 2, approvalId: approval.approval.id, expectedGoalId: session.goal.id }, { session });
     session = getRecord('session', session.id); options.policy = session.policy; options.strictPolicy = true;
   } else {
     session.cwd = learningWorkingDirectory(session.id); session.role = 'learning-review'; options.learningReview = true;
@@ -67,7 +68,6 @@ function prepare(mode, providerId = 'codex', effort = 'default', { simpleScope =
 function values(args, key) {
   return args.filter((value, index) => args[index - 1] === '-c' && value.startsWith(key + '=')).map(value => value.slice(key.length + 1));
 }
-
 for (const mode of ['document', 'learning', 'agent']) test(`${mode} launch encodes a literal dotted/quoted/Unicode project path while preserving its isolated restrictions`, () => {
   const { session, config } = prepare(mode), profileName = mode === 'agent' ? 'bzzy_agent_isolated_v1' : 'bzzy_learning_review_v1';
   assert.match(session.cwd, /\.bzzy/); assert.match(session.cwd, /"資料"/);
@@ -97,7 +97,7 @@ for (const mode of ['document', 'learning', 'agent']) test(`${mode} launch encod
 function scopeConfig(config) {
   return { default_permissions: programScopePermissionProfile, permissions: { [programScopePermissionProfile]: config.scopePermissions },
     approval_policy: 'never', web_search: 'disabled', mcp_servers: {}, features: { ...Object.fromEntries(programScopeDisabledFeatures.map(name => [name, false])), skip_host_skill_discovery: true },
-    shell_environment_policy: { inherit: 'none', set: { PATH: '/usr/bin:/bin' } }, project_doc_max_bytes: 0 };
+    shell_environment_policy: { inherit: 'all', include_only: ['PATH'], set: {} }, project_doc_max_bytes: 0 };
 }
 test('scoped native launch blocks all inherited egress and requires an acknowledged effective configuration', () => {
   const { session, config } = prepare('scope');
@@ -106,7 +106,15 @@ test('scoped native launch blocks all inherited egress and requires an acknowled
   assert.deepEqual(values(config.args, 'default_permissions'), [JSON.stringify(programScopePermissionProfile)]);
   assert.equal(values(config.args, 'sandbox_mode').length, 0);
   assert.equal(config.scopePermissions.network.enabled, false);
-  assert.equal(config.scopePermissions.filesystem[session.engineHome], 'deny');
+  assert.deepEqual(values(config.args, 'shell_environment_policy.inherit'), ['"all"']);
+  assert.deepEqual(values(config.args, 'shell_environment_policy.include_only'), ['["PATH"]']);
+  assert.equal(values(config.args, 'shell_environment_policy.set').length, 0);
+  assert.equal(config.scopePermissions.filesystem[process.env.BZZY_HOME], undefined,
+    'Root-deny already protects private state outside the project grant');
+  assert.equal(config.scopePermissions.filesystem[session.engineHome], undefined,
+    'A denied private parent must not be followed by an unmountable nested deny');
+  assert.equal(config.scopePermissions.filesystem[path.join(session.engineHome, 'tmp', 'arg0')], process.platform === 'linux' ? 'read' : undefined);
+  assert.equal(config.scopePermissions.filesystem[path.join(session.engineHome, 'tmp', 'arg0-linux')], process.platform === 'linux' ? 'read' : undefined);
   const effective = scopeConfig(config);
   assert.doesNotThrow(() => assertProgramScopeCodexConfig({ config: effective }, config.scopePermissions));
   const changed = change => { const bad = structuredClone(effective); change(bad); assert.throws(() => assertProgramScopeCodexConfig({ config: bad }, config.scopePermissions), /No thread or turn/); };
@@ -117,9 +125,49 @@ test('scoped native launch blocks all inherited egress and requires an acknowled
   changed(value => { delete value.permissions; });
 });
 
+test('scoped API-provider launch relies on root-deny for private state outside the project grant', () => {
+  const { session, config } = prepare('scope', 'experiential');
+  assert.equal(config.scopePermissions.filesystem[process.env.BZZY_HOME], undefined);
+  assert.equal(config.scopePermissions.filesystem[path.join(process.env.BZZY_HOME, 'codex-api')], undefined);
+  assert.equal(config.scopePermissions.filesystem[session.engineHome], undefined);
+  assert.equal(config.scopePermissions.filesystem[path.join(session.engineHome, 'tmp', 'arg0')], process.platform === 'linux' ? 'read' : undefined);
+  assert.equal(config.scopePermissions.filesystem[path.join(session.engineHome, 'tmp', 'arg0-linux')], process.platform === 'linux' ? 'read' : undefined);
+  const denied = Object.entries(config.scopePermissions.filesystem)
+    .filter(([, access]) => access === 'deny').map(([root]) => root).filter(path.isAbsolute);
+  for (const root of denied) for (const child of denied) {
+    if (root === child) continue;
+    const relative = path.relative(root, child);
+    assert.ok(relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative),
+      `Denied sandbox roots overlap: ${root} contains ${child}`);
+  }
+});
+
+test('scoped Linux launch rejects a project grant that would contain BZZY private state', { skip: process.platform !== 'linux' }, () => {
+  const scopeCwd = path.join(directory, 'wide-project'), privateHome = path.join(scopeCwd, 'private');
+  assert.throws(() => prepare('scope', 'codex', 'default', { simpleScope: true, privateHome, scopeCwd }),
+    /project directory cannot contain BZZY private state/);
+});
+
+test('scoped npm Codex launch keeps its official native runtime visible for Linux self-exec', { skip: process.platform !== 'linux' }, () => {
+  const packageRoot = path.join(directory, 'official-codex-package');
+  executable = path.join(packageRoot, 'bin', 'codex.js');
+  fs.mkdirSync(path.dirname(executable), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(executable, '#!/usr/bin/env node\n', { mode: 0o700 });
+  const target = process.arch === 'x64' ? 'x86_64-unknown-linux-musl' : 'aarch64-unknown-linux-musl';
+  const native = path.join(packageRoot, 'vendor', target, 'bin', 'codex');
+  fs.mkdirSync(path.dirname(native), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(native, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  process.env.BZZY_CODEX_BIN = executable;
+  const { config } = prepare('scope', 'experiential');
+  assert.equal(config.scopePermissions.filesystem[executable], 'read');
+  assert.equal(config.scopePermissions.filesystem[packageRoot], 'read');
+  assert.equal(config.scopePermissions.filesystem[native], 'read');
+});
+
 for (const failure of ['config', 'profile', 'activation']) test(`scoped adapter refuses unacknowledged ${failure} before any turn`, async t => {
   if (!sandboxSupport()) { t.skip('Requires the enforced native OS sandbox.'); return; }
   executable = fileURLToPath(new URL('./fixtures/program-scope-codex.mjs', import.meta.url)); process.env.BZZY_CODEX_BIN = executable;
+  fs.chmodSync(executable, 0o700);
   const { session, options, config } = prepare('scope');
   fs.writeFileSync(path.join(session.engineHome, 'fixture-config.json'), JSON.stringify({ config: scopeConfig(config), failure }));
   const engine = new CodexEngine(providers.codex, session, options, { event() {}, newline() {} });
@@ -139,40 +187,54 @@ test('opt-in official Codex initializes the actual restricted launch matrix with
       ['document', 'deepseek', 'default'], ['document', 'deepseek', 'high'], ['document', 'deepseek', 'max'],
       ['document', 'experiential', 'default'], ['document', 'experiential', 'none'], ['document', 'experiential', 'high'], ['document', 'experiential', 'max'],
       ['learning', 'codex', 'default'], ['learning', 'deepseek', 'high'], ['learning', 'experiential', 'none'],
-      ['agent', 'codex', 'default'], ['agent', 'deepseek', 'max'], ['agent', 'experiential', 'high'], ['scope', 'codex', 'default']];
-    for (const [mode, provider, effort] of variants) {
-      // Codex 0.165's macOS sandbox currently rejects quoted Unicode paths at
-      // command dispatch. Keep exotic-path config coverage above, and exercise
-      // actual native isolation in a plain synthetic workspace here.
-      const { session, config } = prepare(mode, provider, effort, { simpleScope: mode === 'scope' });
-      // Force file-only authentication storage for the diagnostic's empty
-      // synthetic account home; all production restriction arguments remain.
-      config.args.push('-c', 'cli_auth_credentials_store="file"');
-      const rpc = new Rpc(launch('codex', config.args, { env: config.env, cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
-        canonicalExecutable: true }), async () => { throw new Error('The initialize-only test exposes no tools.'); });
-      rpc.on('failure', () => {});
-      let failure;
-      try {
-        await rpc.request('initialize', { clientInfo: { name: 'bzzy', title: 'bzzy', version: '0.2.0' }, capabilities: { experimentalApi: true } }, 3000);
-        rpc.notify('initialized');
-        if (mode === 'scope') {
-          const effective = await rpc.request('config/read', { cwd: session.cwd, includeLayers: false });
-          assertProgramScopeCodexConfig(effective, config.scopePermissions);
-          const profiles = await rpc.request('permissionProfile/list', {});
-          assert.ok(profiles.data.some(profile => profile.id === programScopePermissionProfile && profile.allowed === true));
-          const local = await rpc.request('command/exec', { command: ['/bin/sh', '-c', 'printf scoped > native-scope-fixture.txt'], cwd: session.cwd, timeoutMs: 3000 });
-          assert.equal(local.exitCode, 0, JSON.stringify(local)); assert.equal(fs.readFileSync(path.join(session.cwd, 'native-scope-fixture.txt'), 'utf8'), 'scoped');
-          let connections = 0;
-          const listener = net.createServer(socket => { connections++; socket.end('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'); });
-          await new Promise((resolve, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolve); });
-          try {
-            const denied = await rpc.request('command/exec', { command: ['/usr/bin/curl', '--silent', '--show-error', '--max-time', '2', `http://127.0.0.1:${listener.address().port}/`], cwd: session.cwd, timeoutMs: 3000 });
-            assert.equal(denied.exitCode, 7); assert.match(denied.stderr, /^curl: /m);
-            assert.equal(connections, 0, 'Native command networking must not reach even a loopback listener.');
-          } finally { await new Promise(resolve => listener.close(resolve)); }
-        }
-      } catch (error) { failure = { rpcCode: error.rpcCode, transportFailure: rpcFailure(error), message: error.message }; }
-      finally { await rpc.close(); }
-      assert.equal(failure, undefined, JSON.stringify({ mode, provider, effort, failure }));
-    }
+      ['agent', 'codex', 'default'], ['agent', 'deepseek', 'max'], ['agent', 'experiential', 'high'],
+      ['scope', 'codex', 'default'], ['scope', 'deepseek', 'high'], ['scope', 'experiential', 'high']];
+    // Release Codex intentionally refuses to place executable arg0 helpers
+    // below the OS temp directory. Keep the opt-in native scope home under the
+    // invoking user's home so this probe exercises the production layout.
+    const nativePrivateRoot = process.platform === 'linux'
+      ? fs.mkdtempSync(path.join(priorEnvironment.HOME || os.homedir(), '.bzzy-native-scope-')) : null;
+    try {
+      for (const [mode, provider, effort] of variants) {
+        // Codex 0.165's macOS sandbox currently rejects quoted Unicode paths at
+        // command dispatch. Keep exotic-path config coverage above, and exercise
+        // actual native isolation in a plain synthetic workspace here.
+        const { session, config } = prepare(mode, provider, effort, { simpleScope: mode === 'scope',
+          privateHome: mode === 'scope' && nativePrivateRoot ? path.join(nativePrivateRoot, 'private') : undefined });
+        // Force file-only authentication storage for the diagnostic's empty
+        // synthetic account home; all production restriction arguments remain.
+        config.args.push('-c', 'cli_auth_credentials_store="file"');
+        const rpc = new Rpc(launch('codex', config.args, { env: config.env, cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
+          canonicalExecutable: true }), async () => { throw new Error('The initialize-only test exposes no tools.'); });
+        rpc.on('failure', () => {});
+        let failure;
+        try {
+          await rpc.request('initialize', { clientInfo: { name: 'bzzy', title: 'bzzy', version: '0.2.0' }, capabilities: { experimentalApi: true } }, 3000);
+          rpc.notify('initialized');
+          if (mode === 'scope') {
+            const effective = await rpc.request('config/read', { cwd: session.cwd, includeLayers: false });
+            assertProgramScopeCodexConfig(effective, config.scopePermissions);
+            const profiles = await rpc.request('permissionProfile/list', {});
+            assert.ok(profiles.data.some(profile => profile.id === programScopePermissionProfile && profile.allowed === true));
+            const local = await rpc.request('command/exec', { command: ['/bin/sh', '-c', 'printf scoped > native-scope-fixture.txt'], cwd: session.cwd, timeoutMs: 3000 });
+            assert.equal(local.exitCode, 0, JSON.stringify(local)); assert.equal(fs.readFileSync(path.join(session.cwd, 'native-scope-fixture.txt'), 'utf8'), 'scoped');
+            const environment = await rpc.request('command/exec', { command: ['/usr/bin/env'], cwd: session.cwd, timeoutMs: 3000 });
+            assert.equal(environment.exitCode, 0, JSON.stringify(environment)); assert.match(environment.stdout, /^PATH=/m);
+            for (const secretName of ['DEEPSEEK_API_KEY', 'EXPLABS_API_KEY', 'BZZY_PROVIDER_API_KEY', 'BZZY_HOME', 'CODEX_HOME']) {
+              assert.doesNotMatch(environment.stdout, new RegExp('^' + secretName + '=', 'm'));
+            }
+            let connections = 0;
+            const listener = net.createServer(socket => { connections++; socket.end('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'); });
+            await new Promise((resolve, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolve); });
+            try {
+              const denied = await rpc.request('command/exec', { command: ['/usr/bin/curl', '--silent', '--show-error', '--max-time', '2', `http://127.0.0.1:${listener.address().port}/`], cwd: session.cwd, timeoutMs: 3000 });
+              assert.equal(denied.exitCode, 7); assert.match(denied.stderr, /^curl: /m);
+              assert.equal(connections, 0, 'Native command networking must not reach even a loopback listener.');
+            } finally { await new Promise(resolve => listener.close(resolve)); }
+          }
+        } catch (error) { failure = { rpcCode: error.rpcCode, transportFailure: rpcFailure(error), message: error.message }; }
+        finally { await rpc.close(); }
+        assert.equal(failure, undefined, JSON.stringify({ mode, provider, effort, failure }));
+      }
+    } finally { if (nativePrivateRoot) fs.rmSync(nativePrivateRoot, { recursive: true, force: true }); }
   });

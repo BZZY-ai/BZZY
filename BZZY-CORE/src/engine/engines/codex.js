@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { launch, root, version, assertCodexVersion, backendCommand } from '../process.js';
 import { home, privateDir, writeJson, saveSession } from '../store.js';
@@ -49,6 +50,54 @@ function rotateNativeThread(session) {
 function missingNativeThread(error, threadId) {
   if (![-32600, -32001].includes(error?.rpcCode) || typeof threadId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(threadId)) return false;
   return error.message === `thread not found: ${threadId}` || error.message === `no rollout found for thread id ${threadId}`;
+}
+
+function pathCoveredByDeniedRoot(filesystem, candidate) {
+  const absolute = path.resolve(candidate);
+  if (filesystem[':slash_tmp'] === 'deny') {
+    const relative = path.relative('/tmp', absolute);
+    if (relative === '' || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) return true;
+  }
+  return Object.entries(filesystem).some(([root, access]) => {
+    if (access !== 'deny' || !path.isAbsolute(root)) return false;
+    const relative = path.relative(path.resolve(root), absolute);
+    return relative === '' || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+  });
+}
+
+function denyFilesystemRoot(filesystem, candidate) {
+  const absolute = path.resolve(candidate);
+  if (!pathCoveredByDeniedRoot(filesystem, absolute)) filesystem[absolute] = 'deny';
+}
+
+function codexRuntimeRoot(executable) {
+  const parent = path.dirname(executable);
+  return path.basename(parent) === 'bin' && path.extname(executable) === '.js' ? path.dirname(parent) : null;
+}
+
+function nativeCodexExecutable(executable) {
+  const runtimeRoot = codexRuntimeRoot(executable);
+  if (!runtimeRoot) return executable;
+  const target = process.arch === 'x64' ? ['@openai/codex-linux-x64', 'x86_64-unknown-linux-musl']
+    : process.arch === 'arm64' ? ['@openai/codex-linux-arm64', 'aarch64-unknown-linux-musl'] : null;
+  if (!target) throw new Error(`Scoped Codex execution does not support Linux ${process.arch}.`);
+  let platformRoot;
+  try {
+    const require = createRequire(path.join(runtimeRoot, 'package.json'));
+    platformRoot = path.dirname(require.resolve(target[0] + '/package.json'));
+  } catch {
+    platformRoot = runtimeRoot;
+  }
+  const candidate = path.join(platformRoot, 'vendor', target[1], 'bin', 'codex');
+  let native;
+  try {
+    native = fs.realpathSync(candidate);
+    if (!fs.statSync(native).isFile()) throw new Error('not a file');
+    fs.accessSync(native, fs.constants.X_OK);
+  } catch {
+    throw new Error('The official Codex Linux runtime is incomplete. Reinstall @openai/codex before scoped execution.');
+  }
+  return native;
 }
 
 function preserveNativeGoalUsage(session) {
@@ -109,6 +158,7 @@ export function codexLaunch(provider, session, options = {}) {
   }
   session.engineHome ||= session.engineThreadId && fs.existsSync(legacy) ? legacy : (provider.auth === 'api-key' ? session.backendHomes?.codexApi : session.backendHomes?.codex) || codexHome(provider);
   privateDir(session.engineHome);
+  const codexExecutable = fs.realpathSync(backendCommand('codex'));
   const args = ['app-server', '--listen', 'stdio://', ...(options.learningReview || scopeAdmission ? ['--strict-config'] : []), ...(!options.learningReview ? ['--enable', 'goals'] : [])];
   const env = { ...subscriptionEnvironment('codex'), ...options.networkEnv, CODEX_HOME: session.engineHome };
   const override = (key, value) => args.push('-c', `${key}=${tomlValue(value)}`);
@@ -119,18 +169,50 @@ export function codexLaunch(provider, session, options = {}) {
   override('approval_policy', scopeAdmission || options.learningReview || options.agentScope || options.yolo || options.scopedAutonomy ? 'never' : 'on-request');
   let scopePermissions;
   if (scopeAdmission) {
-    const executable = fs.realpathSync(backendCommand('codex'));
+    const executable = codexExecutable;
     const filesystem = { ':root': 'deny', ':minimal': 'read', [session.cwd]: 'read', [executable]: 'read', ':tmpdir': 'write', ':slash_tmp': 'deny' };
+    // The npm launcher replaces itself with a native binary below its package
+    // root. Linux permission profiles must keep that official runtime visible
+    // so Codex can re-enter it as `codex-linux-sandbox` inside bubblewrap.
+    // A direct native executable needs only the exact-file grant above.
+    if (process.platform === 'linux') {
+      const runtimeRoot = codexRuntimeRoot(executable);
+      if (runtimeRoot) filesystem[runtimeRoot] = 'read';
+      filesystem[nativeCodexExecutable(executable)] = 'read';
+      // Codex creates a process-lifetime `codex-linux-sandbox` alias below
+      // CODEX_HOME and prepends its directory to PATH. Released builds use the
+      // legacy `arg0` root; newer builds separate helpers by operating system.
+      // Mount the stable per-session parents read-only so either layout works
+      // without copying an executable or exposing the rest of CODEX_HOME.
+      filesystem[path.join(session.engineHome, 'tmp', 'arg0')] = 'read';
+      filesystem[path.join(session.engineHome, 'tmp', 'arg0-linux')] = 'read';
+    }
     if (options.policy?.mode === 'workspace-write') for (const relative of options.policy.writablePaths || []) filesystem[inside(session.cwd, relative, { exists: false })] = 'write';
-    // The authenticated host stays outside the model's permissions, even when
-    // an owner places a project above BZZY's private home.
-    filesystem[home()] = 'deny'; filesystem[codexHome(provider)] = 'deny'; filesystem[session.engineHome] = 'deny';
+    // `:root = deny` already hides private state. Add explicit private masks
+    // only when the project read/write grant contains that state. Redundant
+    // deny mounts below an already-denied root break released Linux Codex
+    // builds before a command starts, and a denied CODEX_HOME parent also
+    // prevents traversal to Codex's read-only sandbox helper.
+    for (const privateRoot of [home(), codexHome(provider), session.engineHome]) {
+      const relative = path.relative(session.cwd, privateRoot);
+      if (relative === '' || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) {
+        denyFilesystemRoot(filesystem, privateRoot);
+      }
+    }
+    if (process.platform === 'linux' && [path.join(session.engineHome, 'tmp', 'arg0'), path.join(session.engineHome, 'tmp', 'arg0-linux')]
+      .some(helperRoot => pathCoveredByDeniedRoot(filesystem, helperRoot))) {
+      throw new Error('A program-scope project directory cannot contain BZZY private state. Choose a dedicated project directory outside BZZY_HOME.');
+    }
     scopePermissions = { filesystem, network: { enabled: false } };
     override('default_permissions', programScopePermissionProfile);
     override(`permissions.${programScopePermissionProfile}`, scopePermissions);
     for (const feature of programScopeDisabledFeatures) override(`features.${feature}`, false);
     override('features.skip_host_skill_discovery', true);
-    override('shell_environment_policy.inherit', 'none'); override('shell_environment_policy.set', { PATH: '/usr/bin:/bin' });
+    // Preserve only Codex's process-local PATH. On Linux it contains the
+    // lifetime-scoped `codex-linux-sandbox` arg0 helper; replacing PATH with a
+    // static system value makes every restricted command fail before exec.
+    // No account, credential or arbitrary environment variable is inherited.
+    override('shell_environment_policy.inherit', 'all'); override('shell_environment_policy.include_only', ['PATH']);
     override('mcp_servers', {}); override('web_search', 'disabled');
     override('project_doc_max_bytes', 0); override('project_doc_fallback_filenames', []);
     override('projects', { [session.cwd]: { trust_level: 'untrusted' } });
@@ -236,8 +318,9 @@ export function assertProgramScopeCodexConfig(result, permissions) {
       || programScopeDisabledFeatures.some(name => config.features?.[name] !== false)
       || config.features?.skip_host_skill_discovery !== true
       || Object.values(config.mcp_servers || {}).some(server => server?.enabled !== false)
-      || config.shell_environment_policy?.inherit !== 'none'
-      || digest(config.shell_environment_policy?.set ?? null) !== digest({ PATH: '/usr/bin:/bin' })
+      || config.shell_environment_policy?.inherit !== 'all'
+      || digest(config.shell_environment_policy?.include_only ?? null) !== digest(['PATH'])
+      || Object.keys(config.shell_environment_policy?.set || {}).length !== 0
       || config.project_doc_max_bytes !== 0) throw new Error('Codex did not acknowledge the restricted program-scope configuration. No thread or turn was started.');
 }
 
