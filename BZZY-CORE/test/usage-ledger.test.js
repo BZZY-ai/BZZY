@@ -220,6 +220,18 @@ test('native Codex goal admission withholds unresolved unbounded usage and passe
   assert.equal(backendStartupFailure(forged), null);
 });
 
+test('native Codex goal updates preserve the raw status and save Core canonical lifecycle state', () => {
+  session.goal = newGoal('Inspect one offline fixture.'); saveSession(session);
+  const events = [], engine = new CodexEngine({ id: 'codex', backend: 'codex' }, session, {}, {
+    event(type, data) { events.push({ type, data }); }, newline() {},
+  });
+  engine.operation = { goal: true }; engine.goalArmed = true;
+  engine.updateGoal({ id: 'native-goal', status: 'budgetLimited', tokensUsed: 123 });
+  assert.equal(session.goal.nativeStatus, 'budgetLimited');
+  assert.equal(session.goal.status, 'budget_limited');
+  assert.equal(events.at(-1).data.status, 'budget_limited');
+});
+
 test('only a local admission receipt proves an interrupted pre-worker launch used zero tokens', () => {
   session.goal = newGoal('Inspect one offline fixture.', 1000); session.goal.nativeTokensUsed = 10; saveSession(session);
   const job = { id: randomUUID(), parentSessionId: session.id, goalId: session.goal.id, currentRound: 1,

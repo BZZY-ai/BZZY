@@ -66,7 +66,7 @@ test('missing and goal-less sessions error without creation or starting Core', a
 
 test('status maps saved states without writes, model calls or Core activation', async () => {
   const session = goal();
-  for (const [raw, reason, expected] of [['paused','user_pause','paused'], ['blocked','scope_dependency','stalled'], ['budget_limited','token_limit','stalled'], ['usage_limited','quota','stalled'], ['awaiting_review',null,'stalled'], ['paused','context_no_progress','stalled'], ['complete',null,'achieved'], ['cancelled','user_cancel','cancelled']]) {
+  for (const [raw, reason, expected] of [['paused','user_pause','paused'], ['blocked','scope_dependency','stalled'], ['budget_limited','token_limit','stalled'], ['budgetLimited','tokenLimit','stalled'], ['usage_limited','quota','stalled'], ['usageLimited','quota','stalled'], ['awaiting_review',null,'stalled'], ['awaitingReview',null,'stalled'], ['paused','context_no_progress','stalled'], ['paused','contextNoProgress','stalled'], ['complete',null,'achieved'], ['cancelled','user_cancel','cancelled']]) {
     session.goal.status = raw; session.goal.reason = reason; saveSession(session);
     const before = digest(loadSession(session.id)), output = await invoke('status');
     assert.equal(output.code, 0, output.stderr); const value = JSON.parse(output.stdout);

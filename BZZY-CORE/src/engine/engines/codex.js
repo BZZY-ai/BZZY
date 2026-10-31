@@ -33,6 +33,7 @@ import { observeRunUsage } from '../usage-ledger.js';
 import { beginSessionCost, observeSessionCost } from '../session-cost.js';
 import { preflightGoalScope, programScopePermissionProfile, programScopeDisabledFeatures } from '../program-scope.js';
 import { inside } from '../evidence.js';
+import { canonicalGoalStatus } from '../goal-state.js';
 
 export { codexHome } from '../auth.js';
 
@@ -596,17 +597,18 @@ export class CodexEngine {
     if (!this.operation?.goal || !this.goalArmed || !this.session.goal || !goal) return;
     this.goalUpdates++;
     const tokens = (this.session.goal.nativeTokenOffset || 0) + goal.tokensUsed;
-    Object.assign(this.session.goal, { nativeStatus: goal.status, status: this.contextStallRequested ? 'paused' : goal.status === 'complete' ? 'verifying' : goal.status, nativeGoalId: goal.id || goal.goalId,
+    const status = canonicalGoalStatus(goal.status);
+    Object.assign(this.session.goal, { nativeStatus: goal.status, status: this.contextStallRequested ? 'paused' : status === 'complete' ? 'verifying' : status, nativeGoalId: goal.id || goal.goalId,
       nativeTokensUsed: tokens, tokensUsed: tokens + (this.session.goal.delegatedTokensUsed || 0), timeUsedSeconds: goal.timeUsedSeconds });
     if (this.contextStallRequested) this.session.goal.reason = 'context_no_progress';
-    else if (goal.status === 'blocked') {
+    else if (status === 'blocked') {
       const blocker = sanitizedNativeBlocker(goal.reason || goal.blockedReason || goal.lastBlocker || goal.blocker?.message);
       Object.assign(this.session.goal, { reason: 'native_blocked', lastBlocker: blocker.reason, nativeBlocker: blocker });
     }
     observeRunUsage(this.session, this.options.toolHost?.context?.runId, { nativeGoal: true });
     saveSession(this.session);
-    this.ui.event('goal', { status: this.contextStallRequested ? 'paused' : goal.status, tokensUsed: tokens,
-      ...(goal.status === 'blocked' ? { reason: this.session.goal.lastBlocker, reasonAvailable: this.session.goal.nativeBlocker?.reasonAvailable } : {}) });
+    this.ui.event('goal', { status: this.contextStallRequested ? 'paused' : status, tokensUsed: tokens,
+      ...(status === 'blocked' ? { reason: this.session.goal.lastBlocker, reasonAvailable: this.session.goal.nativeBlocker?.reasonAvailable } : {}) });
   }
 
   notification(method, params) {
