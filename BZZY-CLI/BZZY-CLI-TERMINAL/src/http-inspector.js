@@ -68,22 +68,24 @@ export function httpExchange(row, width, theme) {
   return { request, response, copy: { request: copies.request.join('\n'), response: copies.response.join('\n') } };
 }
 
+// Each box sits one cell inside the workspace separators, so its sides never
+// double up with them; httpExchange content is wrapped to width - 4.
 export function httpExchangeLayout(exchange, width, height, theme, offsets = {}) {
-  const lines = [], hits = [], regions = [], maxima = {}, c = theme.color;
+  const lines = [], hits = [], regions = [], maxima = {}, c = theme.color, box = Math.max(4, width - 2);
   const requestHeight = Math.floor(height / 2);
   for (const [section, size] of [['request', requestHeight], ['response', height - requestHeight]]) {
     if (size < 2) { for (let i = 0; i < size; i++) lines.push(''); continue; }
     const top = lines.length, bodyHeight = size - 2, content = exchange[section], maximum = Math.max(0, content.length - bodyHeight);
     const start = Math.min(maximum, Math.max(0, offsets[section] || 0)); offsets[section] = start; maxima[section] = maximum;
     const copy = 'Copy', tone = section === 'request' ? palette.accent : palette.agent;
-    lines.push(boxTop(section.toUpperCase(), width, theme, { tone, suffix: copy }));
+    lines.push(' ' + boxTop(section.toUpperCase(), box, theme, { tone, suffix: copy }) + ' ');
     hits.push({ type: 'monitor-http-copy', section, row: top + 1, left: Math.max(1, width - copy.length - 2), right: width - 1 });
     for (let i = 0; i < bodyHeight; i++) {
       const thumb = maximum && i === Math.round((bodyHeight - 1) * start / maximum);
-      lines.push(c('│', palette.border) + fillSurface(content[start + i] || '', width - 2, theme, palette.background, palette.text) + c(thumb ? '┃' : '│', thumb ? palette.accent : palette.border, Boolean(thumb)));
+      lines.push(' ' + c('│', palette.border) + fillSurface(content[start + i] || '', box - 2, theme, palette.background, palette.text) + c(thumb ? '┃' : '│', thumb ? palette.accent : palette.border, Boolean(thumb)) + ' ');
     }
-    const tail = clip(` ${content.length ? start + 1 : 0}–${Math.min(content.length, start + bodyHeight)}/${content.length} · scroll ⇕ `, width - 4);
-    lines.push(c('╰─', palette.border) + c(tail, palette.muted) + c('─'.repeat(Math.max(0, width - cellWidth(tail) - 3)) + '╯', palette.border));
+    const tail = clip(` ${content.length ? start + 1 : 0}–${Math.min(content.length, start + bodyHeight)}/${content.length} · scroll ⇕ `, box - 4);
+    lines.push(' ' + c('╰─', palette.border) + c(tail, palette.muted) + c('─'.repeat(Math.max(0, box - cellWidth(tail) - 3)) + '╯', palette.border) + ' ');
     regions.push({ section, left: 1, right: width, top: top + 1, bottom: top + size });
   }
   return { lines, hits, regions, maxima };

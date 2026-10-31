@@ -145,7 +145,7 @@ export function sessionMetricsLayout(panel, width, { currentGoal, alias, focus =
     if (cellWidth(buttons) + cellWidth(label) > width - 1 && buttons.trim()) { put(buttons, 'accent', true); buttons = '  '; }
     const left = cellWidth(buttons) + 1;
     hits.push({ type: 'metrics-action', action: action.action, disabled: action.disabled, row: lines.length, left, right: left + cellWidth(label) - 1 });
-    buttons += label;
+    buttons += label + ' ';
   }
   put(buttons, 'accent', true); put();
   const data = panel.data;

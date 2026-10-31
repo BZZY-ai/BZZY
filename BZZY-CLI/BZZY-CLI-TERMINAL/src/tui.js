@@ -1297,7 +1297,19 @@ export class TerminalChat {
       this[key + 'FocusRow'] = layout.focusRow; this.contentHits.push(...layout.hits); lines.push(...layout.lines);
     } else if (this.panel === 'metrics') {
       const layout = sessionMetricsLayout(this.ui.sessionMetrics, width, { currentGoal: this.goal, alias: this.alias, focus: this.metricsFocus || 0, selection: this });
-      for (const row of layout.lines) put(row.text, palette[row.tone] || palette.text, row.bold);
+      for (const [index, row] of layout.lines.entries()) {
+        const buttons = layout.hits.filter(hit => hit.type === 'metrics-action' && hit.row === index);
+        if (!buttons.length) { put(row.text, palette[row.tone] || palette.text, row.bold); continue; }
+        // Pills are painted over the layout's own hit cells, so no click target moves.
+        let rendered = '', column = 0;
+        for (const hit of buttons) {
+          const label = sliceCells(row.text, hit.left - 1, hit.right), mark = label.trim()[0];
+          rendered += sliceCells(row.text, column, hit.left - 1) + fillSurface(label, cellWidth(label), this.theme, mark === '›' ? palette.selection : palette.elevated,
+            hit.disabled ? palette.muted : mark === '›' || mark === '●' ? palette.accent : palette.text, !hit.disabled);
+          column = hit.right;
+        }
+        lines.push(rendered + sliceCells(row.text, column, cellWidth(row.text)));
+      }
       this.contentHits.push(...layout.hits);
     } else if (this.panel === 'room') {
       for (const item of this.sharedRoom) {
@@ -1990,7 +2002,7 @@ export class TerminalChat {
     this.hitTargets.push({ type: 'monitor-back', kind: 'http', row: header.length, left: 1, right: cellWidth(back) },
       { type: 'monitor-close', row: header.length, left: width - cellWidth(close) + 1, right: width });
     this.sceneHeaderLength = header.length;
-    if (this.httpInspectorCache?.row !== row || this.httpInspectorCache.width !== width || this.httpInspectorCache.theme !== this.theme) this.httpInspectorCache = { row, width, theme: this.theme, exchange: httpExchange(row, Math.max(1, width - 2), this.theme) };
+    if (this.httpInspectorCache?.row !== row || this.httpInspectorCache.width !== width || this.httpInspectorCache.theme !== this.theme) this.httpInspectorCache = { row, width, theme: this.theme, exchange: httpExchange(row, Math.max(1, width - 4), this.theme) };
     const layout = httpExchangeLayout(this.httpInspectorCache.exchange, width, Math.max(0, height - header.length), this.theme, this.monitor.httpDetailOffsets ||= { request: 0, response: 0 });
     this.monitor.httpDetailMaxima = layout.maxima;
     this.hitTargets.push(...layout.hits.map(hit => ({ ...hit, row: hit.row + header.length })));
