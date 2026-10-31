@@ -43,6 +43,20 @@ test('CLI and iOS share assistant message boundaries for native, legacy and inte
     } finally { ui.close(); }
   }
 });
+test('a running reported step shows the circling loader while work is active and settles to its outcome', () => {
+  const { ui } = terminal();
+  try {
+    const row = () => ui.tui.lastFrame.map(clean).find(line => line.includes('subdomains 12'));
+    ui.tui.busy = true;
+    ui.event('activity', { id: 'recon', summary: 'subdomains 12 | urls candidates 40', status: 'running' });
+    ui.tui.frame = 0; ui.tui.render(); assert.match(row(), /⣾ \S+ · subdomains 12 \| urls candidates 40 · running/);
+    ui.tui.frame = 1; ui.tui.render(); assert.match(row(), /⣽ \S+ · subdomains 12/);
+    ui.tui.busy = false; ui.tui.frame = 5; ui.tui.render(); assert.match(row(), /⣾ \S+ · subdomains 12/, 'an idle terminal does not animate');
+    ui.event('activity', { id: 'recon', summary: 'subdomains 12 | urls candidates 40', status: 'completed' });
+    ui.tui.render(); assert.match(row(), /✓ \S+ · subdomains 12 \| urls candidates 40 · completed/);
+    assert.equal(ui.tui.entries.filter(entry => entry.kind === 'actor-activity').length, 1);
+  } finally { ui.close(); }
+});
 test('connection indicators remain independent of busy model work and preserve the chat draft', () => {
   const { ui, output } = terminal();
   try {
@@ -54,7 +68,8 @@ test('connection indicators remain independent of busy model work and preserve t
     assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.color('●', palette.success, true)));
     assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.color('●', palette.danger, true)));
     ui.connectionStatus = { core: true, relay: true }; ui.tui.render();
-    assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.foreground(palette.goalSuccess)));
+    assert.ok(ui.tui.lastFrame[0].includes(ui.tui.theme.color('●', palette.success, true)));
+    assert.ok(!ui.tui.lastFrame[0].includes(ui.tui.theme.color('●', palette.danger, true)));
     ui.connectionStatus = null; ui.tui.render();
     assert.match(ui.tui.lastFrame.map(clean).join('\n'), /● BZZY Core.*● Relay/);
     assert.equal(ui.tui.value, 'Keep typing'); assert.equal(ui.tui.cursor, 4);
@@ -114,11 +129,12 @@ test('color commands repaint roles and cached content locally without losing dra
   try {
     first.ui.tui.value = 'Keep this draft'; first.ui.tui.cursor = 7;
     first.ui.event('message.user', { text: 'User question' }); first.ui.event('text', { text: 'Agent answer' });
-    for (const name of ['black', 'white', 'blue']) {
+    assert.equal(first.ui.tui.theme.name, 'hive');
+    for (const name of ['black', 'white', 'blue', 'hive']) {
       assert.equal(await first.ui.settingsCommand('/color ' + name), true);
       assert.equal(first.ui.tui.theme.name, name); assert.equal(first.ui.colorPalette, name);
       assert.equal(first.ui.tui.value, 'Keep this draft'); assert.equal(first.ui.tui.cursor, 7);
-      assert.equal(second.ui.tui.theme.name, 'blue');
+      assert.equal(second.ui.tui.theme.name, 'hive');
       const frame = first.ui.tui.lastFrame.map(clean).join('\n');
       assert.match(frame, /User question/); assert.match(frame, /Agent answer/); assert.match(frame, /Keep this draft/);
       assert.match(frame, /BZZY/); assert.equal(first.ui.tui.workspace.left, 0);
@@ -133,7 +149,7 @@ test('color commands repaint roles and cached content locally without losing dra
         else assert.notEqual(fallback.foreground(palette.text), fallback.foreground(palette.background));
       }
     }
-    await first.ui.settingsCommand('/color orange'); assert.equal(first.ui.colorPalette, 'blue');
+    await first.ui.settingsCommand('/color blue'); await first.ui.settingsCommand('/color orange'); assert.equal(first.ui.colorPalette, 'blue');
     assert.equal(await first.ui.settingsCommand('This is a message'), false);
     assert.ok(commandSuggestions('/col').some(item => item.command === '/color'));
   } finally { first.ui.close(); second.ui.close(); }

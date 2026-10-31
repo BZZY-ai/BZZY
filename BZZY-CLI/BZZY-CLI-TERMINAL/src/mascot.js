@@ -8,8 +8,17 @@ const reference = JSON.parse(fs.readFileSync(new URL('../assets/bzzy-eyes.json',
 const pixels = inflateSync(Buffer.from(reference.cyan, 'base64'));
 const dots = [[0, 0, 1], [0, 1, 2], [0, 2, 4], [1, 0, 8], [1, 1, 16], [1, 2, 32], [0, 3, 64], [1, 3, 128]];
 const channels = hex => hex.slice(1).match(/../g).map(value => parseInt(value, 16));
-const dark = channels(palette.border), bright = channels(palette.accent);
-const tones = Array.from({ length: 9 }, (_, index) => '#' + bright.map((channel, axis) => Math.round(dark[axis] + (channel - dark[axis]) * index / 8).toString(16).padStart(2, '0')).join(''));
+// Each palette keeps the cyan compound-eye glow readable on its own background.
+const eyeGradients = { hive: ['#0E3542', '#5CE6FF'], blue: ['#18354A', '#00D9FF'], black: ['#3A3A3A', '#F2F2F2'], white: ['#9DB4C0', '#176378'] };
+const gradients = new Map();
+function eyeTones(name) {
+  if (!gradients.has(name)) {
+    const [dark, bright] = (eyeGradients[name] || eyeGradients.hive).map(channels);
+    gradients.set(name, Array.from({ length: 9 }, (_, index) => '#' + bright.map((channel, axis) => Math.round(dark[axis] + (channel - dark[axis]) * index / 8).toString(16).padStart(2, '0')).join('')));
+  }
+  return gradients.get(name);
+}
+const levels = 9;
 
 function sample(x, y) {
   const px = x * (reference.width - 1), py = y * (reference.height - 1), left = Math.floor(px), top = Math.floor(py);
@@ -50,9 +59,8 @@ export function mascotCells(seconds = 0, { columns = 44, rows = 12, compact = fa
         const value = light(x, y, motion);
         if (value > 24) { mask |= bit; brightness += value; count++; }
       }
-      if (!mask) { line.push({ text: ' ', tone: null }); continue; }
-      const tone = tones[Math.min(tones.length - 1, Math.floor(brightness / count / 256 * tones.length))];
-      line.push({ text: String.fromCodePoint(0x2800 + mask), tone });
+      if (!mask) { line.push({ text: ' ', level: null }); continue; }
+      line.push({ text: String.fromCodePoint(0x2800 + mask), level: Math.min(levels - 1, Math.floor(brightness / count / 256 * levels)) });
     }
     lines.push(line);
   }
@@ -60,9 +68,11 @@ export function mascotCells(seconds = 0, { columns = 44, rows = 12, compact = fa
 }
 
 export function mascotLine(cells, theme = createTerminalTheme()) {
+  const tones = eyeTones(theme.name);
   let line = '', previousTone = null;
   for (const cell of cells) {
-    if (cell.tone != null && cell.tone !== previousTone) { line += theme.foreground(cell.tone); previousTone = cell.tone; }
+    const tone = cell.level == null ? null : tones[cell.level];
+    if (tone != null && tone !== previousTone) { line += theme.foreground(tone); previousTone = tone; }
     line += cell.text;
   }
   return line + theme.foreground(palette.text);

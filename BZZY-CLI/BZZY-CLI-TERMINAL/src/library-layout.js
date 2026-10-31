@@ -22,8 +22,9 @@ export function libraryLayout(rows, width, theme, { panel, focus = 0 } = {}) {
     if (!column) { target.line = '  '; column = 2; } else { target.line += '    '; column += 4; }
     if (selected) focusRow = lines.length;
     if (!row.disabled) hits.push({ type: panel + '-action', action: row.action, row: lines.length, left: column + 1, right: column + size });
-    target.line += fillSurface(text, size, theme, selected ? palette.accent : palette.elevated,
-      row.disabled ? palette.muted : selected ? palette.background : palette.accent, true);
+    const tone = row.disabled ? palette.muted : selected ? palette.background : palette.accent, caps = selected ? palette.background : palette.border;
+    target.line += theme.background(selected ? palette.accent : palette.elevated) + theme.color('[', caps, true) + theme.color(text.slice(1, -1), tone, true)
+      + theme.color(']', caps, true) + theme.background(palette.background);
     return column + size;
   };
   for (let index = 0; index < rows.length; index++) {
@@ -54,7 +55,7 @@ export function libraryLayout(rows, width, theme, { panel, focus = 0 } = {}) {
     const selected = row.action && !row.disabled && actionIndex++ === focus;
     if (row.tone === 'accent' && !row.action && row.text) gap();
     if (selected) focusRow = lines.length;
-    const wrapped = wrap((selected ? '› ' : '  ') + row.text, usable);
+    const wrapped = wrap((selected ? '❯ ' : '  ') + row.text, usable);
     for (const line of wrapped) {
       if (row.action && !row.disabled) {
         hits.push({ type: panel + '-action', action: row.action, libraryMenu: row.menu, row: lines.length, left: 3, right: width - 2 });

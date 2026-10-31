@@ -1,7 +1,11 @@
 import { palette } from './terminal-theme.js';
 import { clean } from './terminal-format.js';
 import { isStalledGoal } from '@bzzy/core/engine/goal-state.js';
-const dots = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+// One loader for every running state: a square of braille dots with a gap
+// circling it. Frame 0 doubles as the placeholder that animated rows replace.
+export const loaderFrames = Object.freeze(['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']);
+export const loader = frame => loaderFrames[Math.abs(Math.trunc(frame)) % loaderFrames.length];
+const dots = loaderFrames;
 const validationReasons = {
   original_goal_unsupported: 'The original goal was not supported.',
   host_checks_incomplete: 'Required evidence or verification checks are incomplete.',

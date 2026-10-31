@@ -18,9 +18,9 @@ import { palette, createTerminalTheme } from './terminal-theme.js';
 import { messageBodyToPlainText, parseMessageBody } from '@bzzy/core/message-format';
 import { renderMessageContent } from './message-renderer.js';
 import { choicePopup, visibleChoices } from './choice-popup.js';
-import { fillSurface, replaceCells, sliceCells } from './terminal-surface.js';
+import { compactSgr, fillSurface, replaceCells, sliceCells } from './terminal-surface.js';
 import { settingsLayout, settingsActions, navigateSettings } from './settings-layout.js';
-import { goalIndicator, goalValidationIndicator, chatWorkIndicator } from './goal-indicator.js';
+import { goalIndicator, goalValidationIndicator, chatWorkIndicator, loader, loaderFrames } from './goal-indicator.js';
 import { escapeInputKind, TerminalKeyInput } from './terminal-keys.js';
 import { recordDebateEvent, debateEntryLayout } from './debate-ui.js';
 import { goalValidationFor } from '@bzzy/core/engine/goal-validation.js';
@@ -38,8 +38,13 @@ import { saveModelCombination } from './model-controls.js';
 import { loadSession } from '@bzzy/core/engine/store.js';
 import { createTerminalSourceProjection } from '@bzzy/core/engine/terminal-source.js';
 import { httpExchange, httpExchangeLayout } from './http-inspector.js';
+import { mascotCells, mascotLine } from './mascot.js';
 
-const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const spinner = loaderFrames;
+// Paint each "[ … ]" segment as a filled button without moving any cell, so
+// existing column-based click targets keep matching the painted controls.
+const buttonText = (text, theme, { tone = palette.accent, rest = palette.muted, fill = palette.elevated } = {}) =>
+  text.split(/(\[[^\]]*\])/).map(part => /^\[.*\]$/.test(part) ? fillSurface(part, cellWidth(part), theme, fill, tone, true) : part ? theme.color(part, rest) : '').join('');
 const animationInterval = 1000 / 60;
 const mouseOn = '\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h', mouseOff = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l';
 const targetKey = hit => hit?.type === 'settings' ? `settings:${hit.action}` : hit && [hit.type, hit.command || hit.action || hit.panel || hit.id || hit.index || '', hit.row, hit.left, hit.right].join(':');
@@ -110,7 +115,8 @@ export class TerminalChat {
     };
     this.timer = setTimeout(tick, animationInterval); this.timer.unref();
   }
-  writeFrame(frame) { if (frame && !this.output.write(frame)) this.outputBlocked = true; }
+  // Private QR/code screens are written exactly as generated.
+  writeFrame(frame, { exact = false } = {}) { if (frame && !this.output.write(exact ? frame : compactSgr(frame))) this.outputBlocked = true; }
   privateAction(value) {
     const view = this.ui.privateView;
     if (!view?.actionMode || !this.resolveInput || !view.actions?.some(action => action.value === value && !action.disabled)) return;
@@ -1242,7 +1248,7 @@ export class TerminalChat {
   content(width) {
     const { color } = this.theme;
     const lines = [], put = (text, tone = palette.text, bold = false) => lines.push(color(text, tone, bold));
-    this.contentHits = [];
+    this.contentHits = []; this.contentSpinners = [];
     if (this.selection) {
       const picker = this.selection, compact = (this.selectionHeight || 16) < 12;
       if (!compact) put('');
@@ -1276,7 +1282,7 @@ export class TerminalChat {
         const confirm = `[ ${picker.confirmLabel || 'Confirm'} ]`, cancel = `[ ${picker.cancelLabel || 'Cancel'} ]`;
         this.contentHits.push({ type: 'confirm', row: lines.length, left: 3, right: 2 + cellWidth(confirm) },
           { type: 'cancel', row: lines.length, left: 6 + cellWidth(confirm), right: 5 + cellWidth(confirm + cancel) });
-        put('  ' + confirm + '   ' + cancel, palette.accent);
+        lines.push(buttonText('  ' + confirm + '   ' + cancel, this.theme));
       }
     } else if (this.panel === 'settings') {
       const tightMain = this.ui.settings.page === 'main' && (this.output.rows || 24) <= 24 && this.ui.settings.rows().filter(row => row.card).length > 4;
@@ -1341,7 +1347,7 @@ export class TerminalChat {
           const resources = this.responseParts(entry);
           if (!continuation && cellWidth(entryLines[0]) + 8 <= width) {
             const left = cellWidth(entryLines[0]) + 1;
-            entryLines[0] += color('  [ ⋯ ]', palette.muted);
+            entryLines[0] += color('  [', palette.border) + color(' ⋯ ', palette.accent, true) + color(']', palette.border);
             this.contentHits.push({ type: 'response-menu', entry, row: lines.length, left, right: left + 7 });
           }
           for (const [offset, styled] of entryLines.entries()) {
@@ -1355,6 +1361,7 @@ export class TerminalChat {
         }
         if (entry.kind === 'approval') this.contentHits.push({ type: 'approval-details', id: entry.questionId, row: lines.length, left: 3, right: width - 2 });
         if (entry.kind === 'debate' || entry.toolTree) for (const hit of layout.hits || []) this.contentHits.push({ ...hit, row: lines.length + hit.row });
+        if (!continuation) for (const row of layout.spinners || []) this.contentSpinners.push(lines.length + row);
         for (const line of entryLines) lines.push(line);
       }
     }
@@ -1373,8 +1380,9 @@ export class TerminalChat {
       this.entryLayouts.set(entry, layout); return layout;
     }
     if (entry.kind === 'invocation') {
-      const base = invocationEntryLayout(entry, width, this.theme), tools = entry.toolTree && this.showTools ? toolTreeLayout(entry.toolTree, width, this.theme, { nested: true }) : { lines: [], hits: [] };
-      const layout = { lines: [...base.lines, ...tools.lines], hits: tools.hits.map(hit => ({ ...hit, row: hit.row + base.lines.length })), width, text: entry.text, showTools: Boolean(this.showTools) };
+      const base = invocationEntryLayout(entry, width, this.theme), tools = entry.toolTree && this.showTools ? toolTreeLayout(entry.toolTree, width, this.theme, { nested: true }) : { lines: [], hits: [], spinners: [] };
+      const layout = { lines: [...base.lines, ...tools.lines], hits: tools.hits.map(hit => ({ ...hit, row: hit.row + base.lines.length })), width, text: entry.text, showTools: Boolean(this.showTools),
+        spinners: [...base.spinners, ...tools.spinners.map(row => row + base.lines.length)] };
       this.entryLayouts.set(entry, layout); return layout;
     }
     const { color } = this.theme;
@@ -1382,10 +1390,16 @@ export class TerminalChat {
     const identityTone = actorColor(this.actors.for(entry.actorSessionId || entry.peerSessionId, this.ui.activeTab || this.ui.sessionId));
     const replyLine = line => color('  │ ', identityTone) + color(line, palette.text);
     const stamp = entry.occurredAt && Number.isFinite(Date.parse(entry.occurredAt)) ? '  ' + new Date(entry.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
-    const speaker = (icon, label, tone) => fillSurface(' ' + icon + ' ', 3, this.theme, tone, palette.background, true) + color(' ' + label, tone, true) + color(stamp, palette.muted);
+    // A speaker badge and a dim rule form each message's top edge. Replies keep
+    // seven cells free for the response menu that content() appends.
+    const speaker = (icon, label, tone, reserve = 0) => {
+      const head = fillSurface(' ' + icon + ' ', 3, this.theme, tone, palette.background, true) + color(' ' + label, tone, true) + color(stamp, palette.muted);
+      const rule = width - cellWidth(head) - reserve - 2;
+      return head + (rule >= 3 ? color(' ' + '─'.repeat(rule), palette.border) : '');
+    };
     if (entry.kind === 'approval') {
       const tone = entry.decision === 'approved' ? palette.goalSuccess : entry.decision === 'denied' ? palette.danger : palette.warning;
-      put('  ' + (entry.decision === 'approved' ? '✔ Approved once' : entry.decision === 'denied' ? '✕ Denied' : '◇ Permission requested') + '  ' + (entry.expanded ? '▴ Hide details' : '▾ Show details'), tone, true);
+      put('  ' + (entry.decision === 'approved' ? '✓ Approved once' : entry.decision === 'denied' ? '✕ Denied' : '◇ Permission requested') + '  ' + (entry.expanded ? '▴ Hide details' : '▾ Show details'), tone, true);
       const command = clean(entry.text).replace(/\s*Allow once\? \[y\/N\]\s*$/, '');
       const rows = entry.expanded ? wrap(command, width - 8) : wrapProse(clip(command, Math.max(20, (width - 8) * 2)), width - 8);
       for (const line of rows) lines.push(color('  │ ', tone) + fillSurface(line, width - 6, this.theme, palette.surface, palette.text));
@@ -1404,8 +1418,17 @@ export class TerminalChat {
     else if (entry.kind === 'actor-activity') {
       const actor = this.actors.for(entry.actorSessionId, this.ui.activeTab || this.ui.sessionId);
       const status = ['planned', 'running', 'completed', 'blocked', 'inconclusive'].includes(entry.status) ? entry.status : 'reported';
-      for (const line of wrap(`${actor.label} · ${entry.text} · ${entry.closed ? 'stopped' : status}`, Math.max(1, width - 4))) put(clip('  › ' + line, width), palette.muted);
+      const running = status === 'running' && !entry.closed, state = entry.closed ? 'stopped' : status;
+      const [icon, tone] = running ? [loaderFrames[0], palette.accent] : entry.closed ? ['■', palette.muted] : status === 'completed' ? ['✓', palette.success]
+        : status === 'blocked' ? ['✕', palette.danger] : status === 'planned' ? ['○', palette.muted] : ['◇', palette.warning];
+      const rows = wrap(`${actor.label} · ${entry.text} · ${state}`, Math.max(1, width - 4));
+      for (const [index, line] of rows.entries()) {
+        const text = clip(line, Math.max(1, width - 4)), name = index ? '' : text.slice(0, actor.label.length);
+        lines.push(color(index ? '    ' : `  ${icon} `, tone, true) + color(name, actorColor(actor), true) + color(text.slice(name.length), running ? palette.text : palette.muted));
+      }
       put('');
+      const layout = { width, text: entry.text, lines, spinners: running ? [0] : [] };
+      this.entryLayouts.set(entry, layout); return layout;
     }
     else if (entry.kind === 'tool') put('  › ' + clip(entry.text, width - 5), palette.muted);
     else {
@@ -1419,7 +1442,7 @@ export class TerminalChat {
       const label = entry.kind === 'assistant' ? actor.role === 'main' ? 'BZZY · Main' : actor.label.replace(/^(Agent|Worker|Reviewer)/, word => word.toUpperCase()) : entry.kind === 'question' ? 'YOUR INPUT IS NEEDED' : entry.kind.toUpperCase();
       const displayLabel = entry.kind === 'assistant' ? clip(label, width - 4) : label;
       if (isFormatted) {
-        lines.push(speaker('✦', displayLabel, tone));
+        lines.push(speaker('✦', displayLabel, tone, 7));
         const rendered = renderMessageContent(projection, { width: width - 7, theme: this.theme, background: palette.background });
         for (const line of rendered.lines) lines.push(replyLine(line));
         lines.push(color('  │', tone));
@@ -1432,7 +1455,7 @@ export class TerminalChat {
       const tail = wrapProse(append ? cached.rawLines.at(-1) + displayText.slice(cached.displayText.length) : displayText, width - (entry.kind === 'assistant' ? 7 : 5));
       const rawLines = append ? [...cached.rawLines.slice(0, -1), ...tail] : tail;
       if (append) for (const line of cached.lines.slice(0, -2)) lines.push(line);
-      else if (entry.kind === 'assistant') lines.push(speaker('✦', displayLabel, tone));
+      else if (entry.kind === 'assistant') lines.push(speaker('✦', displayLabel, tone, 7));
       else put(`  ${displayLabel}`, tone, true);
       for (const line of tail) {
         const text = isFormatted ? line : line.replace(/\*\*(.*?)\*\*/g, '$1').replace(/^#{1,6}\s+/, '');
@@ -1446,6 +1469,30 @@ export class TerminalChat {
     }
     const layout = { width, text: entry.text, lines };
     this.entryLayouts.set(entry, layout); return layout;
+  }
+
+  // The empty chat shows the brand eyes and starting hints, centered when the
+  // column has room; compact terminals keep the same sentences left-aligned.
+  welcomeLines(width, height) {
+    const { color } = this.theme, delegate = this.mode === 'delegate';
+    const text = delegate ? [['What should the team work on?', palette.accent, true], ['Chat normally, or use /goal to start supervised delegated work.', palette.text],
+      ['The brain plans; hands execute; evidence is reviewed.', palette.muted], ['Type / for commands.', palette.muted]]
+      : [['What should BZZY work on?', palette.accent, true], ['Ask a question, build something, or investigate a task.', palette.text],
+        ['/goal <objective>   Persist until the outcome is verified', palette.muted], ['Type / for commands, models and sessions.', palette.muted]];
+    const splash = height >= 18 && width >= 64;
+    if (!splash) return ['', ...text.map(([line, tone, bold]) => color('  ' + line, tone, bold))];
+    const center = (line, size) => ' '.repeat(Math.max(0, Math.floor((width - size) / 2))) + line;
+    const columns = 24, rows = height >= 26 ? 5 : 3;
+    if (this.welcomeEyes?.rows !== rows) this.welcomeEyes = { rows, cells: mascotCells(0, { columns, rows, compact: true }) };
+    const lines = Array(Math.max(1, Math.floor((height - rows - 9) / 3))).fill('');
+    for (const cells of this.welcomeEyes.cells) lines.push(center(mascotLine(cells, this.theme), columns));
+    lines.push('', center(color('B Z Z Y', palette.accent, true) + color('  ·  THE LIVING HIVE', palette.muted), 27), '');
+    for (const [line, tone, bold] of text) {
+      const command = line.startsWith('/goal') ? '/goal <objective>' : '', rest = clip(line.slice(command.length), width - 4);
+      if (command) lines.push('');
+      lines.push(center(color(command, palette.accent, true) + color(rest, tone, bold), cellWidth(command + rest)));
+    }
+    return lines;
   }
 
   executionActivity(width) {
@@ -1550,9 +1597,11 @@ export class TerminalChat {
     const { color } = this.theme, settings = this.ui.settings;
     const subtitle = settings.pageSubtitle || '';
     const header = this.navigationHeader(width);
-    const backRow = header.length + 1;
-    header.push(color('  ← Back', settings.busy ? palette.muted : palette.accent, true)
-      + color(clip('  ' + settings.pageTitle + (subtitle ? ' · ' + subtitle : ''), Math.max(0, width - 9)), palette.muted));
+    const backRow = header.length + 1, title = clip(settings.pageTitle || '', Math.max(1, width - 16));
+    const detail = subtitle ? clip(' · ' + subtitle, Math.max(0, width - 16 - cellWidth(title))) : '';
+    header.push(' ' + fillSurface(' ← Back ', 8, this.theme, palette.elevated, settings.busy ? palette.muted : palette.accent, true) + '  '
+      + color('⬡ ', palette.accent) + color(title, palette.text, true) + color(detail, palette.muted)
+      + color(' ' + '─'.repeat(Math.max(0, width - 14 - cellWidth(title + detail))), palette.border));
     this.hitTargets.push({ type: 'back', row: backRow, left: 3, right: 9 });
     this.sceneHeaderLength = header.length;
     const compact = height - header.length < 16 || settings.page === 'main' && height <= 28;
@@ -1563,7 +1612,7 @@ export class TerminalChat {
     if (!compact) footer.push('');
     const exitRow = footer.length;
     const actionsLabel = '  [Actions ⋯]';
-    footer.push(color(clip(actionsLabel, width), palette.accent));
+    footer.push(buttonText(clip(actionsLabel, width), this.theme));
     if (!compact) footer.push('');
     if (height < 14) footer.length = 0;
     const bodyHeight = Math.max(1, height - header.length - footer.length);
@@ -1627,7 +1676,7 @@ export class TerminalChat {
       lines.push(color(clip('  ← Back  Pair iPhone', width), palette.accent, true), '');
       for (const line of wrap('Open the QR image to scan with your iPhone, or use the code.', width - 4)) lines.push(color('  ' + line, palette.muted));
       const actionRow = lines.length + 1;
-      lines.push(color(clip('  [ Open QR image ]   [ Copy code ]', width), palette.accent, true), '');
+      lines.push(buttonText(clip('  [ Open QR image ]   [ Copy code ]', width), this.theme), '');
       for (const line of wrap(settings.invitationCode() || '', width - 4)) lines.push(color('  ' + line, palette.text, true));
       if (notice) for (const line of wrap(settings.message, width - 4, 2)) lines.push(color('  ' + line, settings.warning ? palette.warning : palette.accent));
       lines.push(color(clip('  Scan the QR, or copy the expiring code.', width), palette.muted));
@@ -1637,7 +1686,7 @@ export class TerminalChat {
     let frame = '\x1b[?25l';
     for (let row = 0; row < height; row++) frame += `\x1b[${row + 1};1H${this.theme.background(palette.background)}${this.theme.foreground(palette.text)}\x1b[2K${lines[row] || ''}\x1b[0m`;
     this.textRegion = null; this.scrollbar = null; this.privateFrame = true;
-    this.lastFrame = []; this.lastBackgrounds = []; this.writeFrame(frame);
+    this.lastFrame = []; this.lastBackgrounds = []; this.writeFrame(frame, { exact: true });
   }
   renderPrivateView(width, height) {
     const view = this.ui.privateView, { color } = this.theme;
@@ -1652,7 +1701,7 @@ export class TerminalChat {
         if (column + size > width && column > 3) { buttonRows.push(line); line = '  '; column = 3; }
         const disabled = !view.actionMode || !this.resolveInput || action.disabled;
         const focused = view.actionFocus === index || !view.actionFocus && index === 0;
-        line += fillSurface(clip(label, size), size, this.theme, focused && !disabled ? palette.selection : palette.surface, disabled ? palette.muted : palette.accent, !disabled) + '  ';
+        line += fillSurface(clip(label, size), size, this.theme, focused && !disabled ? palette.selection : palette.elevated, disabled ? palette.muted : palette.accent, !disabled) + '  ';
         hits.push({ type: 'private-action', action: action.value, disabled, row: lines.length + buttonRows.length + 1, left: column, right: column + size - 1 });
         column += size + 2;
       }
@@ -1669,7 +1718,8 @@ export class TerminalChat {
         const bytes = value => value < 1024 ? value + ' B' : (value / 1024).toFixed(1) + ' KiB';
         const counts = Math.floor(fraction * 100) + '% · ' + bytes(received) + ' / ' + bytes(total);
         const cells = Math.max(4, Math.min(24, width - cellWidth(counts) - 5)), filled = Math.floor(cells * fraction);
-        lines.push(color(clip('  [' + '='.repeat(filled) + '-'.repeat(cells - filled) + '] ' + counts, width), palette.accent));
+        lines.push(cellWidth(counts) + cells + 4 <= width ? '  ' + color('▬'.repeat(filled), palette.accent) + color('─'.repeat(cells - filled), palette.border) + color('  ' + counts, palette.text)
+          : color(clip('  [' + '='.repeat(filled) + '-'.repeat(cells - filled) + '] ' + counts, width), palette.accent));
       }
     }
     const qr = view.qr || [], qrWidth = Math.max(0, ...qr.map(line => cellWidth(line))) + 8;
@@ -1682,7 +1732,7 @@ export class TerminalChat {
     if (view.notice && lines.length < height - 4) lines.push(...wrap(clean(view.notice), Math.max(1, width - 4), Math.max(1, height - lines.length - 4)).map(line => color('  ' + line, view.noticeTone === 'success' ? palette.goalSuccess : palette.warning)));
     while (lines.length < height - 3) lines.push('');
     const cancelRow = lines.length + 1, cancelLeft = width - 10;
-    lines.push(replaceCells(color(clip('  ' + clean(this.resolveInput ? this.question : 'Waiting for encrypted transfer'), width - 12), palette.muted), cancelLeft, color(' ← Back ', palette.accent, true), width, this.theme, palette.background));
+    lines.push(replaceCells(color(clip('  ' + clean(this.resolveInput ? this.question : 'Waiting for encrypted transfer'), width - 12), palette.muted), cancelLeft, fillSurface(' ← Back ', 8, this.theme, palette.elevated, palette.accent, true), width, this.theme, palette.background));
     const value = this.hidden ? '•'.repeat([...this.value].length) : clean(this.value);
     lines.push(view.actionMode || !this.resolveInput ? '' : color(clip('  › ' + value, width), palette.text), '');
     let frame = '\x1b[?25l';
@@ -1690,7 +1740,7 @@ export class TerminalChat {
     // Private codes/QRs never enter chat entries, copy regions or frame caches.
     this.hitTargets = [...hits.filter(hit => hit.row < cancelRow && hit.row <= height - 3), { type: 'private-cancel', row: cancelRow, left: cancelLeft + 1, right: cancelLeft + 8 }]; this.textRegion = null; this.scrollbar = null; this.privateFrame = true; this.lastFrame = []; this.lastBackgrounds = [];
     if (this.resolveInput && !view.actionMode) frame += `\x1b[${height - 1};${Math.min(width, 5 + cellWidth(value))}H\x1b[?25h`;
-    this.writeFrame(frame);
+    this.writeFrame(frame, { exact: true });
   }
   renderWorkspaceScene(options) {
     const width = Math.max(16, (this.output.columns || 80) - 1), height = Math.max(8, this.output.rows || 24);
@@ -1910,15 +1960,15 @@ export class TerminalChat {
     preview.phase = command.phase;
     const controls = ' [← Chat] ', copy = ' [Copy] ', actor = this.actors.for(command.actorSessionId, this.ui.sessionId).label;
     const text = clip(actor + ' · ' + command.phase + (Number.isInteger(command.exitCode) ? ' · exit ' + command.exitCode : '') + (command.redacted ? ' · redacted' : ''), Math.max(0, width - cellWidth(controls + copy)));
-    const row = this.theme.color(controls, palette.accent) + this.theme.color(text, palette.tool);
-    header.push(row + ' '.repeat(Math.max(0, width - cellWidth(row + copy))) + this.theme.color(copy, palette.accent));
+    const row = buttonText(controls, this.theme) + this.theme.color(text, palette.tool);
+    header.push(row + ' '.repeat(Math.max(0, width - cellWidth(row + copy))) + buttonText(copy, this.theme));
     this.hitTargets.push({ type: 'monitor-close', row: header.length, left: 1, right: cellWidth(controls) }, { type: 'monitor-command-copy', row: header.length, left: width - cellWidth(copy) + 1, right: width });
     header.push(sectionHeading('COMMAND', width, this.theme, palette.tool));
     const available = Math.max(0, height - header.length - 1), layout = this.monitor.sourceRows(width - 1, this, preview, { wrapLines: true });
     this.monitor.maxima.command = Math.max(0, layout.lines.length - available);
     this.monitor.offsets.command = Math.min(this.monitor.maxima.command, this.monitor.offsets.command);
     const start = this.monitor.offsets.command, body = layout.lines.slice(start, start + available); while (body.length < available) body.push('');
-    const footer = this.theme.color(' [↑ Start] [↓ End] · scroll ↕', palette.accent);
+    const footer = buttonText(' [↑ Start] [↓ End] · scroll ⇕', this.theme);
     this.hitTargets.push({ type: 'monitor-command-start', row: height, left: 1, right: 10 }, { type: 'monitor-command-end', row: height, left: 11, right: 18 });
     this.textRegion = { left: 1, right: width, top: header.length + 1, bottom: height - 1 };
     this.sceneHeaderLength = header.length; this.scrollbar = null; this.composerRow = 0;
@@ -1935,8 +1985,8 @@ export class TerminalChat {
     const row = current || detail.row; detail.row = row;
     const actor = this.actors.for(row.actorSessionId || row.sessionId, this.ui.sessionId).label;
     const back = ' [← Back] ', close = ' [Close] ', summary = clip('HTTP · ' + actor, Math.max(0, width - cellWidth(back + close)));
-    const line = this.theme.color(back, palette.accent) + this.theme.color(summary, palette.muted);
-    header.push(line + ' '.repeat(Math.max(0, width - cellWidth(line + close))) + this.theme.color(close, palette.accent));
+    const line = buttonText(back, this.theme) + this.theme.color(summary, palette.muted);
+    header.push(line + ' '.repeat(Math.max(0, width - cellWidth(line + close))) + buttonText(close, this.theme));
     this.hitTargets.push({ type: 'monitor-back', kind: 'http', row: header.length, left: 1, right: cellWidth(back) },
       { type: 'monitor-close', row: header.length, left: width - cellWidth(close) + 1, right: width });
     this.sceneHeaderLength = header.length;
@@ -1954,16 +2004,17 @@ export class TerminalChat {
     if (this.monitor.expanded === 'code' && this.monitor.detail?.kind === 'command') { this.renderCommandInspector(width, height, header); return; }
     const { color } = this.theme, kind = this.monitor.expanded || 'agents';
     const label = ` ${kind === 'http' ? 'HTTP PROBE' : kind.toUpperCase()}  [ ${kind === 'code' ? 'Commands ▾' : kind === 'http' ? 'Filter ▾' : 'Newest first'} ]`;
-    const row = header.length + 1;
-    header.push(color(clip(label, width - 12), palette.accent, true) + color('  [ Close ]', palette.accent));
+    const row = header.length + 1, title = label.slice(0, label.indexOf('  ['));
+    header.push(cellWidth(label) <= width - 12 ? color(title, palette.accent, true) + buttonText(label.slice(title.length) + '  [ Close ]', this.theme)
+      : color(clip(label, width - 12), palette.accent, true) + buttonText('  [ Close ]', this.theme));
     this.hitTargets.push({ type: 'monitor-menu', kind, row, left: 2, right: Math.min(width - 13, cellWidth(label)) }, { type: 'monitor-close', row, left: Math.min(width - 11, cellWidth(label) + 1), right: Math.min(width, cellWidth(label) + 12) });
     if (this.monitor.detail) {
       this.hitTargets.push({ type: 'monitor-back', kind, row: header.length + 1, left: 2, right: width });
-      header.push(color(' [ ← Back to feed ]', palette.accent));
+      header.push(buttonText(' [ ← Back to feed ]', this.theme));
     }
     if (kind === 'agents' && this.busy) {
       const controlsRow = header.length + 1;
-      header.push(color(' [ Pause session ]  [ Cancel session ]', palette.warning));
+      header.push(buttonText(' [ Pause session ]  [ Cancel session ]', this.theme, { tone: palette.warning }));
       this.hitTargets.push({ type: 'model-control', command: '/pause', row: controlsRow, left: 2, right: 18 }, { type: 'model-control', command: '/cancel', row: controlsRow, left: 21, right: Math.min(width, 39) });
     }
     const file = this.monitor.files.get(this.monitor.activeFile);
@@ -1973,7 +2024,7 @@ export class TerminalChat {
     const maximum = Math.max(0, layout.lines.length - available); this.monitor.maxima[scrollKind] = maximum; this.monitor.offsets[scrollKind] = Math.min(maximum, this.monitor.offsets[scrollKind]);
     const start = ['agents', 'code'].includes(scrollKind) ? this.monitor.offsets[scrollKind] : Math.max(0, layout.lines.length - available - this.monitor.offsets[scrollKind]);
     const body = layout.lines.slice(start, start + available); while (body.length < available) body.push('');
-    const footer = color(` [ ↓ Latest ]  ${scrollKind === 'source' ? '[ Follow '+ (this.monitor.followCode ? 'ON' : 'OFF') + ' ]' : ['agents', 'code'].includes(scrollKind) ? 'Newest first' : this.monitor.offsets[kind] ? 'Follow paused' : 'Following'} · scroll ↕`, palette.accent);
+    const footer = buttonText(` [ ↓ Latest ]  ${scrollKind === 'source' ? '[ Follow '+ (this.monitor.followCode ? 'ON' : 'OFF') + ' ]' : ['agents', 'code'].includes(scrollKind) ? 'Newest first' : this.monitor.offsets[kind] ? 'Follow paused' : 'Following'} · scroll ⇕`, this.theme);
     this.hitTargets.push({ type: 'monitor-latest', kind: scrollKind, row: height, left: 2, right: 14 });
     if (scrollKind === 'source') this.hitTargets.push({ type: 'monitor-follow', kind: scrollKind, row: height, left: 16, right: Math.min(width, 31) });
     this.hitTargets.push(...layout.hits.filter(hit => hit.row >= start && hit.row < start + available).map(hit => ({ ...hit, row: header.length + hit.row - start + 1 })));
@@ -2048,9 +2099,9 @@ export class TerminalChat {
     const { color } = this.theme, target = loading.session;
     const geometry = workspaceGeometry(width, height, { ...this.workspaceOptions, minimal: this.ui.minimal });
     const center = geometry.center;
-    this.lastFrame = [color(clip(' ┌─ Loading saved chat…', center), palette.accent, true),
-      color(clip(' ' + (target?.alias || target?.id || 'Saved session'), center), palette.text), '',
-      color(clip(` ${spinner[this.frame % spinner.length]} ${loading.count.toLocaleString()} history items loaded · ${elapsed}s`, center), palette.muted)];
+    this.lastFrame = ['', color(clip('  ⬡ Loading saved chat…', center), palette.accent, true),
+      color(clip('    ' + (target?.alias || target?.id || 'Saved session'), center), palette.text, true), '',
+      color(clip(`    ${spinner[this.frame % spinner.length]} `, center), palette.accent) + color(clip(`${loading.count.toLocaleString()} history items loaded · ${elapsed}s`, Math.max(0, center - 6)), palette.muted)];
     const chrome = workspaceChrome(this, geometry), lines = chrome.lines;
     this.hitTargets = []; this.textRegion = null; this.scrollbar = null;
     let frame = '\x1b[?25l';
@@ -2067,23 +2118,24 @@ export class TerminalChat {
       header.push(c('│ ' + clip(label, Math.max(1, left - 3)), palette.accent) + ' '.repeat(Math.max(1, left - 2 - cellWidth(clip(label, Math.max(1, left - 3))))) + c(controls, palette.accent));
       this.hitTargets.push({ type: 'alias-save', row: 1, left, right: left + 6 }, { type: 'alias-cancel', row: 1, left: left + 7, right: width });
     } else {
-      const label = (this.alias || 'New chat') + '  #' + (this.ui.sessionId || '').slice(0, 6);
-      const detail = width >= 42 ? this.activeAgentCount() + ' agents ' : '';
-      const available = Math.max(1, width - cellWidth(detail) - 8), name = clip(label, available);
-      const line = c('┌', palette.border) + c('≡ ', palette.accent, true) + c('● ', palette.main) + c(name, palette.accent, true)
-        + ' '.repeat(Math.max(1, width - cellWidth(name) - cellWidth(detail) - 6)) + c(detail, palette.muted) + c('┐', palette.border);
+      const alias = this.alias || 'New chat', id = '  #' + (this.ui.sessionId || '').slice(0, 6);
+      const detail = width >= 42 ? ' ' + this.activeAgentCount() + ' agents ' : ' ';
+      const available = Math.max(1, width - cellWidth(detail) - 8), name = clip(alias + id, available);
+      const shown = name.startsWith(alias) ? [alias, name.slice(alias.length)] : [name, ''];
+      const line = ' ' + c('≡', palette.accent, true) + ' ' + c('●', this.busy ? palette.success : palette.main, true) + ' ' + c(shown[0], palette.text, true) + c(shown[1], palette.muted)
+        + c(' ' + '─'.repeat(Math.max(0, width - cellWidth(name) - cellWidth(detail) - 6)), palette.border) + c(detail, palette.muted);
       header.push(line);
       this.hitTargets.push({ type: 'alias', row: 1, left: 4, right: Math.min(width - 2, cellWidth(name) + 5) },
         { type: 'workspace-toggle', side: 'left', row: 1, left: 2, right: 3 });
     }
-    if (this.pinned && !this.ui.minimal && !['settings', 'metrics'].includes(this.panel) && (this.output.rows || 24) >= 18) header.push(c(clip(' ❯ ' + this.pinned, width), palette.user));
+    if (this.pinned && !this.ui.minimal && !['settings', 'metrics'].includes(this.panel) && (this.output.rows || 24) >= 18) header.push(c(' ❯ ', palette.accent, true) + c(clip(this.pinned, Math.max(1, width - 3)), palette.user));
     if (this.ui.tabs?.length > 1 && !this.promptDraft) {
       let line = '';
       for (const tab of this.ui.tabs) {
-        const text = ' [' + agentLabel(tab.agent) + '] ';
+        const text = ' [' + agentLabel(tab.agent) + '] ', active = tab.id === this.ui.activeTab;
         if (cellWidth(line) + cellWidth(text) > width) break;
         this.hitTargets.push({ type: 'tab', id: tab.id, row: header.length + 1, left: cellWidth(line) + 1, right: cellWidth(line + text) });
-        line += c(text, tab.id === this.ui.activeTab ? palette.accent : palette.muted, true);
+        line += fillSurface(text, cellWidth(text), this.theme, active ? palette.selection : palette.background, active ? palette.accent : palette.muted, true);
       }
       if (line) header.push(line);
     }
@@ -2125,7 +2177,9 @@ export class TerminalChat {
     const inspecting = this.panel === 'monitor' && ['http', 'command', 'source'].includes(this.monitor.detail?.kind);
     if (this.panel !== 'chat' && this.panel !== 'settings' && !this.promptDraft && !inspecting) {
       this.hitTargets.push({ type: 'back', row: header.length + 1, left: 3, right: 9 });
-      header.push(color('  ← Back', palette.accent, true) + color(clip('  ' + this.panel[0].toUpperCase() + this.panel.slice(1), Math.max(0, width - 8)), palette.muted));
+      const title = clip(this.panel[0].toUpperCase() + this.panel.slice(1), Math.max(1, width - 16));
+      header.push(' ' + fillSurface(' ← Back ', 8, this.theme, palette.elevated, palette.accent, true) + '  ' + color('⬡ ', palette.accent)
+        + color(title, palette.text, true) + color(' ' + '─'.repeat(Math.max(0, width - 14 - cellWidth(title))), palette.border));
     }
     if (this.panel === 'activity' && this.ui.accountStatusEnabled) {
       for (const line of wrapProse(accountStatusLabels(this.ui.accountStatus).map(item => `${item.label}: ${item.value}`).join('  ·  '), width - 4)) header.push(color('  ' + line, palette.muted));
@@ -2157,12 +2211,14 @@ export class TerminalChat {
     const contentKey = `${['skills', 'agents', 'workflows', 'goals'].includes(this.panel) ? Date.now() : this.panel === 'metrics' ? this.ui.sessionMetrics?.revision : ''}:${contentWidth}:${this.panel}:${this.showTools}:${this.contentRevision || 0}:${roomLabels}`;
     let body;
     if (!this.selection && this.panel !== 'settings' && this.bodyCache?.key === contentKey) {
-      body = this.bodyCache.lines; this.contentHits = this.bodyCache.hits;
-    } else { body = this.content(contentWidth); if (!this.selection) this.bodyCache = { key: contentKey, lines: body, hits: this.contentHits }; }
+      body = this.bodyCache.lines; this.contentHits = this.bodyCache.hits; this.contentSpinners = this.bodyCache.spinners;
+    } else { body = this.content(contentWidth); if (!this.selection) this.bodyCache = { key: contentKey, lines: body, hits: this.contentHits, spinners: this.contentSpinners }; }
+    // Cached rows keep the loader placeholder; only visible loader cells advance per frame.
+    let loaders = new Set(this.contentSpinners);
     const opening = this.panel === 'chat' && !this.selection && !this.entries.some(entry => !entry.welcome && entry.kind !== 'tool');
     if (!body.length || opening) {
-      const welcome = this.mode === 'delegate' ? ['', accent('  What should the team work on?'), color('  Chat normally, or use /goal to start supervised delegated work.', palette.text), muted('  The brain plans; hands execute; evidence is reviewed.'), muted('  Type / for commands.')]
-        : ['', accent('  What should BZZY work on?'), color('  Ask a question, build something, or investigate a task.', palette.text), muted('  /goal <objective>   Persist until the outcome is verified'), muted('  Type / for commands, models and sessions.')];
+      loaders = new Set();
+      const welcome = this.welcomeLines(contentWidth, bodyHeight);
       const mode = this.entries.findLast(entry => /^(Parallel|Debate|Validate) mode/.test(entry.text));
       if (mode) welcome.push('', ...wrap(mode.text.replace(/^Debate mode/, 'Validate mode'), width - 5).map(line => muted('  ' + line)));
       body = this.panel === 'metrics' ? [] : this.panel === 'chat' ? welcome : this.panel === 'room' ? [accent('  Shared room · waiting for peer messages'), ...wrap('The two besties exchange findings, evidence and reviews here. Their separate chats stay available above. Use /goal <objective> to begin collaboration.', width - 5).map(line => muted('  ' + line))]
@@ -2220,10 +2276,12 @@ export class TerminalChat {
     const maximum = Math.max(0, body.length - bodyHeight), thumbHeight = Math.min(bodyHeight, Math.max(1, Math.round(bodyHeight * bodyHeight / Math.max(1, body.length))));
     const thumbOffset = maximum ? Math.round((1 - this.scroll / maximum) * (bodyHeight - thumbHeight)) : 0;
     this.scrollbar = !this.selection && bodyHeight ? { column: width, top: header.length + 1, height: bodyHeight, maximum, thumbHeight, thumbTop: header.length + 1 + thumbOffset } : null;
+    const track = this.workspaceActive && this.workspace?.right ? ' ' : edge('│');
     for (let index = 0; index < visibleBody.length; index++) {
       let line = visibleBody[index];
+      if (this.busy && loaders.has(start + index)) line = line.replace(loaderFrames[0], loader(this.frame));
       if (cellWidth(line) > contentWidth) line = color(clip(line, contentWidth), palette.text);
-      visibleBody[index] = line + ' '.repeat(Math.max(0, width - 1 - cellWidth(line))) + (this.selection || !maximum ? ' ' : index >= thumbOffset && index < thumbOffset + thumbHeight ? color('┃', palette.accent) : edge('│'));
+      visibleBody[index] = line + ' '.repeat(Math.max(0, width - 1 - cellWidth(line))) + (this.selection || !maximum ? ' ' : index >= thumbOffset && index < thumbOffset + thumbHeight ? color('┃', palette.accent, true) : track);
     }
     for (const hit of this.contentHits) if (hit.row >= start && hit.row < end) this.hitTargets.push({ ...hit, row: header.length + hit.row - start + 1 });
     for (const hit of bottomHits) this.hitTargets.push({ ...hit, row: header.length + bodyHeight + hit.row + 1 });

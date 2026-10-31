@@ -20,7 +20,7 @@ import { ClientSettings } from './client-settings.js';
 import { Pet } from './mascot.js';
 import { MESSAGE_FORMAT_LIMITS, parseMessageBody } from '@bzzy/core/message-format';
 import { renderMessageContent } from './message-renderer.js';
-import { createTerminalTheme, palettes } from './terminal-theme.js';
+import { createTerminalTheme, palettes, paletteChoice } from './terminal-theme.js';
 import { HostMetricsMonitor } from './host-metrics.js';
 import { ConnectionStatusMonitor } from './connection-status.js';
 import { shareSavedSession, deleteSavedSession, renameSavedSession } from './session-browser.js';
@@ -39,7 +39,7 @@ export class UI {
     this.pet = pet;
     this.minimal = minimal;
     this.launchCwd = cwd;
-    this.colorPalette = updateHandoff?.colorPalette || 'blue';
+    this.colorPalette = updateHandoff?.colorPalette || 'hive';
     this.input = input;
     this.output = output;
     this.error = error;
@@ -201,7 +201,7 @@ export class UI {
     if (await createDefinitionCommand(input, this)) return true;
     if (/^\/color(?:\s|$)/.test(input.trim())) {
       const name = input.trim().slice(6).trim().toLowerCase();
-      if (!Object.hasOwn(palettes, name)) this.event('error', { message: 'Choose /color blue, /color black or /color white.' });
+      if (!Object.hasOwn(palettes, name)) this.event('error', { message: paletteChoice });
       else {
         this.colorPalette = name;
         this.messageTheme = createTerminalTheme(this.output, process.env, name);
@@ -447,7 +447,7 @@ export class UI {
       const entry = this.tui.add('approval', clean(label), { questionId: 'local-approval', expanded: true });
       const selected = await this.chooseOne('Permission requested', { description: clean(label), choices: [
         { value: 'deny', label: '✕ Deny', selected: true, tone: 'danger' },
-        { value: 'approve', label: '✔ Approve once', tone: 'goalSuccess' },
+        { value: 'approve', label: '✓ Approve once', tone: 'goalSuccess' },
       ] }, { kind: 'approval', presentation: 'dropdown' });
       entry.decision = selected === 'approve' ? 'approved' : 'denied'; this.tui.entryLayouts.delete(entry); this.tui.contentRevision++; this.tui.schedule();
       return selected === 'approve';

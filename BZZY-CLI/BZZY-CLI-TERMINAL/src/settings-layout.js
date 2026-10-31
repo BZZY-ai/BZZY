@@ -74,7 +74,7 @@ export function settingsLayout(settings, width, theme, { spaced = true } = {}) {
         const suffix = cell.action && !/[▾▼]$/.test(caption) ? ' ▾' : '';
         addHit(cell, tableWide ? left : 3, tableWide ? left + span - 1 : size + 2, actionIndex);
         if (cell.action) actionIndex++;
-        const rendered = fillSurface(clip(' ' + caption + suffix, span), span, theme, focused ? palette.selection : palette.surface,
+        const rendered = fillSurface(clip(' ' + caption + suffix, span), span, theme, focused ? palette.selection : palette.elevated,
           settings.busy || !cell.action ? palette.muted : focused ? palette.accent : palette[cell.tone] || palette.text, Boolean(focused));
         if (tableWide) { line += rendered; left += span; }
         else lines.push(margin + rendered);
@@ -103,11 +103,12 @@ export function settingsLayout(settings, width, theme, { spaced = true } = {}) {
     }
     const focused = row.action && actionIndex === settings.focus;
     if (row.card) {
-      const background = focused ? palette.selection : palette.surface;
-      const title = clip(`${focused ? '›' : ' '} ${row.icon || '◇'}  ${row.text}  ▸`, size);
+      const background = focused ? palette.selection : palette.elevated, bg = theme.background(background);
+      const icon = row.icon || '◇', name = clip(row.text, Math.max(1, size - 10)), pad = Math.max(0, size - cellWidth(name) - 8);
       const detail = row.value ? row.detail + ' · ' + row.value : row.detail || '';
       addHit(row, 3, size + 2, actionIndex);
-      lines.push(margin + fillSurface(title, size, theme, background, focused ? palette.accent : palette.text, true));
+      lines.push(margin + bg + theme.color(focused ? '▌❯ ' : '   ', palette.accent, true) + theme.color(icon, palette.accent, true) + ' '.repeat(Math.max(1, 3 - cellWidth(icon)))
+        + theme.color(name, focused ? palette.accent : palette.text, true) + ' '.repeat(pad) + theme.color('▸ ', focused ? palette.accent : palette.muted, true) + theme.background(palette.background));
       for (const part of detail ? wrap(detail, size - 3) : []) {
         addHit(row, 3, size + 2, actionIndex);
         lines.push(margin + theme.color('   ' + part, palette.muted));
@@ -120,13 +121,14 @@ export function settingsLayout(settings, width, theme, { spaced = true } = {}) {
       if (row.action === 'back') label = '← Back';
       addHit(row, 3, size + 2, actionIndex);
       if (row.action) actionIndex++;
-      lines.push(margin + fillSurface(clip(' ' + (focused && !primary ? '› ' : '') + label, size), size, theme,
-        primary ? palette.accent : focused ? palette.selection : palette.surface,
+      lines.push(margin + fillSurface(clip(' ' + (focused && !primary ? '❯ ' : '') + label, size), size, theme,
+        primary ? palette.accent : focused ? palette.selection : palette.elevated,
         primary ? palette.background : settings.busy ? palette.muted : focused ? palette.accent : palette.text, primary || focused));
       if (row.detail) for (const line of wrap(row.detail, size - 2)) lines.push(margin + theme.color(' ' + line, palette.muted));
       addGap();
     } else if (row.section) {
-      addGap(); lines.push(margin + theme.color(clip(row.text.toUpperCase(), size), palette.muted, true));
+      const title = clip(row.text.toUpperCase(), Math.max(1, size - 4));
+      addGap(); lines.push(margin + theme.color('⬡ ', palette.accent) + theme.color(title, palette.accent, true) + theme.color(' ' + '─'.repeat(Math.max(0, size - cellWidth(title) - 3)), palette.border));
     } else if (row.text) {
       for (const line of wrap(row.text, size)) lines.push(margin + theme.color(line, palette[row.tone] || palette.muted));
       addGap();

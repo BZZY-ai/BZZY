@@ -1,5 +1,6 @@
 import { clean, clip, cellWidth, wrap } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
+import { loader } from './goal-indicator.js';
 import { diagnosticRedactor } from '@bzzy/core/engine/diagnostic-redaction.js';
 import { redactedUrl, redactedHeaders } from '@bzzy/core/engine/traffic.js';
 
@@ -143,7 +144,7 @@ export class ActivityMonitor {
     } else {
       for (const row of [...this.commands.values()].reverse()) {
         const actor = tui.actors.for(row.actorSessionId || tui.ui.sessionId, tui.ui.sessionId), stamp = time(row.at);
-        const done = row.phase === 'completed', failed = row.phase === 'failed', mark = failed ? '✕' : done ? '✓' : row.phase === 'started' ? '●' : '·';
+        const done = row.phase === 'completed', failed = row.phase === 'failed', mark = failed ? '✕' : done ? '✓' : row.phase === 'started' ? tui.busy ? loader(tui.frame) : '●' : '·';
         const name = width >= 36 ? clip(actor.name, 9).padEnd(10) : '';
         const prefix = stamp + ' ' + mark + ' ' + name;
         hits.push({ type: 'monitor-command', key: row.key, row: lines.length, left: 1, right: width });

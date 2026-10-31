@@ -1,6 +1,7 @@
 import { createToolActivityProjector } from '@bzzy/core/engine/tool-activity.js';
 import { clean, clip, wrap, cellWidth } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
+import { loaderFrames } from './goal-indicator.js';
 
 const pageSize = 25, maximumRows = 2000;
 const safe = value => clip(clean(typeof value === 'string' ? value : '').replace(/\s+/gu, ' ').trim(), 1000);
@@ -69,7 +70,7 @@ export class ToolTreeProjection {
 }
 
 export function toolTreeLayout(group, width, theme, { nested = false } = {}) {
-  const lines = [], hits = [], indent = nested ? '    ' : '  ';
+  const lines = [], hits = [], spinners = [], indent = nested ? '    ' : '  ';
   const put = (value, tone = palette.muted, bold = false) => lines.push(theme.color(clip(value, width), tone, bold));
   const total = group.calls.length + group.dropped;
   put(`${indent}${group.expanded ? '▾' : '▸'} ${nested ? '' : group.agent + ' · '}Tool calls (${total})`, palette.tool, true);
@@ -78,7 +79,7 @@ export function toolTreeLayout(group, width, theme, { nested = false } = {}) {
     const first = Math.min(group.page * pageSize, Math.max(0, group.calls.length - 1)), rows = group.calls.slice(first, first + pageSize);
     if (group.dropped) put(`${indent}  ${group.dropped} older calls retained in saved events`);
     for (const [index, call] of rows.entries()) {
-      const glyph = call.phase === 'started' ? '●' : call.phase === 'completed' ? '✓' : call.phase === 'failed' ? '✕' : '○';
+      const glyph = call.phase === 'started' ? loaderFrames[0] : call.phase === 'completed' ? '✓' : call.phase === 'failed' ? '✕' : '○';
       const tone = call.phase === 'failed' ? palette.danger : call.phase === 'started' ? palette.tool : call.phase === 'completed' ? palette.success : palette.muted;
       const label = safe(call.label || 'Tool'), detail = safe(call.detail);
       const status = call.phase === 'completed' ? 'returned' : call.phase === 'failed' ? 'failed' : call.phase === 'stopped' ? 'stopped · result unknown' : 'running';
@@ -86,6 +87,7 @@ export function toolTreeLayout(group, width, theme, { nested = false } = {}) {
       const prefix = `${indent}${index === rows.length - 1 ? '└' : '├'}─ ${glyph} `;
       const title = `${label}${detail ? `("${detail}")` : ''}`;
       const row = lines.length;
+      if (call.phase === 'started') spinners.push(row);
       put(prefix + clip(title, Math.max(1, width - cellWidth(prefix + suffix))) + suffix, tone);
       hits.push({ type: 'tool-row-toggle', group, call, row, left: cellWidth(indent), right: width - 1 });
       if (call.expanded) {
@@ -101,7 +103,7 @@ export function toolTreeLayout(group, width, theme, { nested = false } = {}) {
       hits.push({ type: 'tool-tree-page', group, delta: 1, row, left: middle + 1, right: width - 1 });
     }
   }
-  lines.push(''); return { lines, hits };
+  lines.push(''); return { lines, hits, spinners };
 }
 
 export function changeToolTree(hit) {

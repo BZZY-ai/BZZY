@@ -1,6 +1,7 @@
 import { clean, clip, cellWidth, wrap } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
 import { actorColor } from './activity-monitor.js';
+import { loaderFrames } from './goal-indicator.js';
 
 const labels = { loaded: 'Loaded', starting: 'Starting', running: 'Running', awaiting_review: 'Awaiting review',
   needs_context: 'Needs context', awaiting_followup: 'Ready for follow-up', paused: 'Paused', interrupted: 'Interrupted',
@@ -152,7 +153,8 @@ export function invocationEntryLayout(entry, width, theme) {
   width = Math.max(1, Math.floor(width));
   const agent = entry.invocationType === 'agent', state = status(entry);
   const tone = agent ? actorColor({ role: 'subagent', name: entry.name }) : palette.agent;
-  const icon = agent ? activeStates.has(entry.state) ? '●' : entry.state === 'failed' || entry.state === 'rejected' ? '✕' : '◇' : '◆';
+  const running = agent && activeStates.has(entry.state);
+  const icon = agent ? running ? loaderFrames[0] : entry.state === 'failed' || entry.state === 'rejected' ? '✕' : '◇' : '◆';
   const prefix = `  ${icon} ${agent ? 'Agent' : 'Skill'} · `;
   const details = state + (agent && entry.round > 1 ? ` · round ${entry.round}` : '');
   let suffix = ` · ${details}`;
@@ -183,5 +185,5 @@ export function invocationEntryLayout(entry, width, theme) {
   }
   if (agent && entry.stopReason) detail(stopLabels[entry.stopReason]);
   if (agent && entry.parentState) detail(`Main state · ${entry.parentState.replace(/_/g, ' ')}`);
-  lines.push(''); return { lines };
+  lines.push(''); return { lines, spinners: running ? [0] : [] };
 }

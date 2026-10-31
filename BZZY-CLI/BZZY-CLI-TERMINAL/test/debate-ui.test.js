@@ -71,7 +71,7 @@ test('participant slots retain distinct colors across same-provider models, phas
   const block = entries[0]; assert.equal(entries.length, 1); assert.equal(block.participants.length, 3); assert.equal(block.messages.length, 7);
   assert.equal(new Set(block.participants.map(participant => debateParticipantTone(participant.index))).size, 3);
   block.expanded = true;
-  for (const name of ['blue', 'black', 'white']) for (const force of ['3', '1', '0']) {
+  for (const name of ['hive', 'blue', 'black', 'white']) for (const force of ['3', '1', '0']) {
     const theme = createTerminalTheme({ isTTY: true }, { FORCE_COLOR: force }, name), rows = debateEntryLayout(block, 119, theme).lines;
     for (const index of [0, 1, 2]) {
       const row = rows.find(line => clean(line).includes(`Agent ${index + 1} · same-provider · same-model`)); assert.ok(row);

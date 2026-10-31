@@ -1,6 +1,6 @@
 # Terminal workspace
 
-The existing terminal renderer provides a shared black/neon frame for Chat,
+The existing terminal renderer provides a shared hive frame for Chat,
 reusable specialist Agents, Skills, Workflows, Goals, Metrics, Settings, native
 extensions and their detail/import/export screens. Persistent iPhone Agents
 remain owned by Core and managed on iPhone.
@@ -33,10 +33,10 @@ session list's scroll. Compact/minimal terminals retain model controls and
   changing panels. Chat history and unsent input keep their existing lifecycle.
 - Drag the vertical column separators. Drag the last two cells of a live-section
   footer to resize adjacent section heights. Click a section title to collapse
-  it or **↗** to inspect it in the center, then **Close** to return to chat.
+  it or **⇗** to inspect it in the center, then **Close** to return to chat.
 - The composer has no permanent shortcut toolbar beneath its input. Goal state
-  and the selected Workflow remain there as colored text on the normal black
-  surface. Enabled **YOLO** appears at the right of goal status; the actions
+  and the selected Workflow remain there as colored text on the normal page
+  background. Enabled **YOLO** appears at the right of goal status; the actions
   menu can enable it when off. Paste, models, tools and pause/cancel remain in visible menus.
 - Each activity section and the saved-session list scroll independently under
   the mouse. Chat stops following when scrolled up; **↓ Latest** in the composer
@@ -179,6 +179,8 @@ colors. A preview shows the file observed at that event, not verified acceptance
 of an edit or permission to execute it.
 
 The shared renderer composites existing views into the center, translates mouse
-hit regions, and paints changed rows with backpressure handling. Side panels
+hit regions, and paints changed rows with backpressure handling. Written rows
+omit color codes that cannot change a painted cell; private QR/code screens are
+written exactly as generated. Side panels
 consume existing state; they do not dispatch model work, change permissions,
 start polling stopped Core back on, or change Relay/iPhone protocols.

@@ -137,7 +137,7 @@ test('agent/skill rows remain newest first and source deltas replay only actual 
     assert.equal(tui.entries.some(entry => /^source\./.test(entry.kind)), false);
   } finally { ui.close(); }
 });
-test('header has no duplicate stats and the composer ends with only goal/workflow state on a black background', () => {
+test('header has no duplicate stats and the composer ends with only goal/workflow state on the page background', () => {
   const { ui, tui, output, session } = terminal();
   try {
     saveWorkflow({ name: 'source-review', instructions: 'Review only supplied source and retain its original evidence.' }, { cwd: directory });
@@ -152,13 +152,13 @@ test('header has no duplicate stats and the composer ends with only goal/workflo
       assert.doesNotMatch(clean(tui.lastFrame[0]), /Nav|Sessions|Live|Actions/);
       assert.match(clean(tui.lastFrame[0]), /dir.*\.bzzy/);
       const center = tui.lastFrame.map(line => sliceCells(line, tui.workspace.x, tui.workspace.x + tui.workspace.center));
-      const afterInput = center.slice(tui.composerRow + 1);
+      const afterInput = center.slice(tui.composerRow + 1), page = tui.theme.palette.background.slice(1).match(/../g).map(value => parseInt(value, 16)).join(';');
       assert.match(afterInput.map(clean).join('\n'), /Goal achieved/); assert.match(afterInput.map(clean).join('\n'), /Workflow: source-review/);
       assert.doesNotMatch(afterInput.map(clean).join('\n'), /Paste|Model|Effort|Tools|Live|Pause|Actions/);
       for (const line of afterInput) {
         let background = null;
         for (const token of line.matchAll(/\x1b\[([0-9;]+)m|([^\x1b]+)/g)) {
-          if (token[2]) { assert.equal(background, '0;0;0', 'visible footer cells remain black'); continue; }
+          if (token[2]) { assert.equal(background, page, 'visible footer cells stay on the page background'); continue; }
           const parts = token[1].split(';').map(Number);
           for (let i = 0; i < parts.length; i++) {
             if (parts[i] === 0 || parts[i] === 49) background = null;

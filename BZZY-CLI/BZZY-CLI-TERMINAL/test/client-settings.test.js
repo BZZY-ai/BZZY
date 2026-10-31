@@ -1082,9 +1082,14 @@ test('Settings pairs through the real Core/Relay adapter, requires phone confirm
 
 test('the neon palette uses exact RGB where supported and readable terminal fallbacks', () => {
   const output = { isTTY: true };
-  const rgb = createTerminalTheme(output, { COLORTERM: 'truecolor' });
+  const rgb = createTerminalTheme(output, { COLORTERM: 'truecolor' }, 'blue');
   assert.equal(rgb.background(palette.background), '\x1b[48;2;0;0;0m');
   assert.equal(rgb.foreground(palette.accent), '\x1b[38;2;0;217;255m');
+  const hive = createTerminalTheme(output, { COLORTERM: 'truecolor' });
+  assert.equal(hive.name, 'hive');
+  assert.equal(hive.background(palette.background), '\x1b[48;2;10;13;18m');
+  assert.equal(hive.foreground(palette.accent), '\x1b[38;2;255;178;36m');
+  assert.equal(new Set(Object.values(palette)).size, Object.keys(palette).length, 'every token resolves to its own role');
   for (const env of [{ TERM: 'xterm-256color' }, { TERM: 'linux' }, { NO_COLOR: '1' }, { TERM: 'dumb' }]) {
     const theme = createTerminalTheme(output, env), line = theme.color('Text 世界', palette.text);
     assert.equal(clean(line), 'Text 世界'); assert.equal(cellWidth(line), 9);

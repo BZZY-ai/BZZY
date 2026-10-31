@@ -1,5 +1,17 @@
-// Shared semantic colors keep every terminal screen on the same neon theme.
+// Shared semantic colors keep every terminal screen on the same theme. The
+// default "hive" values double as the tokens call sites pass; each theme maps a
+// token to its own color by value, so every key keeps a distinct value here.
 export const palette = Object.freeze({
+  background: '#0A0D12', surface: '#0E1219', accent: '#FFB224',
+  text: '#E6EAF0', muted: '#7D8899', border: '#5E4D2B', warning: '#FF9640',
+  selection: '#2B200B', hover: '#3B2C0F',
+  elevated: '#171E29', user: '#3CD3F0', userSurface: '#0B1A21', userText: '#E3F5FA',
+  agent: '#B07CFF', agentSurface: '#140F1F', success: '#4ADE80',
+  main: '#FF5BC9', tool: '#79B8FF',
+  goalActive: '#5EEAD4', goalSuccess: '#34D399', danger: '#FF5470', yolo: '#FF4FA3',
+});
+
+const blue = Object.freeze({
   background: '#000000', surface: '#050508', accent: '#00D9FF',
   text: '#E2EEFF', muted: '#8297B3', border: '#18354A', warning: '#FFBF00',
   selection: '#082432', hover: '#102536',
@@ -9,11 +21,15 @@ export const palette = Object.freeze({
   goalActive: '#00D9FF', goalSuccess: '#00FF9C', danger: '#FF365E', yolo: '#FF1493',
 });
 
-// Existing call sites pass semantic blue tokens. Resolve those tokens within
-// each theme instance, keeping separate UI instances and rich-body colors safe.
+export const paletteNames = Object.freeze(['hive', 'blue', 'black', 'white']);
+export const paletteChoice = 'Choose /color hive, /color blue, /color black or /color white.';
+
+// Call sites pass semantic hive tokens. Resolve those tokens within each theme
+// instance, keeping separate UI instances and rich-body colors safe.
 export const palettes = Object.freeze({
-  blue: palette,
-  black: Object.freeze({ ...palette,
+  hive: palette,
+  blue,
+  black: Object.freeze({ ...blue,
     background: '#000000', surface: '#111111', elevated: '#1C1C1C',
     text: '#F2F2F2', muted: '#A3A3A3', border: '#414141', accent: '#E5E5E5',
     selection: '#292929', hover: '#383838', warning: '#E8B86B',
@@ -21,7 +37,7 @@ export const palettes = Object.freeze({
     agent: '#C6BEEC', agentSurface: '#18151F', success: '#8DD5AD',
     goalActive: '#B4C4FF', goalSuccess: '#7CDEA6', danger: '#FF8490', yolo: '#EAA2CE',
   }),
-  white: Object.freeze({ ...palette,
+  white: Object.freeze({ ...blue,
     background: '#FFFFFF', surface: '#F3F4F5', elevated: '#E8EBEE',
     text: '#17212B', muted: '#52606D', border: '#8996A3', accent: '#176378',
     selection: '#DCE9EF', hover: '#C9DDE7', warning: '#805000',
@@ -45,23 +61,24 @@ const xterm = Array.from({ length: 240 }, (_, offset) => {
   return index >= 232 ? [index, ...Array(3).fill(8 + (index - 232) * 10)]
     : [index, ...[Math.floor((index - 16) / 36), Math.floor((index - 16) / 6) % 6, (index - 16) % 6].map(value => value ? 55 + value * 40 : 0)];
 });
-const basic = new Map([[palette.background, 0], [palette.surface, 0], [palette.text, 15],
-  [palette.muted, 7], [palette.border, 6], [palette.accent, 14], [palette.warning, 11]]);
-basic.set(palette.user, 14); basic.set(palette.userText, 15); basic.set(palette.agent, 13);
-for (const tone of [palette.elevated, palette.userSurface, palette.agentSurface]) basic.set(tone, 0);
-basic.set(palette.success, 10);
-basic.set(palette.goalActive, 14); basic.set(palette.goalSuccess, 10); basic.set(palette.danger, 9); basic.set(palette.yolo, 13);
-basic.set(palette.main, 13); basic.set(palette.tool, 11);
+// 16-color terminals use one ANSI index per semantic key; unlisted keys use 6.
+const neonBasic = { background: 0, surface: 0, elevated: 0, userSurface: 0, agentSurface: 0, text: 15, userText: 15,
+  muted: 7, border: 6, accent: 14, warning: 11, user: 14, agent: 13, success: 10, goalActive: 14, goalSuccess: 10,
+  danger: 9, yolo: 13, main: 13, tool: 11 };
+const basicIndexes = {
+  hive: { ...neonBasic, border: 8, accent: 11, warning: 3, selection: 0, hover: 8, tool: 12, goalActive: 6 },
+  blue: neonBasic,
+  black: { ...neonBasic, accent: 15, border: 8, user: 10 },
+  white: { background: 15, surface: 15, elevated: 7, text: 0, muted: 8, border: 8, accent: 6,
+    selection: 7, hover: 7, warning: 3, user: 2, userSurface: 15, userText: 0, agent: 5, agentSurface: 15,
+    success: 2, goalActive: 4, goalSuccess: 2, danger: 1, yolo: 5, main: 5, tool: 3 },
+};
 
-export function createTerminalTheme(output = process.stdout, env = process.env, name = 'blue') {
-  if (!Object.hasOwn(palettes, name)) throw new Error('Choose /color blue, /color black or /color white.');
+export function createTerminalTheme(output = process.stdout, env = process.env, name = 'hive') {
+  if (!Object.hasOwn(palettes, name)) throw new Error(paletteChoice);
   const selected = palettes[name];
   const tokens = new Map(Object.entries(palette).map(([key, tone]) => [tone, selected[key]]));
-  const lightBasic = { background: 15, surface: 15, elevated: 7, text: 0, muted: 8, border: 8, accent: 6,
-    selection: 7, hover: 7, warning: 3, user: 2, userSurface: 15, userText: 0, agent: 5, agentSurface: 15,
-    success: 2, goalActive: 4, goalSuccess: 2, danger: 1, yolo: 5, main: 5, tool: 3 };
-  const basicTones = name === 'white' ? new Map(Object.entries(lightBasic).map(([key, index]) => [palette[key], index]))
-    : name === 'black' ? new Map([...basic, [palette.accent, 15], [palette.border, 8], [palette.user, 10]]) : basic;
+  const basicTones = new Map(Object.entries(basicIndexes[name]).map(([key, index]) => [palette[key], index]));
   const level = colorLevel(output, env), cache = new Map();
   const sgr = (tone, background = false) => {
     if (!level) return '';

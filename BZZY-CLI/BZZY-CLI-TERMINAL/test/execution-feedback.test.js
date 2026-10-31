@@ -91,7 +91,7 @@ test('actual terminal activity animates visibly beside the action in compact and
       ui.tui.value = 'Preserve this draft'; ui.tui.cursor = 5;
       ui.tui.frame = 0; ui.tui.render(); const first = ui.tui.lastFrame.map(clean).join('\n');
       ui.tui.frame = 1; ui.tui.render(); const second = ui.tui.lastFrame.map(clean).join('\n');
-      assert.match(first, /⠋ Running shell/); assert.match(second, /⠙ Running shell/);
+      assert.match(first, /⣾ Running shell/); assert.match(second, /⣽ Running shell/);
       assert.ok(ui.tui.lastFrame.every(line => cellWidth(line) < columns));
       assert.equal(ui.tui.value, 'Preserve this draft'); assert.equal(ui.tui.cursor, 5);
     }

@@ -161,8 +161,9 @@ try:
         while time.monotonic() < deadline: drain()
         frame = visible()
         # Reflow only the actual chat column; sidebars are independent surfaces.
-        header = next(line for line in frame.splitlines() if '┌≡ ●' in line)
-        left, right = header.index('┌≡ ●'), header.index('┐', header.index('┌≡ ●')) + 1
+        header = next(line for line in frame.splitlines() if '≡ ●' in line)
+        left = header.index('≡ ●') - 1
+        right = header.find('╭', left) if '╭' in header[left:] else len(header)
         prose = re.sub(r'\s+', ' ', ' '.join(line[left:right].replace('│', '').replace('┃', '') for line in frame.splitlines()))
         assert 'Validation could not start' in frame, frame
         assert 'Restore the original files' in prose, frame

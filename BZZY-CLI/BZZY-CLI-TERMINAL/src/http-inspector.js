@@ -1,7 +1,7 @@
 import { clean, cellWidth, clip, wrap } from './terminal-format.js';
 import { palette } from './terminal-theme.js';
 import { fillSurface } from './terminal-surface.js';
-import { sectionHeading } from './workspace-header.js';
+import { boxTop } from './workspace-header.js';
 import { diagnosticRedactor } from '@bzzy/core/engine/diagnostic-redaction.js';
 import { redactedHeaders, redactedUrl } from '@bzzy/core/engine/traffic.js';
 
@@ -76,14 +76,14 @@ export function httpExchangeLayout(exchange, width, height, theme, offsets = {})
     const top = lines.length, bodyHeight = size - 2, content = exchange[section], maximum = Math.max(0, content.length - bodyHeight);
     const start = Math.min(maximum, Math.max(0, offsets[section] || 0)); offsets[section] = start; maxima[section] = maximum;
     const copy = 'Copy', tone = section === 'request' ? palette.accent : palette.agent;
-    lines.push(sectionHeading(section.toUpperCase(), width, theme, tone, copy));
+    lines.push(boxTop(section.toUpperCase(), width, theme, { tone, suffix: copy }));
     hits.push({ type: 'monitor-http-copy', section, row: top + 1, left: Math.max(1, width - copy.length - 2), right: width - 1 });
     for (let i = 0; i < bodyHeight; i++) {
-      const mark = maximum && i === Math.round((bodyHeight - 1) * start / maximum) ? '┃' : '│';
-      lines.push(c('│', palette.border) + fillSurface(content[start + i] || '', width - 2, theme, palette.background, palette.text) + c(mark, palette.border));
+      const thumb = maximum && i === Math.round((bodyHeight - 1) * start / maximum);
+      lines.push(c('│', palette.border) + fillSurface(content[start + i] || '', width - 2, theme, palette.background, palette.text) + c(thumb ? '┃' : '│', thumb ? palette.accent : palette.border, Boolean(thumb)));
     }
-    const tail = clip(` ${content.length ? start + 1 : 0}–${Math.min(content.length, start + bodyHeight)}/${content.length} · scroll ↕ `, width - 4);
-    lines.push(c('└─' + tail + '─'.repeat(Math.max(0, width - cellWidth(tail) - 3)) + '┘', palette.border));
+    const tail = clip(` ${content.length ? start + 1 : 0}–${Math.min(content.length, start + bodyHeight)}/${content.length} · scroll ⇕ `, width - 4);
+    lines.push(c('╰─', palette.border) + c(tail, palette.muted) + c('─'.repeat(Math.max(0, width - cellWidth(tail) - 3)) + '╯', palette.border));
     regions.push({ section, left: 1, right: width, top: top + 1, bottom: top + size });
   }
   return { lines, hits, regions, maxima };

@@ -23,18 +23,19 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
   const rows = Math.max(1, Math.min(filtered.length || 1, maxHeight - reserved));
   const position = Math.max(0, filtered.findIndex(item => item.index === picker.focus));
   const offset = Math.max(0, Math.min(position - Math.floor(rows / 2), filtered.length - rows));
-  const lines = [], hits = [], edge = text => theme.color(text, palette.border);
-  const put = (text = '', tone = palette.text, bold = false, background = palette.surface) => lines.push(edge('│') + fillSurface(clip(text, inner), inner, theme, background, tone, bold) + edge('│'));
-  lines.push(edge('┌' + '─'.repeat(inner) + '┐'));
+  const lines = [], hits = [], edge = text => theme.color(text, palette.accent), surface = theme.background(palette.surface);
+  const put = (text = '', tone = palette.text, bold = false, background = palette.surface, border = '│') => lines.push(surface + theme.color(border, palette.accent, border !== '│') + fillSurface(clip(text, inner), inner, theme, background, tone, bold, palette.surface) + edge('│'));
+  lines.push(surface + edge('╭' + '─'.repeat(inner) + '╮'));
   const locked = picker.locked && picker.loading;
   const hasBackChoice = filtered.slice(offset, offset + rows).some(({ choice }) => choice.value === 'back' && /^← Back/.test(choice.label));
-  const close = locked || hasBackChoice ? '   ' : ' ← Back ', title = ' ' + clip(picker.title, Math.max(1, inner - cellWidth(close) - 2));
-  put(title + ' '.repeat(Math.max(0, inner - cellWidth(title) - cellWidth(close))) + close, palette.accent, true);
+  const close = locked || hasBackChoice ? '   ' : ' ← Back ', title = clip(picker.title, Math.max(1, inner - cellWidth(close) - 4));
+  lines.push(surface + edge('│') + theme.color(' ⬡ ', palette.accent) + theme.color(title, palette.accent, true) + ' '.repeat(Math.max(0, inner - cellWidth(title) - cellWidth(close) - 3))
+    + (close.trim() ? fillSurface(close, cellWidth(close), theme, palette.elevated, palette.accent, true, palette.surface) : close) + edge('│'));
   if (!locked && !hasBackChoice) hits.push({ type: 'cancel', back: true, row: 1, left: size - cellWidth(close) - 1, right: size - 2 });
   if (searchable) {
-    put(' / ' + (picker.query || 'Search models and providers…'), picker.query ? palette.text : palette.muted);
+    put(' ⌕ ' + (picker.query || 'Search models and providers…'), picker.query ? palette.text : palette.muted, false, palette.elevated);
     hits.push({ type: 'picker-search', row: lines.length - 1, left: 2, right: size - 3 });
-    lines.push(edge('├' + '─'.repeat(inner) + '┤'));
+    lines.push(surface + edge('├' + '─'.repeat(inner) + '┤'));
   } else put();
   if (picker.columnHeader) put('   ' + picker.columnHeader, palette.muted);
   if (picker.loading) put(' ' + (picker.loadingLabel || 'Loading choices…'), palette.accent);
@@ -43,26 +44,26 @@ export function choicePopup(picker, { width, height, anchor, minimumTop = 0, the
     const focused = index === picker.focus, selected = picker.single ? choice.selected : picker.selected.has(choice.value);
     let tail = picker.single ? selected ? ' ✓' : '' : selected ? ' [x]' : ' [ ]';
     if (picker.selectEffort && choice.efforts?.length) tail = ` ‹ ${picker.efforts.get(choice.value)} ›`;
-    const label = ` ${focused ? '›' : ' '} ${clip(choice.label, inner - cellWidth(tail) - 5)}`;
+    const label = ` ${focused ? '❯' : ' '} ${clip(choice.label, inner - cellWidth(tail) - 5)}`;
     const tone = picker.kind === 'approval' && palette[choice.tone];
-    put(label + ' '.repeat(Math.max(0, inner - cellWidth(label + tail) - 1)) + tail + ' ', choice.disabled ? palette.muted : tone && focused ? palette.background : tone || (focused ? palette.accent : palette.text), focused, focused ? tone || palette.selection : palette.surface);
+    put(label + ' '.repeat(Math.max(0, inner - cellWidth(label + tail) - 1)) + tail + ' ', choice.disabled ? palette.muted : tone && focused ? palette.background : tone || (focused ? palette.accent : palette.text), focused, focused ? tone || palette.selection : palette.surface, focused ? '┃' : '│');
     hits.push({ type: 'choice', index, row: lines.length - 1, left: 1, right: size - 2, disabled: choice.disabled });
     if (tail.startsWith(' ‹')) {
       hits.push({ type: 'effort', index, direction: 'left', row: lines.length - 1, left: size - cellWidth(tail) - 1, right: size - cellWidth(tail) + 1 },
         { type: 'effort', index, direction: 'right', row: lines.length - 1, left: size - 4, right: size - 2 });
     }
   }
-  lines.push(edge('├' + '─'.repeat(inner) + '┤'));
+  lines.push(surface + edge('├' + '─'.repeat(inner) + '┤'));
   for (const line of detailLines) put(' ' + line, picker.error || picker.warning ? palette.warning : palette.muted);
   if (picker.selectEffort && focused?.efforts?.length) put(' Effort: ' + picker.efforts.get(focused.value) + ' · ←/→ changes', palette.accent);
   const count = filtered.length ? `${position + 1}/${filtered.length}` : '';
   put(' ' + clip((dropdown ? 'Click select · ↑↓ · Esc' : picker.hint || (picker.single ? '↑↓ choose · Enter confirm · Esc cancel' : 'Space selects · Enter confirms')) + (count ? '  ' + count : ''), inner - 1), palette.muted);
   if (!dropdown && !locked) {
-    const confirm = ` [ ${picker.confirmLabel || 'Confirm'} ] `;
-    put(confirm, palette.accent, true);
-    hits.push({ type: 'confirm', row: lines.length - 1, left: 2, right: cellWidth(confirm) });
+    const confirm = `[ ${picker.confirmLabel || 'Confirm'} ]`, room = Math.max(0, inner - cellWidth(confirm) - 1);
+    lines.push(surface + edge('│') + ' ' + fillSurface(clip(confirm, inner - 1), Math.min(cellWidth(confirm), inner - 1), theme, palette.accent, palette.background, true, palette.surface) + ' '.repeat(room) + edge('│'));
+    hits.push({ type: 'confirm', row: lines.length - 1, left: 2, right: cellWidth(' ' + confirm + ' ') });
   }
-  lines.push(edge('└' + '─'.repeat(inner) + '┘'));
+  lines.push(surface + edge('╰' + '─'.repeat(inner) + '╯'));
   // Keep a dropdown attached to its control, including on small terminals and
   // near the bottom of Settings. Other choices use a centered dialog.
   const left = Math.max(1, Math.min(width - size, dropdown && anchor ? anchor.left - 1 : Math.floor((width - size) / 2)));

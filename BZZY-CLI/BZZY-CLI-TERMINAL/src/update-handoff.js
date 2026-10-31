@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { home } from './store.js';
+import { paletteNames } from './terminal-theme.js';
 
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const folder = () => path.join(home(), 'runtime', 'cli-handoff');
@@ -15,7 +16,7 @@ function validated(value) {
   });
   return { v: 1, sessionId: value.sessionId, mode: value.mode, settingsOnly: value.settingsOnly, coreStopped: value.coreStopped,
     activeTab: uuid(value.activeTab) ? value.activeTab : value.sessionId, minimal: value.minimal === true,
-    colorPalette: ['blue', 'black', 'white'].includes(value.colorPalette) ? value.colorPalette : 'blue', drafts };
+    colorPalette: paletteNames.includes(value.colorPalette) ? value.colorPalette : 'hive', drafts };
 }
 export function writeUpdateHandoff(ui, { coreStopped = false } = {}) {
   const tui = ui.tui;

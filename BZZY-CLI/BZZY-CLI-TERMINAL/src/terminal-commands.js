@@ -43,7 +43,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /settings          Workspace, iPhone, Core and private DeepSeek/Abliteration/OrcaRouter API-key setup.
 /settings default-models  Edit all provider/model/effort defaults in one table; /settings modes is an alias.
 /yolo              Toggle native permission bypass for this terminal’s next run.
-/color blue|black|white Switch the complete TUI palette; each launch defaults to blue.
+/color hive|blue|black|white Switch the complete TUI palette; each launch defaults to hive.
 bzzy settings      Open Settings directly without starting a conversation.
 bzzy doctor        Check both installed backends; add --live to test actual replies.
 
@@ -69,7 +69,7 @@ export const chatCommands = [
   { command: '/effort', description: 'Choose the current model’s reasoning effort' },
   { command: '/memory', description: 'Search project knowledge and past conversations', argument: true },
   { command: '/learn', description: 'Review learning jobs, fixtures, candidates and preferences' },
-  { command: '/color', description: 'Switch the full palette: blue, black or white', argument: true },
+  { command: '/color', description: 'Switch the full palette: hive, blue, black or white', argument: true },
   { command: '/providers', description: 'Choose a provider and model from Core' },
   { command: '/default', description: 'Save this mode’s provider, models, efforts and full agent combo' },
   { command: '/delegate', description: 'Switch this paused chat to Delegate' },

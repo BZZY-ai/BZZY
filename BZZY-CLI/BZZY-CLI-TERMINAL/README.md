@@ -19,8 +19,9 @@ uses the existing full saved task context. See the
 [execution/API contract](../../BZZY-CORE/docs/EXECUTION-API.md) for literal args,
 timeouts, Core lifecycle, logs, idempotency and external session integration.
 
-The terminal now uses a black neon workspace with clickable navigation and model
-controls, a dominant chat, and independently scrolling **AGENTS**, **HTTP PROBE**
+The terminal uses the amber **hive** workspace: rounded side panels joined to the
+column separators, clickable navigation and model controls, a dominant chat, and
+independently scrolling **AGENTS**, **HTTP PROBE**
 and **CODE** command lists. Click a request or command to inspect it in the center;
 Esc returns to chat. Drag column separators to resize; use the center **≡** menu
 and sidebar **⋯** actions to reopen hidden panels. The same frame and palette surround Library, Metrics,
@@ -460,7 +461,7 @@ conversations, goals, recovery and all debate/parallel/delegate/besties logic.
 This package owns the terminal frontend; legacy backend modules forward to Core
 for compatibility. Core's daemon and workers run without this CLI installed.
 
-`bzzy` opens a black neon terminal workspace with clickable navigation, a chat
+`bzzy` opens the hive terminal workspace with clickable navigation, a chat
 column and compact live **AGENTS / SKILLS**, **HTTP PROBE**, and **CODE** views.
 The single-row header keeps branding, the saved working/memory paths, Core/Relay
 dots and the CLI host's HH:MM clock visible.
@@ -496,6 +497,11 @@ and last-output/activity age advance independently from Core polling. Native
 tool completion clears the active command; the response's completed/paused/stopped
 label freezes its elapsed time. These rows do not add synthetic chat messages or
 invocation counts and preserve drafts in normal and minimal layouts.
+While the session is working, each reported step that is still running (for
+example `subdomains 142 | urls candidates 1,280`), running tool call, active
+specialist and running CODE command shows the same circling dot-square loader.
+Finished steps show ✓ completed, ✕ blocked or ■ stopped. The loader reflects
+reported state only; it never implies progress that Core did not report.
 
 Core supplies a recent, identity-checked execution-process observation, sampled
 at most once every two seconds for the same process/state. **Process alive**
@@ -834,10 +840,12 @@ mouse input, command picker and approval controls. Use `/models`, `/settings`,
 `/sessions` or `/update` when needed. The layout and unsent draft survive an
 update.
 
-Use `/color blue`, `/color black` or `/color white` to switch the full palette
-instantly: chat roles, surfaces, buttons, selections, borders and status colors.
-Black uses a pitch-black background with neutral controls; white uses a white background
-with dark text and readable accents. Blue is the default on every new launch.
+Use `/color hive`, `/color blue`, `/color black` or `/color white` to switch the
+full palette instantly: chat roles, surfaces, buttons, selections, borders and
+status colors. Hive is the default on every new launch: a near-black background
+with amber frames and controls and cyan eyes. Blue keeps the previous cyan neon
+palette. Black uses a pitch-black background with neutral controls; white uses a
+white background with dark text and readable accents.
 The selection belongs to this CLI only, works in minimal mode, and is retained
 when that same terminal reloads after an update. No provider request is sent.
 
@@ -846,7 +854,7 @@ size instead of switching to a separate dashboard. The top bar contains named
 session access, New Session, Core-reported CPU/RAM and the Settings gear. Activity,
 Network, Skills and the shared room remain available through their commands and
 Ctrl+G. Settings and the complete pairing QR use the full content area beneath
-the top bar and never leave the chat composer underneath. Sky-blue controls have
+the top bar and never leave the chat composer underneath. Accent controls have
 hover and pressed feedback; sessions, Settings actions, Back, Send, Copy and the
 update checker accept mouse clicks. The composer preserves unsent drafts across
 local controls. The obsolete dashboard/eyes header has no rendering route in any
@@ -950,8 +958,8 @@ The daemon keeps the gateway connected after CLI closes. Native local full-line
 tests validate iOS interoperability; public host enrollment, real-device checks
 and unattended boot/logout behavior remain deployment checks.
 
-The default terminal theme uses pure black, cyan controls, pink BZZY replies,
-purple specialists and orange tools. True-color terminals show the exact palette,
+The default hive theme uses a near-black background, amber frames and controls,
+cyan user turns, pink BZZY replies, purple specialists and blue tools. True-color terminals show the exact palette,
 with 256/basic-color fallbacks and
 `NO_COLOR` support. QR display keeps black/white contrast and its quiet zone;
 small terminals show the required dimensions and retain the manual-code option.
