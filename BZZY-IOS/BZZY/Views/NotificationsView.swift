@@ -11,10 +11,7 @@ struct NotificationsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 8) {
-                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text("Notifications")
-                    }.bzzyFont(20, weight: .semibold)
+                    SheetTitle(title: "Notifications", subtitle: "Goal alerts from your computers: achieved, stalled, paused, cancelled and input needed.")
                     VStack(alignment: .leading, spacing: 6) {
                         Text("iPhone permission").bzzyFont(11, weight: .medium).foregroundStyle(BZZYTheme.muted)
                         Text(notifications.permission).bzzyFont(14).foregroundStyle(BZZYTheme.secondary)

@@ -13,7 +13,7 @@ Source assessment on 2026-10-22. The original runtime paths below refer to the e
 
 BZZY keeps specialized agents as persistent workspaces, available on demand with optional schedules and triggers. The iPhone supervises the same work as the terminal. Models, tools, project access, durable evidence, and account credentials belong on the authorized home host.
 
-The two primary app tabs express different entry points into that shared engine. **Agents** opens purpose-built persistent workspaces. **Terminal** opens existing CLI conversations. They do not create two runtimes. The fly’s expression is interface feedback, not evidence that a host is connected or a goal succeeded.
+The iPhone app is one entry point into that shared engine: its **Terminals** home opens existing CLI conversations. Persistent Agents remain Core workspaces; since build 27 the iPhone no longer lists or opens them. This does not create a second runtime. The fly’s expression is interface feedback, not evidence that a host is connected or a goal succeeded.
 
 ## Reusable source
 

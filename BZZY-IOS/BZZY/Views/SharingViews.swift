@@ -22,14 +22,11 @@ struct ShareResourceView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 8) {
-                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text("Share")
-                    }.bzzyFont(20, weight: .semibold)
+                    SheetTitle(title: "Share")
                     SharedResourceLabel(kind: target.kind, name: target.name)
                     Picker("Share mode", selection: $mode) {
                         ForEach(ResourceShareMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.segmented).accessibilityIdentifier("share-mode")
+                    }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier("share-mode")
 
                     if let ticket {
                         demoCode(ticket)
@@ -137,10 +134,8 @@ struct ImportResourceView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text(importedName == nil ? "Import \(kind.title.lowercased())" : "Imported")
-                    }.bzzyFont(20, weight: .semibold)
+                    SheetTitle(title: importedName == nil ? "Import \(kind.title.lowercased())" : "Imported",
+                               subtitle: importedName == nil ? "Scan a BZZY QR or paste an expiring code." : nil)
                     if let importedName {
                         completion(importedName)
                     } else if let demo {
@@ -182,10 +177,9 @@ struct ImportResourceView: View {
                     Text("Scan QR").bzzyFont(14, weight: .medium)
                     Spacer()
                     Image(systemName: "arrow.right").bzzyFont(12)
-                }.foregroundStyle(BZZYTheme.accent).padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 52)
-                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
-            }.buttonStyle(.plain).accessibilityIdentifier("import-scan")
+                }.foregroundStyle(BZZYTheme.accent).padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 56)
+                    .hiveCard(radius: BZZYTheme.controlRadius)
+            }.buttonStyle(BZZYCardStyle()).accessibilityIdentifier("import-scan")
             #endif
             VStack(alignment: .leading, spacing: 13) {
                 Eyebrow(text: "Or paste a code")
@@ -194,16 +188,13 @@ struct ImportResourceView: View {
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
-                    .bzzyFont(13, design: .monospaced).padding(14).textFieldStyle(.plain)
-                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
+                    .bzzyFont(13, design: .monospaced).textFieldStyle(.plain).hiveField()
                     .accessibilityIdentifier("import-code")
                     .onChange(of: code) { _, value in
                         if value.utf8.count > 4096 { code = ""; error = SharingFailure.invalid.localizedDescription }
                     }
                 AccentButton(title: "Review", symbol: "arrow.right") { review(code) }
                     .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .opacity(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 1)
                     .accessibilityIdentifier("import-review")
             }
         }
@@ -257,14 +248,11 @@ struct ImportResourceView: View {
 
     private func completion(_ name: String) -> some View {
         VStack(alignment: .leading, spacing: 27) {
-            Image(systemName: "checkmark.circle").font(.system(size: 50, weight: .ultraLight)).foregroundStyle(BZZYTheme.accent)
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 50, weight: .regular)).foregroundStyle(BZZYTheme.success)
             SharedResourceLabel(kind: kind, name: name)
             Text("Added as an inactive draft.").bzzyFont(14).foregroundStyle(BZZYTheme.secondary)
                 .accessibilityIdentifier("import-complete")
-            AccentButton(title: "Done", symbol: "checkmark") {
-                store.selectedTab = kind == .agent ? .agents : .terminal
-                dismiss()
-            }.accessibilityIdentifier("import-done")
+            AccentButton(title: "Done", symbol: "checkmark") { dismiss() }.accessibilityIdentifier("import-done")
         }.padding(.top, 16)
     }
 
@@ -290,8 +278,7 @@ private struct SharedResourceLabel: View {
     let name: String
     var body: some View {
         HStack(spacing: 15) {
-            Image(systemName: kind.symbol).font(.system(size: 21, weight: .light)).foregroundStyle(BZZYTheme.accent)
-                .frame(width: 44, height: 44).background(BZZYTheme.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+            IconTile(symbol: kind.symbol, size: 44)
             VStack(alignment: .leading, spacing: 6) {
                 Text(name).bzzyFont(18, weight: .medium)
                 Text(kind.title).bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
@@ -366,12 +353,11 @@ struct LiveTerminalShareView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text(kind == .agent ? "Share agent" : "Share terminal")
-                    }.bzzyFont(20, weight: .semibold)
-                    Text(title).bzzyFont(17, weight: .medium)
-                    if let directory { Text(directory).bzzyFont(12, design: .monospaced).textSelection(.enabled) }
+                    SheetTitle(title: kind == .agent ? "Share agent" : "Share terminal")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).bzzyFont(17, weight: .semibold)
+                        if let directory { Text(DisplayPath.short(directory)).bzzyFont(12, design: .monospaced).foregroundStyle(BZZYTheme.secondary).textSelection(.enabled) }
+                    }
                     Text("Project files and full saved context, including chats, notes, memory, goals, nested agents and evidence. Private credentials stay on your host; the recipient connects their own accounts.")
                         .bzzyFont(13).foregroundStyle(BZZYTheme.secondary)
                     VStack(alignment: .leading, spacing: 10) {
@@ -553,242 +539,4 @@ private struct LiveTerminalInvitation: CustomStringConvertible, CustomDebugStrin
 private struct LiveRecipientClaim: Identifiable {
     let id: String
     let fingerprint: String
-}
-
-/// The phone controls a Core import job. Bundle bytes and private account
-/// bindings never pass through this view or the phone filesystem.
-struct LiveAgentImportView: View {
-    @Bindable var store: WorkspaceStore
-    @Environment(RelayConnection.self) private var relay
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var code = ""
-    @State private var invitation: RelayShareInvitation?
-    @State private var fingerprint = ""
-    @State private var verified = false
-    @State private var name = ""
-    @State private var provider = ""
-    @State private var model = ""
-    @State private var effort = "default"
-    @State private var providers: [CoreJSONValue] = []
-    @State private var models: [CoreJSONValue] = []
-    @State private var modelCursor: String?
-    @State private var modelHasMore = false
-    @State private var modelSource = ""
-    @State private var loading = false
-    @State private var busy = false
-    @State private var showScanner = false
-    @State private var error: String?
-    @State private var visible = false
-    private var progress: CoreJSONValue? { relay.coreAgentImportSnapshot }
-    private var finished: Bool { relay.coreAgentImportRecoveredAgent != nil || ["complete", "cancelled", "failed"].contains(progress?["state"].string ?? "") }
-    private var efforts: [String] {
-        models.first(where: { $0["id"].string == model })?["capabilities"]["supportedEfforts"].array?.compactMap(\.string)
-            ?? providers.first(where: { $0["id"].string == provider })?["supportedEfforts"].array?.compactMap(\.string) ?? []
-    }
-    private var validFingerprint: Bool {
-        fingerprint.count == 43 && fingerprint.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil
-    }
-    private var resolvedModel: String? {
-        let explicit = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !explicit.isEmpty { return explicit }
-        guard let configured = providers.first(where: { $0["id"].string == provider })?["model"].string, !configured.isEmpty else { return nil }
-        return configured
-    }
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 8) {
-                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text("Import agent")
-                    }.bzzyFont(20, weight: .semibold)
-                    if !relay.coreAgentsAvailable {
-                        Text("Agent management must be explicitly enabled for this iPhone when pairing.").bzzyFont(14)
-                    } else if relay.coreAgentImportPending {
-                        job
-                    } else if let invitation {
-                        review(invitation)
-                    } else {
-                        entry
-                    }
-                    if let error { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.amber).accessibilityIdentifier("agent-import-error") }
-                }.padding(16)
-            }.bzzyScreen().textFieldStyle(.plain)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-                #if os(iOS)
-                .sheet(isPresented: $showScanner) {
-                    ZStack(alignment: .topTrailing) {
-                        InvitationScannerView(prefixes: ["BZZY:INVITE:1:"], onCode: { raw in showScanner = false; parse(raw) }, onError: { error = $0; showScanner = false })
-                        Button("Close") { showScanner = false }.padding(20).background(.black.opacity(0.7), in: Capsule()).padding()
-                    }.ignoresSafeArea(edges: .bottom)
-                }
-                #endif
-        }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
-            .onAppear { visible = true }
-            .onDisappear { visible = false; clearInvitation() }
-            .task {
-                let origin = HostActionContext(hostID: relay.activeHostID)
-                await loadProviders()
-                while !Task.isCancelled && origin.permits(relay.activeHostID) {
-                    if scenePhase == .active && relay.coreActionsAvailable && relay.coreAgentImportPending && !busy && !finished { await refresh() }
-                    do { try await Task.sleep(for: .seconds(3)) } catch { return }
-                }
-            }
-            .task(id: invitation?.expiresAt) {
-                guard let expiry = invitation?.expiresAt else { return }
-                do { try await Task.sleep(for: .seconds(max(0, expiry.timeIntervalSinceNow))) } catch { return }
-                if self.invitation?.expiresAt == expiry { clearInvitation(); error = "Invitation expired. Ask the sender for a new code." }
-            }
-            .onChange(of: relay.coreActionsAvailable) { _, ready in if !ready { clearInvitation() } }
-            .onChange(of: scenePhase) { _, phase in if phase != .active { clearInvitation() } }
-            .onChange(of: fingerprint) { _, _ in verified = false }
-            .onChange(of: provider) { _, value in if !loading { model = ""; effort = "default"; relay.performHostAction { await loadModels(value) } } }
-    }
-
-    private var entry: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text("Receive a complete agent workspace on your Core, including its project files and saved conversations/context.").bzzyFont(14).foregroundStyle(BZZYTheme.secondary)
-            #if os(iOS)
-            Button { showScanner = true } label: { Label("Scan QR", systemImage: "qrcode.viewfinder").bzzyFont(14).frame(maxWidth: .infinity, minHeight: 44).panel() }
-                .accessibilityIdentifier("agent-import-scan")
-            #endif
-            SecureField("BZZY-AGENT-…", text: $code).bzzyFont(13, design: .monospaced).panel()
-                .textContentType(.oneTimeCode).autocorrectionDisabled().accessibilityIdentifier("agent-import-code")
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
-                .onChange(of: code) { _, value in if value.utf8.count > 4096 { clearInvitation(); error = "Invalid invitation." } }
-            AccentButton(title: "Review", symbol: "arrow.right") { parse(code) }.disabled(code.isEmpty).accessibilityIdentifier("agent-import-review")
-        }
-    }
-
-    private func review(_ invitation: RelayShareInvitation) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text("Full workspace copy").bzzyFont(18, weight: .medium)
-            Text("Includes project files, full chats, notes, memory, goals, evidence and nested relationships. Core validates the bundle and restores fresh local identities beneath your Agents root. Imported work stays paused. No sender accounts, credentials, permissions or schedules are activated.")
-                .bzzyFont(13).foregroundStyle(BZZYTheme.secondary)
-            if let source = invitation.senderFingerprint {
-                Eyebrow(text: "Source fingerprint")
-                Text(source).bzzyFont(11, design: .monospaced).textSelection(.enabled)
-            } else {
-                TextField("Complete sender fingerprint", text: $fingerprint).bzzyFont(12, design: .monospaced).panel().autocorrectionDisabled()
-                    .accessibilityIdentifier("agent-import-fingerprint")
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
-            }
-            Toggle("I compared the complete fingerprint with the sender", isOn: $verified).bzzyFont(13).accessibilityIdentifier("agent-import-verified")
-            if let expiry = invitation.expiresAt { Text("Expires " + expiry.formatted(date: .omitted, time: .shortened)).bzzyFont(12) }
-            Text("Use your Core’s own provider and accounts").bzzyFont(14, weight: .medium)
-            if !relay.coreAgentsConfigured { Text("Configure your Core Agents workspace first.").bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
-            if loading { ProgressView() }
-            TextField("Agent name (optional)", text: $name).bzzyFont(14).panel()
-            Picker("Provider", selection: $provider) {
-                if providers.isEmpty { Text("No providers available").tag("") }
-                ForEach(providers.compactMap { $0["id"].string }, id: \.self) { id in Text(providers.first(where: { $0["id"].string == id })?["name"].string ?? id).tag(id) }
-            }.pickerStyle(.menu)
-            Picker("Model", selection: $model) {
-                Text(providers.first(where: { $0["id"].string == provider })?["model"].string == nil ? "Choose model" : "Provider default").tag("")
-                ForEach(models.compactMap { $0["id"].string }, id: \.self) { id in Text(models.first(where: { $0["id"].string == id })?["name"].string ?? id).tag(id) }
-            }.pickerStyle(.menu)
-            if modelSource == "manual" || models.isEmpty { TextField("Model ID (optional)", text: $model).bzzyFont(13, design: .monospaced).panel() }
-            if modelHasMore { Button("Load more models") { relay.performHostAction { await loadModels(provider, more: true) } } }
-            Picker("Effort", selection: $effort) {
-                Text("Provider default").tag("default")
-                ForEach(efforts.filter { $0 != "default" }, id: \.self) { Text($0).tag($0) }
-            }.pickerStyle(.menu)
-            AccentButton(title: "Receive on Core", symbol: "square.and.arrow.down") { relay.performHostAction { await receive(invitation) } }
-                .disabled(busy || loading || !verified || !validFingerprint || provider.isEmpty || resolvedModel == nil || !relay.coreActionsAvailable || !relay.coreAgentsConfigured || name.utf8.count > 120)
-                .accessibilityIdentifier("agent-import-receive")
-            Button("Use another code") { clearInvitation(); error = nil }
-        }
-    }
-
-    private var job: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text(relay.coreAgentImportRecoveredAgent != nil ? "Imported agent found on Core" : progress?["state"].string == "complete" ? "Imported · Paused" : progress?["state"].string == "awaitingApproval" ? "Awaiting sender approval" : (progress?["state"].string ?? "Checking saved request").capitalized)
-                .bzzyFont(21, weight: .medium).accessibilityIdentifier("agent-import-state")
-            if let recipient = progress?["recipientFingerprint"].string {
-                Eyebrow(text: "Recipient fingerprint")
-                Text(recipient).bzzyFont(11, design: .monospaced).textSelection(.enabled).accessibilityIdentifier("agent-import-recipient")
-                Text("Ask the sender to compare this full fingerprint and approve it in their Share screen.").bzzyFont(13).foregroundStyle(BZZYTheme.secondary)
-            }
-            if let received = progress?["received"].integer, let total = progress?["total"].integer, total > 0 {
-                ProgressView(value: Double(received), total: Double(total))
-                Text("\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))").bzzyFont(12)
-            }
-            if let expiry = progress?["expiresAt"].integer { Text("Expires " + Date(timeIntervalSince1970: Double(expiry) / 1000).formatted(date: .omitted, time: .shortened)).bzzyFont(12) }
-            if let code = progress?["errorCode"].string { Text("Transfer stopped (\(code)). No work was started.").bzzyFont(12).foregroundStyle(BZZYTheme.amber) }
-            if progress?["state"].string == "complete" || relay.coreAgentImportRecoveredAgent != nil {
-                Text(relay.coreAgentImportRecoveredAgent?["name"].string ?? progress?["agent"]["name"].string ?? "Agent").bzzyFont(18, weight: .medium)
-                Text("Saved on your Core with new identities. Review the imported context and authorize your own accounts before asking it to work.").bzzyFont(13).foregroundStyle(BZZYTheme.secondary)
-            }
-            Button("Refresh transfer") { relay.performHostAction { await refresh() } }.disabled(busy || !relay.coreActionsAvailable)
-            if finished {
-                AccentButton(title: progress?["state"].string == "complete" || relay.coreAgentImportRecoveredAgent != nil ? "Done" : "Use another code", symbol: "checkmark") {
-                    let complete = progress?["state"].string == "complete" || relay.coreAgentImportRecoveredAgent != nil
-                    relay.finishCoreAgentImport()
-                    if complete { store.selectedTab = .agents; dismiss() }
-                }
-            } else {
-                Button("Cancel transfer", role: .destructive) { relay.performHostAction { await cancel() } }.disabled(busy || progress == nil || !relay.coreActionsAvailable)
-            }
-            Text("Both Cores must stay online during transfer. Closing this sheet does not execute or resume imported work.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
-        }
-    }
-
-    private func parse(_ raw: String) {
-        clearInvitation(); error = nil
-        do {
-            let value = try RelayShareInvitation.parse(raw, expectedKind: .agent)
-            invitation = value; fingerprint = value.senderFingerprint ?? ""; verified = false
-        } catch { self.error = error.localizedDescription }
-    }
-    private func clearInvitation() { code = ""; invitation = nil; fingerprint = ""; verified = false }
-    private func receive(_ invitation: RelayShareInvitation) async {
-        guard !busy, verified, validFingerprint, let selectedModel = resolvedModel, invitation.expiresAt == nil || invitation.expiresAt! > Date() else { return }
-        let code = invitation.code, source = fingerprint
-        clearInvitation(); busy = true; error = nil
-        defer { busy = false }
-        let origin = HostActionContext(hostID: relay.activeHostID)
-        do {
-            try await relay.beginCoreAgentImport(code: code, sourceFingerprint: source, provider: provider,
-                model: selectedModel,
-                effort: effort, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
-            if visible, origin.permits(relay.activeHostID), !Task.isCancelled { _ = try await relay.refreshCoreAgentImport() }
-        } catch { if visible { self.error = "Import was not confirmed (\((error as? CoreApplicationError)?.code ?? "UNAVAILABLE")). Check the saved request; no automatic retry." } }
-    }
-    private func refresh() async {
-        guard !busy else { return }
-        busy = true; defer { busy = false }
-        do { _ = try await relay.refreshCoreAgentImport(); if visible { error = nil } }
-        catch { if visible { self.error = "Transfer status unavailable (\((error as? CoreApplicationError)?.code ?? "UNAVAILABLE")). Refresh to reconcile; do not submit the code again." } }
-    }
-    private func cancel() async {
-        guard !busy else { return }
-        busy = true; defer { busy = false }
-        do { try await relay.cancelCoreAgentImport(); if visible { error = nil } }
-        catch { if visible { self.error = "Cancellation was not confirmed. Refresh transfer status before trying again." } }
-    }
-    private func loadProviders() async {
-        loading = true; defer { loading = false }
-        let origin = HostActionContext(hostID: relay.activeHostID)
-        do {
-            let result = try await relay.readCoreAgent("agents.providers")
-            guard visible, origin.permits(relay.activeHostID), !Task.isCancelled else { return }
-            providers = result["providers"].array ?? []; provider = providers.first?["id"].string ?? ""
-            await loadModels(provider)
-        } catch { if visible { self.error = "Core provider settings are unavailable." } }
-    }
-    private func loadModels(_ requested: String, more: Bool = false) async {
-        guard !requested.isEmpty else { return }
-        let cursor = more ? modelCursor : nil
-        do {
-            let page = try await relay.readCoreAgentModels(requested, after: cursor)
-            guard visible, provider == requested, !more || modelCursor == cursor else { return }
-            if more { models += page["models"].array ?? [] } else { models = page["models"].array ?? [] }
-            modelCursor = page["nextCursor"].string; modelHasMore = page["hasMore"].bool == true; modelSource = page["source"].string ?? "manual"
-        } catch { if visible, provider == requested { self.error = "Core model catalog is unavailable." } }
-    }
 }

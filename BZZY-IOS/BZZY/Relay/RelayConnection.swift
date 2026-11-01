@@ -1273,6 +1273,9 @@ public final class RelayConnection {
     private func observeCoreConversation(sessionID: String, agentID: String?) async {
         guard UUID(uuidString: sessionID) != nil else { return }
         if observedDeletedCoreSessions.contains(sessionID) { notifyCoreConversationRemoval(sessionID); return }
+        // Save the conversation being left while it is still the displayed one.
+        // Its debounced save is skipped once another session becomes desired.
+        if sessionID != coreSessionID { saveCurrentPresentation() }
         let intent = UUID(); attachmentIntent = intent; desiredCoreSessionID = sessionID
         presentCachedCoreSession(sessionID)
         // An unfinished attachment is an idempotent authorization/read, not work.

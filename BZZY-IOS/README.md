@@ -1,8 +1,40 @@
 # BZZY native iOS
 
-Native Swift/SwiftUI, iOS 17+, with **Agents**, **Terminal** and read-only **Chat**. The current
-appearance follows the CLI: dark flat surfaces, compact monospaced prompt rows,
-cyan controls, teal user messages and lavender assistant messages.
+Native Swift/SwiftUI, iOS 17+. The app opens on one **Terminals** home: the
+named terminal sessions of the selected computer, with read-only **Ask Core** in
+the header. There is no tab bar. The appearance follows the CLI's hive theme:
+near-black surfaces, amber controls, cyan brand eyes and status colors.
+
+Build **0.1.0 (27)** redesigns the front end; Core, Relay and pairing contracts
+are unchanged.
+
+- **Terminals home.** Each aliased session is a card with its live status
+  (Running, Needs input, Paused, Stalled, Achieved, Cancelled), its folder and
+  how recently it changed. Running sessions are outlined in amber and sessions
+  waiting for input in cyan. Pull down to refresh. A paired phone that cannot
+  reach Core shows a **Core is offline** notice; saved conversations stay
+  readable and controls stay locked until an authorized Core response.
+- **Agents tab removed.** At the user's request, iPhone no longer lists, creates,
+  edits, imports or opens persistent Agents. Core's Agent APIs, storage and CLI
+  behavior are unchanged; an Agent alert opens the Terminals home.
+- **Chat.** Your messages are right-aligned bubbles; replies read full width
+  under a speaker label, with skill/agent steps as compact chips. The composer
+  is a rounded field with hold-to-talk dictation beside a round Send button.
+- **Message refresh fixes.** Scrolling back to the bottom of a live chat now
+  resumes the live tail, so replies that arrived while you were reading appear
+  without tapping **Latest**. Leaving a chat releases its reading hold, and
+  switching chats saves the one you are leaving to the on-phone presentation
+  cache first, so reopening it shows its latest messages.
+
+Validation for build 27 (2026-10-31): all **105 native Swift tests**, the
+model/chat/presentation-cache/notification checks (including a new held-tail
+check) and all **21 Debug UI tests** pass on the iPhone 17 Pro simulator (the
+public-Relay smoke test was not run). The signed development build passed the
+artifact, APNs-environment, privacy and signature checks and was installed in
+place on the connected iPhone; CoreDevice confirms **0.1.0 (27)** and it
+launched normally without test arguments. No uninstall or data reset was done.
+The live-chat hold fix needs a paired Core to observe; simulator tests cover the
+scrolling behavior with local history only.
 
 Build **0.1.0 (26)** preserves a failed Core Chat question's support code across
 readiness refreshes and describes a trusted finalization failure separately.
@@ -38,7 +70,7 @@ Core owns full history. The protected display cache is separate from durable
 raw-event acknowledgments and never grants live permissions. Reading older
 messages preserves position; **Latest** explicitly returns to the live tail.
 
-The bottom **Chat** tab asks Core about recorded session and goal status, with
+**Ask Core** (home header) asks Core about recorded session and goal status, with
 visible checking feedback and a checked timestamp. Its Core model runs with no
 tools in an empty private directory, so this chat cannot execute or control the
 sessions it assesses. Questions, drafts and uncertain receipts survive reconnect
@@ -290,13 +322,13 @@ First launch offers **Pair** before the main interface. Successful host approval
 
 For the current manual setup, create at least one CLI terminal with `bzzy`, then open **CLI Settings → Pair iPhone** on the Mac. Its QR/code appears automatically without choosing a terminal. It requests full session control, terminal catalog access, project sharing and Agent management; there are no permission/scope choices. Scan the compact QR directly from the 80x24 TUI or enter the expiring code on iPhone. Confirm the host on iPhone, then choose **Compare and approve iPhone…** on the Mac, compare **This iPhone** with the displayed fingerprint, and choose **Fingerprints match · Pair iPhone**. Expiry and revocation remain available on the secondary pairing screen. The user performs these steps.
 
-After pairing, the workspace stays visible offline with its bottom status indicator. Core-dependent Agents, Terminal and chat actions remain disabled until a fresh authorized Core response; cached history remains readable. Relay connectivity alone does not unlock them. Authorized foreground heartbeats confirm Core readiness; brief inactive overlays such as Notification Center keep a healthy authenticated subscription; actual outages and backgrounding clear live usage and disable sending, control, agent changes and sharing. Pairing, cached history and uncertain command IDs remain saved. Reconnect only reads state and restores observation.
+After pairing, the workspace stays visible offline with its bottom status indicator and an offline notice. Core-dependent Terminal and chat actions remain disabled until a fresh authorized Core response; cached history remains readable. Relay connectivity alone does not unlock them. Authorized foreground heartbeats confirm Core readiness; brief inactive overlays such as Notification Center keep a healthy authenticated subscription; actual outages and backgrounding clear live usage and disable sending, control, agent changes and sharing. Pairing, cached history and uncertain command IDs remain saved. Reconnect only reads state and restores observation.
 
 Terminal lists show only sessions with a nonblank `/alias`, ordered by most recent saved activity. Unnamed sessions remain in Core. A failed CPU/RAM read checks an authorized session heartbeat before reporting Core offline; closing CLI only releases its input lease.
 
-With explicit host `agentAccess`, Agents lists real persistent Core records. Create an on-demand agent, choose its Core-discovered provider/model/effort and instructions, then open its chat/activity, edit it while idle or archive it. Workspaces are created beneath Core's configured BZZY root. Creation/opening does not start inference. Account bindings are configured privately on the host. Scheduling is currently unsupported and is never simulated as active.
+Persistent Agents remain owned by Core, but since build 27 iPhone has no Agents screen: it does not list, create, edit, archive, import or open them. The pairing grant is unchanged. Earlier builds managed Agents from iPhone; that UI was removed at the user's request.
 
-Existing local drafts remain labelled inactive. Samples and demo sessions are limited to previews/UI tests. Opening a conversation, foregrounding, reconnecting or opening a notification never submits a draft or starts work. Agent management lives in iPhone; CLI stays terminal-oriented.
+Existing local drafts remain labelled inactive. Samples and demo sessions are limited to previews/UI tests. Opening a conversation, foregrounding, reconnecting or opening a notification never submits a draft or starts work.
 
 ## Chat and response formatting
 
@@ -342,7 +374,7 @@ Approval cards now appear directly in chat with command details and green
 drafts stay intact, and Core rechecks question identity, expiry and ownership.
 The composer also shows authoritative goal progress/completion/stall colors.
 
-Every agent and terminal opens the same native chat at its most recent message, without an animated trip through old history. Late Core history also lands at the bottom. Compact terminal transcript rows distinguish user, main assistant and worker replies with colored labels and rails, above the prompt composer. COOL, Signal, Subscriptions, Design review and Research contain fictional conversations. The examples demonstrate native tables, normal/bold/italic text, three text sizes, colored highlights, lists, quotes and literal code blocks. Sending in a Demo chat adds a predefined local reply. Created agent drafts remain separate and never receive these fake responses.
+Every terminal opens the same native chat at its most recent message, without an animated trip through old history. Late Core history also lands at the bottom. Your messages are trailing bubbles; main and worker replies read full width under colored speaker labels (workers also get a colored rail). The Design review and Research samples contain fictional conversations. The examples demonstrate native tables, normal/bold/italic text, three text sizes, colored highlights, lists, quotes and literal code blocks. Sending in a Demo chat adds a predefined local reply. Created agent drafts remain separate and never receive these fake responses.
 
 Recent remote conversations also have a protected on-phone presentation cache:
 up to 100 complete semantic entries per host/resource/session/grant, bounded to
@@ -352,16 +384,17 @@ The cache paints before Core attachment and is replaced by durable event replay;
 it contains no live permissions, input ownership or actionable questions. Raw
 events and their durable acknowledgments remain a separate store. Revocation,
 unpairing and confirmed session deletion remove the associated cached display.
-Valid paired phones can read saved Terminal and Chat views offline; Core-dependent
-commands and Agent management still require a current authorized Core response.
+Valid paired phones can read saved Terminal and Ask Core views offline;
+Core-dependent commands still require a current authorized Core response.
 
 Terminal views render the latest 100 entries initially and expand a bounded
 200-entry reading window with **Earlier**. Layout changes, streaming messages
 and bootstrap pagination cannot switch the reader out of following the latest
 activity. Deliberately browsing older history preserves the reading position;
-**Latest** returns to the live tail. Opening history never resends model work.
+scrolling back to the bottom of that window, or **Latest**, returns to the live
+tail. Opening history never resends model work.
 
-The bottom **Chat** tab is a separate read-only Core conversation for questions
+**Ask Core** is a separate read-only Core conversation for questions
 such as “Which sessions are running?” or “What is the goal status of this session?”
 It uses Core's independent assistant defaults and an enforced tool-free model
 profile, with a fresh bounded inventory of saved aliased terminal/goal states.
@@ -395,7 +428,7 @@ The initial Relay protocol has no forward secrecy/ratchet and has not received a
 
 With explicit `shareAccess`, a live terminal's Share action asks Core to package the actual project and full BZZY context. A live Agent requires both `agentAccess` and `shareAccess` and uses `BZZY-AGENT-...`. Both transient sheets display a QR/temporary code, the complete source fingerprint, recipient fingerprint approval and revocation. Codes/QR values are cleared on dismissal, backgrounding and expiry, and never enter durable chat or logs.
 
-For terminals, the recipient uses `bzzy --import CODE` or `/import` in CLI to restore into that CLI's current directory. For Agents, iPhone's **Import agent** scans/pastes the invitation, requires complete sender fingerprint comparison, and selects the receiving Core's own provider/model/effort. Core receives and validates project files, full chats, notes, memory, goals, nested relationships and evidence, then restores a fresh idle Agent beneath its managed Agents root. Imported work is paused, account bindings/permissions remain separate, and opening it never starts inference. The phone shows the temporary recipient fingerprint for the sender's explicit approval; refresh/cancel and saved job-ID reconciliation survive ordinary outages. Codes and bundle bytes are never persisted on iPhone. A completed Core `importId` receipt can recover a transfer after helper restart without receiving it twice.
+For terminals, the recipient uses `bzzy --import CODE` or `/import` in CLI to restore into that CLI's current directory. Builds before 27 also offered an iPhone **Import agent** flow; it was removed with the Agents tab, and the Core import contract below is unchanged. That flow scanned/pasted the invitation, requires complete sender fingerprint comparison, and selects the receiving Core's own provider/model/effort. Core receives and validates project files, full chats, notes, memory, goals, nested relationships and evidence, then restores a fresh idle Agent beneath its managed Agents root. Imported work is paused, account bindings/permissions remain separate, and opening it never starts inference. The phone shows the temporary recipient fingerprint for the sender's explicit approval; refresh/cancel and saved job-ID reconciliation survive ordinary outages. Codes and bundle bytes are never persisted on iPhone. A completed Core `importId` receipt can recover a transfer after helper restart without receiving it twice.
 
 Both Cores must stay online during transfer. Imported identities/paths are remapped, credentials excluded and existing files protected. The public Relay must support the transfer quotas/lifetime; see [project sharing](../BZZY-CORE/docs/PROJECT-SHARING.md). Mobile terminal import and scheduled Agent activation remain unsupported. Legacy demo import is preview/test behavior and cannot substitute for live production import.
 

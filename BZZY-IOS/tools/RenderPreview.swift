@@ -21,36 +21,38 @@ struct RenderPreview {
             }
             FlyEyes.previewShaderURL = library
         }
-        let agents = WorkspaceStore()
         let terminal = WorkspaceStore()
-        terminal.selectedTab = .terminal
-        try render("agents", view: WorkspaceView(store: agents), folder: folder)
         try render("terminal", view: WorkspaceView(store: terminal), folder: folder)
+        try render("terminal-small", view: WorkspaceView(store: WorkspaceStore()), folder: folder, width: 375, height: 667)
+        try render("terminal-large-text", view: WorkspaceView(store: WorkspaceStore()).environment(\.dynamicTypeSize, .accessibility2), folder: folder)
         let assessment = WorkspaceStore()
-        assessment.selectedTab = .chat
-        try render("core-assessment-chat", view: WorkspaceView(store: assessment), folder: folder)
-        try render("core-assessment-chat-large", view: WorkspaceView(store: assessment).environment(\.dynamicTypeSize, .accessibility2), folder: folder, width: 375)
+        try render("core-assessment-chat", view: NavigationStack { CoreChatView(store: assessment) }, folder: folder)
+        try render("core-assessment-chat-large", view: NavigationStack { CoreChatView(store: assessment) }.environment(\.dynamicTypeSize, .accessibility2), folder: folder, width: 375)
         let goalTerminals = WorkspaceStore(includeSamples: false)
-        goalTerminals.selectedTab = .terminal
-        let statuses: [(String, String, String, String?)] = [("starbucks-japan", "complete", "idle", nil),
-            ("Research", "blocked", "idle", nil), ("Current work", "active", "running", nil),
-            ("Paused project", "paused", "paused", "user_pause"), ("Review request", "active", "waiting_for_input", nil)]
-        goalTerminals.applyLiveTerminalCatalog(try JSONSerialization.data(withJSONObject: statuses.map { name, goal, execution, reason in
-            ["id": UUID().uuidString, "alias": name, "cwd": "/fixture/project", "goalStatus": goal,
-             "executionState": execution, "goalReason": reason as Any? ?? NSNull()] as [String: Any]
+        let now = Date()
+        let statuses: [(String, String, String, String?, String, Double)] = [
+            ("starbucks-japan", "complete", "idle", nil, "/Users/demo/code/starbucks-japan", 240),
+            ("Research", "blocked", "idle", nil, "/Users/demo/research/notes", 3_600),
+            ("Current work", "active", "running", nil, "/Users/demo/code/bzzy", 20),
+            ("Paused project", "paused", "paused", "user_pause", "/Users/demo/code/paused-project", 7_200),
+            ("Review request", "active", "waiting_for_input", nil, "/Users/demo/code/review", 90)]
+        let iso = ISO8601DateFormatter()
+        goalTerminals.applyLiveTerminalCatalog(try JSONSerialization.data(withJSONObject: statuses.map { name, goal, execution, reason, cwd, age in
+            ["id": UUID().uuidString, "alias": name, "cwd": cwd, "goalStatus": goal, "model": "gpt-5.5",
+             "executionState": execution, "goalReason": reason as Any? ?? NSNull(),
+             "updatedAt": iso.string(from: now.addingTimeInterval(-age))] as [String: Any]
         }))
         try render("terminal-goal-status", view: WorkspaceView(store: goalTerminals), folder: folder)
         try render("terminal-goal-status-large", view: WorkspaceView(store: goalTerminals).environment(\.dynamicTypeSize, .accessibility2), folder: folder, width: 375)
-        try render("conversation", view: ConversationView(store: agents, agent: agents.agents[0]), folder: folder)
-        try render("subscriptions-chat", view: ConversationView(store: agents, agent: agents.agents[2]), folder: folder)
-        try render("terminal-chat", view: TerminalConversationView(store: terminal, session: TerminalPreview.samples[0]), folder: folder)
+        try render("terminal-chat", view: NavigationStack { TerminalConversationView(store: terminal, session: TerminalPreview.samples[0]) }, folder: folder)
         let chat = ConversationCanvas(store: terminal, conversationID: TerminalPreview.samples[0].id,
-            title: "starbucks-japan", subtitle: "Demo", assistantName: TerminalPreview.samples[0].model)
-        try render("terminal-header", view: chat, folder: folder)
-        try render("terminal-header-large", view: chat.environment(\.dynamicTypeSize, .accessibility2), folder: folder, width: 375)
-        try render("research-chat", view: TerminalConversationView(store: terminal, session: TerminalPreview.samples[1]), folder: folder)
+            title: "starbucks-japan", subtitle: "~/code/starbucks-japan", assistantName: TerminalPreview.samples[0].model)
+        try render("terminal-header", view: NavigationStack { chat }, folder: folder)
+        try render("terminal-header-large", view: NavigationStack { chat }.environment(\.dynamicTypeSize, .accessibility2), folder: folder, width: 375)
+        try render("research-chat", view: NavigationStack { TerminalConversationView(store: terminal, session: TerminalPreview.samples[1]) }, folder: folder)
         let live = WorkspaceStore(includeSamples: false), sessionID = UUID().uuidString.lowercased()
-        live.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: ["session": ["id": sessionID, "alias": "PersistenceTest", "provider": "codex"]]))
+        live.applyLiveSnapshot(try JSONSerialization.data(withJSONObject: ["session": ["id": sessionID, "alias": "PersistenceTest", "provider": "codex",
+            "model": "gpt-5.5", "cwd": "/Users/demo/code/persistence", "goal": ["status": "active", "objective": "Keep chat boundaries"]]]))
         let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("BZZY-CORE/test/fixtures/chat-message-boundaries.json")
         let fixture = (try JSONSerialization.jsonObject(with: Data(contentsOf: fixtures)) as! [[String: Any]])[0]
@@ -59,18 +61,19 @@ struct RenderPreview {
                 "sessionId": sessionID, "createdAt": "2026-10-23T12:00:00Z", "type": event["type"]!, "data": event["data"]!])
         }
         live.applyLiveEvents(events)
-        try render("live-reply-boundaries", view: ConversationCanvas(store: live, conversationID: sessionID,
-            title: "PersistenceTest", subtitle: "Codex · shared message boundaries", remoteSession: true), folder: folder)
-        try render("chat-large-text", view: ConversationView(store: agents, agent: agents.agents[0]).environment(\.dynamicTypeSize, .accessibility2), folder: folder)
-        try render("voice", view: VoiceView(store: agents, conversationID: agents.agents[0].id.uuidString, agentName: "COOL"), folder: folder)
+        try render("live-reply-boundaries", view: NavigationStack { ConversationCanvas(store: live, conversationID: sessionID,
+            title: "PersistenceTest", subtitle: "~/code/persistence", assistantName: "gpt-5.5", remoteSession: true) }, folder: folder)
+        try render("session-details", view: LiveSessionDetailsView(store: live), folder: folder)
+        try render("chat-large-text", view: NavigationStack { TerminalConversationView(store: terminal, session: TerminalPreview.samples[0]) }
+            .environment(\.dynamicTypeSize, .accessibility2), folder: folder)
+        try render("voice", view: VoiceView(store: terminal, conversationID: TerminalPreview.samples[0].id, agentName: TerminalPreview.samples[0].name), folder: folder)
         try render("voice-only", view: VoiceChatView(), folder: folder)
         try render("settings-voice", view: SettingsView().environment(NotificationStore()), folder: folder)
         try render("activity", view: ActivityView(), folder: folder)
-        try render("share", view: ShareResourceView(target: .agent(agents.agents[0]))
+        try render("share", view: ShareResourceView(target: .terminal(TerminalPreview.samples[0]))
             .environment(DemoTransferStore()).environment(RelayConnection(networkingEnabled: false)), folder: folder)
-        try render("import", view: ImportResourceView(store: agents, kind: .agent).environment(DemoTransferStore()), folder: folder)
-        try render("agents-small", view: WorkspaceView(store: WorkspaceStore()), folder: folder, width: 375, height: 667)
-        try render("agents-large-text", view: WorkspaceView(store: WorkspaceStore()).environment(\.dynamicTypeSize, .accessibility2), folder: folder)
+        try render("import", view: ImportResourceView(store: terminal, kind: .terminal).environment(DemoTransferStore()), folder: folder)
+        try render("connect", view: ConnectView(required: true), folder: folder)
         let expressions: [(String, FlyMood, Double)] = [("idle", .idle, 0), ("glance", .curious, 3), ("antennae", .idle, 5.86), ("resting", .resting, 6), ("happy", .happy, 4), ("thinking", .thinking, 4)]
         for expression in expressions {
             let renderer = ImageRenderer(content: FlyEyes(mood: expression.1, interactive: false, frozenTime: expression.2)

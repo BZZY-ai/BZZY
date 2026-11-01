@@ -5,6 +5,7 @@ struct ChatChecks {
     @MainActor static func main() throws {
         checkHistoryWindow()
         checkScrollIntent()
+        checkHeldLiveTailRelease()
         try checkInvocationTranscript()
         for demo in DemoConversation.samples.values {
             require(demo.messages.contains(where: \.isUser) && demo.messages.contains(where: { !$0.isUser }), "Demos need both speakers")
@@ -202,6 +203,23 @@ private func checkScrollIntent() {
     require(state.observeViewport(atLatest: false, includesLatest: true) == .none,
             "The layout following Latest cannot immediately freeze the tail again")
     print("PASS: explicit reader scroll intent, late layout, reconnect preservation and tail recovery")
+}
+
+private func checkHeldLiveTailRelease() {
+    func require(_ condition: @autoclosure () -> Bool, _ message: String) { precondition(condition(), message) }
+    let loaded = (1...40).map { LocalMessage(id: UUID(), text: "Row \($0)", kind: .assistant, createdAt: Date(timeIntervalSince1970: Double($0))) }
+    var window = ConversationHistoryWindow(), reader = ConversationScrollState()
+    reader.setUserScrolling(true)
+    require(reader.observeViewport(atLatest: false, includesLatest: window.includesLatest(in: loaded)) == .holdEarlier,
+            "Scrolling up in a live chat holds the reading position")
+    window.freeze(in: loaded)
+    // Core keeps newer replies out of a held projection, so the loaded rows stay
+    // the same. Their bottom is where the reader left the tail; reaching it again
+    // must resume following so the screen asks Core for the newest replies.
+    reader.setUserScrolling(true)
+    require(reader.observeViewport(atLatest: true, includesLatest: window.includesLatest(in: loaded)) == .followLatest && reader.followingLatest,
+            "Returning to the bottom of a held live chat resumes the live tail without Latest")
+    print("PASS: a held live chat resumes following when the reader returns to its bottom")
 }
 
 @MainActor private func checkInvocationTranscript() throws {

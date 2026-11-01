@@ -14,11 +14,9 @@ struct ActivityView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Text("›").bzzyFont(20, weight: .semibold).foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text("Activity").bzzyFont(20, weight: .semibold)
-                        Spacer()
-                        if session != nil { Button("Refresh") { relay.performHostAction { await relay.refreshCore() } }.bzzyFont(12) }
+                    HStack(alignment: .firstTextBaseline) {
+                        SheetTitle(title: "Activity")
+                        if session != nil { Button("Refresh") { relay.performHostAction { await relay.refreshCore() } }.bzzyFont(13) }
                     }
                     if let session {
                         VStack(alignment: .leading, spacing: 10) {
@@ -40,11 +38,11 @@ struct ActivityView: View {
                                     Text(verbatim: item.details).font(.system(.caption, design: .monospaced))
                                         .textSelection(.enabled).padding(.top, 8)
                                 } label: {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(item.type).bzzyFont(13, weight: .medium).foregroundStyle(BZZYTheme.accent)
-                                        Text(item.date.formatted(date: .omitted, time: .standard)).bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.type).bzzyFont(13, weight: .semibold, design: .monospaced).foregroundStyle(BZZYTheme.text)
+                                        Text(item.date.formatted(date: .omitted, time: .standard)).bzzyFont(11).foregroundStyle(BZZYTheme.muted)
                                     }
-                                }.panel()
+                                }.padding(.horizontal, 14).padding(.vertical, 10).hiveCard()
                             }
                         } else { Text("No recorded activity").bzzyFont(13).foregroundStyle(BZZYTheme.muted) }
                     } else { Text("No activity").bzzyFont(13).foregroundStyle(BZZYTheme.muted) }

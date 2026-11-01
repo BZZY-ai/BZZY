@@ -4,22 +4,11 @@ import RelayKit
 import UIKit
 #endif
 
-struct ConversationView: View {
-    @Bindable var store: WorkspaceStore
-    let agent: AgentProfile
-    var body: some View {
-        ConversationCanvas(store: store, conversationID: agent.id.uuidString, title: agent.name,
-                           subtitle: agent.isSample ? "Demo" : "Draft · \(agent.mode.rawValue)", agent: agent,
-                           shareTarget: .agent(agent)).id(agent.id)
-    }
-}
-
 struct ConversationCanvas: View {
     @Bindable var store: WorkspaceStore
     let conversationID: String
     let title: String
     let subtitle: String
-    var agent: AgentProfile? = nil
     var assistantName: String? = nil
     var shareTarget: ShareTarget? = nil
     var instructions: String? = nil
@@ -39,7 +28,6 @@ struct ConversationCanvas: View {
     @State private var pauseGoalID: String?
     @State private var retryGoalMessageID: String?
     @State private var showShare = false
-    @State private var showImport = false
     @State private var showDefaults = false
     @State private var voice = VoiceCapture()
     @AppStorage(SpeechLanguage.recognitionKey, store: SpeechLanguage.preferences) private var recognitionLanguage = SpeechLanguage.preferred.rawValue
@@ -100,7 +88,7 @@ struct ConversationCanvas: View {
         historyWindow.hasEarlier(in: messages) || isLive && relay.coreSessionID == conversationID && relay.coreHistoryHasOlder
     }
     private var chatConnectionStatus: String {
-        guard isLive else { return isDemo ? "Demo · On device" : "Not connected" }
+        guard isLive else { return isDemo ? "Demo · On this iPhone" : "Draft · Saved on this iPhone" }
         guard relay.isCoreSessionReady(conversationID) else {
             return relay.coreError ?? (relay.coreConnected ? "Opening conversation…" : "Reconnecting to Core…")
         }
@@ -109,204 +97,12 @@ struct ConversationCanvas: View {
         if !relay.coreCommandStatus.isEmpty { return relay.coreCommandStatus }
         return relay.coreInputStatus ?? (relay.corePermissions.contains("execute") ? "Connected to Core" : "Observer · Read only")
     }
+    private var subtitleIsPath: Bool { subtitle.hasPrefix("/") || subtitle.hasPrefix("~") }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Button { composerFocused = false; cancelDictation(); persistComposerDraft(); dismiss() } label: {
-                    Image(systemName: "chevron.left").bzzyFont(17, weight: .medium)
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                }.buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent)
-                    .accessibilityLabel("Back").accessibilityIdentifier("chat-back")
-                Text(title).bzzyFont(14, weight: .semibold).lineLimit(1).truncationMode(.middle)
-                    .accessibilityIdentifier("conversation-title")
-                modePicker.fixedSize(horizontal: true, vertical: false).layoutPriority(1)
-                Spacer(minLength: 0)
-                Menu {
-                    if isLive && relay.coreSharingAllowed && relay.coreSessionID == conversationID {
-                        Button { showShare = true } label: { Label("Share project and context", systemImage: "square.and.arrow.up") }
-                            .disabled(!relay.isCoreSessionReady(conversationID))
-                            .accessibilityIdentifier(relay.coreIsAgent ? "share-live-agent" : "share-live-terminal")
-                    } else if shareTarget != nil {
-                        Button { showShare = true } label: { Label("Share", systemImage: "square.and.arrow.up") }
-                            .accessibilityIdentifier("share-resource")
-                    }
-                    Button { showImport = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
-                        .disabled(isLive && !relay.coreActionsAvailable)
-                    if isLive {
-                        Button { showActivity = true } label: { Label("Activity", systemImage: "list.bullet") }
-                            .disabled(relay.coreSessionID != conversationID).accessibilityIdentifier("live-session-activity")
-                        if relay.coreSelectionControl {
-                            Button { showModelSettings = true } label: { Label("Model and effort", systemImage: "slider.horizontal.3") }
-                                .disabled(!relay.isCoreSessionReady(conversationID) || relay.coreExecutionState != "paused")
-                                .accessibilityIdentifier("session-model")
-                        }
-                        if relay.coreModeControl { Button("Mode defaults") { showDefaults = true } }
-                        if relay.coreYoloControl {
-                            Toggle("YOLO", isOn: Binding(get: { relay.coreYoloEnabled }, set: { enabled in
-                                let pending = store.liveSession?.questions.first(where: { $0.kind == "approval" })
-                                relay.performHostAction { await relay.setCoreYolo(enabled, questionID: pending?.id, sessionID: conversationID) }
-                            })).disabled(!relay.isCoreSessionReady(conversationID) || relay.coreBusy).accessibilityIdentifier("chat-yolo")
-                        }
-                    }
-                    Button { draft = CoreGoalDraft.settingGoal(draft); composerCaretRequest &+= 1; composerFocused = true } label: { Label("Set goal", systemImage: "scope") }
-                        .disabled(!canSetGoal).accessibilityIdentifier("set-goal")
-                    Button { showDetails = true } label: { Label("Details", systemImage: "info.circle") }
-                        .disabled(isLive && relay.coreSessionID != conversationID)
-                } label: {
-                    Image(systemName: "gearshape").bzzyFont(18).frame(width: 44, height: 44)
-                        .foregroundStyle(BZZYTheme.secondary).contentShape(Rectangle())
-                }.menuIndicator(.hidden).buttonStyle(BZZYPressStyle())
-                    .accessibilityLabel("Chat settings").accessibilityIdentifier("chat-settings")
-            }.padding(.horizontal, 8).padding(.vertical, 2)
-            Rectangle().fill(BZZYTheme.line.opacity(0.65)).frame(height: 0.5)
-
-            ScrollViewReader { reader in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        if hasEarlierMessages {
-                            Button { Task { await loadEarlierHistory(reader) } } label: {
-                                HStack(spacing: 8) {
-                                    if pagingHistory || relay.coreHistoryLoading { ProgressView().controlSize(.small) }
-                                    else { Image(systemName: "arrow.up") }
-                                    Text("Earlier messages").bzzyFont(11, weight: .medium)
-                                }.frame(maxWidth: .infinity, minHeight: 44)
-                            }.buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent)
-                                .disabled(pagingHistory || relay.coreHistoryLoading || (!historyWindow.hasEarlier(in: messages) && !relay.isCoreSessionReady(conversationID)))
-                                .accessibilityIdentifier("load-earlier-messages")
-                                .id("earlier-\(visibleMessages.first?.id.uuidString ?? "empty")")
-                        }
-                        if isLive && store.liveSession?.id == conversationID && store.cachedPresentationOmittedMessageCount > 0 {
-                            Text("Some large entries are available from Core when connected.")
-                                .bzzyFont(10).foregroundStyle(BZZYTheme.muted)
-                                .accessibilityIdentifier("chat-cache-omitted")
-                        }
-                        if messages.isEmpty {
-                            if isLive {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(relay.isCoreSessionReady(conversationID) ? "No messages yet" : "No saved messages on this iPhone yet")
-                                        .bzzyFont(12, weight: .medium)
-                                    Text(relay.isCoreSessionReady(conversationID) ? "Write a message or set a goal." : "Core will load this conversation when connected.")
-                                        .bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
-                                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 28)
-                                    .accessibilityElement(children: .combine).accessibilityIdentifier("chat-empty-state")
-                            } else if BZZYTheme.showsMascot {
-                                FlyEyes(interactive: false).frame(width: 160)
-                                    .frame(maxWidth: .infinity).padding(.vertical, 70)
-                            } else {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("› \(title)").bzzyFont(14, weight: .semibold).foregroundStyle(BZZYTheme.accent)
-                                    Text("Write a message or set a goal.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
-                                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 28)
-                                    .accessibilityElement(children: .combine).accessibilityIdentifier("chat-empty-state")
-                            }
-                        }
-                        ForEach(visibleMessages) { message in
-                            TranscriptMessageRow(message: message, showsDraft: !isDemo && !isLive && message.isUser,
-                                       speaker: message.isUser ? "You" : (message.speaker ?? assistantName ?? title),
-                                       showsSpeaker: startsSpeakerGroup(message))
-                                .id(message.id)
-                        }
-                        if isLive, relay.coreSessionID == conversationID {
-                            ForEach(relay.coreOutgoingMessages) { outgoing in
-                                OutgoingMessageRow(message: outgoing, retryEnabled: relay.isCoreSessionReady(conversationID) && !relay.isCoreSessionBusy(conversationID)) {
-                                    prepareForSubmission()
-                                    if outgoing.status == .failed, CoreGoalDraft.isNewGoal(outgoing.text),
-                                       CoreGoalDraft.needsReplacement(status: relay.coreGoalStatus), let goalID = relay.coreGoalID,
-                                       outgoing.params["replaceGoalId"]?.string != goalID {
-                                        retryGoalMessageID = outgoing.id; goalToReplace = goalID; showReplaceGoal = true
-                                    } else { relay.performHostAction { await relay.retryOutgoingMessage(outgoing.id) } }
-                                }.contextMenu {
-                                    if outgoing.status == .failed {
-                                        Button("Remove failed message", role: .destructive) { relay.removeFailedOutgoingMessage(outgoing.id) }
-                                    }
-                                }
-                            }
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
-                            .background(GeometryReader { geometry in
-                                Color.clear.preference(key: ConversationBottomPreference.self,
-                                    value: geometry.frame(in: .named("conversation-scroll")).maxY)
-                            })
-                    }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
-                }.scrollIndicators(.hidden).scrollDismissesKeyboard(.interactively)
-                    .accessibilityIdentifier("conversation-history").accessibilityValue("\(visibleMessages.count) messages")
-                    .coordinateSpace(name: "conversation-scroll")
-                    .background(GeometryReader { geometry in
-                        Color.clear.onAppear { scrollViewportHeight = geometry.size.height }
-                            .onChange(of: geometry.size.height) { _, height in scrollViewportHeight = height }
-                    })
-                    .modifier(ConversationScrollInteraction { scrollState.setUserScrolling($0) })
-                    .onPreferenceChange(ConversationBottomPreference.self) { bottom in
-                        bottomPosition = bottom
-                        guard !messages.isEmpty, !pagingHistory, let bottom, scrollViewportHeight > 0 else { return }
-                        let atLatest = bottom >= 0 && bottom <= scrollViewportHeight + 72
-                        let includesLatest = historyWindow.includesLatest(in: messages) && !(isLive && relay.coreHistoryHasNewer)
-                        switch scrollState.observeViewport(atLatest: atLatest, includesLatest: includesLatest) {
-                        case .followLatest:
-                            historyWindow.showLatest()
-                            if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
-                            scrollToLatest(reader)
-                        case .holdEarlier:
-                            historyWindow.freeze(in: messages)
-                            if isLive { relay.holdCoreHistory(sessionID: conversationID) }
-                        case .none: break
-                        }
-                    }
-                    .modifier(ConversationInitialScrollAnchor())
-                    .task(id: conversationID) {
-                        historyWindow.showLatest(); scrollState.showLatest()
-                        if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
-                        await Task.yield()
-                        scrollToLatest(reader)
-                    }
-                    .task(id: messages.last) {
-                        // Cached rows, late bootstrap and streamed text all get a
-                        // layout pass before positioning. A reader in history stays put.
-                        await Task.yield()
-                        guard !Task.isCancelled else { return }
-                        scrollToLatest(reader)
-                    }
-                    .task(id: scrollViewportHeight) {
-                        await Task.yield()
-                        guard !Task.isCancelled else { return }
-                        scrollToLatest(reader)
-                    }
-                    .task(id: bottomPosition) {
-                        // Interleaved tool/worker rows can grow before the last
-                        // message. Follow their resulting layout as well.
-                        guard let bottomPosition, bottomPosition > scrollViewportHeight + 1 else { return }
-                        await Task.yield()
-                        guard !Task.isCancelled else { return }
-                        scrollToLatest(reader)
-                    }
-                    .onChange(of: relay.coreOutgoingMessages.map(\.id)) { previous, current in
-                        if isLive, relay.coreSessionID == conversationID, current.contains(where: { !previous.contains($0) }) {
-                            prepareForSubmission()
-                            scrollToLatest(reader, force: true)
-                        }
-                    }
-                    .onChange(of: composerFocused) {
-                        if composerFocused && scrollState.followingLatest { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { reader.scrollTo("bottom", anchor: .bottom) } }
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        if !scrollState.followingLatest {
-                            Button {
-                                Task {
-                                    prepareForSubmission()
-                                    await Task.yield()
-                                    scrollToLatest(reader, force: true)
-                                }
-                            } label: {
-                                Label("Latest", systemImage: "arrow.down").bzzyFont(11, weight: .semibold)
-                                    .padding(.horizontal, 14).frame(minHeight: 44)
-                                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.accent.opacity(0.5), lineWidth: 0.7))
-                            }.buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent)
-                                .padding(16).accessibilityIdentifier("chat-jump-to-latest")
-                        }
-                    }
-            }
+            header
+            transcript
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .bzzyScreen().toolbar(.hidden)
@@ -326,11 +122,6 @@ struct ConversationCanvas: View {
         }
         .sheet(isPresented: $showModelSettings) { CoreDefaultsEditor(sessionID: conversationID) }
         .sheet(isPresented: $showDefaults) { CoreDefaultsEditor() }
-        .sheet(isPresented: $showImport) {
-            let kind: SharedResourceKind = agent != nil || shareTarget?.kind == .agent || isLive && relay.coreIsAgent ? .agent : .terminal
-            if kind == .agent && !store.showsDemoContent { LiveAgentImportView(store: store).coreAvailabilityGate() }
-            else { ImportResourceView(store: store, kind: kind).coreAvailabilityGate() }
-        }
         .sheet(isPresented: $showActivity) { ActivityView(store: store, sessionID: conversationID) }
         .sheet(isPresented: $showShare) {
             if isLive { LiveTerminalShareView(sessionID: conversationID, title: title, directory: store.liveSession?.directory, kind: relay.coreIsAgent ? .agent : .terminal) }
@@ -339,7 +130,7 @@ struct ConversationCanvas: View {
         .onChange(of: voiceHeld) { _, held in
             if held { startDictation() } else { finishDictation() }
         }
-        .onChange(of: [showShare, showImport, showDetails, showActivity, showDefaults, showModelSettings]) { _, presented in
+        .onChange(of: [showShare, showDetails, showActivity, showDefaults, showModelSettings]) { _, presented in
             if presented.contains(true) { composerFocused = false; cancelDictation(); persistComposerDraft() }
         }
         .onChange(of: voice.transcript) { _, text in
@@ -369,7 +160,13 @@ struct ConversationCanvas: View {
         .onChange(of: relay.coreConversationRemovalID) {
             if isLive && relay.coreRemovedSessionID == conversationID { cancelDictation(); dismiss() }
         }
-        .onDisappear { composerFocused = false; cancelDictation(); persistComposerDraft() }
+        .onDisappear {
+            composerFocused = false; cancelDictation(); persistComposerDraft()
+            // A held reading position belongs to this screen. Leaving it must not
+            // keep Core's projection frozen, or later replies stop reaching the
+            // display and the saved presentation cache.
+            if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
+        }
         .confirmationDialog("Pause this conversation?", isPresented: $showPauseConfirmation, titleVisibility: .visible) {
             Button("Pause") {
                 guard canPause, pauseHostID == relay.activeHostID, pauseGoalID == relay.coreGoalID else { return }
@@ -390,10 +187,75 @@ struct ConversationCanvas: View {
         }
         .sheet(isPresented: $showDetails) {
             if isLive { LiveSessionDetailsView(store: store).coreAvailabilityGate() }
-            else { WorkspaceDetailsView(title: title, subtitle: subtitle, agent: agent, instructions: instructions).coreAvailabilityGate() }
+            else { WorkspaceDetailsView(title: title, subtitle: subtitle, instructions: instructions).coreAvailabilityGate() }
         }
     }
 
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Button { composerFocused = false; cancelDictation(); persistComposerDraft(); dismiss() } label: {
+                RoundIcon(symbol: "chevron.left")
+            }.buttonStyle(BZZYPressStyle())
+                .accessibilityLabel("Back").accessibilityIdentifier("chat-back")
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).bzzyFont(16, weight: .semibold).lineLimit(1).truncationMode(.middle)
+                    .accessibilityIdentifier("conversation-title")
+                if !subtitle.isEmpty {
+                    Text(subtitle).bzzyFont(11, design: subtitleIsPath ? .monospaced : .default)
+                        .foregroundStyle(BZZYTheme.muted).lineLimit(1).truncationMode(subtitleIsPath ? .head : .tail)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 2)
+            modePicker.fixedSize(horizontal: true, vertical: false).layoutPriority(1)
+            settingsMenu
+        }.padding(.horizontal, 8).padding(.vertical, 2)
+            .background(BZZYTheme.background)
+            .overlay(alignment: .bottom) { Rectangle().fill(BZZYTheme.line.opacity(0.7)).frame(height: 0.5) }
+    }
+
+    private var settingsMenu: some View {
+        Menu {
+            if isLive && relay.coreSharingAllowed && relay.coreSessionID == conversationID {
+                Button { showShare = true } label: { Label("Share project and context", systemImage: "square.and.arrow.up") }
+                    .disabled(!relay.isCoreSessionReady(conversationID))
+                    .accessibilityIdentifier(relay.coreIsAgent ? "share-live-agent" : "share-live-terminal")
+            } else if shareTarget != nil {
+                Button { showShare = true } label: { Label("Share", systemImage: "square.and.arrow.up") }
+                    .accessibilityIdentifier("share-resource")
+            }
+            Button { draft = CoreGoalDraft.settingGoal(draft); composerCaretRequest &+= 1; composerFocused = true } label: { Label("Set goal", systemImage: "scope") }
+                .disabled(!canSetGoal).accessibilityIdentifier("set-goal")
+            if isLive {
+                Button { showActivity = true } label: { Label("Activity", systemImage: "list.bullet.rectangle") }
+                    .disabled(relay.coreSessionID != conversationID).accessibilityIdentifier("live-session-activity")
+                if relay.coreSelectionControl {
+                    Button { showModelSettings = true } label: { Label("Model and effort", systemImage: "cpu") }
+                        .disabled(!relay.isCoreSessionReady(conversationID) || relay.coreExecutionState != "paused")
+                        .accessibilityIdentifier("session-model")
+                }
+                if relay.coreModeControl { Button { showDefaults = true } label: { Label("Mode defaults", systemImage: "slider.horizontal.3") } }
+                if relay.coreYoloControl {
+                    Toggle("YOLO", isOn: Binding(get: { relay.coreYoloEnabled }, set: { enabled in
+                        let pending = store.liveSession?.questions.first(where: { $0.kind == "approval" })
+                        relay.performHostAction { await relay.setCoreYolo(enabled, questionID: pending?.id, sessionID: conversationID) }
+                    })).disabled(!relay.isCoreSessionReady(conversationID) || relay.coreBusy).accessibilityIdentifier("chat-yolo")
+                }
+            }
+            Button { showDetails = true } label: { Label("Details", systemImage: "info.circle") }
+                .disabled(isLive && relay.coreSessionID != conversationID)
+        } label: {
+            RoundIcon(symbol: "ellipsis", tint: BZZYTheme.secondary)
+        }.menuIndicator(.hidden).buttonStyle(BZZYPressStyle())
+            .accessibilityLabel("Chat settings").accessibilityIdentifier("chat-settings")
+    }
+
+    /// Pausing an idle conversation stays in the mode menu; the composer offers
+    /// it only while work is running or a goal is being pursued.
+    private var showsPauseShortcut: Bool {
+        ["active", "verifying"].contains(store.liveSession?.goalStatus ?? "")
+            || ["queued", "launching", "running", "verifying", "waiting_for_input"].contains(relay.coreExecutionState ?? "")
+    }
     private var canPause: Bool {
         isLive && relay.isCoreSessionReady(conversationID) && relay.corePermissions.contains("pause") && relay.coreExecutionState != "paused"
             && !relay.coreBusy && !relay.coreCommandUncertain
@@ -420,13 +282,172 @@ struct ConversationCanvas: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(modeTitle.uppercased()).tracking(0.6)
-                if isLive && relay.coreModeControl { Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) }
-            }.bzzyFont(10, weight: .semibold).foregroundStyle(BZZYTheme.accent)
-                .padding(.horizontal, 8).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                Text(modeTitle.uppercased()).tracking(0.7)
+                if isLive && relay.coreModeControl { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)) }
+            }.bzzyFont(11, weight: .bold).foregroundStyle(BZZYTheme.accent)
+                .padding(.horizontal, 11).frame(minHeight: 28)
+                .background(BZZYTheme.accent.opacity(0.12), in: Capsule())
+                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }.menuIndicator(.hidden).buttonStyle(.plain)
             .disabled(!isLive || !relay.coreModeControl || !relay.isCoreSessionReady(conversationID))
             .accessibilityLabel("Chat mode").accessibilityValue(modeTitle).accessibilityIdentifier("conversation-mode")
+    }
+
+    // MARK: Transcript
+
+    private var transcript: some View {
+        ScrollViewReader { reader in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    if hasEarlierMessages {
+                        Button { Task { await loadEarlierHistory(reader) } } label: {
+                            HStack(spacing: 8) {
+                                if pagingHistory || relay.coreHistoryLoading { ProgressView().controlSize(.small).tint(BZZYTheme.accent) }
+                                else { Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)) }
+                                Text("Earlier messages").bzzyFont(12, weight: .semibold)
+                            }.padding(.horizontal, 14).frame(minHeight: 34)
+                                .background(BZZYTheme.elevated, in: Capsule())
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }.buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent)
+                            .disabled(pagingHistory || relay.coreHistoryLoading || (!historyWindow.hasEarlier(in: messages) && !relay.isCoreSessionReady(conversationID)))
+                            .accessibilityIdentifier("load-earlier-messages")
+                            .id("earlier-\(visibleMessages.first?.id.uuidString ?? "empty")")
+                    }
+                    if isLive && store.liveSession?.id == conversationID && store.cachedPresentationOmittedMessageCount > 0 {
+                        Label("Some large entries are available from Core when connected.", systemImage: "icloud.and.arrow.down")
+                            .bzzyFont(11).foregroundStyle(BZZYTheme.muted)
+                            .frame(maxWidth: .infinity)
+                            .accessibilityIdentifier("chat-cache-omitted")
+                    }
+                    if messages.isEmpty { emptyState }
+                    ForEach(visibleMessages) { message in
+                        TranscriptMessageRow(message: message, showsDraft: !isDemo && !isLive && message.isUser,
+                                   speaker: message.isUser ? "You" : (message.speaker ?? assistantName ?? title),
+                                   showsSpeaker: startsSpeakerGroup(message))
+                            .id(message.id)
+                    }
+                    if isLive, relay.coreSessionID == conversationID {
+                        ForEach(relay.coreOutgoingMessages) { outgoing in
+                            OutgoingMessageRow(message: outgoing, retryEnabled: relay.isCoreSessionReady(conversationID) && !relay.isCoreSessionBusy(conversationID)) {
+                                prepareForSubmission()
+                                if outgoing.status == .failed, CoreGoalDraft.isNewGoal(outgoing.text),
+                                   CoreGoalDraft.needsReplacement(status: relay.coreGoalStatus), let goalID = relay.coreGoalID,
+                                   outgoing.params["replaceGoalId"]?.string != goalID {
+                                    retryGoalMessageID = outgoing.id; goalToReplace = goalID; showReplaceGoal = true
+                                } else { relay.performHostAction { await relay.retryOutgoingMessage(outgoing.id) } }
+                            }.contextMenu {
+                                if outgoing.status == .failed {
+                                    Button("Remove failed message", role: .destructive) { relay.removeFailedOutgoingMessage(outgoing.id) }
+                                }
+                            }
+                        }
+                    }
+                    Color.clear.frame(height: 1).id("bottom")
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: ConversationBottomPreference.self,
+                                value: geometry.frame(in: .named("conversation-scroll")).maxY)
+                        })
+                }.padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 14)
+            }.scrollIndicators(.hidden).scrollDismissesKeyboard(.interactively)
+                .accessibilityIdentifier("conversation-history").accessibilityValue("\(visibleMessages.count) messages")
+                .coordinateSpace(name: "conversation-scroll")
+                .background(GeometryReader { geometry in
+                    Color.clear.onAppear { scrollViewportHeight = geometry.size.height }
+                        .onChange(of: geometry.size.height) { _, height in scrollViewportHeight = height }
+                })
+                .modifier(ConversationScrollInteraction { scrollState.setUserScrolling($0) })
+                .onPreferenceChange(ConversationBottomPreference.self) { bottom in
+                    bottomPosition = bottom
+                    guard !messages.isEmpty, !pagingHistory, let bottom, scrollViewportHeight > 0 else { return }
+                    let atLatest = bottom >= 0 && bottom <= scrollViewportHeight + 72
+                    // Only this screen's window decides whether the newest row is
+                    // on screen. Core's held projection reports newer events while
+                    // the reader browses; requiring it to be empty here made the
+                    // hold permanent, so live replies stopped appearing until Latest.
+                    let includesLatest = historyWindow.includesLatest(in: messages)
+                    switch scrollState.observeViewport(atLatest: atLatest, includesLatest: includesLatest) {
+                    case .followLatest:
+                        historyWindow.showLatest()
+                        if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
+                        scrollToLatest(reader)
+                    case .holdEarlier:
+                        historyWindow.freeze(in: messages)
+                        if isLive { relay.holdCoreHistory(sessionID: conversationID) }
+                    case .none: break
+                    }
+                }
+                .modifier(ConversationInitialScrollAnchor())
+                .task(id: conversationID) {
+                    historyWindow.showLatest(); scrollState.showLatest()
+                    if isLive { relay.showLatestCoreHistory(sessionID: conversationID) }
+                    await Task.yield()
+                    scrollToLatest(reader)
+                }
+                .task(id: messages.last) {
+                    // Cached rows, late bootstrap and streamed text all get a
+                    // layout pass before positioning. A reader in history stays put.
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    scrollToLatest(reader)
+                }
+                .task(id: scrollViewportHeight) {
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    scrollToLatest(reader)
+                }
+                .task(id: bottomPosition) {
+                    // Interleaved tool/worker rows can grow before the last
+                    // message. Follow their resulting layout as well.
+                    guard let bottomPosition, bottomPosition > scrollViewportHeight + 1 else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    scrollToLatest(reader)
+                }
+                .onChange(of: relay.coreOutgoingMessages.map(\.id)) { previous, current in
+                    if isLive, relay.coreSessionID == conversationID, current.contains(where: { !previous.contains($0) }) {
+                        prepareForSubmission()
+                        scrollToLatest(reader, force: true)
+                    }
+                }
+                .onChange(of: composerFocused) {
+                    if composerFocused && scrollState.followingLatest { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { reader.scrollTo("bottom", anchor: .bottom) } }
+                }
+                .overlay(alignment: .bottom) {
+                    if !scrollState.followingLatest {
+                        Button {
+                            Task {
+                                prepareForSubmission()
+                                await Task.yield()
+                                scrollToLatest(reader, force: true)
+                            }
+                        } label: {
+                            Image(systemName: "arrow.down").font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(BZZYTheme.text)
+                                .frame(width: 40, height: 40)
+                                .background(BZZYTheme.elevated, in: Circle())
+                                .overlay(Circle().stroke(BZZYTheme.accent.opacity(0.45), lineWidth: 0.8))
+                                .shadow(color: .black.opacity(0.45), radius: 10, y: 4)
+                                .frame(width: 44, height: 44).contentShape(Rectangle())
+                        }.buttonStyle(BZZYPressStyle())
+                            .padding(.bottom, 12)
+                            .accessibilityLabel("Latest")
+                            .accessibilityIdentifier("chat-jump-to-latest")
+                            .transition(.opacity)
+                    }
+                }
+        }
+    }
+
+    private var emptyState: some View {
+        let ready = relay.isCoreSessionReady(conversationID)
+        return VStack(spacing: 12) {
+            IconTile(symbol: isLive ? "terminal" : "text.bubble", tint: isLive && !ready ? BZZYTheme.muted : BZZYTheme.accent, size: 50)
+            Text(isLive ? (ready ? "No messages yet" : "No saved messages on this iPhone yet") : title)
+                .bzzyFont(16, weight: .semibold).multilineTextAlignment(.center)
+            Text(isLive && !ready ? "Core will load this conversation when connected." : "Write a message or set a goal.")
+                .bzzyFont(13).foregroundStyle(BZZYTheme.secondary).multilineTextAlignment(.center)
+        }.frame(maxWidth: .infinity).padding(.vertical, 56).padding(.horizontal, 24)
+            .accessibilityElement(children: .combine).accessibilityIdentifier("chat-empty-state")
     }
 
     private func persistComposerDraft() {
@@ -435,104 +456,135 @@ struct ConversationCanvas: View {
         } else if !isLive { store.localComposerDrafts[conversationID] = draft.isEmpty ? nil : draft }
     }
 
+    // MARK: Composer
+
+    private var currentModel: String? {
+        let model = isLive && store.liveSession?.id == conversationID ? store.liveSession?.model : assistantName
+        return model?.isEmpty == false ? model : nil
+    }
+
     private var composer: some View {
         VStack(spacing: 8) {
             if isLive, relay.coreSessionID == conversationID {
-                HStack {
-                    if let status = store.liveSession?.goalStatus {
-                        GoalPhasePill(status: status, reason: relay.coreGoalReason)
-                    }
-                    Spacer(minLength: 6)
-                    if relay.canResumeCoreGoal {
-                        goalShortcut("Resume", icon: "play.fill", id: "resume-goal", enabled: relay.isCoreSessionReady(conversationID) && !relay.coreBusy && !relay.coreCommandUncertain) {
-                            prepareForSubmission(); relay.performHostAction { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
+                if store.liveSession?.goalStatus != nil || relay.canResumeCoreGoal || showsPauseShortcut {
+                    HStack(spacing: 8) {
+                        if let status = store.liveSession?.goalStatus {
+                            GoalPhasePill(status: status, reason: relay.coreGoalReason)
                         }
-                    } else {
-                        Button {
-                            requestPauseConfirmation()
-                        } label: {
-                            Image(systemName: "pause.fill").bzzyFont(14).frame(width: 44, height: 44)
-                        }.buttonStyle(.plain).foregroundStyle(canPause ? BZZYTheme.accent : BZZYTheme.muted)
-                            .disabled(!canPause).accessibilityLabel("Pause conversation").accessibilityIdentifier("pause-goal")
+                        Spacer(minLength: 6)
+                        if relay.canResumeCoreGoal {
+                            goalShortcut("Resume", icon: "play.fill", id: "resume-goal", enabled: relay.isCoreSessionReady(conversationID) && !relay.coreBusy && !relay.coreCommandUncertain) {
+                                prepareForSubmission(); relay.performHostAction { await relay.resumeStalledCoreGoal(sessionID: conversationID) }
+                            }
+                        } else if showsPauseShortcut {
+                            Button { requestPauseConfirmation() } label: {
+                                Label("Pause", systemImage: "pause.fill").bzzyFont(12, weight: .semibold)
+                                    .padding(.horizontal, 12).frame(minHeight: 32)
+                                    .background((canPause ? BZZYTheme.accent : BZZYTheme.muted).opacity(0.12), in: Capsule())
+                                    .frame(minHeight: 44).contentShape(Rectangle())
+                            }.buttonStyle(BZZYPressStyle()).foregroundStyle(canPause ? BZZYTheme.accent : BZZYTheme.muted)
+                                .disabled(!canPause).accessibilityLabel("Pause conversation").accessibilityIdentifier("pause-goal")
+                        }
                     }
                 }
-                if let session = store.liveSession, session.id == conversationID {
+                if let session = store.liveSession, session.id == conversationID, !session.questions.isEmpty {
                     ScrollView {
                         VStack(spacing: 8) { ForEach(session.questions) { question in LiveQuestionView(question: question, sessionID: conversationID) } }
-                    }.scrollIndicators(.hidden).frame(maxHeight: session.questions.isEmpty ? 0 : 260)
+                    }.scrollIndicators(.hidden).frame(maxHeight: 260).fixedSize(horizontal: false, vertical: true)
                 }
-                if let error = relay.coreError { Text(error).bzzyFont(11).foregroundStyle(BZZYTheme.danger) }
+                if let error = relay.coreError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill").bzzyFont(12).foregroundStyle(BZZYTheme.danger)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-            if let model = isLive && store.liveSession?.id == conversationID ? store.liveSession?.model : assistantName, !model.isEmpty {
-                HStack(spacing: 6) {
-                    Text(model).bzzyFont(11, weight: .medium).foregroundStyle(BZZYTheme.accent)
-                        .lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 0)
-                }.accessibilityIdentifier("chat-current-model")
+            HStack(alignment: .bottom, spacing: 8) {
+                HStack(alignment: .bottom, spacing: 2) {
+                    #if canImport(UIKit)
+                    GoalMessageEditor(text: $draft, focused: Binding(get: { composerFocused }, set: { composerFocused = $0 }), caretAtEndRequest: composerCaretRequest)
+                        .padding(.vertical, 12).padding(.leading, 16)
+                        .disabled(voiceDraft != nil || voice.isBusy || voiceHeld)
+                    #else
+                    TextField("Message", text: $draft, axis: .vertical)
+                        .bzzyFont(16).lineLimit(1...5).textFieldStyle(.plain)
+                        .focused($composerFocused).padding(.vertical, 12).padding(.leading, 16)
+                        .accessibilityIdentifier("message-draft")
+                        .disabled(voiceDraft != nil || voice.isBusy || voiceHeld)
+                    #endif
+                    microphone
+                }.background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: 23, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 23, style: .continuous)
+                        .stroke(voice.isBusy ? BZZYTheme.accent.opacity(0.7) : composerFocused ? BZZYTheme.accent.opacity(0.4) : BZZYTheme.line, lineWidth: 0.8))
+                sendButton
             }
-            HStack(alignment: .bottom, spacing: 10) {
-                Text("›").bzzyFont(19, weight: .semibold).foregroundStyle(BZZYTheme.accent)
-                    .frame(height: 48).padding(.leading, 10).accessibilityHidden(true)
-                #if canImport(UIKit)
-                GoalMessageEditor(text: $draft, focused: Binding(get: { composerFocused }, set: { composerFocused = $0 }), caretAtEndRequest: composerCaretRequest)
-                    .padding(.vertical, 14)
-                    .disabled(voiceDraft != nil || voice.isBusy || voiceHeld)
-                #else
-                TextField("Message", text: $draft, axis: .vertical)
-                    .bzzyFont(14).lineLimit(1...5).textFieldStyle(.plain)
-                    .focused($composerFocused).padding(.vertical, 14)
-                    .accessibilityIdentifier("message-draft")
-                    .disabled(voiceDraft != nil || voice.isBusy || voiceHeld)
-                #endif
-                Image(systemName: voice.isRecording ? "waveform" : "mic.fill").bzzyFont(19)
-                    .foregroundStyle(voice.isBusy ? BZZYTheme.accent : BZZYTheme.secondary)
-                    .frame(width: 44, height: 46).contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0).updating($voiceHeld) { _, held, _ in held = true })
-                    .allowsHitTesting(canDictate && !voice.isFinishing)
-                    .opacity(canDictate ? 1 : 0.35)
-                    .accessibilityElement().accessibilityAddTraits(.isButton)
-                    .accessibilityLabel(voice.isBusy ? "Finish dictation" : "Hold to talk")
-                    .accessibilityHint("Hold while speaking. Release to finish. Review the text, then press Send.")
-                    .accessibilityIdentifier("voice-record")
-                    .accessibilityAction {
-                        if voice.isBusy { finishDictation() } else { startDictation() }
-                    }
-                Button {
-                    if isLive {
-                        let submitted = draft
-                        if CoreGoalDraft.isNewGoal(submitted.trimmingCharacters(in: .whitespacesAndNewlines)),
-                           CoreGoalDraft.needsReplacement(status: relay.coreGoalStatus), let goalID = relay.coreGoalID {
-                            replacementDraft = submitted; goalToReplace = goalID; showReplaceGoal = true
-                        } else { submit(submitted) }
-                    } else {
-                        if isDemo { store.sendDemoMessage(draft, conversationID: conversationID) }
-                        else { store.saveDraft(draft, conversationID: conversationID) }
-                        draft = ""; composerFocused = false
-                    }
-                    BZZYTheme.haptic()
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("Send").bzzyFont(11, weight: .semibold)
-                        Image(systemName: "return").bzzyFont(10, weight: .semibold)
-                    }.foregroundStyle(BZZYTheme.background).frame(minWidth: 58, minHeight: 44)
-                        .background(BZZYTheme.accent, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                }.buttonStyle(.plain).padding(4)
-                    .disabled(!canSubmit)
-                    .opacity(canSubmit ? 1 : 0.3)
-                    .accessibilityLabel(isLive ? "Send message to Core" : isDemo ? "Send demo message" : "Save message draft on this device")
-                    .accessibilityIdentifier("save-message")
-            }.background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
-            HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                if let model = currentModel, voice.error == nil, !voice.isBusy {
+                    Text(model).bzzyFont(11, weight: .semibold).foregroundStyle(BZZYTheme.accent)
+                        .lineLimit(1).truncationMode(.middle).layoutPriority(1)
+                        .accessibilityIdentifier("chat-current-model")
+                    Text("·").bzzyFont(11).foregroundStyle(BZZYTheme.muted).accessibilityHidden(true)
+                }
                 Text(voice.error ?? (voice.isStarting ? "Allow speech access, then hold again" : voice.isRecording ? "Listening · Release to finish" : voice.isFinishing ? "Finishing transcript…" : chatConnectionStatus))
-                    .bzzyFont(10).foregroundStyle(voice.error == nil ? BZZYTheme.muted : BZZYTheme.amber)
+                    .bzzyFont(11).foregroundStyle(voice.error == nil ? (voice.isBusy ? BZZYTheme.accent : BZZYTheme.muted) : BZZYTheme.amber)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
                 if voice.isBusy {
-                    Button("Cancel") { cancelDictation() }.bzzyFont(10).buttonStyle(.plain)
-                        .foregroundStyle(BZZYTheme.secondary).accessibilityLabel("Cancel dictation and keep draft")
+                    Button("Cancel") { cancelDictation() }.bzzyFont(11, weight: .semibold).buttonStyle(.plain)
+                        .foregroundStyle(BZZYTheme.secondary).frame(minHeight: 28)
+                        .accessibilityLabel("Cancel dictation and keep draft")
                 }
+            }.padding(.horizontal, 6)
+        }.padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
+            .background(BZZYTheme.background)
+            .overlay(alignment: .top) { Rectangle().fill(BZZYTheme.line.opacity(0.7)).frame(height: 0.5) }
+    }
+
+    private var microphone: some View {
+        Image(systemName: voice.isRecording ? "waveform" : "mic.fill")
+            .font(.system(size: 17, weight: .semibold))
+            .symbolEffect(.variableColor.iterative, isActive: voice.isRecording && !reduceMotion)
+            .foregroundStyle(voice.isBusy ? BZZYTheme.accentInk : BZZYTheme.secondary)
+            .frame(width: 34, height: 34)
+            .background(voice.isBusy ? BZZYTheme.accent : Color.clear, in: Circle())
+            .frame(width: 44, height: 46).contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).updating($voiceHeld) { _, held, _ in held = true })
+            .allowsHitTesting(canDictate && !voice.isFinishing)
+            .opacity(canDictate ? 1 : 0.35)
+            .accessibilityElement().accessibilityAddTraits(.isButton)
+            .accessibilityLabel(voice.isBusy ? "Finish dictation" : "Hold to talk")
+            .accessibilityHint("Hold while speaking. Release to finish. Review the text, then press Send.")
+            .accessibilityIdentifier("voice-record")
+            .accessibilityAction {
+                if voice.isBusy { finishDictation() } else { startDictation() }
             }
-        }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8).background(BZZYTheme.background)
-            .overlay(alignment: .top) { Rectangle().fill(BZZYTheme.line).frame(height: 0.5) }
+    }
+
+    private var sendButton: some View {
+        Button {
+            if isLive {
+                let submitted = draft
+                if CoreGoalDraft.isNewGoal(submitted.trimmingCharacters(in: .whitespacesAndNewlines)),
+                   CoreGoalDraft.needsReplacement(status: relay.coreGoalStatus), let goalID = relay.coreGoalID {
+                    replacementDraft = submitted; goalToReplace = goalID; showReplaceGoal = true
+                } else { submit(submitted) }
+            } else {
+                prepareForSubmission()
+                if isDemo { store.sendDemoMessage(draft, conversationID: conversationID) }
+                else { store.saveDraft(draft, conversationID: conversationID) }
+                draft = ""; composerFocused = false
+            }
+            BZZYTheme.haptic()
+        } label: {
+            Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold))
+                .foregroundStyle(canSubmit ? BZZYTheme.accentInk : BZZYTheme.muted)
+                .frame(width: 44, height: 44)
+                .background(canSubmit ? BZZYTheme.accent : BZZYTheme.elevated, in: Circle())
+                .overlay(Circle().stroke(canSubmit ? Color.clear : BZZYTheme.line, lineWidth: 0.6))
+                .padding(.bottom, 1)
+        }.buttonStyle(.plain)
+            .disabled(!canSubmit)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: canSubmit)
+            .accessibilityLabel(isLive ? "Send message to Core" : isDemo ? "Send demo message" : "Save message draft on this device")
+            .accessibilityIdentifier("save-message")
     }
 
     private func prepareForSubmission() {
@@ -584,11 +636,10 @@ struct ConversationCanvas: View {
 
     private func goalShortcut(_ title: String, icon: String, id: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: icon).bzzyFont(11, weight: .semibold)
-                .padding(.horizontal, 11).frame(minHeight: 34)
-                .foregroundStyle(enabled ? BZZYTheme.accent : BZZYTheme.muted)
-                .background(enabled ? BZZYTheme.accent.opacity(0.10) : BZZYTheme.elevated, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(enabled ? BZZYTheme.accent.opacity(0.3) : BZZYTheme.line, lineWidth: 0.7))
+            Label(title, systemImage: icon).bzzyFont(12, weight: .semibold)
+                .padding(.horizontal, 12).frame(minHeight: 32)
+                .foregroundStyle(enabled ? BZZYTheme.accentInk : BZZYTheme.muted)
+                .background(enabled ? BZZYTheme.accent : BZZYTheme.elevated, in: Capsule())
                 .frame(minHeight: 44).contentShape(Rectangle())
         }.buttonStyle(BZZYPressStyle()).disabled(!enabled).accessibilityIdentifier(id)
     }
@@ -678,34 +729,26 @@ private struct GoalPhasePill: View {
     var body: some View {
         HStack(spacing: 7) {
             if active && !reduceMotion { ProgressView().controlSize(.mini).tint(tone) }
-            else { Image(systemName: status == "complete" ? "checkmark.circle.fill" : stalled ? "xmark.circle.fill" : "circle.dotted") }
-            Text(status == "complete" ? "Goal achieved" : stalled ? "Goal stalled" : active ? status == "verifying" ? "Verifying goal..." : "Pursuing goal..." : "Goal \(status)").lineLimit(1)
-        }.bzzyFont(11, weight: .semibold).foregroundStyle(tone).padding(.horizontal, 10).padding(.vertical, 8)
-            .background(tone.opacity(0.13), in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius)).accessibilityIdentifier("chat-goal-status")
+            else { Image(systemName: status == "complete" ? "checkmark.circle.fill" : stalled ? "exclamationmark.octagon.fill" : "circle.dotted") }
+            Text(status == "complete" ? "Goal achieved" : stalled ? "Goal stalled" : active ? status == "verifying" ? "Verifying goal…" : "Pursuing goal…" : "Goal \(status.replacingOccurrences(of: "_", with: " "))").lineLimit(1)
+        }.bzzyFont(12, weight: .semibold).foregroundStyle(tone).padding(.horizontal, 12).frame(minHeight: 32)
+            .background(tone.opacity(0.13), in: Capsule()).accessibilityIdentifier("chat-goal-status")
     }
 }
 
-private struct TranscriptBlock<Content: View>: View {
-    let speaker: String
-    var isUser = false
+/// A message written on this side of the conversation.
+struct UserBubble: View {
+    let text: String
     var pending = false
-    var accent: Color? = nil
-    var showsSpeaker = true
-    @ViewBuilder var content: () -> Content
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if showsSpeaker { HStack(spacing: 7) {
-                Text(isUser ? "YOU" : "AGENT")
-                if !isUser { Text("·"); Text(speaker).lineLimit(1).truncationMode(.middle) }
-            }.bzzyFont(11, weight: .semibold)
-                .foregroundStyle(isUser ? BZZYTheme.user : accent ?? BZZYTheme.agent)
-                .accessibilityHidden(true) }
-            content().frame(maxWidth: .infinity, alignment: .leading)
-        }.padding(.horizontal, 12).padding(.vertical, 10)
-            .overlay(alignment: .leading) {
-                Rectangle().fill(isUser ? BZZYTheme.user.opacity(pending ? 0.35 : 0.85) : (accent ?? BZZYTheme.agent).opacity(0.8)).frame(width: 2)
-            }
+        Text(verbatim: text).bzzyFont(16).lineSpacing(2).textSelection(.enabled)
+            .foregroundStyle(BZZYTheme.userText.opacity(pending ? 0.6 : 1))
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(BZZYTheme.userSurface, in: UnevenRoundedRectangle(topLeadingRadius: BZZYTheme.bubbleRadius, bottomLeadingRadius: BZZYTheme.bubbleRadius,
+                                                                          bottomTrailingRadius: 6, topTrailingRadius: BZZYTheme.bubbleRadius, style: .continuous))
+            .overlay(UnevenRoundedRectangle(topLeadingRadius: BZZYTheme.bubbleRadius, bottomLeadingRadius: BZZYTheme.bubbleRadius,
+                                            bottomTrailingRadius: 6, topTrailingRadius: BZZYTheme.bubbleRadius, style: .continuous)
+                .stroke(BZZYTheme.user.opacity(pending ? 0.12 : 0.22), lineWidth: 0.7))
     }
 }
 
@@ -714,24 +757,25 @@ private struct OutgoingMessageRow: View {
     let retryEnabled: Bool
     let retry: () -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            TranscriptBlock(speaker: "you", isUser: true, pending: message.status != .accepted) {
-                Text(verbatim: message.text).bzzyFont(15).lineSpacing(4).textSelection(.enabled)
-                    .foregroundStyle(message.status == .accepted ? BZZYTheme.userText : BZZYTheme.userText.opacity(0.65))
-            }
-            HStack(spacing: 8) {
-                if message.status == .sending { ProgressView().controlSize(.mini) }
+        VStack(alignment: .trailing, spacing: 6) {
+            UserBubble(text: message.text, pending: message.status != .accepted)
+            HStack(spacing: 6) {
+                if message.status == .sending { ProgressView().controlSize(.mini).tint(BZZYTheme.muted) }
+                else if message.status == .accepted { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(BZZYTheme.muted) }
+                else { Image(systemName: "exclamationmark.circle.fill").font(.system(size: 11)).foregroundStyle(message.status == .failed ? BZZYTheme.danger : BZZYTheme.amber) }
                 Text(message.status == .sending ? "Sending…" : message.status == .accepted ? "Sent" : message.status == .uncertain ? "Not confirmed" : "Not sent")
-                    .bzzyFont(10).foregroundStyle(message.status == .failed ? BZZYTheme.danger : BZZYTheme.secondary)
+                    .bzzyFont(11).foregroundStyle(message.status == .failed ? BZZYTheme.danger : BZZYTheme.muted)
                 if [.failed, .uncertain].contains(message.status) {
-                    Button(action: retry) { Label("Retry", systemImage: "arrow.clockwise").bzzyFont(11, weight: .semibold) }
+                    Button(action: retry) { Label("Retry", systemImage: "arrow.clockwise").bzzyFont(12, weight: .semibold) }
                         .buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.accent).disabled(!retryEnabled)
-                        .padding(.horizontal, 10).frame(minHeight: 44)
-                        .background(BZZYTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
+                        .padding(.horizontal, 12).frame(minHeight: 32)
+                        .background(BZZYTheme.accent.opacity(0.12), in: Capsule())
+                        .frame(minHeight: 44)
                         .accessibilityIdentifier("retry-message-\(message.id)")
                 }
             }
-        }.accessibilityIdentifier("outgoing-message-\(message.id)")
+        }.frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 48)
+            .accessibilityIdentifier("outgoing-message-\(message.id)")
     }
 }
 
@@ -741,33 +785,50 @@ private struct TranscriptMessageRow: View {
     let speaker: String
     var showsSpeaker = true
     private var content: ChatContent { ChatContent.parse(message.text) }
+    private var tint: Color { message.accentIndex.map(invocationColor) ?? BZZYTheme.agent }
     var body: some View {
         if let step = message.invocation {
             let tint = step.kind == .skill ? BZZYTheme.accent : invocationColor(step.accentIndex)
-            (Text("\(step.kind == .skill ? "◆ Skill" : "◇ Agent") · \(step.name)").foregroundColor(tint)
-             + Text(" · \(step.label)").foregroundColor(BZZYTheme.secondary))
-                .bzzyFont(11, weight: .medium).fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+            (Text(Image(systemName: step.kind == .skill ? "sparkle" : "person.2.fill"))
+             + Text(step.kind == .skill ? "  Skill · " : "  Agent · ")
+             + Text(step.name).fontWeight(.semibold)
+             + Text("  ·  \(step.label)").foregroundStyle(BZZYTheme.secondary))
+                .bzzyFont(12, weight: .medium).foregroundStyle(tint)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(tint.opacity(0.25), lineWidth: 0.6))
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("chat-invocation-\(step.id)")
-        } else {
-        VStack(alignment: .leading, spacing: 7) {
-            TranscriptBlock(speaker: message.isUser ? "you" : speaker, isUser: message.isUser,
-                            accent: message.accentIndex.map(invocationColor), showsSpeaker: showsSpeaker) {
-                if message.isUser {
-                    Text(verbatim: message.text).bzzyFont(15).lineSpacing(4).textSelection(.enabled)
-                        .foregroundStyle(BZZYTheme.userText)
-                } else {
-                    ChatRichText(content: content).foregroundStyle(BZZYTheme.text)
+        } else if message.isUser {
+            VStack(alignment: .trailing, spacing: 5) {
+                UserBubble(text: message.text)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("chat-user-\(message.id.uuidString)")
+                    .accessibilityHint("Your message")
+                if showsDraft {
+                    Label("Saved on this iPhone", systemImage: "iphone").bzzyFont(11).foregroundStyle(BZZYTheme.muted)
+                        .accessibilityIdentifier("saved-draft")
                 }
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("chat-\(message.isUser ? "user" : "assistant")-\(message.id.uuidString)")
-            .accessibilityHint(message.isUser ? "Your message" : "\(speaker)'s reply")
-            if showsDraft {
-                Label("Draft", systemImage: "iphone").bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
-                    .accessibilityIdentifier("saved-draft")
-            }
-        }
+            }.frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 48)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                if showsSpeaker {
+                    HStack(spacing: 7) {
+                        Circle().fill(tint).frame(width: 7, height: 7)
+                        Text(speaker).bzzyFont(12, weight: .semibold).foregroundStyle(tint)
+                            .lineLimit(1).truncationMode(.middle)
+                    }.accessibilityHidden(true)
+                }
+                ChatRichText(content: content).foregroundStyle(BZZYTheme.text)
+            }.padding(.leading, message.accentIndex == nil ? 0 : 12)
+                .overlay(alignment: .leading) {
+                    if message.accentIndex != nil { Capsule().fill(tint.opacity(0.6)).frame(width: 2.5) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("chat-assistant-\(message.id.uuidString)")
+                .accessibilityHint("\(speaker)'s reply")
         }
     }
 }
@@ -780,37 +841,44 @@ private func invocationColor(_ index: Int) -> Color {
 struct WorkspaceDetailsView: View {
     let title: String
     let subtitle: String
-    var agent: AgentProfile? = nil
     var instructions: String? = nil
     @State private var showActivity = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 25) {
-                    Text(title).bzzyFont(32, weight: .medium).tracking(-1)
-                    detail("Execution", "Inactive", "pause.circle")
-                    detail("Permissions", "None", "hand.raised")
-                    detail("Type", agent?.mode.rawValue ?? "On demand", "clock")
-                    if let schedule = agent?.schedule { detail("Repeat", schedule.label, "repeat") }
-                    if let purpose = agent?.purpose ?? instructions { detail("Instructions", purpose, "text.alignleft") }
+                VStack(alignment: .leading, spacing: 14) {
+                    SheetTitle(title: title, subtitle: subtitle)
+                    VStack(spacing: 0) {
+                        detail("Execution", "Inactive", "pause.circle")
+                        Divider().overlay(BZZYTheme.line)
+                        detail("Permissions", "None", "hand.raised")
+                        Divider().overlay(BZZYTheme.line)
+                        detail("Type", "On demand", "clock")
+                    }.padding(.horizontal, 14).hiveCard()
+                    if let instructions {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Eyebrow(text: "Instructions")
+                            Text(instructions).bzzyFont(14).foregroundStyle(BZZYTheme.secondary)
+                                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }.frame(maxWidth: .infinity, alignment: .leading).panel()
+                    }
                     Button { showActivity = true } label: {
-                        Label("Activity", systemImage: "list.bullet").bzzyFont(14)
-                            .frame(maxWidth: .infinity, alignment: .leading).panel()
-                    }.buttonStyle(.plain).foregroundStyle(BZZYTheme.accent)
-                }.padding(25)
+                        Label("Activity", systemImage: "list.bullet.rectangle").frame(maxWidth: .infinity)
+                    }
+                }.padding(16)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .sheet(isPresented: $showActivity) { ActivityView() }
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
     }
     private func detail(_ label: String, _ value: String, _ icon: String) -> some View {
-        HStack(alignment: .top, spacing: 13) {
-            Image(systemName: icon).foregroundStyle(BZZYTheme.accent).frame(width: 22)
-            VStack(alignment: .leading, spacing: 8) {
-                Text(label).bzzyFont(14, weight: .medium)
-                Text(value).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading).panel()
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 14, weight: .semibold)).foregroundStyle(BZZYTheme.accent).frame(width: 22)
+                .accessibilityHidden(true)
+            Text(label).bzzyFont(14)
+            Spacer()
+            Text(value).bzzyFont(13).foregroundStyle(BZZYTheme.secondary)
+        }.padding(.vertical, 13)
     }
 }
 
@@ -818,7 +886,7 @@ struct WorkspaceDetailsView: View {
 // Keep UIKit's native interactive pop transition with the custom chat header.
 // The delegate belongs only to this visible destination and rejects a root or
 // in-flight transition; SwiftUI keeps its navigation-controller delegate.
-private struct ChatBackGesture: UIViewControllerRepresentable {
+struct ChatBackGesture: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> Controller { Controller() }
     func updateUIViewController(_ controller: Controller, context: Context) { controller.enableAfterLayout() }
     static func dismantleUIViewController(_ controller: Controller, coordinator: ()) { controller.restore() }
@@ -871,15 +939,17 @@ private struct GoalMessageEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var focused: Bool
     var caretAtEndRequest = 0
+    private static var editorFont: UIFont { UIFontMetrics(forTextStyle: .body).scaledFont(for: .systemFont(ofSize: 16, weight: .regular)) }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
         view.delegate = context.coordinator
         view.backgroundColor = .clear
-        view.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: 14, weight: .regular))
+        view.font = Self.editorFont
         view.adjustsFontForContentSizeCategory = true
         view.textColor = UIColor(BZZYTheme.text)
         view.tintColor = UIColor(BZZYTheme.accent)
+        view.keyboardAppearance = .dark
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
         view.isScrollEnabled = false
@@ -911,9 +981,9 @@ private struct GoalMessageEditor: UIViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
         let width = proposal.width ?? 200
         let measured = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        let line = uiView.font?.lineHeight ?? 18
-        uiView.isScrollEnabled = measured.height > line * 5
-        return CGSize(width: width, height: min(max(line, measured.height), line * 5))
+        let line = uiView.font?.lineHeight ?? 20
+        uiView.isScrollEnabled = measured.height > line * 6
+        return CGSize(width: width, height: min(max(line, measured.height), line * 6))
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: GoalMessageEditor
@@ -922,11 +992,13 @@ private struct GoalMessageEditor: UIViewRepresentable {
         func style(_ view: UITextView) {
             guard view.markedTextRange == nil else { return }
             let selection = view.selectedRange
-            let defaults: [NSAttributedString.Key: Any] = [.font: UIFontMetrics(forTextStyle: .body).scaledFont(for: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)), .foregroundColor: UIColor(BZZYTheme.text)]
+            let defaults: [NSAttributedString.Key: Any] = [.font: GoalMessageEditor.editorFont, .foregroundColor: UIColor(BZZYTheme.text)]
             view.textStorage.beginEditing()
             view.textStorage.setAttributes(defaults, range: NSRange(location: 0, length: view.text.utf16.count))
             if CoreGoalDraft.isGoal(view.text) {
-                view.textStorage.addAttributes([.foregroundColor: UIColor(BZZYTheme.success), .backgroundColor: UIColor(BZZYTheme.success).withAlphaComponent(0.18)], range: NSRange(location: 0, length: 5))
+                view.textStorage.addAttributes([.foregroundColor: UIColor(BZZYTheme.success), .backgroundColor: UIColor(BZZYTheme.success).withAlphaComponent(0.18),
+                                                .font: UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: 15, weight: .semibold))],
+                                               range: NSRange(location: 0, length: 5))
             }
             view.textStorage.endEditing()
             view.typingAttributes = defaults; view.selectedRange = selection

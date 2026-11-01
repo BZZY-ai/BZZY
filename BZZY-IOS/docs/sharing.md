@@ -9,7 +9,7 @@ Agent packages and mobile project import remain unimplemented. The following
 sections describe historical local demo/import validation, not current gateway
 capabilities; see [current validation](full-line-validation.md).
 
-Implemented only in BZZY-IOS, 2026-10-22. Both agent and terminal chat headers expose Share. Both primary tabs expose Import. The existing connection guide and Relay implementation define real invitations; this change does not add a service, another runtime, invitation URLs or a portable package protocol.
+Implemented only in BZZY-IOS, 2026-10-22. Terminal chat headers expose Share and the Terminals home header exposes Import. (Before build 27, Agent chats and an Agents tab exposed the same actions; iPhone no longer shows Agents.) The existing connection guide and Relay implementation define real invitations; this change does not add a service, another runtime, invitation URLs or a portable package protocol.
 
 ## Available now
 

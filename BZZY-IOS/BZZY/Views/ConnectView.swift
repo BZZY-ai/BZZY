@@ -29,30 +29,37 @@ struct ConnectView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text(relay.isAddingHost ? "Add computer" : required ? "Pair BZZY Core" : "Connect")
-                    }.bzzyFont(20, weight: .semibold)
-                    HStack {
-                        Label(relay.status.rawValue, systemImage: relay.status == .connected ? "checkmark.circle" : "network")
-                            .bzzyFont(13).foregroundStyle(relay.status == .connected ? BZZYTheme.accent : BZZYTheme.secondary)
+                    if required && !relay.isAddingHost && !relay.hasHost { BrandMark().padding(.top, 6) }
+                    SheetTitle(title: relay.isAddingHost ? "Add computer" : required ? "Pair BZZY Core" : "Connect",
+                               subtitle: relay.hasHost && !relay.isAddingHost ? nil : "On your computer, open BZZY → Settings → Pair iPhone, then scan its QR code.")
+                    HStack(spacing: 10) {
+                        Circle().fill(relay.status == .connected ? BZZYTheme.success : relay.status == .connecting ? BZZYTheme.accent : BZZYTheme.muted)
+                            .frame(width: 8, height: 8)
+                        Text("Relay · " + relay.status.rawValue).bzzyFont(13, weight: .medium)
+                            .foregroundStyle(relay.status == .connected ? BZZYTheme.text : BZZYTheme.secondary)
                         Spacer()
                         if relay.status != .connected {
                             Button("Connect") { Task { await relay.connect() } }
                                 .bzzyFont(13).disabled(relay.status == .connecting || !relay.networkingEnabled)
                         }
-                    }
+                    }.padding(.horizontal, 14).frame(minHeight: 52).hiveCard()
                     if relay.hasHost && !relay.isAddingHost {
-                        if let name = relay.hosts.first(where: { $0.id == relay.activeHostID })?.name {
-                            Text(name).bzzyFont(16, weight: .medium).foregroundStyle(BZZYTheme.accent)
-                        }
-                        Label(relay.hostStatus, systemImage: "desktopcomputer").bzzyFont(17)
+                        HStack(spacing: 14) {
+                            IconTile(symbol: "desktopcomputer", tint: relay.coreActionsAvailable ? BZZYTheme.success : BZZYTheme.accent, size: 44)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Computer").bzzyFont(16, weight: .semibold)
+                                Text(relay.hostStatus).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+                                Text(relay.coreConnectionLabel).bzzyFont(12, weight: .semibold)
+                                    .foregroundStyle(relay.coreActionsAvailable ? BZZYTheme.success : BZZYTheme.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }.padding(14).hiveCard()
                         fingerprintBlock("Host", relay.hostFingerprint)
-                        Text(relay.coreConnectionLabel).bzzyFont(14, weight: .medium)
-                            .foregroundStyle(relay.coreActionsAvailable ? BZZYTheme.accent : BZZYTheme.secondary)
                         if let error = relay.coreError { Text(error).bzzyFont(12).foregroundStyle(BZZYTheme.secondary) }
-                        Button("Refresh Core connection") { Task { await relay.refresh() } }.bzzyFont(13)
-                        Button("Remove computer", role: .destructive) { hostToRemove = relay.activeHostID }.bzzyFont(13)
+                        HStack(spacing: 10) {
+                            Button("Refresh Core") { Task { await relay.refresh() } }
+                            Button("Remove computer", role: .destructive) { hostToRemove = relay.activeHostID }
+                        }
                     } else if relay.hasPairingPreview {
                         fingerprintBlock("Host fingerprint", relay.hostFingerprint)
                         Text("Compare the full fingerprint with the one shown on your host.")
@@ -66,37 +73,31 @@ struct ConnectView: View {
                                 guard relay.activeHostID == originHostID, relay.hostFingerprint == fingerprint, !Task.isCancelled else { return }
                                 await relay.claimConfirmedHost()
                             }
-                        }.disabled(!compared || relay.isBusy || relay.status == .connecting || !relay.networkingEnabled).opacity(compared ? 1 : 0.4)
+                        }.disabled(!compared || relay.isBusy || relay.status == .connecting || !relay.networkingEnabled)
                         Button("Cancel") { relay.cancelPairingPreview(); compared = false }.bzzyFont(13)
                     } else if relay.pairingStatus == "Pending approval" {
-                        Label("Approve on your host", systemImage: "desktopcomputer").bzzyFont(17)
+                        HStack(spacing: 12) {
+                            ProgressView().tint(BZZYTheme.accent)
+                            Text("Approve on your host").bzzyFont(17, weight: .semibold)
+                        }
                         fingerprintBlock("This iPhone", relay.deviceFingerprint)
                         Text("Compare this fingerprint before approving the device.").bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
                         Button("Refresh") { Task { await relay.refresh() } }.bzzyFont(13)
                     } else {
                         VStack(alignment: .leading, spacing: 15) {
                             #if os(iOS)
-                            Button { showScanner = true } label: {
-                                Label("Scan host QR", systemImage: "qrcode.viewfinder").bzzyFont(15)
-                                    .frame(maxWidth: .infinity, minHeight: 52)
-                                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
-                            }.buttonStyle(.plain).foregroundStyle(BZZYTheme.accent)
+                            AccentButton(title: "Scan host QR", symbol: "qrcode.viewfinder") { showScanner = true }
                             #endif
                             SecureField("Pairing code or QR text", text: $code)
                                 .textContentType(.oneTimeCode).autocorrectionDisabled()
-                                .bzzyFont(13, design: .monospaced).padding(14)
-                                .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                                .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
+                                .bzzyFont(13, design: .monospaced).hiveField()
                                 .accessibilityIdentifier("pairing-code")
                             if !code.hasPrefix("BZZY:INVITE:1:") && !code.hasPrefix("BZZY:P:") {
                                 TextField("Host fingerprint", text: $fingerprint).autocorrectionDisabled()
-                                    .bzzyFont(13, design: .monospaced).padding(14)
-                                    .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                                    .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
+                                    .bzzyFont(13, design: .monospaced).hiveField()
                                     .accessibilityIdentifier("pairing-fingerprint")
                             }
-                            Button("Review host") { review(code) }.bzzyFont(14).foregroundStyle(BZZYTheme.accent)
+                            Button { review(code) } label: { Text("Review host").frame(maxWidth: .infinity) }
                                 .disabled(code.isEmpty).accessibilityIdentifier("review-host")
                         }.textFieldStyle(.plain)
                         Text("Use a PAIR invitation from your host.").bzzyFont(11).foregroundStyle(BZZYTheme.muted)
@@ -159,13 +160,7 @@ struct HostPickerView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 13) {
-                        Image(systemName: "desktopcomputer").bzzyFont(20, weight: .regular).foregroundStyle(BZZYTheme.accent)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("Computers").bzzyFont(20, weight: .semibold)
-                            Text("Your default opens on a fresh app launch.").bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
-                        }
-                    }.padding(.top, 6)
+                    SheetTitle(title: "Computers", subtitle: "Your default opens on a fresh app launch.")
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         VStack(spacing: 12) {
                             ForEach(relay.hosts) { host in hostRow(host) }
@@ -235,8 +230,7 @@ struct HostPickerView: View {
             } label: {
                 Image(systemName: "ellipsis").bzzyFont(17, weight: .semibold).foregroundStyle(BZZYTheme.accent).frame(width: 44, height: 44)
             }.accessibilityLabel("Options for \(host.name)").accessibilityIdentifier("host-options-\(host.id)")
-        }.padding(12).background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.panelRadius))
-            .overlay(RoundedRectangle(cornerRadius: BZZYTheme.panelRadius).stroke(selected ? BZZYTheme.accent.opacity(0.6) : BZZYTheme.line, lineWidth: 0.8))
+        }.padding(12).hiveCard(highlight: selected ? BZZYTheme.accent : nil)
     }
 }
 

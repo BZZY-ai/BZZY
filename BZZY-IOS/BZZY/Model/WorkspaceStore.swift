@@ -11,19 +11,6 @@ struct HostActionContext: Equatable {
     }
 }
 
-enum WorkspaceTab: String, CaseIterable {
-    case agents = "Agents"
-    case terminal = "Terminal"
-    case chat = "Chat"
-    var symbol: String {
-        switch self {
-        case .agents: return "square.grid.2x2"
-        case .terminal: return "terminal"
-        case .chat: return "text.bubble"
-        }
-    }
-}
-
 enum AgentMode: String, Codable, CaseIterable {
     case scheduled = "Scheduled"
     case onDemand = "On demand"
@@ -305,8 +292,6 @@ struct TerminalPreview: Identifiable {
 
 @MainActor @Observable
 final class WorkspaceStore {
-    var selectedTab: WorkspaceTab = .agents
-    var notificationAgentID: String?
     var notificationTerminalID: String?
     private(set) var agents: [AgentProfile]
     private(set) var messages: [String: [LocalMessage]]
@@ -372,16 +357,17 @@ final class WorkspaceStore {
             if CommandLine.arguments.contains("--reset-ui-testing") { try? FileManager.default.removeItem(at: testFile) }
             let store = WorkspaceStore(persistenceURL: testFile, includeSamples: !CommandLine.arguments.contains("--multi-host-testing"))
             if CommandLine.arguments.contains("--history-paging-testing") {
-                store.agents[0].isSample = false
-                let id = AgentProfile.samples[0].id.uuidString
-                store.messages[id] = (1...225).map { index in
+                let draft = TerminalDraft(id: UUID(uuidString: "30000000-0000-4000-8000-000000000000")!, name: "History fixture",
+                    instructions: "Local paging fixture", symbol: "clock.arrow.circlepath")
+                if !store.terminalDrafts.contains(draft) { store.terminalDrafts.append(draft) }
+                store.messages[draft.conversationID] = (1...225).map { index in
                     LocalMessage(id: UUID(uuidString: String(format: "30000000-0000-4000-8000-%012d", index))!,
                         text: String(format: "History entry %03d", index), kind: index.isMultiple(of: 2) ? .assistant : .user,
                         createdAt: Date(timeIntervalSince1970: Double(index)))
                 }
             }
             if CommandLine.arguments.contains("--invocation-ui-testing") {
-                let session = AgentProfile.samples[0].id.uuidString
+                let session = "00000000-0000-4000-8000-0000000000aa"
                 let job = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
                 try? store.applyLiveSnapshot(JSONSerialization.data(withJSONObject: ["session": ["id": session, "alias": "Invocation fixture", "model": "Fixture"]]))
                 let values: [(String, [String: Any])] = [
@@ -617,7 +603,7 @@ final class WorkspaceStore {
 
     func setLiveAvailability(_ available: Bool, status: String) { liveAvailable = available; liveStatus = status }
     func clearLiveConversation() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveAvailable = false; liveStatus = "Conversation unavailable"; resetCachedPresentationStatus() }
-    func clearLiveSession() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveTerminals = []; hostAgents = []; hostAgentWorkspace = nil; hostAgentsConfigured = false; liveAvailable = false; liveStatus = "Not connected"; notificationAgentID = nil; notificationTerminalID = nil; resetCachedPresentationStatus() }
+    func clearLiveSession() { liveProjection = LiveConversationProjection(); liveSession = nil; liveMessages = []; liveActivity = []; liveTerminals = []; hostAgents = []; hostAgentWorkspace = nil; hostAgentsConfigured = false; liveAvailable = false; liveStatus = "Not connected"; notificationTerminalID = nil; resetCachedPresentationStatus() }
     private func resetCachedPresentationStatus() {
         isPresentingCachedHistory = false; cachedPresentationSavedAt = nil; cachedPresentationOmittedMessageCount = 0
     }

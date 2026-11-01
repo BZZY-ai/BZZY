@@ -18,79 +18,87 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 12) {
                     if BZZYTheme.showsMascot {
                         FlyEyes(interactive: false).frame(width: 100).frame(maxWidth: .infinity).padding(.top, 10)
                     }
-                    HStack(spacing: 8) {
-                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text("Settings")
-                    }.bzzyFont(20, weight: .semibold)
-                    Eyebrow(text: "Connection")
+                    SheetTitle(title: "Settings")
                     Button { showConnection = true } label: {
                         HStack(spacing: 14) {
-                            Image(systemName: "desktopcomputer").bzzyFont(18, weight: .regular).foregroundStyle(BZZYTheme.accent)
-                            VStack(alignment: .leading, spacing: 7) {
-                                Text(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Computer").bzzyFont(14, weight: .medium)
+                            IconTile(symbol: "desktopcomputer", tint: relay.coreActionsAvailable ? BZZYTheme.success : BZZYTheme.accent, size: 44)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Computer").bzzyFont(16, weight: .semibold)
                                 Text(relay.corePairAuthorized ? relay.coreConnectionLabel : relay.hostStatus).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            Spacer()
-                            Image(systemName: "chevron.right").bzzyFont(12).foregroundStyle(BZZYTheme.muted)
-                        }.panel()
-                    }.buttonStyle(.plain).accessibilityIdentifier("connection-settings")
-                    Button { showNotifications = true } label: {
-                        HStack {
-                            Label("Notifications", systemImage: "bell").bzzyFont(14)
-                            Spacer()
-                            Text(notifications.permission).bzzyFont(11).foregroundStyle(BZZYTheme.secondary)
-                            Image(systemName: "chevron.right").bzzyFont(11)
-                        }.panel()
-                    }.buttonStyle(.plain).accessibilityIdentifier("notification-settings")
-                    Button { showDefaults = true } label: {
-                        HStack {
-                            Label("Models and defaults", systemImage: "slider.horizontal.3").bzzyFont(14)
-                            Spacer(); Image(systemName: "chevron.right").bzzyFont(11)
-                        }.panel()
-                    }.buttonStyle(.plain).disabled(!relay.coreActionsAvailable)
-                        .accessibilityIdentifier("model-defaults-settings")
-                    Eyebrow(text: "Voice")
-                    Button { showVoice = true } label: {
-                        HStack { Label("Open voice chat", systemImage: "waveform").bzzyFont(14); Spacer(); Image(systemName: "chevron.right").bzzyFont(11) }.panel()
-                    }.buttonStyle(.plain).disabled(!AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
-                        .accessibilityIdentifier("open-voice-chat")
-                    VStack(alignment: .leading, spacing: 20) {
-                        languagePicker("Listening language · STT", selection: $recognitionLanguage, identifier: "speech-recognition-language")
-                        languagePicker("Speaking voice · TTS", selection: $synthesisLanguage, identifier: "speech-synthesis-language")
-                    }.panel()
-                    Eyebrow(text: "BZZY Updates")
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text(relay.coreUpdateStatus).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
-                        if let snapshot = relay.coreUpdateSnapshot {
-                            if let target = snapshot["target"].string, snapshot["available"].bool == true {
-                                Text("Version " + String(target.prefix(8))).bzzyFont(11, design: .monospaced).foregroundStyle(BZZYTheme.accent)
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(BZZYTheme.muted)
+                        }.padding(14).hiveCard().contentShape(Rectangle())
+                    }.buttonStyle(BZZYCardStyle()).accessibilityIdentifier("connection-settings")
+                    section("General")
+                    VStack(spacing: 0) {
+                        Button { showNotifications = true } label: {
+                            settingsRow("bell.fill", "Notifications", value: notifications.permission, tint: BZZYTheme.danger)
+                        }.buttonStyle(BZZYCardStyle()).accessibilityIdentifier("notification-settings")
+                        rowDivider
+                        Button { showDefaults = true } label: {
+                            settingsRow("cpu", "Models and defaults", tint: BZZYTheme.agent)
+                        }.buttonStyle(BZZYCardStyle()).disabled(!relay.coreActionsAvailable)
+                            .accessibilityIdentifier("model-defaults-settings")
+                    }.hiveCard()
+                    section("Voice")
+                    VStack(alignment: .leading, spacing: 0) {
+                        Button { showVoice = true } label: {
+                            settingsRow("waveform", "Open voice chat", tint: BZZYTheme.user)
+                        }.buttonStyle(BZZYCardStyle()).disabled(!AppLaunchMode.allowsPreviewNavigation && !relay.coreActionsAvailable)
+                            .accessibilityIdentifier("open-voice-chat")
+                        rowDivider
+                        VStack(alignment: .leading, spacing: 16) {
+                            languagePicker("Listening language · STT", selection: $recognitionLanguage, identifier: "speech-recognition-language")
+                            languagePicker("Speaking voice · TTS", selection: $synthesisLanguage, identifier: "speech-synthesis-language")
+                        }.padding(14)
+                    }.hiveCard()
+                    section("BZZY Updates")
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(alignment: .top, spacing: 12) {
+                            IconTile(symbol: "arrow.down.circle.fill", tint: BZZYTheme.success, size: 34)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(relay.coreUpdateStatus).bzzyFont(13).foregroundStyle(BZZYTheme.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if let target = relay.coreUpdateSnapshot?["target"].string, relay.coreUpdateSnapshot?["available"].bool == true {
+                                    Text("Version " + String(target.prefix(8))).bzzyFont(12, weight: .semibold, design: .monospaced).foregroundStyle(BZZYTheme.accent)
+                                }
                             }
-                            Toggle("Monitor updates", isOn: updatePreference("monitoringEnabled")).bzzyFont(12)
-                            Toggle("Notify this iPhone", isOn: updatePreference("notificationsEnabled")).bzzyFont(12)
-                            Toggle("Allow updates from this iPhone", isOn: updatePreference("remoteUpdatesEnabled")).bzzyFont(12)
-                            if let blocked = snapshot["blocked"].string { Text(blocked).bzzyFont(11).foregroundStyle(BZZYTheme.secondary) }
                         }
-                        Button("Check for updates") { relay.performHostAction { await relay.refreshCoreUpdates(checkNow: true) } }
-                            .bzzyFont(13).accessibilityIdentifier("check-bzzy-updates")
-                        Button(relay.coreUpdatePending ? "Retry accepted update request" : "Update CLI and Core") { updateTarget = relay.coreUpdatePendingTarget ?? relay.coreUpdateSnapshot?["target"].string; confirmUpdate = true }
-                            .bzzyFont(13, weight: .medium).foregroundStyle(BZZYTheme.accent)
-                            .disabled(!relay.coreUpdatePending && relay.coreUpdateSnapshot?["canInstall"].bool != true)
-                            .accessibilityIdentifier("install-bzzy-update")
-                        Text("Updating pauses running work. Core reconnects when installation finishes.").bzzyFont(10).foregroundStyle(BZZYTheme.muted)
-                    }.panel().disabled(!relay.coreActionsAvailable || relay.coreUpdateBusy)
-                    Eyebrow(text: "Privacy")
-                    VStack(alignment: .leading, spacing: 22) {
-                        setting("lock.shield", "Credentials", "Credentials stay on your host.")
-                        setting("hand.raised", "Permissions", "No permissions granted.")
+                        if let snapshot = relay.coreUpdateSnapshot {
+                            Toggle("Monitor updates", isOn: updatePreference("monitoringEnabled")).bzzyFont(14)
+                            Toggle("Notify this iPhone", isOn: updatePreference("notificationsEnabled")).bzzyFont(14)
+                            Toggle("Allow updates from this iPhone", isOn: updatePreference("remoteUpdatesEnabled")).bzzyFont(14)
+                            if let blocked = snapshot["blocked"].string { Text(blocked).bzzyFont(12).foregroundStyle(BZZYTheme.secondary) }
+                        }
+                        HStack(spacing: 10) {
+                            Button("Check now") { relay.performHostAction { await relay.refreshCoreUpdates(checkNow: true) } }
+                                .accessibilityIdentifier("check-bzzy-updates")
+                            Button(relay.coreUpdatePending ? "Retry accepted update" : "Update CLI and Core") { updateTarget = relay.coreUpdatePendingTarget ?? relay.coreUpdateSnapshot?["target"].string; confirmUpdate = true }
+                                .disabled(!relay.coreUpdatePending && relay.coreUpdateSnapshot?["canInstall"].bool != true)
+                                .accessibilityIdentifier("install-bzzy-update")
+                        }
+                        Text("Updating pauses running work. Core reconnects when installation finishes.").bzzyFont(11).foregroundStyle(BZZYTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }.tint(BZZYTheme.accent).frame(maxWidth: .infinity, alignment: .leading).panel().disabled(!relay.coreActionsAvailable || relay.coreUpdateBusy)
+                    section("Privacy")
+                    VStack(alignment: .leading, spacing: 0) {
+                        setting("lock.shield.fill", "Credentials", "Credentials stay on your host.")
+                        rowDivider
+                        setting("hand.raised.fill", "Permissions", "No permissions granted.")
+                        rowDivider
                         setting("figure.walk.motion", "Motion", reduceMotion ? "Reduce Motion enabled." : "Follows system settings.")
+                        rowDivider
                         setting("qrcode", "Sharing", "QR or expiring code. Relay required.")
-                    }
+                    }.hiveCard()
                     Text("BZZY · Native iOS")
-                        .bzzyFont(9, design: .monospaced).foregroundStyle(BZZYTheme.muted).lineSpacing(5).padding(.top, 12)
+                        .bzzyFont(10, design: .monospaced).foregroundStyle(BZZYTheme.muted)
+                        .frame(maxWidth: .infinity).padding(.top, 14)
                 }.padding(16)
             }.bzzyScreen().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .task {
@@ -116,12 +124,27 @@ struct SettingsView: View {
                 .voiceChatScreen(isPresented: $showVoice)
         }.tint(BZZYTheme.accent).preferredColorScheme(.dark)
     }
+    private var rowDivider: some View {
+        Rectangle().fill(BZZYTheme.line).frame(height: 0.5).padding(.leading, 60)
+    }
+    private func section(_ title: String) -> some View {
+        Eyebrow(text: title).padding(.top, 14).padding(.leading, 4)
+    }
+    private func settingsRow(_ icon: String, _ title: String, value: String? = nil, tint: Color) -> some View {
+        HStack(spacing: 12) {
+            IconTile(symbol: icon, tint: tint, size: 34)
+            Text(title).bzzyFont(15, weight: .medium).foregroundStyle(BZZYTheme.text)
+            Spacer(minLength: 8)
+            if let value { Text(value).bzzyFont(13).foregroundStyle(BZZYTheme.secondary).lineLimit(1) }
+            Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(BZZYTheme.muted)
+        }.padding(.horizontal, 14).frame(minHeight: 54).contentShape(Rectangle())
+    }
     private func languagePicker(_ label: String, selection: Binding<String>, identifier: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(label).bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
             Picker(label, selection: selection) {
                 ForEach(SpeechLanguage.allCases) { Text($0.name).tag($0.rawValue) }
-            }.pickerStyle(.segmented).accessibilityIdentifier(identifier)
+            }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier(identifier)
         }
     }
     private func updatePreference(_ key: String) -> Binding<Bool> {
@@ -130,13 +153,14 @@ struct SettingsView: View {
         })
     }
     private func setting(_ icon: String, _ title: String, _ text: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: icon).bzzyFont(18, weight: .light).foregroundStyle(BZZYTheme.accent).frame(width: 23)
-            VStack(alignment: .leading, spacing: 7) {
-                Text(title).bzzyFont(14, weight: .medium)
-                Text(text).bzzyFont(12).foregroundStyle(BZZYTheme.secondary).lineSpacing(5)
+        HStack(alignment: .top, spacing: 12) {
+            IconTile(symbol: icon, tint: BZZYTheme.accent, size: 34)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).bzzyFont(14, weight: .semibold)
+                Text(text).bzzyFont(12).foregroundStyle(BZZYTheme.secondary).fixedSize(horizontal: false, vertical: true)
             }
-        }
+            Spacer(minLength: 0)
+        }.padding(14)
     }
 }
 
@@ -171,12 +195,8 @@ struct CoreDefaultsEditor: View {
         NavigationStack {
             ScrollView { VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 22) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("›").foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                        Text(sessionID == nil ? "Models and defaults" : "Conversation model")
-                    }.bzzyFont(20, weight: .semibold)
-                    Text(sessionID == nil ? "Saved on this computer. Defaults apply to new chats and mode launches." : "Pause, choose a model, then resume your saved goal in this conversation.")
-                        .bzzyFont(12).foregroundStyle(BZZYTheme.secondary)
+                    SheetTitle(title: sessionID == nil ? "Models and defaults" : "Conversation model",
+                               subtitle: sessionID == nil ? "Saved on this computer. Defaults apply to new chats and mode launches." : "Pause, choose a model, then resume your saved goal in this conversation.")
                     if sessionID == nil {
                         Picker("Default for", selection: $target) {
                             ForEach(targets, id: \.self) { Text($0 == "cli" ? "CLI chat" : $0 == "core" ? "Core assistant" : $0 == "debate" ? "Validate" : $0.capitalized).tag($0) }
@@ -284,7 +304,7 @@ private struct DefaultModelFields: View {
                 ForEach(models.compactMap { $0["id"].string }, id: \.self) { Text($0).tag($0) }
                 if !choice.model.isEmpty && !models.contains(where: { $0["id"].string == choice.model }) { Text(choice.model).tag(choice.model) }
             }.pickerStyle(.menu)
-            TextField("Model ID", text: $choice.model).autocorrectionDisabled().bzzyFont(12, design: .monospaced)
+            TextField("Model ID", text: $choice.model).autocorrectionDisabled().bzzyFont(13, design: .monospaced).textFieldStyle(.plain).hiveField()
             Picker("Effort", selection: $choice.effort) {
                 Text("Provider default").tag("default")
                 ForEach(Array(Set(efforts + (choice.effort == "default" ? [] : [choice.effort]))).sorted(), id: \.self) { Text($0).tag($0) }

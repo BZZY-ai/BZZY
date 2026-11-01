@@ -57,7 +57,7 @@ enum SharingFailure: Error, LocalizedError {
     case wrongType, unavailable, expired, capacity, invalid, saveFailed
     var errorDescription: String? {
         switch self {
-        case .wrongType: "This code belongs in the other tab."
+        case .wrongType: "This code is for a different kind of import."
         case .unavailable: "Demo code unavailable. Create a new one in Share."
         case .expired: "Code expired. Create a new one."
         case .capacity: "Too many demo codes. Revoke one or wait for expiry."

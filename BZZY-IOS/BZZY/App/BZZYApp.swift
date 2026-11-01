@@ -81,13 +81,15 @@ struct WorkspaceView: View {
     @State private var relay: RelayConnection
     @State private var notifications: NotificationStore
     @State private var transfers = DemoTransferStore()
-    @State private var importKind: SharedResourceKind?
+    @State private var showImport = false
     @State private var showConnection = false
     @State private var showHosts = false
+    @State private var showSettings = false
     @State private var notificationRoutingNotice: String?
     @State private var hostProfilesReady = false
     @State private var pendingConnectionFromNotification = false
     @State private var navigationID = UUID()
+    @State private var storageNoticeDismissed = false
     @Environment(\.scenePhase) private var scenePhase
 
     init(store: WorkspaceStore, relay: RelayConnection? = nil, notifications: NotificationStore? = nil) {
@@ -95,10 +97,6 @@ struct WorkspaceView: View {
         self._relay = State(initialValue: relay ?? RelayConnection())
         self._notifications = State(initialValue: notifications ?? NotificationStore())
     }
-    @State private var showSettings = false
-    @State private var showCreate = false
-    @State private var storageNoticeDismissed = false
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var allowsDemoNavigation: Bool {
         #if BZZY_PREVIEW
@@ -114,27 +112,17 @@ struct WorkspaceView: View {
         VStack(spacing: 0) {
             if !allowsDemoNavigation && !relay.corePairAuthorized {
                 VStack(spacing: 0) {
-                    if !relay.hosts.isEmpty { workspaceHeader }
+                    if !relay.hosts.isEmpty { homeHeader(navigable: false) }
                     ConnectView(required: true)
                     if !relay.hosts.isEmpty { CoreConnectionFooter() }
                 }
             } else {
                 NavigationStack {
-                    VStack(spacing: 0) {
-                        workspaceHeader
-                        if store.selectedTab == .chat {
-                            CoreChatView(store: store)
-                        } else if store.selectedTab == .agents {
-                            AgentsView(store: store, showCreate: $showCreate)
-                        } else {
-                            TerminalView(store: store)
-                        }
-                    }
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        VStack(spacing: 0) { bottomBar; CoreConnectionFooter() }
-                    }
-                    .bzzyScreen()
-                    .toolbar(.hidden)
+                    TerminalView(store: store)
+                        .safeAreaInset(edge: .top, spacing: 0) { homeHeader(navigable: true) }
+                        .safeAreaInset(edge: .bottom, spacing: 0) { CoreConnectionFooter() }
+                        .bzzyScreen()
+                        .toolbar(.hidden)
                 }
                 .id(navigationID)
             }
@@ -148,10 +136,7 @@ struct WorkspaceView: View {
             }) { SettingsView() }
             .sheet(isPresented: $showConnection) { ConnectView() }
             .sheet(isPresented: $showHosts) { HostPickerView(onSelect: { resetHostNavigation() }) }
-            .sheet(item: $importKind) { kind in
-                if kind == .agent && !store.showsDemoContent { LiveAgentImportView(store: store).coreAvailabilityGate() }
-                else { ImportResourceView(store: store, kind: kind).coreAvailabilityGate() }
-            }
+            .sheet(isPresented: $showImport) { ImportResourceView(store: store, kind: .terminal).coreAvailabilityGate() }
             .alert("Local storage", isPresented: Binding(get: { store.storageError != nil && !storageNoticeDismissed }, set: { if !$0 { storageNoticeDismissed = true } })) {
                 Button("OK") { storageNoticeDismissed = true }
             } message: { Text(store.storageError ?? "") }
@@ -209,60 +194,77 @@ struct WorkspaceView: View {
             }
     }
 
-    private var workspaceHeader: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Text(">_").bzzyFont(15, weight: .semibold).foregroundStyle(BZZYTheme.accent).accessibilityHidden(true)
-                Text("BZZY").bzzyFont(18, weight: .bold).foregroundStyle(BZZYTheme.accent)
-                if !dynamicTypeSize.isAccessibilitySize {
-                    Text("/ " + store.selectedTab.rawValue.lowercased()).bzzyFont(10).foregroundStyle(BZZYTheme.secondary)
+    private var activeHostName: String {
+        relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Choose computer"
+    }
+
+    private func homeHeader(navigable: Bool) -> some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 4) {
+                BrandMark()
+                Spacer(minLength: 8)
+                if navigable {
+                    NavigationLink { CoreChatView(store: store) } label: { askCoreLabel }
+                        .buttonStyle(BZZYPressStyle())
+                        .accessibilityLabel("Ask Core")
+                        .accessibilityHint("Read-only questions about your sessions")
+                        .accessibilityIdentifier("open-core-chat")
+                }
+                RoundButton(symbol: "square.and.arrow.down", label: "Import terminal") { showImport = true }
+                    .accessibilityIdentifier("import-resource").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
+                RoundButton(symbol: "gearshape", label: "Settings") { showSettings = true }
+            }
+            if !relay.hosts.isEmpty { hostSelector }
+        }.padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 10)
+            .background(BZZYTheme.background)
+    }
+
+    private var askCoreLabel: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 7) {
+                Image(systemName: "sparkles").font(.system(size: 14, weight: .semibold))
+                Text("Ask Core").bzzyFont(14, weight: .semibold).lineLimit(1)
+            }.foregroundStyle(BZZYTheme.accent)
+                .padding(.horizontal, 14).frame(height: 40)
+                .background(BZZYTheme.accent.opacity(0.12), in: Capsule())
+                .overlay(Capsule().stroke(BZZYTheme.accent.opacity(0.32), lineWidth: 0.7))
+                .frame(minHeight: 44).contentShape(Rectangle()).fixedSize()
+            RoundIcon(symbol: "sparkles", tint: BZZYTheme.accent)
+        }
+    }
+
+    private var hostSelector: some View {
+        Button { showHosts = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "desktopcomputer").font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(BZZYTheme.accent)
+                Text(activeHostName).bzzyFont(15, weight: .semibold).foregroundStyle(BZZYTheme.text).lineLimit(1)
+                if relay.activeHostID == relay.defaultHostID {
+                    Image(systemName: "star.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(BZZYTheme.accent)
                         .accessibilityHidden(true)
                 }
-                Spacer()
-                if store.selectedTab != .chat {
-                RoundButton(symbol: "square.and.arrow.down", label: "Import \(store.selectedTab == .agents ? "agent" : "terminal")") {
-                    importKind = store.selectedTab == .agents ? .agent : .terminal
-                }.accessibilityIdentifier("import-resource").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
-                }
-                if store.selectedTab == .agents {
-                    RoundButton(symbol: "plus", label: "Create an agent") { showCreate = true }
-                        .accessibilityIdentifier("create-agent").disabled(!allowsDemoNavigation && !relay.coreActionsAvailable)
-                }
-                RoundButton(symbol: "slider.horizontal.3", label: "Settings") { showSettings = true }
-            }
-            if !relay.hosts.isEmpty {
-                Button { showHosts = true } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: "desktopcomputer").bzzyFont(13)
-                        Text(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Choose computer")
-                            .bzzyFont(13, weight: .medium).lineLimit(1)
-                        if relay.activeHostID == relay.defaultHostID { Image(systemName: "star.fill").bzzyFont(9) }
-                        Spacer(minLength: 4)
-                        Image(systemName: "chevron.up.chevron.down").bzzyFont(10, weight: .semibold)
-                    }.foregroundStyle(BZZYTheme.accent).padding(.horizontal, 12).frame(minHeight: 44)
-                        .background(BZZYTheme.surface, in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                        .overlay(RoundedRectangle(cornerRadius: BZZYTheme.controlRadius).stroke(BZZYTheme.line, lineWidth: 0.7))
-                }.buttonStyle(BZZYPressStyle()).accessibilityIdentifier("host-selector")
-                    .accessibilityLabel("Computer")
-                    .accessibilityValue(relay.hosts.first(where: { $0.id == relay.activeHostID })?.name ?? "Choose computer")
-                    .accessibilityHint("Switch computers, choose a default, or add a computer")
-            }
-        }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 10)
-            .background(BZZYTheme.surface)
-            .overlay(alignment: .bottom) { Rectangle().fill(BZZYTheme.line).frame(height: 0.5) }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(BZZYTheme.muted)
+            }.padding(.horizontal, 14).frame(minHeight: 46)
+                .hiveCard(radius: BZZYTheme.controlRadius + 2)
+                .contentShape(Rectangle())
+        }.buttonStyle(BZZYPressStyle()).accessibilityIdentifier("host-selector")
+            .accessibilityLabel("Computer")
+            .accessibilityValue(activeHostName)
+            .accessibilityHint("Switch computers, choose a default, or add a computer")
     }
 
     private func resetHostNavigation() {
-        showCreate = false; showSettings = false; showConnection = false; importKind = nil
+        showSettings = false; showConnection = false; showImport = false
         pendingConnectionFromNotification = false
-        store.notificationAgentID = nil; store.notificationTerminalID = nil
+        store.notificationTerminalID = nil
         navigationID = UUID()
     }
 
     private func applyMultiHostFixture() {
         #if DEBUG
         guard AppLaunchMode.contains("--ui-testing"), AppLaunchMode.contains("--multi-host-testing") else { return }
-        store.selectedTab = .terminal
         guard relay.hosts.first(where: { $0.id == relay.activeHostID })?.name == "Test Mac" else { return }
         let sessionID = "44444444-4444-4444-8444-444444444444"
         let snapshot: [String: Any] = ["session": ["id": sessionID, "alias": "Test only dummy chat", "cwd": "/isolated-ui-fixture", "model": "Fixture"]]
@@ -314,9 +316,10 @@ struct WorkspaceView: View {
         guard targetHostID == nil || routingHostID == targetHostID else { return }
         switch route {
         case .agents, .terminal:
+            // iPhone lists terminals only; an Agent alert opens the home list.
             showSettings = false
             showConnection = false
-            store.selectedTab = route == .agents ? .agents : .terminal
+            showImport = false
             navigationID = UUID()
         case .updates:
             showConnection = false
@@ -331,43 +334,12 @@ struct WorkspaceView: View {
         }
             await relay.refresh()
             guard relay.activeHostID == routingHostID else { return }
-            if let resource {
-                await relay.reconcileNotificationResource(resource, sessionID: sessionID, agentID: agentID)
+            if let resource, route == .terminal, agentID == nil {
+                await relay.reconcileNotificationResource(resource, sessionID: sessionID)
                 guard relay.activeHostID == routingHostID else { return }
-                if let agentID, store.hostAgents.contains(where: { $0.id == agentID && $0.sessionID == relay.coreSessionID }) { store.notificationAgentID = agentID }
-                else if let sessionID, store.liveTerminals.contains(where: { $0.id == sessionID && $0.id == relay.coreSessionID }) { store.notificationTerminalID = sessionID }
+                if let sessionID, store.liveTerminals.contains(where: { $0.id == sessionID && $0.id == relay.coreSessionID }) { store.notificationTerminalID = sessionID }
             }
         }
-    }
-
-    private var bottomBar: some View {
-        HStack(spacing: 4) {
-            ForEach(WorkspaceTab.allCases, id: \.self) { tab in
-                Button {
-                    BZZYTheme.haptic()
-                    store.selectedTab = tab
-                } label: {
-                    let layout = dynamicTypeSize.isAccessibilitySize
-                        ? AnyLayout(VStackLayout(spacing: 5))
-                        : AnyLayout(HStackLayout(spacing: 10))
-                    layout {
-                        Image(systemName: tab.symbol).bzzyFont(18, weight: .medium)
-                        Text(tab.rawValue).bzzyFont(13, weight: .medium).lineLimit(1)
-                    }.frame(maxWidth: .infinity).frame(minHeight: 52)
-                        .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 8 : 0)
-                        .foregroundStyle(store.selectedTab == tab ? BZZYTheme.accent : BZZYTheme.secondary)
-                        .background(store.selectedTab == tab ? BZZYTheme.selection : .clear,
-                                    in: RoundedRectangle(cornerRadius: BZZYTheme.controlRadius))
-                }.buttonStyle(.plain)
-                    .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
-                    .disabled(!allowsDemoNavigation && !relay.coreActionsAvailable && tab == .agents)
-                    .accessibilityAddTraits(store.selectedTab == tab ? .isSelected : [])
-            }
-        }.padding(.horizontal, 8).padding(.vertical, 4)
-            .background(BZZYTheme.surface)
-            .overlay(alignment: .top) { Rectangle().fill(BZZYTheme.line).frame(height: 0.5) }
-            .padding(.top, 4)
-            .background(BZZYTheme.background)
     }
 }
 
@@ -390,23 +362,32 @@ private struct CoreConnectionFooter: View {
     @State private var checking = false
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
-            HStack(spacing: 7) {
-                Circle().fill(relay.connectionOnline ? BZZYTheme.success : BZZYTheme.danger).frame(width: 6, height: 6)
-                Text("CORE").bzzyFont(10, weight: .semibold).foregroundStyle(BZZYTheme.secondary)
-                Text(relay.connectionOnline ? "Online" : "Offline").bzzyFont(11, weight: .medium)
-                    .accessibilityIdentifier("connection-status-label")
-                HostMetricsBar(metrics: relay.connectionOnline ? relay.hostMetrics : nil, status: relay.hostMetricsStatus)
+            let online = relay.connectionOnline
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Circle().fill(online ? BZZYTheme.success : BZZYTheme.danger).frame(width: 7, height: 7)
+                        .shadow(color: (online ? BZZYTheme.success : BZZYTheme.danger).opacity(0.6), radius: 3)
+                    Text("CORE").bzzyFont(10, weight: .bold).tracking(0.8).foregroundStyle(BZZYTheme.muted)
+                    Text(online ? "Online" : "Offline").bzzyFont(12, weight: .semibold)
+                        .foregroundStyle(online ? BZZYTheme.text : BZZYTheme.danger)
+                        .accessibilityIdentifier("connection-status-label")
+                }.fixedSize()
+                HostMetricsBar(metrics: online ? relay.hostMetrics : nil, status: relay.hostMetricsStatus)
                     .frame(maxWidth: .infinity)
                 Button {
                     checking = true
                     Task { await relay.checkConnection(); checking = false }
                 } label: {
-                    if checking { ProgressView().controlSize(.mini) }
-                    else { Image(systemName: "arrow.clockwise").bzzyFont(13) }
-                }.frame(minWidth: 44, minHeight: 44).disabled(checking).buttonStyle(.plain).foregroundStyle(BZZYTheme.secondary)
+                    Group {
+                        if checking { ProgressView().controlSize(.mini).tint(BZZYTheme.secondary) }
+                        else { Image(systemName: "arrow.clockwise").font(.system(size: 13, weight: .semibold)) }
+                    }.frame(width: 44, height: 44).contentShape(Rectangle())
+                }.disabled(checking).buttonStyle(BZZYPressStyle()).foregroundStyle(BZZYTheme.secondary)
                     .accessibilityIdentifier("refresh-connection")
                     .accessibilityLabel(checking ? "Checking connection" : "Refresh connection")
-            }.padding(.horizontal, 16).frame(minHeight: 44).background(BZZYTheme.background)
+            }.padding(.leading, 16).padding(.trailing, 6).frame(minHeight: 46)
+                .background(BZZYTheme.surface.ignoresSafeArea(edges: .bottom))
+                .overlay(alignment: .top) { Rectangle().fill(BZZYTheme.line).frame(height: 0.5) }
                 .accessibilityElement(children: .contain).accessibilityIdentifier("connection-status")
         }
     }
@@ -417,16 +398,43 @@ private struct HostMetricsBar: View {
     let status: String
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { Text(cpu); Text(memory) }.fixedSize()
-            VStack(spacing: 1) { Text(cpu); Text(memory) }
-        }.bzzyFont(10, design: .monospaced).foregroundStyle(BZZYTheme.secondary)
+            HStack(spacing: 12) { cpuChip; memoryChip }.fixedSize()
+            VStack(alignment: .leading, spacing: 2) { cpuChip; memoryChip }
+        }.bzzyFont(10, weight: .medium, design: .monospaced)
             .accessibilityElement(children: .combine).accessibilityIdentifier("host-metrics")
             .accessibilityLabel("Host usage").accessibilityValue(metrics == nil ? status : "\(cpu), \(memory)")
     }
-    private var cpu: String { "CPU \(metrics?.hostCPUPercent.map { String(format: "%.0f%%", $0) } ?? "—")" }
-    private var memory: String {
-        guard let metrics else { return "RAM —" }
+    private var cpuChip: some View { MetricChip(label: "CPU", value: cpuValue, fraction: metrics?.hostCPUPercent.map { $0 / 100 }) }
+    private var memoryChip: some View {
+        MetricChip(label: "RAM", value: memoryValue,
+                   fraction: metrics.flatMap { $0.memoryTotalBytes > 0 ? Double($0.memoryUsedBytes) / Double($0.memoryTotalBytes) : nil })
+    }
+    private var cpuValue: String { metrics?.hostCPUPercent.map { String(format: "%.0f%%", $0) } ?? "—" }
+    private var memoryValue: String {
+        guard let metrics else { return "—" }
         let gib = 1024.0 * 1024 * 1024, total = Double(metrics.memoryTotalBytes) / gib
-        return "RAM " + String(format: total >= 10 ? "%.1f/%.0fG" : "%.1f/%.1fG", Double(metrics.memoryUsedBytes) / gib, total)
+        return String(format: total >= 10 ? "%.1f/%.0fG" : "%.1f/%.1fG", Double(metrics.memoryUsedBytes) / gib, total)
+    }
+    private var cpu: String { "CPU \(cpuValue)" }
+    private var memory: String { "RAM \(memoryValue)" }
+}
+
+private struct MetricChip: View {
+    let label: String
+    let value: String
+    let fraction: Double?
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(label).foregroundStyle(BZZYTheme.muted)
+            if let fraction {
+                let clamped = min(max(fraction, 0), 1)
+                Capsule().fill(BZZYTheme.line).frame(width: 24, height: 4)
+                    .overlay(alignment: .leading) { Capsule().fill(tone(clamped)).frame(width: max(2, 24 * clamped), height: 4) }
+            }
+            Text(value).foregroundStyle(BZZYTheme.secondary)
+        }
+    }
+    private func tone(_ value: Double) -> Color {
+        value < 0.7 ? BZZYTheme.success : value < 0.9 ? BZZYTheme.amber : BZZYTheme.danger
     }
 }
