@@ -1498,7 +1498,7 @@ export class TerminalChat {
     if (this.welcomeEyes?.rows !== rows) this.welcomeEyes = { rows, cells: mascotCells(0, { columns, rows, compact: true }) };
     const lines = Array(Math.max(1, Math.floor((height - rows - 9) / 3))).fill('');
     for (const cells of this.welcomeEyes.cells) lines.push(center(mascotLine(cells, this.theme), columns));
-    lines.push('', center(color('B Z Z Y', palette.accent, true) + color('  ·  THE LIVING HIVE', palette.muted), 27), '');
+    lines.push('', center(color('B Z Z Y', palette.accent, true), 7), '');
     for (const [line, tone, bold] of text) {
       const command = line.startsWith('/goal') ? '/goal <objective>' : '', rest = clip(line.slice(command.length), width - 4);
       if (command) lines.push('');

@@ -27,9 +27,7 @@ export function workspaceHeader(tui, width, { privateMode = false, controls = ''
   const clock = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   const status = dot(coreOn) + c(tiny ? 'C ' : width < 100 ? ' Core  ' : ' BZZY Core  ', coreOn ? palette.text : palette.muted)
     + dot(relayOn) + c(tiny ? 'R' : ' Relay', relayOn ? palette.text : palette.muted) + c(' ' + clock, palette.text, !tiny);
-  let brand = eyes[0] + c(' BZZY', palette.accent, true) + (tiny ? ' ' : c(` ${terminalVersion} `, palette.muted));
-  const tagline = c(' THE LIVING HIVE ', palette.accent);
-  if (!privateMode && tui.ui.sessionId && width - cellWidth(brand + tagline + status) >= 72) brand += tagline;
+  const brand = eyes[0] + c(' BZZY', palette.accent, true) + (tiny ? ' ' : c(` ${terminalVersion} `, palette.muted));
   let line = brand;
   const control = (label, value, hit) => {
     const column = cellWidth(line) + 1, text = c(label, palette.muted) + c(value, palette.text);
