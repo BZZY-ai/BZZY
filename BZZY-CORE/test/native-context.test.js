@@ -417,4 +417,7 @@ test('Claude records reported tools, deduplicates compact boundaries and seals e
   assert.equal(session.nativeContext.epoch, 1); assert.equal(session.nativeContext.metrics.legacySignals, 1);
   assert.equal(session.nativeContext.refresh.state, 'pending');
   assert.deepEqual(session.nativeBackendReadiness.reportedTools, ['mcp__bzzy_goal__list_skills']);
+  const activity = observed.filter(row => row.type === 'activity');
+  assert.deepEqual(activity.map(row => row.data.status), ['running', 'completed']);
+  assert.equal(activity[0].data.id, activity[1].data.id); assert.equal(activity[1].data.toolCallId, 'claude-read');
 });

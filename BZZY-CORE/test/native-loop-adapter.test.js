@@ -58,6 +58,26 @@ async function churn() {
   }
 }
 
+test('Codex native tool outcomes settle their inferred activity rows by tool-call ID', () => {
+  makeEngine();
+  engine.notification('item/started', { threadId: 'native-thread', turnId: 't1', item: {
+    id: 'read-fixture', type: 'commandExecution', command: 'sed -n 1,20p README.md',
+  } });
+  engine.notification('item/completed', { threadId: 'native-thread', turnId: 't1', item: {
+    id: 'read-fixture', type: 'commandExecution', command: 'sed -n 1,20p README.md', status: 'completed', exitCode: 0,
+  } });
+  engine.notification('item/started', { threadId: 'native-thread', turnId: 't1', item: {
+    id: 'failed-web', type: 'webSearch', action: { type: 'openPage', url: 'https://example.test/fixture' },
+  } });
+  engine.notification('item/completed', { threadId: 'native-thread', turnId: 't1', item: {
+    id: 'failed-web', type: 'webSearch', action: { type: 'openPage', url: 'https://example.test/fixture' }, status: 'failed', error: { message: 'fixture failure' },
+  } });
+  const activity = events(session.id).filter(row => row.type === 'activity');
+  assert.deepEqual(activity.map(row => row.data.status), ['running', 'completed', 'running', 'blocked']);
+  assert.equal(activity[0].data.id, activity[1].data.id); assert.equal(activity[2].data.id, activity[3].data.id);
+  assert.deepEqual(activity.filter(row => !row.data.executionActive).map(row => row.data.toolCallId), ['read-fixture', 'failed-web']);
+});
+
 test('actual native goal pauses its active turn once after compaction churn, preserving identity, history and owner allowance', async () => {
   const original = structuredClone(session.goal);
   makeEngine(); const running = engine.run('Fixture', { goal: true }); running.catch(() => {});

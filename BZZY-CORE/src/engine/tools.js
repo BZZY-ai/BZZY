@@ -267,6 +267,7 @@ export class ToolHost {
     try {
       result = await this.executeTool(name, input, callId);
     } catch (error) {
+      this.activityReporter?.finish?.(callId, { failed: true });
       display('failed');
       try { recordDiagnosticTool(this.session, this.context, { name, callId, started, error }); }
       catch { /* Never replace the tool's actual outcome with a telemetry error. */ }
@@ -280,6 +281,7 @@ export class ToolHost {
     }
     try { recordDiagnosticTool(this.session, this.context, { name, callId, started, result }); }
     catch { /* A successful mutation must never look failed or be retried for diagnostics. */ }
+    this.activityReporter?.finish?.(callId);
     display('completed');
     return result;
   }
@@ -368,7 +370,7 @@ export class ToolHost {
       return skill;
     }
     if (name === 'activity') { const record = recordActivity(session, input, this.ui); this.activityReporter?.explicit(record); return record; }
-    if (name === 'http_request') { this.activityReporter?.tool(null, name, input); return observedRequest(session, input, this.ui); }
+    if (name === 'http_request') { this.activityReporter?.tool(callId, name, input); return observedRequest(session, input, this.ui); }
     if (name === 'get_task_state') {
       const state = compactTaskState(session, input, this.context);
       try {

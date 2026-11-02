@@ -54,6 +54,7 @@ test('a running reported step shows the circling loader while work is active and
     ui.tui.busy = false; ui.tui.frame = 5; ui.tui.render(); assert.match(row(), /⣾ \S+ · subdomains 12/, 'an idle terminal does not animate');
     ui.event('activity', { id: 'recon', summary: 'subdomains 12 | urls candidates 40', status: 'completed' });
     ui.tui.render(); assert.match(row(), /✓ \S+ · subdomains 12 \| urls candidates 40 · completed/);
+    assert.equal(ui.tui.currentActivity, '');
     assert.equal(ui.tui.entries.filter(entry => entry.kind === 'actor-activity').length, 1);
   } finally { ui.close(); }
 });

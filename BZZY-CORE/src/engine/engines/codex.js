@@ -642,6 +642,8 @@ export class CodexEngine {
         else if (item?.type === 'fileChange') this.progress.tool(item.id, item.type, {});
         else if (item?.type === 'webSearch') this.progress.tool(item.id, item.type, { url: item.action?.url });
         else if (item?.type === 'mcpToolCall') this.progress.tool(item.id, item.tool, item.arguments);
+      } else if (item?.id && ['commandExecution', 'fileChange', 'webSearch', 'mcpToolCall'].includes(item.type)) {
+        this.progress.finish?.(item.id, { failed: item.status === 'failed' || Boolean(item.error) || Number.isInteger(item.exitCode) && item.exitCode !== 0 });
       }
       if (item?.type === 'webSearch' && ['openPage', 'open_page'].includes(item.action?.type) && item.action.url) this.traffic.record(item.id, item.action.url, 'Codex web', phase);
       else if (item?.type === 'mcpToolCall') this.traffic.tool(item.id, item.tool, item.arguments, phase, Boolean(item.error));

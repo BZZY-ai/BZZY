@@ -273,7 +273,7 @@ export class TerminalChat {
     } else if (type === 'activity') {
       const worker = data.sessionId && data.sessionId !== sessionId;
       const actor = this.actors.for(data.actorSessionId || data.sessionId, sessionId);
-      this.currentActivity = data.closedAt ? '' : actor.label + ' · ' + data.summary;
+      this.currentActivity = data.closedAt || data.status !== 'running' ? '' : actor.label + ' · ' + data.summary;
       if (worker && !data.closedAt && data.status === 'running') this.delegationPhase = 'Executor running';
       const index = this.activities.findIndex(item => item.id && item.id === data.id);
       if (index >= 0) this.activities[index] = data; else this.activities.push(data);
@@ -1330,7 +1330,10 @@ export class TerminalChat {
     } else if (this.panel === 'activity') {
       for (const item of this.activities) {
         const attribution = this.actors.for(item.actorSessionId || item.sessionId, this.ui.activeTab || this.ui.sessionId).label + ' · ';
-        put(`  ${item.closedAt ? '✓' : '›'} ${clip(attribution + item.summary, width - 4)}`, item.tool ? palette.muted : palette.accent, !item.tool);
+        const status = item.status || 'running', active = !item.closedAt && ['planned', 'running'].includes(status);
+        const stopped = Boolean(item.closedAt) && ['planned', 'running'].includes(status), failed = status === 'blocked', uncertain = status === 'inconclusive';
+        put(`  ${active ? '›' : stopped ? '■' : failed ? '✕' : uncertain ? '◇' : '✓'} ${clip(attribution + item.summary, width - 4)}`,
+          item.tool || stopped ? palette.muted : failed ? palette.danger : uncertain ? palette.warning : active ? palette.accent : palette.success, !item.tool);
         if (!item.tool) for (const line of wrap(item.details || '', width - 5)) put('    ' + line, palette.muted);
         if (item.inference) for (const line of wrap('Inference: ' + item.inference, width - 5)) put('    ' + line, palette.muted);
         put('');

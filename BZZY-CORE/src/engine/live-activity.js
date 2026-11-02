@@ -46,16 +46,32 @@ export function humanActivity(name, input = {}, objective = '') {
 }
 
 export class ActivityReporter {
-  constructor(session, ui, prompt = '') { this.session = session; this.ui = ui; this.prompt = prompt; }
+  constructor(session, ui, prompt = '') { this.session = session; this.ui = ui; this.prompt = prompt; this.toolActivities = new Map(); }
   setPrompt(prompt) { this.prompt = prompt; }
   explicit(record) { this.explicitAt = Date.now(); this.lastSummary = record.summary; }
+  unavailable() { try { this.ui?.event('activity.unavailable', { reason: 'The live activity entry could not be saved.' }); } catch { /* Progress telemetry never changes tool execution. */ } }
   tool(id, name, input) {
     if (/^(?:mcp__bzzy_goal__|activity$|checkpoint$|get_task_state$|get_goal$|update_goal$)/.test(name || '')) return;
     if (Date.now() - (this.explicitAt || 0) < 90000) return;
     const activity = humanActivity(name, input, this.prompt);
     if (!activity || activity.summary === this.lastSummary) return;
     this.lastSummary = activity.summary;
-    try { return recordActivity(this.session, activity, this.ui, { provenance: 'host-inferred', source: 'native-tool', toolCallId: id || null }); }
-    catch { this.ui.event('activity.unavailable', { reason: 'The live activity entry could not be saved.' }); }
+    try {
+      const record = recordActivity(this.session, activity, this.ui, { provenance: 'host-inferred', source: 'native-tool', toolCallId: id || null });
+      if (id) {
+        if (this.toolActivities.size >= 4096) this.toolActivities.delete(this.toolActivities.keys().next().value);
+        this.toolActivities.set(String(id), record);
+      }
+      return record;
+    } catch { this.unavailable(); }
+  }
+  finish(id, { failed = false } = {}) {
+    const key = id == null ? '' : String(id), previous = this.toolActivities.get(key);
+    if (!previous) return;
+    this.toolActivities.delete(key);
+    try {
+      return recordActivity(this.session, { ...previous, status: failed ? 'blocked' : 'completed' }, this.ui,
+        { provenance: previous.provenance, source: previous.source, toolCallId: previous.toolCallId || key });
+    } catch { this.unavailable(); }
   }
 }

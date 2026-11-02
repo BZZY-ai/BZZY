@@ -214,6 +214,7 @@ export class ClaudeEngine {
         } else if (event.type === 'user') {
           for (const block of event.message?.content || []) if (block.type === 'tool_result') {
             this.traffic.complete(block.tool_use_id, Boolean(block.is_error));
+            this.progress.finish?.(block.tool_use_id, { failed: Boolean(block.is_error) });
             const startedTool = observedTools.get(block.tool_use_id);
             observedTools.delete(block.tool_use_id);
             if (startedTool) try {

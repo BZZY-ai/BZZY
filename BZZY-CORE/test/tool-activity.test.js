@@ -1,13 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createToolActivityProjector } from '../src/engine/tool-activity.js';
 import { RunnerUI } from '../src/engine/runtime-ui.js';
-import { createSession } from '../src/engine/store.js';
+import { createSession, saveSession } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
-import { events } from '../src/engine/database.js';
+import { events, listRecords } from '../src/engine/database.js';
+import { ActivityReporter } from '../src/engine/live-activity.js';
+import { ToolHost } from '../src/engine/tools.js';
+import { normalizeContract } from '../src/engine/contracts.js';
 
 test('native commands, files, browser actions and searches project only display metadata', () => {
   const project = createToolActivityProjector({ sessionId: 'session', runId: 'run', secrets: [] });
@@ -41,6 +45,29 @@ test('complete values are scrubbed before command previews are shortened', () =>
   } } });
   assert.doesNotMatch(JSON.stringify(action), /fixture-secret-binding|PRIVATE_KEY/);
   assert.match(action.detail, /redacted/);
+});
+
+test('Core HTTP tool outcomes settle the activity created for their exact call ID', async () => {
+  const previous = process.env.BZZY_HOME, directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-core-http-activity-')));
+  process.env.BZZY_HOME = path.join(directory, 'private');
+  const server = http.createServer((request, response) => { response.writeHead(200, { 'content-type': 'text/plain' }); response.end('offline fixture'); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  try {
+    const origin = `http://127.0.0.1:${server.address().port}`, session = createSession(getProvider('codex'), directory);
+    session.contract = normalizeContract({ objective: 'Read the local synthetic fixture.', scope: { allowedTargets: [origin], allowedActions: ['GET'] } });
+    session.policy = session.contract.policy; saveSession(session);
+    const ui = new RunnerUI(session.id), host = new ToolHost(session, ui, { goalMode: false });
+    host.activityReporter = new ActivityReporter(session, ui, session.contract.objective);
+    const result = await host.call('http_request', { url: origin + '/fixture' });
+    assert.equal(result.status, 200);
+    const activity = listRecords('activity').filter(record => record.sessionId === session.id);
+    assert.equal(activity.length, 1); assert.equal(activity[0].status, 'completed'); assert.equal(activity[0].executionActive, false);
+    assert.match(activity[0].toolCallId, /^[a-f0-9-]{36}$/); ui.close();
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    if (previous === undefined) delete process.env.BZZY_HOME; else process.env.BZZY_HOME = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('workers mirror sanitized tool lifecycles durably without changing their original events', () => {
