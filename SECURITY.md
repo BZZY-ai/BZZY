@@ -12,10 +12,13 @@ Versioned program scope is an explicit owner opt-in, separate from historical
 scope text. Private approval/binding receipts, exact goal pins and current fences
 govern admission. Enrolled Codex execution requires verified strict configuration
 and an acknowledged named profile with native networking/inherited integrations
-disabled; mediated access uses Core's checked HTTP tool. Host verification also
-disables networking. Unsupported profiles/backends fail before execution. Other
-terminal sessions retain their existing isolation limits. Revocation cannot
-undo traffic already sent. Imported histories never carry scope authority.
+disabled; mediated target access uses Core's checked HTTP tool. A mediated owner
+terminal may also use its separately configured fixed read-only Gmail gateway;
+this grants no target, worker, Agent or extension authority. Host verification
+and offline program scopes disable networking. Unsupported profiles/backends fail
+before execution. Other terminal sessions retain their existing isolation limits.
+Revocation cannot undo traffic already sent. Imported histories never carry scope
+authority.
 HTTP mediation validates URL/hostname/method scope; it does not pin DNS answers
 or provide private-address isolation against DNS rebinding. Host network
 controls are still required for that boundary.
@@ -227,9 +230,12 @@ status. Credentials never enter model input, model-facing tool arguments, logs, 
 exports or portable project state. Saving is local and makes no Gmail request.
 
 Save authorizes Core's `gmail_read` tool for ordinary owner-terminal chats and
-goals on that host. Core's ToolHost enforces this boundary; persistent Agents,
-workers and reviewers do not inherit the connection. Workflow or skill text,
-an imported definition and selected signup aliases cannot grant this access.
+goals on that host, including a valid mediated program-scoped goal. Offline scopes
+remain offline. Program scope still governs website targets and actions; mailbox
+authorization is a separate private, read-only owner grant. Core's ToolHost
+enforces these boundaries; persistent Agents, workers and reviewers do not inherit
+the connection. Workflow or skill text, an imported definition and selected signup
+aliases cannot grant this access.
 The separate per-skill signup-alias list stays in private Core `config.json`;
 it supplies approved account-selection data and is not mailbox authentication.
 Approved aliases are the website login/registration identities, rather than

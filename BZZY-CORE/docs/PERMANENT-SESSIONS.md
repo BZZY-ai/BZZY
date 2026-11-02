@@ -216,11 +216,15 @@ Enrolled execution currently supports Codex with a verified named permission
 profile, strict configuration and no YOLO bypass. Native shell networking,
 inherited MCP/apps/plugins/hooks and native network features are disabled.
 The effective configuration, listed profile and activated profile must be
-acknowledged before a turn starts. `mediated` permits approved requests through
-Core `http_request`; raw browser/socket networking is unavailable. Gmail and
-extension network actions are not admitted in this mode. Host verification
-commands use disabled networking too. Unsupported profiles/backends fail before
-execution. Ordinary unenrolled terminal networking retains its previous limits.
+acknowledged before a turn starts. `mediated` permits approved target requests
+through Core `http_request`; raw browser/socket networking is unavailable. A
+separately configured owner terminal may also use Core's fixed read-only
+`gmail_read` gateway for verification mail; that mailbox grant does not widen
+website targets or pass to workers, reviewers or persistent Agents. Extension
+network actions are not admitted, and offline scopes expose no mailbox gateway.
+Host verification commands use disabled networking too. Unsupported
+profiles/backends fail before execution. Ordinary unenrolled terminal networking
+retains its previous limits.
 
 Core HTTP mediation currently checks URL, hostname, method and scope binding;
 it does not pin DNS answers or guarantee isolation from private addresses after

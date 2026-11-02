@@ -197,7 +197,7 @@ export function taskTools(session, { goalMode } = {}) {
   );
   if (session.peers) tools.push(spec('peer_status', 'Read other agents’ attributed status, checkpoints and issues for this shared goal. Their claims are not proof.'));
   if (programScopeCapsule(session).enrolled) for (let index = tools.length - 1; index >= 0; index--) {
-    if (['gmail_read', 'interact_extension'].includes(tools[index].name)) tools.splice(index, 1);
+    if (tools[index].name === 'interact_extension') tools.splice(index, 1);
   }
   if (agentExecutionScope(session)) return tools.filter(tool => agentToolNames.has(tool.name)).concat([
     spec('read_project_file', 'Read a bounded UTF-8 slice of a regular file in this Agent project. Private authentication files, runtime databases, symlinks, hardlinks and paths outside the project are denied.',

@@ -79,7 +79,8 @@ export const programScopeDisabledFeatures = ['multi_agent', 'multi_agent_v2', 'v
   'remote_control', 'mcp_2026_07_28', 'codex_apps_mcp_2026_07_28'];
 export const programScopeCapabilities = () => ({ mediatedHttp: true, nativeTargetIsolation: false,
   nativeProfiles: [{ backend: 'codex', id: programScopePermissionProfile, mode: 'core-http-only', requiresRuntimeAcknowledgment: true }],
-  limitation: 'Scoped Codex requires an acknowledged profile with native networking, MCP, apps, browsers and hooks disabled. Only Core HTTP requests can reach approved targets; raw sockets, native browsers and other backends are unsupported.' });
+  ownerMailbox: { tool: 'gmail_read', mode: 'separately-authorized-read-only', networkModes: ['mediated'] },
+  limitation: 'Scoped Codex requires an acknowledged profile with native networking, MCP, apps, browsers and hooks disabled. Only Core HTTP requests can reach approved targets; a separately configured owner-terminal Gmail reader may access that private mailbox read-only. Raw sockets, native browsers and other backends are unsupported.' });
 
 export function programScopeStatus(value) {
   const session = sessionFor(value, true), project = projectFor(session), control = stateFor(project.id);
@@ -303,8 +304,12 @@ export function programScopeCommandPolicy(session) {
   return checked(session) ? { ...policy, network: 'disabled' } : policy;
 }
 export function assertProgramToolAdmission(session, name) {
-  if (!checked(session)) return;
-  if (['gmail_read', 'interact_extension'].includes(name)) fail('This scoped execution permits external access only through Core http_request. Account and extension gateways require a separate supported scope admission.', 'PROGRAM_SCOPE_DENIED');
+  const value = checked(session); if (!value) return;
+  if (name === 'gmail_read') {
+    if (value.version.scope.networkMode !== 'mediated') fail('Read-only Gmail access requires a mediated program scope and the owner’s separately configured mailbox authorization.', 'PROGRAM_SCOPE_DENIED');
+    return;
+  }
+  if (name === 'interact_extension') fail('Scoped target access is limited to Core http_request. Extension gateways require a separate supported scope admission.', 'PROGRAM_SCOPE_DENIED');
 }
 function matches(url, target) {
   if (/^https?:\/\//.test(target)) {

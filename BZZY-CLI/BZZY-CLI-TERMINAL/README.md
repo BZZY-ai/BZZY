@@ -309,7 +309,8 @@ Open **Settings → BZZY Core → Gmail / email access** to configure the main
 Gmail mailbox login and its app password. The private screen displays that
 private login and masks password input and saved-password status. **Configure Gmail**
 or **Replace account** saves locally and explicitly authorizes read-only access
-from ordinary owner-terminal chats and goals; Save makes no network request.
+from ordinary owner-terminal chats and goals, including mediated program-scoped
+owner goals; offline scopes remain offline. Save makes no network request.
 Persistent Agents, workers and reviewers do not inherit that connection.
 **Disconnect** asks for confirmation and removes the local mailbox connection.
 

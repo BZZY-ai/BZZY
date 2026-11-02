@@ -10,6 +10,10 @@ import { events, putRecord } from '../src/engine/database.js';
 import { setGmailSettings } from '../src/engine/gmail-account.js';
 import { CoreAgents } from '../src/agents.js';
 import { CoreWorkspaces } from '../src/workspaces.js';
+import { initializeProject } from '../src/engine/project.js';
+import { newGoal } from '../src/engine/goals.js';
+import { normalizeContract } from '../src/engine/contracts.js';
+import { programScopeOperation, programScopeStatus } from '../src/engine/program-scope.js';
 
 const provider = { id: 'codex', backend: 'codex' };
 const mailbox = 'backend-mailbox@example.invalid', alias = 'form+1@example.invalid';
@@ -45,6 +49,22 @@ async function dispatched() {
   for (let i = 0; i < 100 && !fs.existsSync(marker); i++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(fs.existsSync(marker), 'fixture helper must start before authorization changes');
 }
+function mediatedProgramSession() {
+  const session = createSession(provider, cwd), objective = 'Use the approved local fixture registration flow.';
+  initializeProject(session); session.goal = newGoal(objective);
+  session.contract = normalizeContract({ objective, context: 'Use only the synthetic target and read-only mailbox.',
+    scope: { allowedTargets: ['example.invalid'] } });
+  session.policy = session.contract.policy; saveSession(session);
+  const current = () => loadSession(session.id);
+  const operate = (operation, input) => programScopeOperation(operation, { reviewed: true, requestId: randomUUID(),
+    expectedRevision: programScopeStatus(current()).revision, ...input }, { session: current() });
+  const { proposal } = operate('scope.propose', { scope: { allowedTargets: ['example.invalid'], excludedTargets: [],
+    allowedActions: ['GET'], excludedActions: [], restrictions: [], cleanupObligations: [], networkMode: 'mediated' },
+    sources: [{ reference: 'synthetic registration scope', sha256: 'a'.repeat(64) }] });
+  const { approval } = operate('scope.approve', { proposalId: proposal.id });
+  operate('scope.continue', { approvalId: approval.id, expectedGoalId: current().goal.id });
+  return current();
+}
 
 test('ordinary owner chats discover native Gmail independently of alias setup, with safe missing-account guidance', async () => {
   const session = createSession(provider, cwd), tools = taskTools(session, { goalMode: false });
@@ -70,6 +90,13 @@ test('authenticated bridge lists and reads private mail while activity and diagn
     assert.ok(events(session.id, 0, 1000).some(event => event.type === 'diagnostic.tool' && event.data.mailbox?.count === 1));
     assert.ok(output.some(event => event.data.label === 'Read email' && event.data.detail === 'Read selected message'));
   } finally { await tools.close(); }
+});
+
+test('a mediated owner program scope can use its separately configured read-only mailbox', async () => {
+  configured(); const session = mediatedProgramSession();
+  assert.ok(taskTools(session).some(tool => tool.name === 'gmail_read'));
+  const list = await host(session).call('gmail_read', { operation: 'list', last: 1, search: `to:${alias}` });
+  assert.equal(list.messages[0].to, alias); assert.equal(list.readOnly, true); assert.equal(list.untrustedContent, true);
 });
 
 test('saved worker, reviewer, Agent and project identity cannot be disguised to inherit owner mailbox access', async () => {

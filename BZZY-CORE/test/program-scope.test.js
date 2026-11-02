@@ -13,6 +13,9 @@ import { normalizeContract } from '../src/engine/contracts.js';
 import { enqueueExecution } from '../src/engine/execution-queue.js';
 import { preflightGoalWorkflow, getGoalWorkflow, saveWorkflow, selectWorkflow } from '../src/engine/workflows.js';
 import { createMissionContext } from '../src/engine/mission-context.js';
+import { ToolHost, taskTools } from '../src/engine/tools.js';
+import { codexDynamicTools, synchronizeCodexTools } from '../src/engine/engines/codex.js';
+import { prepareNativeReadiness, acknowledgeNativeReadiness } from '../src/engine/native-context.js';
 import { programScopeOperation, programScopeStatus, programScopeCapsule, preflightGoalScope,
   assertGoalScopeAdmission, assertScopeOperation, scopeForMission, programScopeCommandPolicy, assertProgramToolAdmission } from '../src/engine/program-scope.js';
 
@@ -144,19 +147,37 @@ test('scope successor retains the exact pinned workflow after the Library versio
 
 test('offline native admission rejects YOLO and weaker execution policies', () => {
   transition(approve());
+  assert.ok(!taskTools(current()).some(tool => tool.name === 'gmail_read'));
+  assert.throws(() => assertProgramToolAdmission(current(), 'gmail_read'), { code: 'PROGRAM_SCOPE_DENIED' });
   assert.throws(() => preflightGoalScope(current(), { yolo: true }), { code: 'UNSUPPORTED_SCOPE_ENFORCEMENT' });
   assert.throws(() => preflightGoalScope(current(), { policy: { ...current().policy, network: 'inherit' } }), { code: 'UNSUPPORTED_SCOPE_ENFORCEMENT' });
   assert.throws(() => enqueueExecution(session.id, { prompt: 'no bypass', options: { yolo: true } }, 'yolo', { authorize() {} }), { code: 'UNSUPPORTED_SCOPE_ENFORCEMENT' });
 });
 
-test('scoped host commands lose native networking and external account gateways cannot bypass mediated scope', () => {
+test('mediated scope keeps native networking off while admitting only the separately authorized owner mailbox gateway', async () => {
   const approval = approve('mediated'); transition(approval);
   assert.equal(current().policy.network, 'inherit');
   assert.equal(programScopeCommandPolicy(current()).network, 'disabled');
-  for (const name of ['gmail_read', 'interact_extension']) assert.throws(() => assertProgramToolAdmission(current(), name), { code: 'PROGRAM_SCOPE_DENIED' });
+  assert.ok(taskTools(current()).some(tool => tool.name === 'gmail_read'));
+  assert.ok(!taskTools(current()).some(tool => tool.name === 'interact_extension'));
+  assert.doesNotThrow(() => assertProgramToolAdmission(current(), 'gmail_read'));
+  await assert.rejects(new ToolHost(current(), { event() {} }).call('gmail_read', { operation: 'list', last: 1 }), { code: 'GMAIL_NOT_CONFIGURED' });
+  assert.throws(() => assertProgramToolAdmission(current(), 'interact_extension'), { code: 'PROGRAM_SCOPE_DENIED' });
   assert.doesNotThrow(() => assertProgramToolAdmission(current(), 'http_request'));
   operate('scope.revoke', { approvalId: approval.id, reason: 'Fixture scope revoked.' });
   assert.throws(() => programScopeCommandPolicy(current()), { code: 'PROGRAM_SCOPE_REVOKED' });
+  await assert.rejects(new ToolHost(current(), { event() {} }).call('gmail_read', { operation: 'list', last: 1 }), { code: 'PROGRAM_SCOPE_REVOKED' });
+});
+
+test('a pre-mailbox mediated native thread rotates with a handoff before its next turn', () => {
+  transition(approve('mediated')); const live = current();
+  const options = { goalMode: true, toolHost: { context: { goalMode: true } } };
+  const tools = codexDynamicTools(live, options); assert.ok(tools.some(tool => tool.name === 'gmail_read'));
+  live.engineThreadId = 'pre-mailbox-scoped-thread'; live.coreSkillsProtocol = 7;
+  prepareNativeReadiness(live, { backend: 'codex', tools: tools.filter(tool => tool.name !== 'gmail_read'), instructions: 'Previously admitted scoped instructions.' });
+  acknowledgeNativeReadiness(live, { threadId: live.engineThreadId });
+  const result = synchronizeCodexTools(live, options);
+  assert.equal(result.rotated, true); assert.equal(live.engineThreadId, null); assert.equal(live.conversationHandoff.pending, true);
 });
 
 test('descendant operations require the exact current mission scope binding', () => {
