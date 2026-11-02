@@ -54,16 +54,17 @@ test('the complete pack round-trips through native Library ZIP validation with f
   const originals = inputs.map(input => saveSubagentDefinition({ ...input, capabilities: { version: 1, tags: [input.name.replace(/-agent$/, '')] } }, { scope: 'global' }));
   const workflow = saveWorkflow(workflowInput(), { scope: 'global' });
   const reporter = importSkill(path.join(pack, 'vuln-report-writer'), { scope: 'global' });
-  setSkillEnabled(reporter.name, true, reporter.revision, { scope: 'global' });
+  const scanner = importSkill(path.join(pack, 'whatweb'), { scope: 'global' });
+  for (const skill of [reporter, scanner]) setSkillEnabled(skill.name, true, skill.revision, { scope: 'global' });
   const kinds = ['agent', 'workflow', 'skill'], preview = previewLibraryExport({ cwd: project, kinds }); reviews.push(preview);
-  assert.equal(preview.entries.length, 27);
+  assert.equal(preview.entries.length, 28);
   const shareDirectory = path.join(process.env.BZZY_HOME, 'relay', 'shares', randomUUID()); fs.mkdirSync(shareDirectory, { recursive: true, mode: 0o700 });
   const archive = buildLibraryArchive(path.join(shareDirectory, 'project.zip'), { cwd: project, kinds, expectedDigest: preview.sourceDigest });
   process.env.BZZY_HOME = path.join(directory, 'recipient');
   const recipient = path.join(directory, 'recipient-project'); fs.mkdirSync(recipient);
   const review = previewLibraryImport(archive.path, { cwd: recipient }); reviews.push(review);
   const installed = importLibraryBundle(review, { cwd: recipient, enable: true });
-  assert.equal(installed.agents.length, 25); assert.equal(installed.skills.length, 1); assert.equal(installed.workflows.length, 1);
+  assert.equal(installed.agents.length, 25); assert.equal(installed.skills.length, 2); assert.equal(installed.workflows.length, 1);
   for (const original of originals) {
     const restored = getSubagentDefinition(original.name, { scope: 'global' });
     assert.equal(restored.instructions, original.instructions); assert.equal(restored.version, original.version); assert.equal(restored.enabled, true);
@@ -77,6 +78,13 @@ test('the complete pack round-trips through native Library ZIP validation with f
   const skillText = readSkill(reporter.name, { scope: 'global', limit: 32768 }).text;
   assert.match(skillText, /never publish gate passwords, bearer tokens/); assert.doesNotMatch(skillText, /\.\.\/findings|<real JWT>|No placeholders anywhere/);
   assert.match(skillText, /exactly four sections/);
+  const scannerSkill = inspectSkill(scanner.name, { scope: 'global' });
+  assert.equal(scannerSkill.enabled, true); assert.equal(scannerSkill.version, scanner.version);
+  const scannerText = readSkill(scanner.name, { scope: 'global', limit: 32768 }).text;
+  assert.match(scannerText, /explicitly authorized targets/); assert.match(scannerText, /--follow-redirect=same-site/);
+  assert.match(scannerText, /does not\s+install WhatWeb/); assert.match(scannerText, /fingerprinting hypothesis/);
+  const scannerReference = readSkill(scanner.name, { scope: 'global', file: 'references/cli-options.md', limit: 32768 }).text;
+  assert.match(scannerReference, /WhatWeb 0\.6\.4/); assert.match(scannerReference, /External plugin files or directories are/);
   const retry = previewLibraryImport(archive.path, { cwd: recipient }); reviews.push(retry);
   importLibraryBundle(retry, { cwd: recipient, enable: true });
   assert.equal(listSubagentDefinitions({ scope: 'global', limit: 100 }).total, 25);

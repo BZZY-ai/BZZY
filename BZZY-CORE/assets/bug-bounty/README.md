@@ -1,10 +1,11 @@
 # Bug bounty workflow and specialists
 
 This optional portable pack contains 25 BZZY specialist definitions, each with
-its complete class criteria, plus the bug bounty methodology and the
-`vuln-report-writer` reporting skill. Updates ship these source assets; they do
-not silently install definitions, replace an owner's Library, select a workflow,
-start models or authorize target access.
+its complete class criteria, plus the bug bounty methodology, the
+`vuln-report-writer` reporting skill and the `whatweb` technology-fingerprinting
+skill. Updates ship these source assets; they do not silently install definitions,
+replace an owner's Library, select a workflow, start models or authorize target
+access.
 
 The installed workflow is a compact execution adaptation. The full supplied
 methodology, its BZZY routing additions and source-audit notes remain in
@@ -69,6 +70,14 @@ loads the enabled `vuln-report-writer` skill to prepare the report. That is the
 skill's exact name. The reporter uses project-relative permitted output paths,
 secure local private bindings, the current program's taxonomy and genuine
 evidence. Preparing a report never authorizes external submission.
+
+The separate `whatweb` package is an optional reconnaissance method based on
+WhatWeb 0.6.4's command interface. It checks the installed version, requires
+explicit target authorization, overrides broad redirect defaults, chooses
+aggression and concurrency deliberately, and records fingerprints as hypotheses
+rather than vulnerability proof. Importing the package does not install the
+WhatWeb binary or authorize live requests. Its option reference remains a text
+resource and its external-plugin paths are treated as executable, untrusted code.
 
 The source methodology retains its supplied source-audit and attribution notes.
 It covers web/API research; native, blockchain and availability assessments need

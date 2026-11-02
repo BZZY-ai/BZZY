@@ -144,8 +144,9 @@ Implemented:
 
 - An optional [bug bounty pack](assets/bug-bounty/README.md) with 25 self-contained
   specialist authoring definitions, embedded per-class criteria, a compact goal
-  workflow and a portable reporting skill. These assets use existing Core Library
-  APIs and do not auto-install or authorize testing when Core updates.
+  workflow, a portable reporting skill and a bounded WhatWeb fingerprinting
+  skill. These assets use existing Core Library APIs and do not auto-install,
+  install the scanner binary or authorize testing when Core updates.
 
 - Encrypted Relay Library codes transfer skills, specialist agents, workflows
   and saved goal templates between execution hosts. Source selection, pinned
