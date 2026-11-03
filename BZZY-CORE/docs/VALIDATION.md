@@ -1,3 +1,30 @@
+# Full debug ZIP scoped to chat, memory and skills (2026-11-03)
+
+Full debug export no longer reads the project folder. A HUNTR program export
+whose workspace held about 44 GB of recon output ran for more than 20 hours,
+using CPU and disk throughout. The Oct 30 NASA export captured 22.7 GiB, of
+which 21.8 GiB were snapshot and worker copies of the project. The ZIP now holds
+the complete saved chat/event/record streams, memory/compactor/learning records,
+the recall index, `.bzzy` notes/ledgers/evidence copies, referenced evidence
+files and skill resources. Project files outside `.bzzy` and worker, snapshot,
+Parallel and Besties workspace copies, including copies inside imported bundles,
+are never listed or read. The manifest records them as
+`project_files_not_captured` / `workspace_copies_not_captured` exclusions plus a
+`fileScope` summary. Complete and `--bounded` modes, progress phases, detached
+jobs and the manifest format version are unchanged.
+
+Node 24/macOS: all 24 full-export regressions pass. A new fixture proves recon
+trees, snapshot/worker/peer copies and imported copies are never listed, opened
+or read, while chat, worker chat, memory, notes, evidence and skills remain; it
+fails on the previous exporter. Core: 1,507 of 1,514 pass, 6 skipped, 1 known
+environmental canvas `/private/var` path failure (also failing without this
+change). CLI: 915 of 939 pass, 21 skipped, the 3 known failures (goal colors,
+delegate completion, saved-goal popup). Core and CLI checks pass. Offline, a
+synthetic program with 384 MiB of URL lists and two cloned workspace copies
+exported in 0.4 s (8 MiB captured, 0.3 MiB ZIP) versus 39.9 s (1,160 MiB,
+400 MiB ZIP) with the previous code. No live server, installation or Relay was
+changed.
+
 # Named-session goal controls (2026-10-30)
 
 `bzzy --attach NAME --g status|continue|pause` looks up an existing owner terminal

@@ -1,6 +1,6 @@
 GUIDE TO THE BZZY DEBUGGER — READ THIS FIRST
 ==========================================
-Version: 2. Updated: 2026-10-27.
+Version: 3. Updated: 2026-11-03.
 
 This is the read-first guide for an owner or an AI assistant investigating BZZY
 with a regular session debug report or a full debug ZIP. Read the entire guide
@@ -97,8 +97,10 @@ Default filename:
 
 The full ZIP retains the regular overview and adds complete scoped record/event
 streams, full logical conversation messages, memory/compaction/learning state,
-derived recall documents when present, project files including .bzzy notes and
-ledgers, referenced execution/evidence/snapshot files, and skill resources.
+derived recall documents when present, the project's .bzzy notes, ledgers and
+evidence copies, referenced evidence files, and skill resources. It does not
+read project files outside .bzzy or worker/snapshot/Parallel/Besties workspace
+copies; manifest.fileScope and the exclusions list record that policy.
 The full streams do not inherit the regular overview's text/array display caps.
 Complete capture is the default. The result reports mode, file count,
 uncompressed captured bytes and compressed ZIP bytes separately.
@@ -143,9 +145,9 @@ outcomes. Never describe those newer capabilities as evidence that an older run
 had the same instructions or schemas. Check timestamps, event types and coverage.
 
 The database export has a sequence cutoff. Events appended later are outside that
-export. Export again to compare checkpoints. The full ZIP reads filesystem files
-after its database snapshot and checks each file individually. That is not an
-atomic snapshot of an entire changing project. A missing or changing file must be
+export. Export again to compare checkpoints. The full ZIP reads .bzzy and evidence
+files after its database snapshot and checks each file individually. That is not
+an atomic snapshot of a changing .bzzy directory. A missing or changing file must be
 reported as such; it must not be reconstructed from an assistant's assertion.
 
 The full ZIP's overview can have an earlier cutoff than the full JSONL streams.
@@ -176,6 +178,9 @@ For a full ZIP:
      completeness.
      Also inspect excludedRecordKinds and recordPolicy for scoped record types
      that were excluded from the safe diagnostic projection.
+     Read fileScope. Project files outside .bzzy and workspace copies are out
+     of scope by design (reasons project_files_not_captured and
+     workspace_copies_not_captured); their absence is not missing data.
   5. Read overview.md for orientation and its limitations.
   6. Locate session/records.jsonl, session/events.jsonl and session/messages.jsonl.
   7. Locate memory/knowledge-index.jsonl when it exists.
@@ -237,16 +242,19 @@ memory/knowledge-index.jsonl
   It includes selected-session chat entries and relevant project-shared non-chat
   knowledge; it is not permission to copy unrelated chats' raw conversations.
 
-workspace/
-  Captured project files. In particular inspect .bzzy project constraints, notes,
-  contracts, goals, checkpoints, issues, activities, ledgers and agent namespaces.
-  Project ledgers can be shared by several chats in one engagement. A complete
-  project ledger is not proof that each entry belongs to the selected run.
+workspace/.bzzy/
+  The project's BZZY directory: constraints, notes, contracts, goals,
+  checkpoints, issues, activities, ledgers, evidence copies, imports and agent
+  namespaces. Other project files (source trees, recon or tool output) are not
+  captured. Project ledgers can be shared by several chats in one engagement. A
+  complete project ledger is not proof that each entry belongs to the selected run.
 
 execution-files/
-  Referenced safe evidence, source snapshots and isolated worker files from
-  Core's execution storage. Source metadata is also in saved records. Check both
-  expected artifact hashes and captured file hashes before using an observation.
+  Exact evidence files referenced by saved artifact records in Core's execution
+  storage. Source metadata is also in saved records. Check both expected artifact
+  hashes and captured file hashes before using an observation. Snapshot, worker,
+  Parallel and Besties workspace copies are not captured; snapshot records in
+  session/records.jsonl keep their file names, sizes and hashes.
 
 library/skills/
   Metadata and hash-checked resource files for the included skill versions.
@@ -261,9 +269,10 @@ current definition with the same name.
 6. SCOPE, EXCLUSIONS AND THE MEANING OF "FULL"
 ----------------------------------------------
 
-Full means the scoped saved BZZY execution/context data and readable project
-context are exported without the regular report's display clipping. It does not
-mean a raw copy of the owner's machine, authentication stores or runtime database.
+Full means the scoped saved BZZY execution, memory and skill data plus BZZY's
+own .bzzy and evidence files are exported without the regular report's display
+clipping. It does not mean a copy of the project folder, workspace copies, the
+owner's machine, authentication stores or runtime database.
 
 The selected terminal includes its explicitly linked workers and relevant derived
 learning/compaction conversations. Separate terminal chats in the same directory
@@ -280,13 +289,13 @@ credential/archive/database containers can be excluded. Their reason is listed.
 Do not call a ZIP literally complete at the byte level when exclusions exist.
 If a relevant source is absent, state the gap and propose a minimal safe follow-up.
 
-Complete capture has no 512 MiB project budget or 4 GiB staging cap. ZIP64
-packaging, manifest writing and JSONL source capture stream to disk. Multi-gigabyte
+Complete capture has no 512 MiB optional-file budget or 4 GiB staging cap. ZIP64
+packaging, manifest writing and JSONL source capture stream to disk. Large
 archives require space for both redacted staging files and the output ZIP.
 Directory file counts and saved record selection still consume memory; host
 resources remain finite.
 
-Individual project files and JSONL records can exceed 64 MiB. Large sources use
+Individual .bzzy files and JSONL records can exceed 64 MiB. Large sources use
 checked private disk snapshots and disk-backed text/JSON/HAR redaction or binary
 scanning. Complete logical strings are scrubbed across read boundaries, including
 escaped JSON credentials and private reasoning. Redacted private JSON values may
@@ -301,8 +310,8 @@ counts the buffered scrubber; diskBackedFiles/diskBackedRedactedFiles count file
 
 Explicit --bounded mode retains a 512 MiB optional context budget and a 4 GiB
 uncompressed staging limit. Scoped diagnostic streams, skill metadata and guides
-are written first. File capture prioritizes .bzzy notes/ledgers, referenced
-artifacts and checked skills before bulk project, worker and snapshot trees.
+are written first. File capture then visits .bzzy (notes and ledgers first),
+referenced evidence files and checked skills.
 Optional files over the processing or capture limits are omitted whole. Check
 captureMode, contextLimited, contextCapture and manifest.exclusions. An omitted
 subtree may not have been enumerated, so do not infer its exact missing-file count.

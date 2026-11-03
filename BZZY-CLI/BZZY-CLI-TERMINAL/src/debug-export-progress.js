@@ -1,7 +1,7 @@
 const phases = {
   session: 'Reading the saved chat', destination: 'Preparing output', staging: 'Preparing private staging',
-  overview: 'Writing overview', history: 'Reading saved history', workspace: 'Capturing project files',
-  resources: 'Capturing evidence and resources', manifest: 'Writing manifest', packaging: 'Packaging ZIP', complete: 'ZIP ready',
+  overview: 'Writing overview', history: 'Reading saved history', workspace: 'Capturing .bzzy notes and evidence',
+  resources: 'Capturing skill resources', manifest: 'Writing manifest', packaging: 'Packaging ZIP', complete: 'ZIP ready',
 };
 const counters = ['elapsedMs', 'records', 'events', 'files', 'bytes', 'exclusions', 'packagedFiles', 'packagedBytes', 'inspectedBytes'];
 const count = value => Number.isSafeInteger(value) && value >= 0;
@@ -20,7 +20,7 @@ export function safeDebugExportProgress(value) {
 
 export function debugExportContextNotice(result) {
   return result?.full === true && result.contextLimited === true
-    ? 'Project file capture reached its budget. Saved session history and memory streams are retained; some project or evidence files are omitted. Check manifest.exclusions inside the ZIP.'
+    ? 'Optional file capture reached its budget. Saved session history and memory streams are retained; some .bzzy, evidence or skill files are omitted. Check manifest.exclusions inside the ZIP.'
     : null;
 }
 

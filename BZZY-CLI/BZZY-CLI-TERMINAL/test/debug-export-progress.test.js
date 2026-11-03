@@ -14,11 +14,11 @@ test('capture summaries distinguish complete and bounded mode and captured data 
   assert.doesNotMatch(debugExportProgressLines({ phase: 'history' }, { captureMode: 'PRIVATE' }).join('\n'), /PRIVATE/);
 });
 
-test('successful context-limited export distinguishes retained diagnostics from omitted project files', () => {
+test('successful context-limited export distinguishes retained diagnostics from omitted optional files', () => {
   const message = debugExportContextNotice({ full: true, contextLimited: true, contextBudget: { reason: 'PRIVATE_TEXT' } });
-  assert.match(message, /Project file capture reached its budget/);
+  assert.match(message, /Optional file capture reached its budget/);
   assert.match(message, /Saved session history and memory streams are retained/);
-  assert.match(message, /project or evidence files are omitted/);
+  assert.match(message, /\.bzzy, evidence or skill files are omitted/);
   assert.match(message, /manifest\.exclusions/); assert.doesNotMatch(message, /PRIVATE_TEXT/);
   for (const result of [undefined, {}, { full: true }, { full: true, contextLimited: false }, { full: true, contextLimited: 'true' }, { full: false, contextLimited: true }]) {
     assert.equal(debugExportContextNotice(result), null);

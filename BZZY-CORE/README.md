@@ -193,12 +193,13 @@ Implemented:
   tool attempts/outcomes, without starting diagnostic inference or changing use
   counts. Existing running sessions can export their already saved records.
   The separate full ZIP adds memory/compactor/learning records, complete scoped
-  streams, project notes/ledgers/files and referenced execution evidence. It
-  includes the [detailed debugging guide](docs/GUIDE_TO_BZZY_DEBUGGER.txt), with
-  manifest exclusions and source/export hashes. Complete capture
-  supports multi-gigabyte ZIP64 archives without aggregate capture caps;
+  streams, `.bzzy` notes/ledgers, referenced evidence and skill resources. It
+  never reads project files outside `.bzzy` or worker/snapshot workspace copies,
+  so large recon or tool output does not slow it down. It includes the
+  [detailed debugging guide](docs/GUIDE_TO_BZZY_DEBUGGER.txt), with manifest
+  exclusions and source/export hashes. Complete capture has no aggregate cap;
   large individual sources use disk-backed text/JSON redaction and binary scanning.
-  `--bounded` opts into the previous size-limited project capture.
+  `--bounded` applies a 512 MiB budget to the optional files.
   `bzzy --full-debug-export SESSION` validates and detaches a durable export job;
   owner-local status retains progress/results after the shell closes. Completion
   and failure use the own-phone notification queue without starting model work.

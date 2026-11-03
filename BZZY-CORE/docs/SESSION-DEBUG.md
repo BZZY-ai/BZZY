@@ -46,10 +46,16 @@ tool, project import format, sharing code or permission grant.
 `/full_debug_export`, **Metrics → Full debug ZIP**, or **F** creates a separate
 `session-name_full_debug_ddmmyyyy.zip`. From another terminal use
 `bzzy debug full SESSION [FILE.zip]` or `bzzy full_debug_export SESSION [FILE.zip]`.
-Full export defaults to complete capture, including multi-gigabyte projects.
-Use `/full_debug_export --bounded` or append `--bounded` to either terminal
-command when a size-limited project capture is preferred. The regular Markdown
-export remains available independently.
+The ZIP holds BZZY's own data for the chat: the complete saved conversation,
+events and records, memory/compactor/learning state, the project's `.bzzy`
+notes, ledgers and evidence copies, referenced evidence files and the resources
+of skills the chat used. It does not read the project folder itself: files
+outside `.bzzy` (for example a multi-gigabyte recon output tree) and worker,
+snapshot, Parallel and Besties workspace copies stay out of the ZIP. Saved tool
+calls and outputs remain in the event stream. Complete capture is the default
+and has no aggregate budget for these files. Use `/full_debug_export --bounded`
+or append `--bounded` to either terminal command for a 512 MiB optional budget.
+The regular Markdown export remains available independently.
 
 For a long capture, run `bzzy --full-debug-export SESSION [FILE.zip]` from a
 second shell. `bzzy debug full SESSION --detach` and
@@ -101,20 +107,26 @@ documents are projected only if already present; export builds no memory/index
 and starts no learning work. Explicitly related learning/compaction conversations
 are included, while unrelated raw terminal histories remain outside scope.
 
-Project context includes `.bzzy` notes, ledgers and compatibility projections.
-Project-shared knowledge and ledgers remain labeled shared context. Referenced
-safe evidence/snapshot/worker files and checked skill resources,
-including safe binary resources, are captured separately. The archive is not a
-project-import or execution package and copies no raw runtime database.
+Project context is limited to `.bzzy`: notes, ledgers, goals, checkpoints,
+issues, evidence copies and compatibility projections. Project-shared knowledge
+and ledgers remain labeled shared context. Exact evidence files referenced by
+saved artifact records and checked skill resources, including safe binary
+resources, are captured separately. Project files outside `.bzzy` are recorded
+as one `project_files_not_captured` exclusion. Referenced worker, snapshot,
+Parallel and Besties workspace copies, including copies inside imported bundles,
+are recorded as `workspace_copies_not_captured`; snapshot records keep their
+file manifests. `manifest.fileScope` lists what is and is not captured. The
+archive is not a project-import or execution package and copies no raw runtime
+database.
 
 The full streams have no overview text/array/family display clipping. Complete
-capture has no 512 MiB project budget or 4 GiB staging cap. ZIP64 packaging and
+capture has no 512 MiB optional-file budget or 4 GiB staging cap. ZIP64 packaging and
 manifest writing stream their data; JSONL source files stream one complete record
 at a time. Large archives still require disk space for the redacted staging tree
 and output ZIP. File counts and saved record selection also consume memory, so
 this is not a promise of unlimited host resources.
 
-Individual project files and JSONL records can exceed 64 MiB. Large sources use
+Individual `.bzzy` files and JSONL records can exceed 64 MiB. Large sources use
 a checked private disk snapshot, bounded copy buffers, disk-backed redaction
 spans and structural JSON/HAR/JSONL parsing. Large JSON strings are decoded and
 scrubbed on disk, including escaped credentials and private reasoning. Safe binary
@@ -128,8 +140,8 @@ unsafe sources remain explicit manifest exclusions.
 
 Explicit bounded capture retains the 512 MiB optional file budget and 4 GiB
 uncompressed staging limit. It writes scoped diagnostic streams, skill metadata
-and guides first, then prioritizes `.bzzy`, referenced artifact files and checked
-skill resources before bulk project, worker and snapshot trees. Source-size and
+and guides first, then captures `.bzzy` (notes first), referenced evidence files
+and checked skill resources. Source-size and
 post-redaction checks omit whole optional files or subtrees, never truncate them.
 An 8 MiB minimum manifest reserve and bounded context metadata preserve diagnostic
 headroom. Unenumerated subtrees are marked; their missing-file count is unknown.

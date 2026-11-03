@@ -250,7 +250,7 @@ test('full-export progress survives panel navigation without leaking to other ch
     assert.ok(sessionMetricsLayout(panel, 40).lines.every(line => cellWidth(line.text) <= 40));
     panel.stop(); report({ phase: 'workspace', files: 12, bytes: 2 * 1024 ** 2 });
     panel.open(firstId); await panel.activate('full-export'); assert.equal(calls, 1);
-    assert.match(text(), /Capturing project files/); assert.match(text(), /12 files/);
+    assert.match(text(), /Capturing \.bzzy notes and evidence/); assert.match(text(), /12 files/);
     panel.open(secondId); report({ phase: 'packaging', packagedFiles: 12, packagedBytes: 2 * 1024 ** 2 });
     assert.match(text(), /another chat/); assert.doesNotMatch(text(), /12 files|Packaging ZIP/);
     complete({ full: true, outputPath: '/project/first-chat.zip' }); await task; await settle();
@@ -272,7 +272,7 @@ test('closing Metrics clears the export timer and ignores late progress without 
   assert.equal(panel.exportResult, null); assert.equal(panel.exporting, false);
 });
 
-test('a completed ZIP with limited project context remains successful and displays its capture limits', async () => {
+test('a completed ZIP with limited optional file context remains successful and displays its capture limits', async () => {
   const panel = new SessionMetricsPanel({}, { load: async id => snapshot(id), exportFullDebug: async () => ({
     full: true, outputPath: '/project/baseline.zip', exclusions: 4, contextLimited: true,
   }) });
@@ -281,7 +281,7 @@ test('a completed ZIP with limited project context remains successful and displa
     assert.equal(panel.exportError, null); assert.equal(panel.exporting, false);
     for (const width of [40, 100]) {
       const layout = sessionMetricsLayout(panel, width), text = layout.lines.map(line => line.text.trim()).join(' ').replace(/\s/g, '');
-      assert.match(text, /FulldebugZIPexported/); assert.match(text, /Projectfilecapturereacheditsbudget/);
+      assert.match(text, /FulldebugZIPexported/); assert.match(text, /Optionalfilecapturereacheditsbudget/);
       assert.match(text, /Savedsessionhistoryandmemorystreamsareretained/);
       assert.match(text, /4captureomissions/); assert.match(text, /manifest\.exclusions/);
       assert.ok(layout.lines.every(line => cellWidth(line.text) <= width));

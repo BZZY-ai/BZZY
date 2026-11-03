@@ -147,6 +147,9 @@ test('full ZIP preserves long chat, memory, learning, notes, ledgers, evidence a
   assert.equal(path.basename(result.outputPath), 'complete-session_full_debug_26102026.zip'); assert.equal(result.full, true); assert.deepEqual(state(), before);
   const files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
   assert.equal(manifest.complete, true); assert.ok(manifest.sessionIds.includes(review.id)); assert.ok(!manifest.sessionIds.includes(other.id));
+  assert.equal(files['workspace/script.sh'], undefined, 'Project files outside .bzzy are not diagnostic data.');
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace' && row.reason === 'project_files_not_captured' && row.subtree === true));
+  assert.ok(manifest.fileScope.notCaptured.some(text => /outside \.bzzy/.test(text))); assert.match(manifest.scope, /not captured/);
   assert.equal(files['workspace/.bzzy/NOTES.md'].toString(), long);
   assert.equal(JSON.parse(files['workspace/.bzzy/ledger/day.jsonl']).record.details, long);
   const records = rows(files['session/records.jsonl']);
@@ -180,16 +183,81 @@ test('full streams scrub split credentials, private envelopes, HAR headers, auth
   appendEvent(parent.id, 'backend', { method: 'turn/completed', params: { turn: { id: 't', status: 'completed', items: [{ type: 'reasoning', text: 'PRIVATE_REASONING_VALUE' }] } } });
   appendEvent(parent.id, 'backend', { method: 'item/completed', params: { item: { type: 'commandExecution', command: 'cat ~/.aws/credentials', aggregatedOutput: 'BARE_AUTH_FILE_OUTPUT' } } });
   putRecord('core.binding', 'owner', { sessionId: parent.id, token: 'OWNER_BINDING_PRIVATE' });
-  fs.writeFileSync(path.join(parent.cwd, '.env'), 'PRIVATE_ENV_VALUE');
-  fs.writeFileSync(path.join(parent.cwd, 'relay credentials'), 'PRIVATE_RELAY_BINDING_FIXTURE');
-  fs.writeFileSync(path.join(parent.cwd, '.bzzy', 'credentials.json'), '{"secret":"PRIVATE_AUTH_STORE"}');
-  fs.writeFileSync(path.join(parent.cwd, 'capture.har'), JSON.stringify({ headers: [{ name: 'Cookie', value: 'PRIVATE_HAR_COOKIE' }] }));
-  fs.writeFileSync(path.join(parent.cwd, 'packet.bin'), Buffer.concat([Buffer.from([255, 0]), Buffer.from('Cookie: sid=PRIVATE_BINARY_COOKIE')]));
-  const external = path.join(directory, 'outside.txt'); fs.writeFileSync(external, 'ESCAPING_LINK_VALUE'); fs.symlinkSync(external, path.join(parent.cwd, 'escape'));
+  // The project root is never read. Captured .bzzy files keep every privacy check.
+  const external = path.join(directory, 'outside.txt'); fs.writeFileSync(external, 'ESCAPING_LINK_VALUE');
+  for (const base of [parent.cwd, path.join(parent.cwd, '.bzzy')]) {
+    fs.writeFileSync(path.join(base, '.env'), 'PRIVATE_ENV_VALUE');
+    fs.writeFileSync(path.join(base, 'relay credentials'), 'PRIVATE_RELAY_BINDING_FIXTURE');
+    fs.writeFileSync(path.join(base, 'credentials.json'), '{"secret":"PRIVATE_AUTH_STORE"}');
+    fs.writeFileSync(path.join(base, 'capture.har'), JSON.stringify({ headers: [{ name: 'Cookie', value: 'PRIVATE_HAR_COOKIE' }] }));
+    fs.writeFileSync(path.join(base, 'packet.bin'), Buffer.concat([Buffer.from([255, 0]), Buffer.from('Cookie: sid=PRIVATE_BINARY_COOKIE')]));
+    fs.symlinkSync(external, path.join(base, 'escape'));
+  }
   const files = contents((await exportFullSessionDebug(parent.id)).outputPath), text = Buffer.concat(Object.values(files)).toString();
   for (const value of [synthetic, synthetic.slice(0, 15), synthetic.slice(15), 'PRIVATE_REASONING_VALUE', 'BARE_AUTH_FILE_OUTPUT', 'OWNER_BINDING_PRIVATE', 'PRIVATE_ENV_VALUE', 'PRIVATE_RELAY_BINDING_FIXTURE', 'PRIVATE_AUTH_STORE', 'PRIVATE_HAR_COOKIE', 'PRIVATE_BINARY_COOKIE', 'ESCAPING_LINK_VALUE']) assert.ok(!text.includes(value), value);
   const messages = rows(files['session/messages.jsonl']); assert.ok(messages.some(row => row.text.includes('SAFE_PREFIX') && row.text.includes('SAFE_SUFFIX') && row.text.includes('[redacted]')));
-  const manifest = JSON.parse(files['manifest.json']); assert.ok(manifest.exclusions.some(row => row.path.endsWith('/.env'))); assert.ok(manifest.exclusions.some(row => row.path.endsWith('/escape')));
+  const manifest = JSON.parse(files['manifest.json']);
+  for (const [name, reason] of [['.env', 'private_opaque_or_generated_path'], ['relay credentials', 'private_opaque_or_generated_path'], ['credentials.json', 'private_opaque_or_generated_path'],
+    ['packet.bin', 'credential_in_binary'], ['escape', 'link_or_special_file']]) {
+    assert.ok(manifest.exclusions.some(row => row.path === `workspace/.bzzy/${name}` && row.reason === reason), name);
+  }
+  assert.ok(JSON.parse(files['workspace/.bzzy/capture.har']).headers[0].value !== 'PRIVATE_HAR_COOKIE');
+  assert.ok(!Object.keys(files).some(name => name.startsWith('workspace/') && !name.startsWith('workspace/.bzzy/')));
+});
+
+test('full ZIP never lists or reads project files or workspace copies, keeping chat, memory, evidence and skills', async t => {
+  // A HUNTR-style program: bulk recon output in the project and copies of it in
+  // snapshot, worker, external peer and imported-bundle workspaces.
+  const recon = path.join(parent.cwd, 'recon', 'executions', 'cycle-1'); fs.mkdirSync(recon, { recursive: true });
+  fs.writeFileSync(path.join(recon, 'waymore.urls.txt'), 'https://target.example/RECON_URL_NOT_DIAGNOSTIC\n'.repeat(20000));
+  const snapshot = path.join(process.env.BZZY_HOME, 'snapshots', 'snapshot-copy'), worker = path.join(process.env.BZZY_HOME, 'workers', 'worker-copy');
+  const external = path.join(directory, 'external-peer'), imported = path.join(parent.cwd, '.bzzy', 'imports', 'bundle', 'private');
+  for (const copy of [snapshot, worker, external, path.join(imported, 'snapshots', 'old')]) {
+    fs.mkdirSync(path.join(copy, 'recon'), { recursive: true }); fs.writeFileSync(path.join(copy, 'recon', 'urls.txt'), 'WORKSPACE_COPY_NOT_DIAGNOSTIC');
+  }
+  fs.mkdirSync(path.join(imported, 'artifacts', 'old'), { recursive: true }); fs.writeFileSync(path.join(imported, 'artifacts', 'old', 'proof.txt'), 'IMPORTED_EVIDENCE_RETAINED');
+  putRecord('snapshot', 'snapshot-copy', { id: 'snapshot-copy', sessionId: parent.id, directory: snapshot, manifest: { 'recon/urls.txt': { size: 29, sha256: 'a'.repeat(64) } } });
+  const executor = createSession(getProvider('deepseek'), worker, 'offline-worker'); executor.parentSessionId = parent.id; executor.role = 'executor'; saveSession(executor);
+  putRecord('assignment', 'assignment-copy', { id: 'assignment-copy', sessionId: parent.id, workerSessionId: executor.id, workspace: worker });
+  const peer = createSession(getProvider('deepseek'), external, 'offline-peer'); peer.parentSessionId = parent.id; peer.role = 'peer'; saveSession(peer);
+  appendEvent(parent.id, 'message.user', { text: 'RUN_RECON_AND_TEST' }); appendEvent(parent.id, 'text', { text: 'RECON_CHAT_RETAINED' });
+  appendEvent(executor.id, 'text', { text: 'WORKER_CHAT_RETAINED' });
+  putRecord('core.session.memory.node', 'recon-node', { sessionId: parent.id, summary: 'MEMORY_RETAINED' });
+  fs.writeFileSync(path.join(parent.cwd, '.bzzy', 'NOTES.md'), 'NOTES_RETAINED');
+  const evidence = path.join(process.env.BZZY_HOME, 'artifacts', parent.id, 'evidence.txt'); fs.mkdirSync(path.dirname(evidence), { recursive: true });
+  fs.writeFileSync(evidence, 'EVIDENCE_RETAINED'); putRecord('artifact', 'evidence-copy', { id: 'evidence-copy', sessionId: parent.id, path: evidence, sha256: digest('EVIDENCE_RETAINED') });
+  const skill = createSkill({ name: 'recon-method', description: 'Inspect supplied recon.', instructions: 'SKILL_RETAINED' }, { scope: 'global' });
+  setSkillEnabled(skill.name, true, skill.revision, { scope: 'global' });
+  const forbidden = [path.join(parent.cwd, 'recon'), snapshot, worker, external, path.join(imported, 'snapshots')], touched = [];
+  for (const method of ['readdirSync', 'opendirSync', 'openSync', 'readFileSync', 'createReadStream', 'copyFileSync']) {
+    const original = fs[method];
+    t.mock.method(fs, method, function (file, ...args) {
+      if (typeof file === 'string' && forbidden.some(root => file === root || file.startsWith(root + path.sep))) touched.push(`${method} ${path.relative(directory, file)}`);
+      return original.call(this, file, ...args);
+    });
+  }
+  const before = state(), result = await exportFullSessionDebug(parent.id); t.mock.restoreAll();
+  assert.deepEqual(touched, [], 'Project trees and workspace copies are never listed, opened or read.');
+  assert.deepEqual(state(), before); assert.equal(result.contextLimited, false);
+  const files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']), names = Object.keys(files);
+  assert.ok(!names.some(name => name.startsWith('workspace/') && !name.startsWith('workspace/.bzzy/')));
+  assert.ok(!names.some(name => /^(?:execution-files\/(?:snapshots|workers|besties|parallel)|workers)\//.test(name) || name.includes('/private/snapshots/')));
+  const text = Buffer.concat(Object.values(files)).toString();
+  for (const value of ['RECON_URL_NOT_DIAGNOSTIC', 'WORKSPACE_COPY_NOT_DIAGNOSTIC']) assert.ok(!text.includes(value), value);
+  assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'RECON_CHAT_RETAINED'));
+  assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'WORKER_CHAT_RETAINED'));
+  assert.ok(rows(files['session/events.jsonl']).some(row => row.type === 'message.user' && row.data.text === 'RUN_RECON_AND_TEST'));
+  const records = rows(files['session/records.jsonl']);
+  assert.ok(records.some(row => row.kind === 'core.session.memory.node' && row.data.summary === 'MEMORY_RETAINED'));
+  assert.ok(records.some(row => row.kind === 'snapshot' && row.data.manifest['recon/urls.txt']), 'Snapshot file manifests remain in saved records.');
+  assert.equal(files['workspace/.bzzy/NOTES.md'].toString(), 'NOTES_RETAINED');
+  assert.ok(Object.entries(files).some(([name, data]) => name.startsWith('execution-files/artifacts/') && data.toString() === 'EVIDENCE_RETAINED'));
+  assert.equal(files['workspace/.bzzy/imports/bundle/private/artifacts/old/proof.txt'].toString(), 'IMPORTED_EVIDENCE_RETAINED');
+  assert.ok(Object.entries(files).some(([name, data]) => name.startsWith('library/skills/') && name.endsWith('/SKILL.md') && data.toString().includes('SKILL_RETAINED')));
+  assert.ok(manifest.sessionIds.includes(executor.id) && manifest.sessionIds.includes(peer.id), 'Worker and peer chats remain in scope.');
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace' && row.reason === 'project_files_not_captured' && row.subtree));
+  assert.equal(manifest.exclusions.find(row => row.path === 'execution-files' && row.reason === 'workspace_copies_not_captured')?.references, 3);
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/.bzzy/imports/bundle/private/snapshots' && row.reason === 'workspace_copies_not_captured' && row.subtree));
 });
 
 test('full ZIP default collisions are numbered and explicit destinations/symlinks are never overwritten', async () => {
@@ -212,24 +280,25 @@ test('valid multibyte aliases keep export filenames within filesystem byte limit
   assert.deepEqual(state(), before);
 });
 
-test('bounded capture lists oversized project files as omissions while complete history remains exportable', async () => {
-  const large = path.join(parent.cwd, 'large.bin'); fs.closeSync(fs.openSync(large, 'wx')); fs.truncateSync(large, 65 * 1024 * 1024);
-  fs.writeFileSync(path.join(parent.cwd, 'small.txt'), 'SMALL_INPUT_RETAINED');
+test('bounded capture lists oversized .bzzy files as omissions while complete history remains exportable', async () => {
+  const large = path.join(parent.cwd, '.bzzy', 'large.bin'); fs.closeSync(fs.openSync(large, 'wx')); fs.truncateSync(large, 65 * 1024 * 1024);
+  fs.writeFileSync(path.join(parent.cwd, '.bzzy', 'small.txt'), 'SMALL_INPUT_RETAINED');
   appendEvent(parent.id, 'text', { text: 'COMPLETE_SAVED_HISTORY' }); const before = state();
   const result = await exportFullSessionDebug(parent.id, { captureMode: 'bounded' }), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
   assert.equal(manifest.complete, true);
-  assert.equal(files['workspace/large.bin'], undefined);
-  assert.equal(files['workspace/small.txt'].toString(), 'SMALL_INPUT_RETAINED');
+  assert.equal(files['workspace/.bzzy/large.bin'], undefined);
+  assert.equal(files['workspace/.bzzy/small.txt'].toString(), 'SMALL_INPUT_RETAINED');
   assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'COMPLETE_SAVED_HISTORY'));
-  assert.deepEqual(manifest.exclusions.find(row => row.path === 'workspace/large.bin'),
-    { path: 'workspace/large.bin', reason: 'source_file_size_limit', sourceBytes: 65 * 1024 * 1024, limitBytes: 64 * 1024 * 1024 });
+  assert.deepEqual(manifest.exclusions.find(row => row.path === 'workspace/.bzzy/large.bin'),
+    { path: 'workspace/.bzzy/large.bin', reason: 'source_file_size_limit', sourceBytes: 65 * 1024 * 1024, limitBytes: 64 * 1024 * 1024 });
   assert.equal(fs.statSync(large).size, 65 * 1024 * 1024); assert.deepEqual(state(), before);
   assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
   assert.deepEqual(fs.readFileSync(fileURLToPath(new URL('../../GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))), fs.readFileSync(fileURLToPath(new URL('../docs/GUIDE_TO_BZZY_DEBUGGER.txt', import.meta.url))));
 });
 
-test('complete capture includes individual binary, text and JSONL values over 64 MiB without clipping', async () => {
-  const binary = path.join(parent.cwd, 'large.bin'), text = path.join(parent.cwd, 'large.txt'), ledger = path.join(parent.cwd, 'large.jsonl');
+test('complete capture includes individual .bzzy binary, text and JSONL values over 64 MiB without clipping', async () => {
+  const notes = path.join(parent.cwd, '.bzzy');
+  const binary = path.join(notes, 'large.bin'), text = path.join(notes, 'large.txt'), ledger = path.join(notes, 'large.jsonl');
   fs.closeSync(fs.openSync(binary, 'wx')); fs.truncateSync(binary, 65 * 1024 ** 2);
   const block = Buffer.alloc(1024 ** 2, 120);
   for (const [file, prefix, suffix] of [
@@ -246,7 +315,7 @@ test('complete capture includes individual binary, text and JSONL values over 64
 with zipfile.ZipFile(sys.argv[1]) as archive:
     manifest = json.loads(archive.read('manifest.json'))
     for name in ('large.bin', 'large.txt', 'large.jsonl'):
-        entry = next(row for row in manifest['inventory'] if row['path'] == 'workspace/' + name)
+        entry = next(row for row in manifest['inventory'] if row['path'] == 'workspace/.bzzy/' + name)
         assert entry['sourceBytes'] > 64 * 1024 ** 2 and entry['capture'] == 'disk-backed'
         digest, size, tail = hashlib.sha256(), 0, b''
         with archive.open(entry['path']) as value:
@@ -266,7 +335,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
             assert len(parsed['body']) == 65 * 1024 ** 2 + len('JSON_END')
             assert parsed['token'] == '[redacted]' and parsed['headers'][0]['value'] == '[redacted]'
     assert not any('.file-capture-' in name or name.startswith('.large-capture-') for name in archive.namelist())
-print('verified')`, result.outputPath, parent.cwd], { encoding: 'utf8', maxBuffer: 4096 });
+print('verified')`, result.outputPath, notes], { encoding: 'utf8', maxBuffer: 4096 });
   assert.equal(verified.status, 0, verified.stderr); assert.match(verified.stdout, /verified/);
   assert.deepEqual(state(), before); assert.deepEqual(fs.readdirSync(path.join(process.env.BZZY_HOME, 'debug-exports')), []);
 });
@@ -310,7 +379,8 @@ test('optional context exhaustion keeps memory history and prioritizes notes, ar
   putRecord('artifact', 'priority', { id: 'priority', sessionId: parent.id, path: artifact, sha256: digest(evidence) });
   let skill = createSkill({ name: 'priority-method', description: 'Inspect supplied data.', instructions: 'PRIORITY_SKILL' }, { scope: 'global' });
   skill = setSkillEnabled(skill.name, true, skill.revision, { scope: 'global' });
-  const bulk = path.join(parent.cwd, 'aaa-bulk.txt'); fs.writeFileSync(bulk, 'x'.repeat(16384));
+  const bulk = path.join(parent.cwd, '.bzzy', 'aaa-bulk.txt'); fs.writeFileSync(bulk, 'x'.repeat(16384));
+  const project = path.join(parent.cwd, 'aaa-project-bulk.txt'); fs.writeFileSync(project, 'y'.repeat(16384));
   appendEvent(parent.id, 'text', { text: 'COMPLETE_HISTORY_BEFORE_CONTEXT_LIMIT' });
   putRecord('core.session.memory.node', 'preserved-node', { sessionId: parent.id, summary: 'COMPLETE_MEMORY_BEFORE_CONTEXT_LIMIT' });
   const opened = [], open = fs.openSync;
@@ -324,54 +394,56 @@ test('optional context exhaustion keeps memory history and prioritizes notes, ar
   assert.ok(Object.entries(files).some(([name, data]) => name.startsWith('library/skills/') && name.endsWith('/SKILL.md') && data.toString().includes('PRIORITY_SKILL')));
   assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'COMPLETE_HISTORY_BEFORE_CONTEXT_LIMIT'));
   assert.ok(rows(files['session/records.jsonl']).some(row => row.kind === 'core.session.memory.node' && row.data.summary === 'COMPLETE_MEMORY_BEFORE_CONTEXT_LIMIT'));
-  assert.equal(files['workspace/aaa-bulk.txt'], undefined); assert.ok(!opened.includes(bulk), 'Over-budget source is skipped before opening its payload.');
-  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/aaa-bulk.txt' && row.reason === 'context_byte_budget' && row.sourceBytes === 16384));
+  assert.equal(files['workspace/.bzzy/aaa-bulk.txt'], undefined); assert.ok(!opened.includes(bulk), 'Over-budget source is skipped before opening its payload.');
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/.bzzy/aaa-bulk.txt' && row.reason === 'context_byte_budget' && row.sourceBytes === 16384));
+  assert.ok(!opened.includes(project), 'Project files are outside the capture scope.');
+  assert.ok(!manifest.exclusions.some(row => row.path === 'workspace/aaa-project-bulk.txt'), 'Project files are never enumerated.');
   assert.deepEqual(state(), before); assert.equal(fs.readFileSync(bulk).length, 16384);
 });
 
 test('redaction/formatting expansion is checked after transformation without failing the archive', async t => {
-  const source = JSON.stringify(Array(1000).fill(0)), filename = path.join(parent.cwd, 'expands.json'); fs.writeFileSync(filename, source);
+  const source = JSON.stringify(Array(1000).fill(0)), filename = path.join(parent.cwd, '.bzzy', 'expands.json'); fs.writeFileSync(filename, source);
   let opened = false; const open = fs.openSync;
   t.mock.method(fs, 'openSync', (file, ...args) => { if (file === filename) opened = true; return open(file, ...args); });
   const result = await exportFullSessionDebug(parent.id, { maxContextBytes: 4096 }), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
-  assert.equal(opened, true); assert.equal(result.contextLimited, true); assert.equal(files['workspace/expands.json'], undefined);
-  const omitted = manifest.exclusions.find(row => row.path === 'workspace/expands.json');
+  assert.equal(opened, true); assert.equal(result.contextLimited, true); assert.equal(files['workspace/.bzzy/expands.json'], undefined);
+  const omitted = manifest.exclusions.find(row => row.path === 'workspace/.bzzy/expands.json');
   assert.equal(omitted.reason, 'context_byte_budget'); assert.equal(omitted.sourceBytes, Buffer.byteLength(source));
   assert.ok(omitted.exportedBytes > 4096); assert.ok(files['session/records.jsonl']);
 });
 
 test('worker forwards an empty optional budget while retaining complete scoped diagnostics and subtree omissions', async () => {
-  fs.writeFileSync(path.join(parent.cwd, 'unvisited.txt'), 'OPTIONAL_SOURCE');
+  fs.writeFileSync(path.join(parent.cwd, '.bzzy', 'unvisited.txt'), 'OPTIONAL_SOURCE');
   appendEvent(parent.id, 'text', { text: 'MANDATORY_HISTORY' });
   const result = await exportFullSessionDebugInWorker(parent.id, { maxContextBytes: 0 }), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
   assert.equal(result.contextLimited, true); assert.equal(result.contextCapture.capturedBytes, 0);
   assert.equal(result.contextCapture.omittedPathsComplete, false); assert.ok(result.contextCapture.omittedSubtrees > 0);
-  assert.ok(manifest.exclusions.some(row => row.path === 'workspace' && row.subtree && row.remainingDescendantsOnly));
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/.bzzy' && row.subtree && row.remainingDescendantsOnly));
   assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'MANDATORY_HISTORY'));
-  assert.equal(files['workspace/unvisited.txt'], undefined); assert.ok(files['GUIDE_TO_BZZY_DEBUGGER.txt']);
+  assert.equal(files['workspace/.bzzy/unvisited.txt'], undefined); assert.ok(files['GUIDE_TO_BZZY_DEBUGGER.txt']);
 });
 
 test('bounded capture preserves manifest headroom and omission coverage for many empty files', async () => {
-  const bulk = path.join(parent.cwd, 'bulk'); fs.mkdirSync(bulk);
+  const bulk = path.join(parent.cwd, '.bzzy', 'bulk'); fs.mkdirSync(bulk);
   for (let index = 0; index < 5000; index++) fs.writeFileSync(path.join(bulk, `${String(index).padStart(5, '0')}-${'a'.repeat(200)}.txt`), '');
   appendEvent(parent.id, 'text', { text: 'HISTORY_WITH_MANY_EMPTY_CONTEXT_FILES' });
   const result = await exportFullSessionDebug(parent.id, { captureMode: 'bounded' }), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
   assert.equal(result.contextLimited, true); assert.equal(result.contextCapture.metadataBytes, result.contextCapture.metadataLimitBytes);
   assert.equal(result.contextCapture.omittedPathsComplete, false);
   assert.ok(manifest.exclusions.some(row => row.path === 'optional-context' && row.reason === 'context_manifest_budget' && row.subtree));
-  assert.ok(Object.keys(files).filter(name => name.startsWith('workspace/bulk/')).length < 5000);
+  assert.ok(Object.keys(files).filter(name => name.startsWith('workspace/.bzzy/bulk/')).length < 5000);
   assert.ok(rows(files['session/messages.jsonl']).some(row => row.text === 'HISTORY_WITH_MANY_EMPTY_CONTEXT_FILES'));
   assert.ok(Buffer.byteLength(files['manifest.json']) < result.contextCapture.manifestReserveBytes);
 });
 
 test('complete capture keeps a large inventory without the bounded metadata ceiling', async () => {
-  const bulk = path.join(parent.cwd, 'bulk'); fs.mkdirSync(bulk);
+  const bulk = path.join(parent.cwd, '.bzzy', 'bulk'); fs.mkdirSync(bulk);
   for (let index = 0; index < 5000; index++) fs.writeFileSync(path.join(bulk, `${String(index).padStart(5, '0')}-${'a'.repeat(200)}.txt`), '');
   const result = await exportFullSessionDebug(parent.id), files = contents(result.outputPath), manifest = JSON.parse(files['manifest.json']);
   assert.equal(result.contextLimited, false); assert.equal(result.contextCapture.metadataLimitBytes, null);
   assert.ok(result.contextCapture.metadataBytes > 4 * 1024 ** 2);
-  assert.equal(Object.keys(files).filter(name => name.startsWith('workspace/bulk/')).length, 5000);
-  assert.equal(manifest.inventory.filter(row => row.path.startsWith('workspace/bulk/')).length, 5000);
+  assert.equal(Object.keys(files).filter(name => name.startsWith('workspace/.bzzy/bulk/')).length, 5000);
+  assert.equal(manifest.inventory.filter(row => row.path.startsWith('workspace/.bzzy/bulk/')).length, 5000);
   assert.ok(!manifest.exclusions.some(row => /budget|headroom/.test(row.reason)));
   assert.ok(!Object.keys(files).some(name => name.startsWith('.manifest-')));
 });
@@ -389,7 +461,7 @@ test('future events and incomplete records retain their valid JSON payloads with
 });
 
 test('unreadable and disappearing optional directories are omitted without inventing their contents', async t => {
-  const blocked = path.join(parent.cwd, 'unreadable'), vanished = path.join(parent.cwd, 'vanished');
+  const blocked = path.join(parent.cwd, '.bzzy', 'unreadable'), vanished = path.join(parent.cwd, '.bzzy', 'vanished');
   fs.mkdirSync(blocked); fs.mkdirSync(vanished); fs.writeFileSync(path.join(blocked, 'hidden.txt'), 'UNREAD_CAPTURE');
   const readdir = fs.readdirSync, realpath = fs.realpathSync;
   t.mock.method(fs, 'readdirSync', (file, ...args) => {
@@ -401,8 +473,8 @@ test('unreadable and disappearing optional directories are omitted without inven
     return realpath(file, ...args);
   });
   const files = contents((await exportFullSessionDebug(parent.id)).outputPath), manifest = JSON.parse(files['manifest.json']);
-  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/unreadable' && row.reason === 'unreadable_source'));
-  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/vanished' && row.reason === 'missing_source'));
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/.bzzy/unreadable' && row.reason === 'unreadable_source'));
+  assert.ok(manifest.exclusions.some(row => row.path === 'workspace/.bzzy/vanished' && row.reason === 'missing_source'));
   assert.doesNotMatch(Buffer.concat(Object.values(files)).toString(), /UNREAD_CAPTURE|private source detail|private vanished detail/);
 });
 
@@ -415,8 +487,8 @@ test('mandatory history size limits publish no clipped ZIP and retain the saved 
 });
 
 test('staging disk failures remain fatal during optional capture and manifest writing without exposing private details', async t => {
-  fs.writeFileSync(path.join(parent.cwd, 'small.txt'), 'saved source'); const before = state();
-  for (const [suffix, phase] of [[path.join('workspace', 'small.txt'), 'workspace'], ['manifest.json', 'manifest']]) {
+  fs.writeFileSync(path.join(parent.cwd, '.bzzy', 'small.txt'), 'saved source'); const before = state();
+  for (const [suffix, phase] of [[path.join('workspace', '.bzzy', 'small.txt'), 'workspace'], ['manifest.json', 'manifest']]) {
     const write = fs.writeFileSync, open = fs.openSync;
     t.mock.method(fs, 'writeFileSync', (file, ...args) => {
       if (String(file).endsWith(path.sep + suffix)) throw Object.assign(new Error('private-token=DO_NOT_DISPLAY'), { code: 'ENOSPC' });

@@ -586,20 +586,23 @@ size and compressed ZIP size.
 For a baseline before starting another goal, use
 `bzzy debug full "session-name" before-next-goal.zip` from a second terminal.
 It includes the regular overview plus complete scoped event/record/message
-streams, memory/compaction/learning history, project notes and ledgers, source
-files, referenced evidence/snapshots and skill resources. Secrets/private stores
-remain excluded, and manifest.json lists missing/changing/unsafe files. Complete
-capture is the default: it has no 512 MiB project budget or 4 GiB staging cap,
-and supports multi-gigabyte archives using ZIP64. Manifest data and JSONL source
-files stream to disk. Individual project files and JSONL records over 64 MiB use
-checked private snapshots and disk-backed text/JSON redaction or binary scanning.
+streams, memory/compaction/learning history, the project's `.bzzy` notes and
+ledgers, referenced evidence and skill resources. It does not read the project
+folder itself: source trees, recon/tool output and worker or snapshot workspace
+copies stay out, so a large program workspace does not make the ZIP slow or huge.
+Saved tool calls and outputs remain in the event stream. Secrets/private stores
+remain excluded, and manifest.json lists missing/changing/unsafe files and the
+out-of-scope project files. Complete capture is the default: it has no 512 MiB
+optional-file budget or 4 GiB staging cap and uses ZIP64. Manifest data and JSONL
+source files stream to disk. Individual `.bzzy` files and JSONL records over 64 MiB
+use checked private snapshots and disk-backed text/JSON redaction or binary scanning.
 Scratch is removed before packaging. Large exports require space for these
 redaction passes, staging and the ZIP; file counts and selected saved records
 still use memory. Assembled conversation messages retain a separate 64 MiB buffer limit.
 
 Use `/full_debug_export --bounded` or `bzzy debug full "session-name" --bounded`
-for the previous size-limited capture. This mode retains a 512 MiB optional
-project budget and 4 GiB uncompressed staging limit, prioritizing `.bzzy`,
+for a size-limited capture. This mode retains a 512 MiB optional file budget
+and 4 GiB uncompressed staging limit, visiting `.bzzy` notes first, then
 referenced evidence and checked skills. Optional files that exceed processing
 or capture limits become explicit omissions; saved diagnostic streams remain
 intact or the operation fails. The result identifies bounded mode, budget usage

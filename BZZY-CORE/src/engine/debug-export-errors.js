@@ -8,7 +8,7 @@ const reasons = {
   SESSION_DEBUG_OPEN_FILES: 'The host reached its open-file limit. Close unused files and retry.',
   SESSION_DEBUG_PATH: 'The output path is too long. Choose a shorter filename.',
   SESSION_DEBUG_SIZE: 'The export reached a diagnostic size limit; no incomplete export was published.',
-  SESSION_DEBUG_SOURCE_SIZE: 'A source exceeded the buffered capture boundary. Complete project capture supports large files using disk-backed processing.',
+  SESSION_DEBUG_SOURCE_SIZE: 'A source exceeded the buffered capture boundary. Complete capture supports large .bzzy files using disk-backed processing.',
   SESSION_DEBUG_CAPTURE_MODE: 'Choose complete capture without a context byte budget, or bounded capture with its optional byte budget.',
   SESSION_DEBUG_START: 'The detached export process could not start. No session work was resumed.',
   SESSION_DEBUG_INTERRUPTED: 'The export process stopped before confirming completion. Inspect its output before retrying.',
@@ -24,7 +24,7 @@ const reasons = {
 const filesystem = { EACCES: 'ACCESS', EPERM: 'ACCESS', ENOSPC: 'SPACE', EDQUOT: 'SPACE', ENOENT: 'MISSING',
   EEXIST: 'EXISTS', EMFILE: 'OPEN_FILES', ENFILE: 'OPEN_FILES', ENAMETOOLONG: 'PATH', EFBIG: 'SIZE' };
 const phases = { session: 'reading the saved chat', destination: 'preparing the output directory', staging: 'preparing private staging',
-  overview: 'writing the supplementary overview', history: 'reading saved history', workspace: 'capturing project context',
+  overview: 'writing the supplementary overview', history: 'reading saved history', workspace: 'capturing .bzzy notes and evidence',
   resources: 'capturing diagnostic resources', manifest: 'writing the manifest', packaging: 'packaging the ZIP' };
 
 export function debugExportDiagnostic(error, phase = error?.exportPhase) {

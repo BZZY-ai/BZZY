@@ -116,7 +116,7 @@ Usage:
                                        Grant explicit session actions to a client
   bzzy sessions                         Open named terminal chats; ↑/↓ select, Enter open
   bzzy debug export SESSION [FILE.md]   Export session + skills/agents here without stopping work
-  bzzy debug full SESSION [FILE.zip] [--bounded]  Full diagnostic ZIP; --bounded limits project capture
+  bzzy debug full SESSION [FILE.zip] [--bounded]  Chat, memory and skills ZIP; skips project files
   bzzy --full-debug-export SESSION [FILE.zip]    Detach full export; notify iPhone on completion/error
   bzzy debug full SESSION --detach              Same detached full export
   bzzy debug status JOB_ID                      Saved export progress, output path or failure
