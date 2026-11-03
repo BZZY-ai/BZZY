@@ -84,10 +84,12 @@ export function conversationRedactionContext(sessionId, ref, throughSeq, { budge
       filter = ` AND e.type='text' AND json_extract(e.data,'$.itemId') IS ? AND json_extract(e.data,'$.runId') IS ? AND json_extract(e.data,'$.threadRef') IS ? AND json_extract(e.data,'$.turnId') IS ?`;
       args = [row.itemId, row.runId, row.threadRef, row.turnId];
     } else {
+      // Nearest boundaries by ordered index walk. max()/min() over a residual
+      // filter scanned the whole chat history on every message reconstruction.
       const boundary = `(e.type='diagnostic.run.finished' OR e.type!='text' AND ${conversationVisible})`;
-      start = db.prepare(`SELECT coalesce(max(e.seq),0) AS seq FROM events e WHERE e.session_id=? AND e.seq<? AND ${boundary}`).get(sessionId, ref.seq).seq;
-      end = db.prepare(`SELECT coalesce(min(e.seq),?) AS seq FROM events e WHERE e.session_id=? AND e.seq>? AND e.seq<=? AND ${boundary}`)
-        .get(throughSeq + 1, sessionId, ref.seq, throughSeq).seq;
+      start = db.prepare(`SELECT e.seq FROM events e WHERE e.session_id=? AND e.seq<? AND ${boundary} ORDER BY e.seq DESC LIMIT 1`).get(sessionId, ref.seq)?.seq ?? 0;
+      end = db.prepare(`SELECT e.seq FROM events e WHERE e.session_id=? AND e.seq>? AND e.seq<=? AND ${boundary} ORDER BY e.seq LIMIT 1`)
+        .get(sessionId, ref.seq, throughSeq)?.seq ?? throughSeq + 1;
     }
   }
   const where = `e.session_id=? AND e.seq>? AND e.seq<? AND ${conversationVisible} AND typeof(${conversationBody})='text'${filter}`;

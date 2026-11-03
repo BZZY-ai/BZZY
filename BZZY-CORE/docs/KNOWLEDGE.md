@@ -238,6 +238,12 @@ Twelve completed meaningful attempts make an episode eligible for a complex-work
 review by default; repeated identical successful operations alone do not qualify.
 Review packets prioritize failures and omit repeated operation/outcome/summary
 tuples with coverage counts. Original observations remain in the event log.
+Queue admission captures its packet inside the database write transaction, so
+each complete-message reconstruction reads only that item's text deltas through
+an indexed lookup. It no longer scans the chat from its first event. On real
+24k- and 115k-event chats the capture took 34 ms and 89 ms instead of 1.1 s and
+4.8 s, with byte-identical packets. The long lock used to stall every other
+Core writer.
 A failed command followed by the same command succeeding is
 only a temporal candidate for a fix. Trigger cooldown defaults to five minutes;
 compaction and routine state polls alone do not create a review storm.

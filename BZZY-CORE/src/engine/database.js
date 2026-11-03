@@ -30,6 +30,9 @@ export function database() {
     CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS session_events ON events(session_id,seq);
     CREATE INDEX IF NOT EXISTS session_event_types ON events(session_id,type,seq);
+    -- Message reconstruction reads one item's text deltas without scanning the
+    -- chat; learning capture does this inside its write transaction.
+    CREATE INDEX IF NOT EXISTS session_text_items ON events(session_id,json_extract(data,'$.itemId'),seq) WHERE type='text';
     CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),updated_at DESC,id);
     CREATE INDEX IF NOT EXISTS records_session_state ON records(kind,json_extract(data,'$.sessionId'),json_extract(data,'$.state'),updated_at DESC,id);
     CREATE INDEX IF NOT EXISTS records_session ON records(kind,json_extract(data,'$.sessionId'),updated_at DESC,id);

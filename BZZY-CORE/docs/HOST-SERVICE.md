@@ -88,6 +88,15 @@ hide outdated-manifest errors. Its bounded wait accommodates supervisor restart
 throttling. Automatic start failures carry an attempt-specific gate, separate
 from explicit user Stop; updater recovery cannot clear a newer explicit Stop.
 
+A supervised Core whose process is alive but answers slowly is reported as
+`CORE_BUSY`, and its stop state is left unchanged. Only a start whose control
+process is missing writes the failed-start gate. During readiness one health
+check may wait for the rest of the 15 s window; status polls stay at 1 s. A
+failed-start gate never asked Core to pause work. So, on a running service, a
+fresh `bzzy` launch or `bzzy-core start` clears it without a restart: running
+hunts and paused goals stay as they are. An explicit Stop still finishes its
+pause barrier first, and update-owned starts still respect every gate.
+
 Advanced `bzzy-core service plan` and `service install --dry-run` print the
 manifest without writing or loading anything. `service install` prepares it;
 service subcommands also accept start/status/stop/restart. An active manifest

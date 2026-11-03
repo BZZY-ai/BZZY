@@ -35,7 +35,7 @@ try {
     'ASSISTANT_SETUP_REQUIRED', 'PROVIDER_UNAVAILABLE', 'CONFLICT']);
   const serviceCodes = new Set(['SERVICE_USAGE', 'SERVICE_PATH_INVALID', 'SERVICE_PLATFORM_UNSUPPORTED', 'SERVICE_NON_ROOT_REQUIRED',
     'SERVICE_PRIVATE_PATH_REQUIRED', 'SERVICE_FILE_CONFLICT', 'SERVICE_OUTDATED', 'SERVICE_MANAGER_UNAVAILABLE', 'SERVICE_NOT_INSTALLED',
-    'SERVICE_RUNNING', 'SERVICE_PREREQUISITES', 'SERVICE_START_FAILED', 'CORE_ALREADY_RUNNING']);
+    'SERVICE_RUNNING', 'SERVICE_PREREQUISITES', 'SERVICE_START_FAILED', 'CORE_ALREADY_RUNNING', 'CORE_BUSY']);
   console.error(error.code === 'CORE_STOPPED' ? 'Core was stopped. Run bzzy-core restart or open a new bzzy terminal to reactivate it.'
     : error.code === 'STOP_INCOMPLETE' ? 'Core could not verify that all work stopped. Its stop barrier remains active; retry bzzy-core stop.'
     : error.code === 'CORE_SERVICE_UNAVAILABLE' ? 'The prepared Core service is unavailable. Run bzzy-core start or inspect bzzy-core status; no detached fallback was started.'

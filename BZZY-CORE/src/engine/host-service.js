@@ -299,8 +299,10 @@ async function lifecycleRuntime() {
       try {
         const target = new URL(info.url);
         if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || target.username || target.password) return { running: false };
+        // Status polls stay at 1 s. Startup readiness may wait for the rest of
+        // its window, so a Core that is briefly busy still answers this check.
         const response = await fetch(info.url + '/health', { headers: { authorization: `Bearer ${info.token}` }, redirect: 'error',
-          signal: AbortSignal.timeout(Math.max(1, Math.min(1000, timeoutMs))) });
+          signal: AbortSignal.timeout(Math.max(1, Math.min(15000, timeoutMs))) });
         if (!response.ok) return { running: false };
         const health = await response.json();
         const identity = health.identity;
@@ -350,8 +352,11 @@ export async function startCoreHost({ plan = servicePlan(), runtime, run = defau
   // it before changing the operator gate or invoking the service manager.
   installed(plan, { exact: true });
   const manager = serviceStatus(plan, { run }), engine = await runtime.status();
+  // A failed-start gate never asked Core to pause work, so a running service
+  // behind it is not quiescing. A fresh launch clears it without a restart.
+  const failedStart = runtime.stopIntent?.()?.source === 'service_start_failure';
   if (respectStop && runtime.stopped()) throw failure('CORE_STOPPED', 'Core was stopped by the local operator. The update did not reactivate it.');
-  if (runtime.stopped() && (manager.running || engine.running)) {
+  if (runtime.stopped() && !failedStart && (manager.running || engine.running)) {
     throw failure('CORE_STOPPED', 'Core is still quiescing. Run bzzy-core restart to finish the stop before reactivating it.');
   }
   if (engine.running && !sameManagedProcess(engine, manager)) throw failure('CORE_ALREADY_RUNNING', 'Core is running outside the user service. Run bzzy-core restart to migrate it safely.');
@@ -377,6 +382,12 @@ export async function startCoreHost({ plan = servicePlan(), runtime, run = defau
     await delay(Math.min(100, Math.max(1, deadline - Date.now())));
   } while (Date.now() < deadline);
   if (!sameManagedProcess(current, supervisor)) {
+    // A live supervised Core that answers slowly is busy, not failed. Keep its
+    // stop state: a false failed-start gate makes Core refuse all new work.
+    const control = runtime.controlIdentity?.();
+    if (supervisor.running && Number.isSafeInteger(supervisor.pid) && control?.pid === supervisor.pid && runtime.controlAlive?.(control)) {
+      throw failure('CORE_BUSY', 'Core is running but did not answer in time, so it is probably busy. Its stop state was left unchanged. Retry shortly or run bzzy-core status.');
+    }
     runtime.persistStop({ source: 'service_start_failure', attemptId });
     throw failure('SERVICE_START_FAILED', 'The user service did not become ready. Check bzzy-core status and private supervisor logs.');
   }

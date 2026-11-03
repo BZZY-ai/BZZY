@@ -105,6 +105,30 @@ test('overlapping turns that reuse an item ID retain separate completion and red
   assert.equal(separate.text, 'SAFE_OTHER_TURN');
 });
 
+test('message reconstruction reads only its own indexed deltas after a long history, for sealed and legacy messages', t => {
+  // Learning capture rebuilds 40 messages inside its write transaction. Each
+  // rebuild must not rescan the chat from its first event.
+  transaction(db => { for (let index = 0; index < 2000; index++) appendEvent(session.id, 'backend', { method: 'item/commandExecution/outputDelta', params: { delta: 'x'.repeat(200) } }, db); });
+  const identity = { runId: 'run', threadRef: 'thread', turnId: 'turn', itemId: 'late-item' };
+  const first = appendEvent(session.id, 'text', { ...identity, text: 'SEALED_START ' });
+  appendEvent(session.id, 'text', { ...identity, itemId: 'other-item', text: 'OTHER_ITEM ' });
+  appendEvent(session.id, 'text', { ...identity, text: 'SEALED_END' });
+  const seal = appendEvent(session.id, 'message.finalized', identity);
+  const db = database(), prepare = db.prepare.bind(db), statements = [];
+  t.mock.method(db, 'prepare', sql => { statements.push(sql); return prepare(sql); });
+  const context = conversationRedactionContext(session.id, { seq: first.seq, type: 'text' }, seal.seq);
+  t.mock.restoreAll();
+  assert.equal(context.text, 'SEALED_START SEALED_END');
+  const rows = statements.find(sql => sql.startsWith('SELECT e.seq,e.created_at,'));
+  const plan = db.prepare('EXPLAIN QUERY PLAN ' + rows).all(session.id, 0, seal.seq, identity.itemId, identity.runId, identity.threadRef, identity.turnId);
+  assert.ok(plan.some(row => /session_text_items/.test(row.detail)), JSON.stringify(plan));
+  appendEvent(session.id, 'message.user', { text: 'LEGACY_QUESTION' });
+  const legacy = appendEvent(session.id, 'text', { text: 'LEGACY_PART_ONE ' });
+  appendEvent(session.id, 'text', { text: 'LEGACY_PART_TWO' });
+  const next = appendEvent(session.id, 'message.user', { text: 'NEXT_QUESTION' });
+  assert.equal(conversationRedactionContext(session.id, { seq: legacy.seq, type: 'text' }, next.seq).text, 'LEGACY_PART_ONE LEGACY_PART_TWO');
+});
+
 test('more than 1024 interleaved starts cannot block the scanner from reaching their completion markers', () => {
   transaction(() => {
     for (let index = 0; index < 1100; index++) appendEvent(session.id, 'text', { runId: 'run', threadRef: 'thread', itemId: `open-${index}`, text: `Observation ${index}.` });

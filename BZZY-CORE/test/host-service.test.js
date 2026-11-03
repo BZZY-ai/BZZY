@@ -420,6 +420,46 @@ test('automatic readiness gates carry an exact attempt and only that failed atte
   } finally { setup.close(); }
 });
 
+test('a live supervised Core that answers slowly is busy and never gets a failed-start gate', async () => {
+  for (const alive of [true, false]) {
+    const setup = lifecycle();
+    try {
+      await startCoreHost(setup); setup.events.length = 0;
+      // A long write transaction freezes the control loop; its process stays alive.
+      setup.runtime.status = async () => ({ running: false });
+      setup.runtime.controlIdentity = () => ({ pid: 4321, start: 'fixture', boot: 'fixture' });
+      setup.runtime.controlAlive = identity => alive && identity?.pid === 4321;
+      if (alive) {
+        await assert.rejects(startCoreHost({ ...setup, readinessWaitMs: 50 }), { code: 'CORE_BUSY' });
+        assert.equal(setup.runtime.stopped(), false); assert.equal(setup.events.includes('persist-intent'), false);
+      } else {
+        await assert.rejects(startCoreHost({ ...setup, readinessWaitMs: 50 }), { code: 'SERVICE_START_FAILED' });
+        assert.equal(setup.runtime.stopped(), true, 'A dead control process still gets the failed-start gate.');
+      }
+    } finally { setup.close(); }
+  }
+});
+
+test('a failed-start gate on a running service clears on a fresh launch without pausing work, unlike an explicit stop', async () => {
+  const setup = lifecycle();
+  try {
+    await startCoreHost(setup);
+    let intent = { source: 'service_start_failure', attemptId: randomUUID(), id: randomUUID() };
+    setup.runtime.stopped = () => Boolean(intent); setup.runtime.stopIntent = () => intent;
+    setup.runtime.clearStop = () => { setup.events.push('clear-intent'); intent = null; };
+    setup.events.length = 0;
+    assert.equal((await activateCLIHost(setup)).managed, true);
+    assert.equal(intent, null);
+    assert.equal(setup.events.some(value => /quiesce|bootout|disable --now|shutdown-control/.test(value)), false, 'No restart, unload or pause.');
+    intent = { source: 'operator', id: randomUUID() };
+    await assert.rejects(activateCLIHost(setup), { code: 'CORE_STOPPED' });
+    assert.equal(intent?.source, 'operator', 'An explicit Stop keeps its quiescing barrier.');
+    intent = { source: 'service_start_failure', attemptId: randomUUID(), id: randomUUID() };
+    await assert.rejects(startCoreHost({ ...setup, respectStop: true, attemptId: randomUUID() }), { code: 'CORE_STOPPED' });
+    assert.equal(intent?.source, 'service_start_failure', 'Update-owned starts still respect every gate.');
+  } finally { setup.close(); }
+});
+
 test('exact manifest receipts restore the original bytes and recover through new stop-aware lifecycle code', async () => {
   const setup = lifecycle();
   try {

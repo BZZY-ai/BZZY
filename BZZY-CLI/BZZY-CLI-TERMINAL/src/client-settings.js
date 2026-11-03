@@ -50,6 +50,7 @@ const messages = {
   SERVICE_MANAGER_UNAVAILABLE: 'The background service could not be controlled. Check Core status and your user login.',
   SERVICE_OUTDATED: 'The installed Core service needs updating. Run the BZZY installer again.',
   SERVICE_START_FAILED: 'Core did not become ready. Check Core status and the private service log.',
+  CORE_BUSY: 'Core is running but busy and did not answer in time. Its stop state is unchanged; try again shortly.',
   SERVICE_PREREQUISITES: 'Core needs installation prerequisites fixed. Run bzzy-core doctor for details.',
   OPERATOR_STOP_FAILED: 'Core could not confirm that all work stopped. Check its status before trying again.',
   STOP_INCOMPLETE: 'Core could not verify that all work stopped. Check its status before trying again.',

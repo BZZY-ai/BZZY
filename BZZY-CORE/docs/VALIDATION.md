@@ -1,3 +1,35 @@
+# Core freezes from learning capture and false failed-start gates (2026-11-03)
+
+On the owner's server, `bzzy` sometimes reported "The user service did not
+become ready" while Core was running. It then left a failed-start gate, so Core
+refused new work until `bzzy-core restart`, which pauses hunts. Two defects
+combined. A running goal queues a learning review every 30 s, and queue
+admission captures its packet inside `BEGIN IMMEDIATE`. Each of its up to 40
+complete-message rebuilds scanned the chat from its first event: a sealed
+message without an earlier same-identity seal used 0 as its lower bound. The
+daemon's synchronous SQLite writes waited on that lock (10 s busy timeout), so
+`/health` went silent. Separately, startup readiness capped each health check at
+1 s and wrote the gate whenever its 15 s window passed, even when the supervised
+process was alive. Later launches then failed as "still quiescing".
+
+A partial index, `session_text_items` (text events by session and item ID), lets
+each rebuild read only its own deltas. Legacy boundary lookups walk the index in
+order instead of computing max/min over the history. In offline replays of the
+real Evernote (24k events) and NASA v3 (115k events) chats, packet capture fell
+from 1,094 ms to 34 ms and from 4,825 ms to 89 ms, with identical packet hashes.
+The index built in 6 ms and 33 ms. Readiness now lets one health check wait for
+the rest of its window. It reports `CORE_BUSY` without a gate when the
+supervised control process is alive. A fresh launch or `bzzy-core start` clears
+a failed-start gate on a running service without a restart. Explicit Stop and
+update-owned starts are unchanged.
+
+Node 24/macOS: lifecycle, stop-intent, root-service and update tests pass, 37 of
+38 with 1 skipped, including two new ones. A new history regression covers
+interleaved, sealed and legacy messages and asserts the index plan. Core:
+1,509 of 1,516 pass, 6 skipped, with the 1 known environmental canvas path
+failure. CLI settings: 51/51. Core and CLI checks pass. The live server was not
+changed.
+
 # Full debug ZIP scoped to chat, memory and skills (2026-11-03)
 
 Full debug export no longer reads the project folder. A HUNTR program export
