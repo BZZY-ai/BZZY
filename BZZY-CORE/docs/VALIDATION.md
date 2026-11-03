@@ -1,3 +1,35 @@
+# Session memory during long goals and recorded maintenance failures (2026-11-03)
+
+A real 6-hour Evernote hunt export showed BZZY's own compactor did nothing: 12
+jobs, 0 attempts, 0 tokens, 0 summaries. Paid summaries waited for an idle host
+(`foreground_priority`), and a continuously running goal is never idle. Eleven
+older jobs were paused under `source_changed`. That label was applied to any
+indexing, extract or job-preflight exception and paused the whole session, so
+the real cause was lost. A plausible trigger is a database lock held by the
+learning capture fixed above.
+
+Foreground work still has priority. But a paid summary now waits at most
+`maxForegroundWaitSeconds` (default 600, owner-configurable, 0 restores
+idle-only) and then runs with the existing per-session cooldown, the single
+background request slot and the existing job/daily budgets. Maintenance
+failures no longer pause a conversation's memory. Local indexing and extract
+errors record a safe `lastError` and retry with backoff: 15 s for SQLite
+locks and other transient host errors, 5 min otherwise, doubling to 1 h.
+Paused summary jobs are unaffected. A failing job's preflight backs off on its
+own, and after five failures that job becomes `failed` with its receipt. A
+scope or integrity mismatch pauses only that job. Only a deleted or ineligible
+source pauses the session. Receipts carry phase, code, name, a redacted message
+and a count. Owner holds, uncertain-request rules and "old paid jobs untouched
+on a new run" are unchanged.
+
+In an offline replay of the real Evernote chat as a running goal, all 23 memory
+nodes were summarized (13 fake model calls, 10 verbatim). The previous code left
+12 jobs queued behind foreground priority with one summary. Node 24/macOS: 133 of
+133 compactor, lifecycle, history, background-model, assignment-memory and
+session-health tests pass, including four new ones that fail on the previous
+code. Core: 1,514 of 1,521 pass, 6 skipped, with the 1 known environmental canvas
+path failure; the Core check passes. No CLI code changed.
+
 # Core freezes from learning capture and false failed-start gates (2026-11-03)
 
 On the owner's server, `bzzy` sometimes reported "The user service did not

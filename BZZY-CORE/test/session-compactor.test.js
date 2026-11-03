@@ -698,3 +698,93 @@ for (const reason of ['owner_pause', 'owner_cancel', 'source_paused']) test(`gen
   assert.deepEqual(getRecord('core.session.memory', session.id), legacy);
   assert.deepEqual(sessionCompactionStatus(session).control, before);
 });
+
+test('a long foreground goal gets summaries after the bounded wait, one per cooldown, and 0 keeps idle-only', async () => {
+  queue(session, { count: 16 }); session.executionState = 'running'; saveSession(session);
+  let calls = 0; const runModel = async () => { calls++; return summary(); };
+  assert.deepEqual(await processSessionCompactions({ runModel }), []);
+  const waiting = listRecords(JOB, { sessionId: session.id });
+  assert.ok(waiting.length >= 2); assert.equal(calls, 0, 'Foreground work keeps priority at first.');
+  assert.ok(waiting.every(item => item.scheduleReason === 'foreground_priority' && Number.isFinite(Date.parse(item.foregroundSince))));
+  const past = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+  for (const item of waiting) putRecord(JOB, item.id, { ...item, foregroundSince: past });
+  const [first] = await processSessionCompactions({ runModel });
+  assert.equal(first.state, 'completed'); assert.equal(calls, 1); assert.equal(loadSession(session.id).executionState, 'running');
+  assert.deepEqual(await processSessionCompactions({ runModel }), []);
+  assert.equal(calls, 1, 'The per-session cooldown still spaces foreground summaries.');
+  assert.ok(listRecords(JOB, { sessionId: session.id }).some(item => item.state === 'queued' && item.scheduleReason === 'foreground_cooldown'));
+  const control = getRecord('core.session.compactor.control', session.id);
+  putRecord('core.session.compactor.control', session.id, { ...control, lastForegroundDispatchAt: new Date(Date.now() - 61000).toISOString() });
+  const [second] = await processSessionCompactions({ runModel });
+  assert.equal(second.state, 'completed'); assert.equal(calls, 2);
+});
+
+test('maxForegroundWaitSeconds 0 keeps paid summaries idle-only and invalid waits are rejected', async () => {
+  configureSessionCompaction({ maxForegroundWaitSeconds: 0 }, { expectedRevision: 0 });
+  assert.equal(sessionCompactionSettings().maxForegroundWaitSeconds, 0);
+  queue(); session.executionState = 'running'; saveSession(session);
+  assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Idle-only policy') }), []);
+  const item = job(); putRecord(JOB, item.id, { ...item, foregroundSince: new Date(Date.now() - 86400000).toISOString() });
+  assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Idle-only policy') }), []);
+  assert.equal(job().scheduleReason, 'foreground_priority');
+  for (const value of [30, 86401, -1, 1.5, '600']) {
+    assert.throws(() => configureSessionCompaction({ maxForegroundWaitSeconds: value }, { expectedRevision: 1 }), { code: 'INVALID_COMPACTOR' });
+  }
+});
+
+test('a database lock or unknown error during local indexing backs off with a receipt instead of pausing memory', async t => {
+  for (let index = 0; index < 260; index++) appendEvent(session.id, 'message.user', { text: `Observation ${index}: ${'Keep unresolved evidence explicit. '.repeat(10)}` });
+  queueSessionCompaction(session, { force: true, maxParts: 1 });
+  // Queued foreground work keeps paid jobs deferred; local indexing still runs.
+  putRecord('execution', 'foreground', { id: 'foreground', sessionId: session.id, state: 'queued' });
+  const db = database(), prepare = db.prepare.bind(db);
+  const failures = [[Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR', errcode: 5 }), true],
+    [new TypeError('synthetic indexing defect at /private/fixture'), false]];
+  for (const [failure, transient] of failures) {
+    let thrown = false;
+    const indexed = sessionMemoryStatus(session).indexedThroughSeq;
+    t.mock.method(db, 'prepare', sql => {
+      if (!thrown && sql === 'SELECT coalesce(max(seq),0) AS seq FROM events WHERE session_id=?') { thrown = true; throw failure; }
+      return prepare(sql);
+    });
+    await processSessionCompactions({ runModel: () => assert.fail('No paid request in this fixture') });
+    t.mock.restoreAll();
+    let control = sessionCompactionStatus(session).control;
+    assert.equal(thrown, true); assert.equal(control.state, 'enabled'); assert.equal(control.reasonPaused ?? null, null);
+    assert.equal(control.lastError.phase, 'indexing'); assert.equal(control.lastError.transient, transient);
+    assert.equal(control.lastError.name, transient ? 'Error' : 'TypeError');
+    if (transient) { assert.equal(control.lastError.code, 'ERR_SQLITE_ERROR'); assert.equal(control.lastError.errcode, 5); }
+    assert.equal(control.maintenanceFailures, 1); assert.ok(Date.parse(control.maintenanceRetryAt) > Date.now());
+    for (const item of listRecords(JOB, { sessionId: session.id })) assert.equal(item.state, 'queued', 'No summary job is paused by a maintenance error.');
+    assert.equal(sessionMemoryStatus(session).indexedThroughSeq, indexed);
+    await processSessionCompactions({ runModel: () => assert.fail('No paid request in this fixture') });
+    assert.equal(sessionMemoryStatus(session).indexedThroughSeq, indexed, 'The backoff is respected.');
+    putRecord('core.session.compactor.control', session.id, { ...getRecord('core.session.compactor.control', session.id), maintenanceRetryAt: new Date(Date.now() - 1000).toISOString() });
+    await processSessionCompactions({ runModel: () => assert.fail('No paid request in this fixture') });
+    control = sessionCompactionStatus(session).control;
+    assert.ok(sessionMemoryStatus(session).indexedThroughSeq > indexed, 'Indexing resumes after the backoff.');
+    assert.equal(control.maintenanceFailures, 0); assert.equal(control.maintenanceRetryAt, null);
+    assert.equal(control.lastError.phase, 'indexing', 'The last receipt remains for diagnosis.');
+  }
+});
+
+test('one failing summary job backs off and finally fails with its receipt while other jobs continue', async () => {
+  queue(session, { count: 16 });
+  const [bad, good] = listRecords(JOB, { sessionId: session.id }).sort((left, right) => left.id.localeCompare(right.id));
+  assert.ok(bad && good);
+  const { budget: _budget, ...broken } = bad; putRecord(JOB, bad.id, broken);
+  const [completed] = await processSessionCompactions({ runModel: async () => summary() });
+  assert.equal(completed.id, good.id); assert.equal(completed.state, 'completed');
+  let failed = getRecord(JOB, bad.id);
+  assert.equal(sessionCompactionStatus(session).control.state, 'enabled');
+  assert.equal(failed.state, 'queued'); assert.equal(failed.preflightFailures, 1); assert.equal(failed.reasonPaused ?? null, null);
+  assert.equal(failed.lastError.phase, 'summary-preflight'); assert.equal(failed.lastError.name, 'TypeError'); assert.equal(failed.lastError.transient, false);
+  assert.ok(Date.parse(failed.nextAttemptAt) > Date.now());
+  assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('The failing job is backing off.') }), []);
+  putRecord(JOB, bad.id, { ...getRecord(JOB, bad.id), preflightFailures: 4, nextAttemptAt: new Date(Date.now() - 1000).toISOString() });
+  await processSessionCompactions({ runModel: () => assert.fail('The broken job never dispatches.') });
+  failed = getRecord(JOB, bad.id);
+  assert.equal(failed.state, 'failed'); assert.equal(failed.reasonPaused, 'maintenance_error'); assert.equal(failed.error, 'COMPACTOR_MAINTENANCE');
+  assert.equal(failed.lastError.count, 2); assert.equal(sessionCompactionStatus(session).control.state, 'enabled');
+  assert.doesNotMatch(JSON.stringify(failed.lastError), /synthetic-compactor-fixture-value/);
+});

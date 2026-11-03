@@ -138,7 +138,19 @@ stop handling and explicit recovery after uncertain requests.
 
 Both owner settings APIs accept `duringForeground` (default false) and
 `foregroundCooldownSeconds`. Retention defaults to 60 seconds (10–3,600 allowed);
-learning defaults to 300 seconds (60–3,600 allowed). The existing owner-only
+learning defaults to 300 seconds (60–3,600 allowed). Retention also accepts
+`maxForegroundWaitSeconds` (default 600; 0, or 60–86,400). A paid summary waits
+at most that long behind foreground work and then runs with the cooldown, so a
+continuously running goal still gets summaries; 0 keeps them idle-only.
+
+Indexing, extract and summary-preflight failures do not pause a conversation's
+memory. Each leaves a safe `lastError` receipt on the compactor control or job:
+phase, code, name, a redacted message and a repeat count. The work then retries
+with backoff: 15 s for database locks and other transient host errors, 5 min
+otherwise, doubling up to 1 h. A job whose preflight fails five times becomes
+`failed` with that receipt, and other jobs continue. A scope or integrity
+mismatch pauses only its own job. A deleted or ineligible source still pauses
+the session as `source_changed`. The existing owner-only
 `CoreKnowledge` settings operation requires `reviewed:true` and the displayed
 revision. Configuration starts no work and does not resume paused jobs.
 

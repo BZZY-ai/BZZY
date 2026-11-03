@@ -86,8 +86,11 @@ revision and, when inherited, Core's revision. Changing defaults affects fresh
 jobs, while existing jobs keep their original selection through retries and
 explicit resume. Authentication stays in Core's private backend setup.
 
-The optional worker gives foreground work scheduling priority. Indexing never
-waits for model output; short material may be retained verbatim without inference.
+The optional worker gives foreground work scheduling priority, but a long goal
+is never idle. A paid summary waits at most `maxForegroundWaitSeconds` (default
+600) behind foreground work. After that it runs with the per-session cooldown,
+one background request at a time and within the daily budget. 0 restores
+idle-only summaries. Indexing never waits for model output; short material may be retained verbatim without inference.
 Larger pending nodes receive source-linked host extractive fallback views. Query
 recall combines relevant nodes with recent coverage; originals stay unchanged.
 Local extraction also runs when paid compaction is disabled, without creating
@@ -183,8 +186,9 @@ generation records remain archived, and old paid jobs retain their own recovery
 state. Merely reading memory never starts migration. Source-local memory/compactor cursors, nodes, jobs and
 accounting receipts are excluded from project transfer; recipients rebuild their
 own indexes from historical originals and never resume imported compactor jobs. Owner-only
-settings can allow budgeted inference during foreground work, with a cooldown;
-the default retains foreground priority. See [long-run reliability](LONG-RUN-RELIABILITY.md)
+settings can allow budgeted inference during foreground work without the
+bounded wait (`duringForeground`), with a cooldown. By default foreground work
+keeps priority for the bounded wait. See [long-run reliability](LONG-RUN-RELIABILITY.md)
 for update/resume behavior, source boundaries and scheduling controls.
 
 ## Owner controls
