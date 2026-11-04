@@ -9,8 +9,11 @@ queued does not guarantee display. This feature needs the matching Relay server
 update; the existing iOS app format is compatible.
 
 Run a script independently of the terminal with
-`bzzy --background /path/task.py --cwd /path/project --timeout 300 --json -- ARG...`.
-Core returns a durable job ID immediately; inspect it with
+`bzzy --background /path/task.py --cwd /path/project --timeout 300 --json ARG...`,
+for example `bzzy --background waymore2.py --domain example.com`. After the script,
+only `--cwd`, `--timeout`, `--notif`, `--json` and `--request-id` configure BZZY;
+the first other argument and everything after it go to the script literally. Use
+`--` before script arguments that start with one of those names. Core returns a durable job ID immediately; inspect it with
 `bzzy background list|status JOB_ID|logs JOB_ID|cancel JOB_ID`.
 Add `--notif` for `Completed task.py` / `Failed task.py` iPhone alerts; scripts
 without that flag do not queue pushes. Existing debug export alerts are unchanged.

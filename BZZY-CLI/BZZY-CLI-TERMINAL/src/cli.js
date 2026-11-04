@@ -62,7 +62,7 @@ Usage:
   bzzy "initial context" --goal "task"  Send context first, then start a durable goal
   bzzy --context-file FILE --goal "task" Load saved instructions and start the goal directly
   bzzy --preprompt FILE --goal "task" --detach  Same saved instructions; Core keeps running
-  bzzy --background SCRIPT [--notif] -- ARG...  Submit a durable Core script job
+  bzzy --background SCRIPT [--notif] ARG...  Submit a durable Core script job with its arguments
   bzzy background list|status ID|logs ID|cancel ID  Inspect saved script jobs
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
   bzzy skills sync                     Choose and import Codex skill folders
@@ -146,7 +146,8 @@ Options:
   --context-file FILE   UTF-8 task instructions (up to 1 MiB), relative to --cwd; no initialization chat
   --preprompt FILE      Alias for --context-file; full instructions saved before work
   --custom-notification TEXT  Queue a custom iPhone push alert (up to 180 characters)
-  --background SCRIPT   Run a script through Core and immediately return its job ID
+  --background SCRIPT   Run a script through Core and immediately return its job ID; after SCRIPT,
+                        args other than --cwd/--timeout/--notif/--json/--request-id go to the script
   --timeout SECONDS     Script deadline (1–604800); omitted means no deadline
   --notif               Opt in to iPhone completion/failure alerts for this script
   --token-budget N      Optional goal token budget
@@ -246,6 +247,8 @@ Subscription sign-in is handled by the official, unmodified backend CLIs.
 API providers must support the Responses protocol in this version.
 `;
 
+const BACKGROUND_JOB_OPTIONS = new Set(['--cwd', '--timeout', '--notif', '--json', '--request-id']);
+
 export function parseArgs(argv) {
   const options = { cwd: process.cwd(), pet: true, yolo: false, json: false, captureNetwork: true };
   const args = [];
@@ -261,6 +264,9 @@ export function parseArgs(argv) {
     if (raw === '--') { if (options.backgroundScript) options.scriptArgs = argv.slice(i + 1); else args.push(...argv.slice(i + 1)); break; }
     const equal = raw.indexOf('=');
     const flag = equal > 0 ? raw.slice(0, equal) : raw;
+    // After --background SCRIPT only script-job options configure BZZY; the first other
+    // argument starts the script's literal argv. -- still marks the boundary explicitly.
+    if (options.backgroundScript && !BACKGROUND_JOB_OPTIONS.has(flag)) { options.scriptArgs = argv.slice(i); break; }
     if (args[0] === 'extensions' && flag === '--revision') {
       const value = equal > 0 ? raw.slice(equal + 1) : argv[++i];
       if (value === undefined) throw new Error('--revision requires a value.'); args.push(flag, value); continue;

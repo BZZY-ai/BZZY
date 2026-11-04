@@ -40,7 +40,18 @@ test('background parsing preserves literal argv after -- and preprompt is the ex
   const parsed = parseArgs(['--background', 'task.py', '--cwd', directory, '--timeout', '12', '--notif', '--json', '--', '--json', '', 'a b', '$(literal)']);
   assert.deepEqual(parsed.options.scriptArgs, ['--json', '', 'a b', '$(literal)']); assert.equal(parsed.options.timeoutSeconds, 12); assert.equal(parsed.options.notify, true);
   assert.equal(parseArgs(['--preprompt', 'instructions.txt', '--goal', 'finish', '--detach']).options.contextFile, 'instructions.txt');
-  for (const args of [['--background', 'task.py', 'arg'], ['--background', 'task.py', '--goal', 'task'], ['--notif'], ['--timeout', '1'], ['--background', 'task.py', '--timeout', '0'], ['--preprompt', 'a', '--context-file', 'b']]) assert.throws(() => parseArgs(args));
+  for (const args of [['arg', '--background', 'task.py'], ['--goal', 'task', '--background', 'task.py'], ['--notif'], ['--timeout', '1'], ['--background', 'task.py', '--timeout', '0'], ['--preprompt', 'a', '--context-file', 'b']]) assert.throws(() => parseArgs(args));
+});
+test('after --background SCRIPT the first non-job argument starts literal script argv without --', () => {
+  const bare = parseArgs(['--background', 'waymore2.py', '--domain', 'example.com']);
+  assert.equal(bare.options.backgroundScript, 'waymore2.py'); assert.deepEqual(bare.options.scriptArgs, ['--domain', 'example.com']); assert.deepEqual(bare.args, []);
+  const mixed = parseArgs(['--cwd', directory, '--background', 'scan.py', '--timeout', '5', '--json', '--notif', '--request-id', 'r1', '--domain', 'x', '--cwd', '/elsewhere', '--json', '--', 'tail']);
+  assert.deepEqual(mixed.options.scriptArgs, ['--domain', 'x', '--cwd', '/elsewhere', '--json', '--', 'tail']);
+  assert.equal(mixed.options.cwd, directory); assert.equal(mixed.options.timeoutSeconds, 5); assert.equal(mixed.options.json, true); assert.equal(mixed.options.notify, true); assert.equal(mixed.options.requestId, 'r1');
+  assert.deepEqual(parseArgs(['--background', 'task.py', 'arg', '--goal', 'task', '--help']).options.scriptArgs, ['arg', '--goal', 'task', '--help']);
+  const explicit = parseArgs(['--background', 'task.py', '--', '--timeout', '9']);
+  assert.deepEqual(explicit.options.scriptArgs, ['--timeout', '9']); assert.equal(explicit.options.timeoutSeconds, undefined);
+  assert.equal(parseArgs(['--background', 'task.py', '--json']).options.scriptArgs, undefined);
 });
 test('Python jobs outlive the submitting CLI; JSON commands retain outcomes and --notif is explicit', async () => {
   const cwd = path.join(directory, 'working folder'); fs.mkdirSync(cwd);
@@ -55,7 +66,11 @@ test('Python jobs outlive the submitting CLI; JSON commands retain outcomes and 
   const event = logs.stdout.trim().split('\n').map(JSON.parse)[0]; assert.equal(event.type, 'job.log'); assert.equal(event.jobId, job.id);
   assert.deepEqual(JSON.parse(event.data.text), { args: ['a b', '--json', '$(literal)'], cwd });
   const list = await run(['background', 'list', '--json']); assert.equal(JSON.parse(list.stdout).items.length, 1);
-  const notified = await run(['--background', file, '--cwd', cwd, '--notif', '--json']); assert.equal(notified.code, 0, notified.stderr); assert.equal(JSON.parse(notified.stdout).notify, true);
+  const notified = await run(['--background', file, '--cwd', cwd, '--notif', '--json', '--domain', 'example.com']); assert.equal(notified.code, 0, notified.stderr);
+  const bare = JSON.parse(notified.stdout); assert.equal(bare.notify, true);
+  await until(async () => JSON.parse((await run(['background', 'status', bare.id, '--json'])).stdout).state === 'completed');
+  const bareLogs = await run(['background', 'logs', bare.id, '--json']); assert.equal(bareLogs.code, 0, bareLogs.stderr);
+  assert.deepEqual(JSON.parse(bareLogs.stdout.trim().split('\n').map(JSON.parse)[0].data.text), { args: ['--domain', 'example.com'], cwd });
   const missing = await run(['background', 'status', '00000000-0000-0000-0000-000000000000', '--json']);
   assert.equal(missing.code, 1); assert.equal(JSON.parse(missing.stderr).code, 'JOB_NOT_FOUND'); assert.equal(missing.stdout, '');
 });

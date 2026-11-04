@@ -12,6 +12,7 @@ add a workflow engine or grant imported code access to private accounts.
 
 ```sh
 bzzy --background /path/check.py --cwd /path/project --timeout 300 --json --request-id check-20261029 -- --mode fast "literal argument"
+bzzy --background /path/scan.py --domain example.com
 bzzy background list --json
 bzzy background status JOB_ID --json
 bzzy background logs JOB_ID --json
@@ -21,10 +22,16 @@ bzzy background cancel JOB_ID --request-id cancel-check-20261029 --json
 
 Submission returns one JSON job object, including `id`, as soon as Core accepts
 the durable queue entry. It does not wait for the script, model setup or phone
-delivery. Closing the submitting terminal does not cancel the job. Only options
-before `--` configure BZZY; every argument after it is passed literally, including
-empty strings, spaces and strings resembling flags or shell substitutions. There
-is no implicit shell evaluation. Use an absolute `--cwd` when integrating; the
+delivery. Closing the submitting terminal does not cancel the job. After the
+script path, BZZY reads only its job options `--cwd`, `--timeout`, `--notif`,
+`--json` and `--request-id`; the first other argument starts the script's argv,
+so `bzzy --background scan.py --domain example.com` passes `--domain example.com`.
+An explicit `--` also ends BZZY options; use it when the script's first argument
+is one of those five names. Every script argument is passed literally, including
+empty strings, spaces, a later `--` and strings resembling flags or shell
+substitutions. The script path is one argv item: a quoted `"scan.py --domain x"` is
+a file name, not a command line. There is no implicit shell evaluation. Use an
+absolute `--cwd` when integrating; the
 CLI otherwise uses its invocation directory. Relative script paths resolve there.
 
 An executable file uses its own shebang. Non-executable `.py` files use

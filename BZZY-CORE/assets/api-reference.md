@@ -400,6 +400,11 @@ bzzy background logs JOB_ID --follow
 bzzy background cancel JOB_ID --request-id huntr-cancel-001 --json
 ```
 
+After the script path, only `--cwd`, `--timeout`, `--notif`, `--json` and
+`--request-id` configure BZZY. The first other argument starts literal script
+argv, so `bzzy --background /absolute/scan.py --domain example.com` needs no `--`;
+keep `--` when the script's first argument is one of those option names.
+
 | Method and path | Body / query / result |
 | --- | --- |
 | `POST /v1/jobs` | `{script,cwd,args?:[],timeoutSeconds?:0,notify?:false}` + key → 202 job |
