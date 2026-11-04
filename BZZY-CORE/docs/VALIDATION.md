@@ -1,3 +1,30 @@
+# Native goal resume reconciliation and separate usage baselines (2026-11-04)
+
+A stale blocked notification arriving during native goal activation could make
+Core disregard the activation reply and settle the resumed run before its new
+turn started. A raced activation now gets a read-only current-goal lookup;
+newer notifications, genuine terminal states and owner stops retain precedence.
+An unsuccessful reconciliation surfaces its error without replaying activation.
+Continuation also clears stale native-blocker fields, while original events
+remain in history.
+
+Native goal tokens now use their own saved baseline, independently of the
+aggregate session counter that can include cached input. A lower native counter
+no longer creates a false reset merely because aggregate usage is higher.
+The larger observed delta is still counted once, legacy spending remains charged,
+and real counter decreases retain uncertain allocations. Historical incomplete
+receipts are not rewritten or promoted to complete.
+
+Node 24/Linux: all 89 focused recovery, cancellation, forced-stop, context and
+usage-ledger tests pass; the two defect regressions fail against the original
+implementation. Thirteen related CLI goal-control/validation tests and five
+standalone/authoring checks pass in an isolated non-root copy. Core and CLI
+syntax checks pass. Existing fixture executable permissions were prepared for
+testing. A broader root-run encountered separate service/profile fixture failures
+and stalled transfer checks and was stopped; it is not recorded as a passing
+full suite. All model work used offline synthetic fixtures. No running owner
+installation or saved session was changed.
+
 # Session memory during long goals and recorded maintenance failures (2026-11-03)
 
 A real 6-hour Evernote hunt export showed BZZY's own compactor did nothing: 12

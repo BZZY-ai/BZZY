@@ -571,7 +571,17 @@ export class CodexEngine {
         if (params.objective) consumeNativeRefresh(this.session, refreshEpoch, 'accepted-native-goal-objective');
         recordBackendDiagnostics(this.session, { setupId: promptSetupId, method: 'thread/goal/set', outcome: 'accepted',
           delivery: params.objective ? 'prepared-objective' : 'resume-existing-native-objective', threadId: this.threadId }, 'diagnostic.prompt');
+        if (this.interrupted) return;
         if (this.goalUpdates === version) this.updateGoal(result.goal);
+        else {
+          // A resumed thread can publish its old blocked state while goal/set
+          // activates it. Neither that notification nor the dispatch reply is
+          // necessarily the latest state. Read after the accepted mutation;
+          // a still newer notification during that read retains precedence.
+          const snapshotVersion = this.goalUpdates;
+          const snapshot = await this.rpc.request('thread/goal/get', { threadId: this.threadId });
+          if (!this.interrupted && this.goalUpdates === snapshotVersion) this.updateGoal(snapshot.goal);
+        }
       } else {
         const effort = reasoningEffort(this.session, this.options);
         const refreshEpoch = this.session.nativeContext?.refresh?.epoch;
@@ -604,6 +614,8 @@ export class CodexEngine {
     else if (status === 'blocked') {
       const blocker = sanitizedNativeBlocker(goal.reason || goal.blockedReason || goal.lastBlocker || goal.blocker?.message);
       Object.assign(this.session.goal, { reason: 'native_blocked', lastBlocker: blocker.reason, nativeBlocker: blocker });
+    } else if (status === 'active' || ['native_blocked', 'native_turn_failed'].includes(this.session.goal.reason)) {
+      delete this.session.goal.reason; delete this.session.goal.lastBlocker; delete this.session.goal.nativeBlocker;
     }
     observeRunUsage(this.session, this.options.toolHost?.context?.runId, { nativeGoal: true });
     saveSession(this.session);

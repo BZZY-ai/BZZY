@@ -114,6 +114,32 @@ test('an already active native goal is paused before its existing thread is resu
   assert.equal(calls('thread/start').length, 0); assert.equal(session.engineThreadId, 'old-native-thread');
 });
 
+test('a stale blocked notification during resume cannot end the newly activated native goal', async () => {
+  Object.assign(session.goal, { status: 'blocked', reason: 'native_blocked', lastBlocker: 'An earlier provider failure.',
+    nativeBlocker: { reason: 'An earlier provider failure.' } });
+  createEngine({ initiallyLoaded: true, goalDispatchRace: 'stale-blocked', goalTurnDelayMs: 500 });
+  await engine.run('resume', { goal: true, resumeGoal: true });
+  assert.equal(session.turns, 1, 'The admitted goal must reach its new turn rather than settling from the old blocked state.');
+  assert.equal(session.goal.status, 'paused'); assert.equal(session.goal.nativeTokensUsed, 72);
+  assert.equal(session.goal.reason, undefined); assert.equal(session.goal.lastBlocker, undefined); assert.equal(session.goal.nativeBlocker, undefined);
+  assert.equal(calls('thread/goal/get').length, 2, 'A raced dispatch is reconciled by a read, without replaying the mutation.');
+  assert.equal(calls('thread/goal/set').length, 1); assert.equal(calls('thread/start').length, 0);
+});
+
+for (const race of ['terminal-before-reply', 'blocked-during-reconcile']) test(`a genuine native blocker survives dispatch reconciliation (${race})`, { timeout: 5000 }, async () => {
+  createEngine({ initiallyLoaded: true, goalDispatchRace: race });
+  await engine.run('resume', { goal: true, resumeGoal: true });
+  assert.equal(session.goal.status, 'blocked'); assert.equal(session.goal.reason, 'native_blocked');
+  assert.equal(calls('thread/goal/get').length, 2); assert.equal(calls('thread/goal/set').length, 1);
+  assert.equal(calls('thread/start').length, 0);
+});
+
+test('a failed dispatch reconciliation is surfaced without replaying the accepted goal', async () => {
+  createEngine({ initiallyLoaded: true, goalDispatchRace: 'stale-blocked', reconcileError: { code: -32603, message: 'Fixture snapshot unavailable.' } });
+  await assert.rejects(engine.run('resume', { goal: true, resumeGoal: true }), /Fixture snapshot unavailable/);
+  assert.equal(calls('thread/goal/set').length, 1); assert.equal(calls('thread/start').length, 0);
+});
+
 test('an existing thread with no native goal reinstalls the original mission without losing previously consumed budget', async () => {
   const goalId = session.goal.id, contract = structuredClone(session.contract);
   createEngine({ nativeGoalMissing: true }); await engine.run('resume', { goal: true, resumeGoal: true });

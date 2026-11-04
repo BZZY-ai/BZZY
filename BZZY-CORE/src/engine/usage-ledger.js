@@ -6,6 +6,10 @@ const atomic = operation => database().isTransaction ? operation(database()) : t
 const goalKey = (sessionId, goalId) => `${sessionId}:${goalId}`;
 const knownGoalTokens = goal => Math.max(0, count(goal?.nativeTokensUsed) || 0, count(goal?.supervisorTokensUsed) || 0,
   (count(goal?.tokensUsed) || 0) - (count(goal?.delegatedTokensUsed) || 0));
+// Native goal usage can exclude cached input counted in the session aggregate.
+// Compare each counter with its own baseline; retain the legacy spent floor
+// separately for budgets and attribution when no native baseline was saved.
+const nativeGoalTokens = goal => count(goal?.nativeTokensUsed) ?? knownGoalTokens(goal);
 function charge(run) {
   const unknown = run.state === 'finished' && !run.accountingComplete;
   return { ...run, chargedTokens: unknown && run.allowance != null ? Math.max(run.measuredTokens, run.allowance) : run.measuredTokens,
@@ -38,8 +42,8 @@ export function beginRunUsage(session, run, { tokenBudget } = {}) {
     const limit = count(tokenBudget);
     const allowance = limit == null ? null : Math.max(0, limit - (goal ? knownGoalTokens(goal) : baselineTokens));
     const receipt = { version: 1, runId: run.id, sessionId: session.id, goalId: goal?.id || null, provider: session.provider,
-      backend: session.backend, counter: 'backend-total-tokens', baselineTokens, baselineGoalTokens: knownGoalTokens(goal),
-      sessionHighWater: baselineTokens, goalHighWater: knownGoalTokens(goal), measuredTokens: 0, chargedTokens: 0,
+      backend: session.backend, counter: 'backend-total-tokens', baselineTokens, baselineGoalTokens: nativeGoalTokens(goal),
+      sessionHighWater: baselineTokens, goalHighWater: nativeGoalTokens(goal), measuredTokens: 0, chargedTokens: 0,
       observed: false, accountingComplete: false, allowance, state: 'running', startedAt: now() };
     if (session.usage?.tokens !== undefined && count(session.usage.tokens) == null) receipt.counterInvalid = true;
     putRecord(RUN, run.id, receipt, db); return receipt;

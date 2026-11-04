@@ -9,7 +9,7 @@ const spec = JSON.parse(process.env.BZZY_TEST_SCENARIO || '{}');
 const log = request => fs.appendFileSync(process.env.BZZY_TEST_LOG, JSON.stringify(request) + '\n');
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const notify = (method, params) => send({ method, params });
-let loaded = Boolean(spec.initiallyLoaded), threadId = 'old-native-thread';
+let loaded = Boolean(spec.initiallyLoaded), threadId = 'old-native-thread', goalDispatched = false;
 let goal = spec.nativeGoalMissing ? null : { id: 'old-native-goal', status: spec.existingGoalActive ? 'active' : 'paused', tokensUsed: 50 };
 function failure(request, definition) {
   if (!definition) return false;
@@ -37,7 +37,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   } else if (request.method === 'thread/goal/get') {
     if (!loaded) { send({ id: request.id, error: { code: -32600, message: `thread not found: ${request.params.threadId}` } }); continue; }
     if (failure(request, spec.getError)) continue;
+    if (goalDispatched && failure(request, spec.reconcileError)) continue;
     result = { goal };
+    if (goalDispatched && spec.goalDispatchRace === 'blocked-during-reconcile') {
+      goal = { ...goal, status: 'blocked' };
+      notify('thread/goal/updated', { threadId, goal });
+    }
   } else if (request.method === 'thread/goal/clear') { goal = null; result = { cleared: true }; }
   else if (request.method === 'thread/goal/set') {
     if (request.params.status === 'paused' && failure(request, spec.pauseError)) continue;
@@ -45,15 +50,22 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     if (!goal && request.params.status === 'active' && !request.params.objective) {
       send({ id: request.id, error: { code: -32602, message: 'The new fixture goal requires the complete original objective.' } }); continue;
     }
+    if (request.params.status === 'active' && spec.goalDispatchRace) {
+      notify('thread/goal/updated', { threadId, goal: { ...goal, status: 'blocked' } });
+    }
     goal = { id: goal?.id || 'replacement-native-goal', status: request.params.status, tokensUsed: goal?.tokensUsed || 0 };
     result = { goal };
     if (request.params.status === 'active') {
-      setTimeout(() => {
+      goalDispatched = true;
+      if (spec.goalDispatchRace === 'terminal-before-reply') {
+        goal = { ...goal, status: 'blocked' };
+        notify('thread/goal/updated', { threadId, goal });
+      } else if (spec.goalDispatchRace !== 'blocked-during-reconcile') setTimeout(() => {
         notify('turn/started', { threadId, turn: { id: 'fixture-goal-turn' } });
         goal = { ...goal, status: 'paused', tokensUsed: goal.tokensUsed + 2 };
         notify('thread/goal/updated', { threadId, goal });
         notify('turn/completed', { threadId, turn: { id: 'fixture-goal-turn', status: 'completed' } });
-      }, 10);
+      }, spec.goalTurnDelayMs || 10);
     }
   } else if (request.method === 'turn/start') {
     if (failure(request, spec.turnError)) continue;

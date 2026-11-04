@@ -30,6 +30,21 @@ transport and ambiguous failures, accepted resumes with failed later reads, and
 failed active-goal/turn requests do not trigger this recovery or automatic replay.
 Diagnostics distinguish a rejected resume from the accepted replacement start.
 
+If a goal notification races the accepted activation request, Core reconciles
+the current native state with a read-only goal lookup before settling the run.
+An old blocked notification cannot terminate newly resumed work; a genuine
+terminal state, a newer notification and an owner stop retain precedence.
+Reconciliation failure is surfaced without replaying the accepted activation.
+Successful continuation clears stale native-blocker fields from current state;
+the original error remains in history.
+
+Usage receipts baseline native goal tokens separately from the session aggregate,
+which can include substantially more cached input. Resuming cannot mistake that
+difference for a counter reset. Attribution still uses the larger observed delta
+once, retains prior spent usage, and conservatively holds genuinely uncertain
+allocations. Existing incomplete receipts remain incomplete until reconciled;
+updating the code does not rewrite historical accounting.
+
 Generated diagnostic files can remain in the project directory. Content-validated
 BZZY regular reports and full-debug ZIPs are excluded from execution snapshots,
 worker copies and workspace comparisons with explicit omission metadata. This

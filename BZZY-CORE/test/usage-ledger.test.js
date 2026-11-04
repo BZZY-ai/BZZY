@@ -92,6 +92,40 @@ test('counter resets cannot lower high-water usage or manufacture replenished bu
   assert.equal(supervisorAccounting(session).accountingComplete, false);
 });
 
+test('resumed native goal counters use their own baseline when aggregate usage includes cached input', () => {
+  session.goal = newGoal('Resume only this offline fixture.', 2000);
+  Object.assign(session.goal, { tokensUsed: 1000, nativeTokensUsed: 20 });
+  session.usage = { tokens: 10100, available: true }; saveSession(session);
+  const run = begin(true, 2000);
+  session.goal.nativeTokensUsed = 25;
+  observeRunUsage(session, run.id, { nativeGoal: true }); receipt(run, 10150);
+  endRunUsage(session, run.id);
+  assert.equal(Boolean(getRecord('usage.run', run.id).counterReset), false);
+  assert.equal(supervisorAccounting(session).tokens, 1050, 'The larger compatible delta is counted once.');
+  assert.equal(supervisorAccounting(session).accountingComplete, true);
+  session.goal.tokensUsed = 1050;
+  const resumed = begin(true, 2000);
+  session.goal.nativeTokensUsed = 28;
+  observeRunUsage(session, resumed.id, { nativeGoal: true }); receipt(resumed, 10180);
+  endRunUsage(session, resumed.id);
+  assert.equal(supervisorAccounting(session).tokens, 1080);
+  assert.equal(supervisorAccounting(session).accountingComplete, true);
+  assert.equal(Boolean(getRecord('usage.run', resumed.id).counterReset), false);
+});
+
+test('a real native goal counter decrease still retains the uncertain allocation', () => {
+  session.goal = newGoal('Inspect only this offline fixture.', 200);
+  Object.assign(session.goal, { tokensUsed: 50, nativeTokensUsed: 20 });
+  const run = begin(true, 200);
+  session.goal.nativeTokensUsed = 25; observeRunUsage(session, run.id, { nativeGoal: true });
+  session.goal.nativeTokensUsed = 22; observeRunUsage(session, run.id, { nativeGoal: true });
+  receipt(run, 110); endRunUsage(session, run.id);
+  assert.equal(getRecord('usage.run', run.id).counterReset, true);
+  assert.equal(supervisorAccounting(session).tokens, 60);
+  assert.equal(supervisorAccounting(session).chargedTokens, 200);
+  assert.equal(supervisorAccounting(session).accountingComplete, false);
+});
+
 test('recovery closes an uncertain old run without replay and adapter-proven pre-request failure has zero usage', () => {
   session.goal = newGoal('Inspect one offline fixture.', 200); saveSession(session);
   const uncertain = begin(true, 200); receipt(uncertain, 120, { available: false });
