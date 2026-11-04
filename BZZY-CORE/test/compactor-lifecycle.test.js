@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { BzzyCore } from '../src/index.js';
+import { CoreAssistant } from '../src/assistant.js';
 import { appendEvent, getRecord, listRecords, putRecord } from '../src/engine/database.js';
 import { createSession, loadSession, saveSession } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
@@ -120,6 +121,54 @@ test('only an explicit compactor resume clears its owner hold', () => {
   startRun('new-run'); assert.equal(control().ownerHold, 'pause');
   controlSessionCompaction(session, 'resume', { expectedRevision: control().revision });
   assert.equal(control().ownerHold, null); assert.equal(control().state, 'enabled');
+});
+
+test('a fresh uncertain dispatch parks only its own job and never latches the session control', async () => {
+  new CoreAssistant().configure({ source: 'core', provider: 'codex', model: 'offline-compactor', effort: 'default' }, { requestId: randomUUID(), expectedRevision: 0 });
+  for (let index = 0; index < 8; index++) {
+    appendEvent(session.id, 'message.user', { text: `Inspect fictional offline baseline ${index}.` });
+    const native = { runId: 'fixture-source', threadRef: 'fixture-thread', turnId: `turn-${index}`, itemId: `answer-${index}` };
+    appendEvent(session.id, 'text', { ...native, text: `Decision ${index}: ${'The offline control stays inconclusive and must not become a confirmed finding. '.repeat(14)}` });
+    appendEvent(session.id, 'message.finalized', native);
+  }
+  let page; do { page = queueSessionCompaction(session, { force: true }); } while (page.indexed.indexingRemaining);
+  session = loadSession(session.id); session.executionState = 'idle'; saveSession(session);
+  assert.ok(jobs().length >= 2, 'the seeded history produces at least two model-eligible leaves');
+  assert.equal(control().state, 'enabled');
+
+  // First dispatched summary is interrupted with unknown usage (uncertain);
+  // every later dispatch returns a valid summary.
+  let calls = 0;
+  const runModel = async () => { if (++calls === 1) throw new Error('simulated dispatch interruption'); return { text: 'Offline inconclusive navigation summary.', tokens: 100, usageAvailable: true }; };
+  const authAvailable = async () => true;
+  for (let tick = 0; tick < 12 && !jobs().some(job => job.reasonPaused === 'uncertain_request'); tick++) await processSessionCompactions({ runModel, authAvailable });
+  const uncertainJob = jobs().find(job => job.reasonPaused === 'uncertain_request');
+  assert.ok(uncertainJob, 'the interrupted summary parks its own job uncertain');
+  assert.equal(uncertainJob.state, 'paused');
+  assert.equal(uncertainJob.error, 'COMPACTOR_UNCERTAIN');
+  // The crucial regression: one interrupted summary must not latch the session.
+  assert.equal(control().state, 'enabled', 'uncertain outcome must not pause the whole session control');
+  assert.ok(control().reasonPaused == null, 'the session control carries no pause reason after an uncertain summary');
+  // A sibling node still summarizes on a later tick.
+  for (let tick = 0; tick < 12 && !jobs().some(job => job.state === 'completed'); tick++) await processSessionCompactions({ runModel, authAvailable });
+  assert.ok(jobs().some(job => job.state === 'completed'), 'sibling nodes keep summarizing after an uncertain one');
+  assert.equal(control().state, 'enabled');
+});
+
+test('a control latched uncertain by an earlier build self-heals on the next run; its uncertain jobs stay parked', () => {
+  startRun('first-run'); seed();
+  const parked = jobs()[0];
+  // Simulate the legacy latch: a parked uncertain job plus a session control
+  // stuck in the non-recovering 'uncertain_request' hold.
+  putRecord('core.session.compactor.job', parked.id, { ...parked, state: 'paused', reasonPaused: 'uncertain_request', dispatched: true, attempts: 1 });
+  pauseSessionCompaction(session.id, 'uncertain_request');
+  assert.equal(control().state, 'paused'); assert.equal(control().reasonPaused, 'uncertain_request');
+  // A fresh foreground run re-enables the control...
+  startRun('healing-run');
+  assert.equal(control().state, 'enabled'); assert.equal(control().reasonPaused, null);
+  // ...while the specific uncertain job stays parked and is never auto-replayed.
+  const still = getRecord('core.session.compactor.job', parked.id);
+  assert.equal(still.state, 'paused'); assert.equal(still.reasonPaused, 'uncertain_request');
 });
 
 test('new source activity keeps an uncertain paid request and its conservative charge intact', async () => {

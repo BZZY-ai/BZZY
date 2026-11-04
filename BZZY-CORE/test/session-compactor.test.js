@@ -365,13 +365,15 @@ for (const stop of ['owner_pause', 'owner_cancel', 'source_paused', 'operator_st
   assert.equal(sessionMemoryStatus(session).fallbackNodes, 0); assert.equal(listRecords(JOB).length, 0);
 });
 
-test('dispatched failure is charged conservatively and requires explicit resume, without provider error leakage', async () => {
+test('dispatched failure parks its own job conservatively without latching the session or leaking provider errors', async () => {
   queue(); const [result] = await processSessionCompactions({ runModel: async () => { throw Error('Bearer private-error-token'); } });
   assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'uncertain_request'); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
   assert.doesNotMatch(JSON.stringify(result), /private-error-token/);
-  const stopped = sessionCompactionStatus(session).control;
-  pauseAllSessionCompactions('host_shutdown');
-  assert.deepEqual(sessionCompactionStatus(session).control, stopped);
+  // The job parks uncertain for inspection, but one interrupted summary must not
+  // latch the whole session: the control stays enabled so sibling nodes keep
+  // summarizing, while the uncertain job itself is never auto-replayed.
+  assert.equal(sessionCompactionStatus(session).control.state, 'enabled');
+  assert.notEqual(sessionCompactionStatus(session).control.reasonPaused, 'uncertain_request');
   assert.equal(job().reasonPaused, 'uncertain_request'); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
   queueSessionCompaction(session, { force: true });
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('A new turn is not consent to repeat an uncertain call') }), []);

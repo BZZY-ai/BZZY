@@ -99,7 +99,12 @@ does not prevent local extraction once the source session can run. Active
 session/owner/operator pauses and cancellation still stop summary-tree
 maintenance. Event capture and the separate conversation/search index keep their
 existing behavior; a compactor pause does not delete or disable those originals.
-Uncertain paid jobs keep their dispatch receipts and stay paused.
+Uncertain paid jobs keep their dispatch receipts and stay paused. An uncertain
+outcome is scoped to its own job: it is charged conservatively and never
+auto-replayed, but it does not pause the whole session, so the remaining nodes
+keep summarizing. A session control left in a legacy `uncertain_request` hold
+is re-enabled by the next foreground run, while its individual uncertain jobs
+stay parked for explicit inspection or resume.
 Status distinguishes `fallbackNodes`, `hostSummaries`, `modelSummaries` and
 `uncoveredNodes`; extracts do not increase the completed model-summary count.
 Model jobs use the verified restricted document profile, an empty private working

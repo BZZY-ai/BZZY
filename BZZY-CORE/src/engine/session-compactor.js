@@ -89,7 +89,13 @@ function source(value) {
 }
 const ownerHoldFor = control => ['pause', 'cancel'].includes(control?.ownerHold) ? control.ownerHold
   : control?.reasonPaused === 'owner_pause' ? 'pause' : control?.reasonPaused === 'owner_cancel' ? 'cancel' : null;
-const sourceHolds = new Set(['source_stopped', 'source_paused', 'user_pause', 'user_cancel', 'host_operator_stop', 'operator_stop', 'host_stopped', 'host_shutdown']);
+// Holds that a new foreground run may clear on the session control. A fresh
+// uncertain outcome no longer latches the control (see runJob), but
+// 'uncertain_request' stays listed so a control latched by an earlier build
+// self-heals on next activity; its individual uncertain jobs remain parked
+// (the paid scheduler only selects enabled controls and queued jobs) and are
+// never auto-replayed.
+const sourceHolds = new Set(['source_stopped', 'source_paused', 'uncertain_request', 'user_pause', 'user_cancel', 'host_operator_stop', 'operator_stop', 'host_stopped', 'host_shutdown']);
 const controlFor = id => {
   const saved = getRecord(CONTROL, id);
   // Legacy explicit compactor stops retain their intent without a read-time write.
@@ -524,7 +530,10 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
         lastError: failureReceipt(error, dispatched ? 'summary' : 'summary-start', current.lastError),
         retryOutcome, nextAttemptAt, runner: null, lease: null }, db);
     });
-    if (uncertain) pauseSessionCompaction(job.sessionId, 'uncertain_request');
+    // The job above is parked 'uncertain_request' for inspection and is never
+    // auto-replayed; its conservative charge stands. It must NOT halt the whole
+    // session: sibling nodes keep summarizing, and requestInFlight() already
+    // serializes dispatch, so one interrupted summary cannot latch compaction.
     return publicJob(getRecord(JOB, id) || next);
   } finally {
     clearTimeout(timer); clearInterval(monitor);
