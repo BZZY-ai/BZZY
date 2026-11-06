@@ -84,7 +84,12 @@ become current progress. Workers, restricted Agents, ordinary chat and inactive
 goals receive no project brief.
 
 Selection ranks lexical matches against the current objective and considers at
-most 32 matching records for the brief. Coverage/omissions are explicit; this is
+most 32 matching records for the brief. The current goal's own outcome projection
+is always considered as a fallback, beyond that candidate limit and exempt from
+the objective-token filter, so a generic objective that shares no terms with the
+goal's recorded decisions (which otherwise leaves the brief empty) still delivers
+the goal's own archived rejections and open questions instead of nothing; its live
+latest-checkpoint items stay in the capsule and are not duplicated. Coverage/omissions are explicit; this is
 not an exhaustive project search or semantic relevance guarantee. Project-file-only
 notes and oversized records remain available through explicit knowledge search.
 Reads do not index conversations or create memory, learning or model jobs. Evidence
