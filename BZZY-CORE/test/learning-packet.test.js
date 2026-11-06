@@ -243,16 +243,26 @@ test('new learned procedures stage by default and report actual candidate IDs', 
   assert.ok(getRecord('core.skill.candidate', result.result.candidateIds[0])); assert.equal(listRecords('core.skill').length, 0);
 });
 
-test('preempting a dispatched review preserves uncertain-spend pause and never silently retries it', async () => {
+test('a dispatched review finishes through a foreground resume instead of being preempted into an uncertain charge', async () => {
   const job = queue(); let begin, release;
   const began = new Promise(resolve => { begin = resolve; }), held = new Promise(resolve => { release = resolve; });
   const running = runLearningJob(job.id, { runReview: async () => { begin(); return held; } });
-  await began; session.executionState = 'running'; saveSession(session); deferLearningForSession(session.id); release(await noChange());
+  await began; session.executionState = 'running'; saveSession(session);
+  // The review is already dispatched to the model; a foreground resume must not
+  // pause it into an uncertain charge that yields nothing. A continuous goal is
+  // otherwise only idle in brief stall windows, so this review would always die.
+  deferLearningForSession(session.id);
+  assert.equal(inspectLearningJob(job.id).state, 'running');
+  // Let the in-review monitor tick while the source is running; it must not abort
+  // a dispatched review either.
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(inspectLearningJob(job.id).state, 'running');
+  release(await noChange());
   const result = await running;
-  assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'uncertain_foreground_preemption');
-  assert.equal(learningUsage().reservedTokens, 0); assert.equal(learningUsage().tokensUsed, job.budget.tokenBudget);
+  assert.equal(result.state, 'completed'); assert.equal(result.result.noChange, true);
+  assert.equal(learningUsage().reservedTokens, 0); assert.equal(learningUsage().tokensUsed, 100);
   session.executionState = 'idle'; saveSession(session);
-  assert.deepEqual(await processLearningReviews({ runReview: () => assert.fail('Unknown paid work needs an owner decision.') }), []);
+  assert.deepEqual(await processLearningReviews({ runReview: () => assert.fail('A completed review needs no further paid work.') }), []);
 });
 
 test('policy-off new skill proposals are visible and complete honestly as no change', async () => {

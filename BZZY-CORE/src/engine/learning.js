@@ -202,9 +202,15 @@ export function deferLearningForSession(sessionId) {
     putRecord(kind, job.id, { ...job, scheduleReason: 'source_foreground', revision: job.revision + 1 });
   }
   if (!learningSettings().duringForeground) for (const job of listRecords(kind, { sessionId, state: 'running' })) {
+    // A review already dispatched to the model finishes under its own bounded
+    // budget instead of being preempted into an uncertain charge that yields
+    // nothing; a continuous goal is otherwise only idle in brief stall windows,
+    // so the review that dispatched there would always be killed on resume. Real
+    // stops still abort it (pauseLearningForSession, runnable's hard-stop checks).
+    if (job.reviewStarted) continue;
     controlLearningJob(job.id, 'pause', { expectedRevision: getRecord(kind, job.id).revision });
     const paused = getRecord(kind, job.id);
-    putRecord(kind, job.id, { ...paused, reasonPaused: job.reviewStarted ? 'uncertain_foreground_preemption' : 'foreground_preemption' });
+    putRecord(kind, job.id, { ...paused, reasonPaused: 'foreground_preemption' });
   }
 }
 export function pauseAllLearning(reason = 'host_stopped') {
@@ -410,14 +416,19 @@ export async function runRestrictedLearningModel({ session, prompt, budget, sign
   }
 }
 
-function runnable(job) {
+function runnable(job, { dispatched = false } = {}) {
   const source = sourceSession(job.sessionId), project = projectFor(source);
   const local = Boolean(getRecord(job.reason === 'evaluation' ? 'core.learning.evaluation' : 'core.learning.output', job.id));
   if (operatorStopped() || ['paused', 'cancelled'].includes(source.executionState)) return false;
   if (sourceStopRequested(source.id)) return false;
-  if (!local && !learningSettings().duringForeground && ['running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState)) return false;
+  // A review already dispatched to the model during an idle window runs to
+  // completion under its own bounded token/runtime budget even if the source
+  // goal resumes; only the hard stops above and a scope change below abort it.
+  // Before dispatch, ordinary foreground work still defers the queued review.
+  const foregroundDefers = !dispatched && !local && !learningSettings().duringForeground;
+  if (foregroundDefers && ['running', 'starting', 'waiting_for_input', 'verifying'].includes(source.executionState)) return false;
   if (project.id !== job.projectId || project.root !== job.projectRoot || (source.agentNamespace ?? null) !== job.agentNamespace) throw error('LEARNING_SCOPE', 'Learning source changed scope.');
-  if (!local && !learningSettings().duringForeground && listRecords('execution', { sessionId: source.id, states: ['queued', 'starting', 'running', 'waiting_for_input'] }).length) return false;
+  if (foregroundDefers && listRecords('execution', { sessionId: source.id, states: ['queued', 'starting', 'running', 'waiting_for_input'] }).length) return false;
   return source;
 }
 
@@ -484,7 +495,7 @@ function settleUsage(job, tokens) {
 // Trusted host processors can reuse this lifecycle for held-out evaluations.
 // commit is synchronous and invoked only after cancellation/scope/budget checks.
 export async function executeLearningOperation(id, { session, signal, runReview = runRestrictedLearningModel, perform, commit, authorizeReview, canRun = () => true } = {}) {
-  const controller = new AbortController(), pendingReviews = new Set(); let job, source, timer, monitor, measuredTokens = 0, unknownUsage = false;
+  const controller = new AbortController(), pendingReviews = new Set(); let job, source, timer, monitor, measuredTokens = 0, unknownUsage = false, dispatched = false;
   job = transaction(db => {
     const previous = ownJob(id, session);
     if (previous.state !== 'queued') throw error('CONFLICT', 'Learning job is not queued.');
@@ -524,7 +535,7 @@ export async function executeLearningOperation(id, { session, signal, runReview 
   monitor = setInterval(() => {
     try {
       const current = getRecord(kind, id);
-      if (!current || current.state !== 'running' || current.lease !== job.lease || !runnable(job) || !canRun()) controller.abort(error('LEARNING_PAUSED', 'Learning was preempted.'));
+      if (!current || current.state !== 'running' || current.lease !== job.lease || !runnable(job, { dispatched }) || !canRun()) controller.abort(error('LEARNING_PAUSED', 'Learning was preempted.'));
       else authorizeReview?.({ job: current, source });
     } catch { controller.abort(error('LEARNING_SCOPE', 'Learning scope is no longer available.')); }
   }, 100);
@@ -547,7 +558,9 @@ export async function executeLearningOperation(id, { session, signal, runReview 
       if (job.modelCapabilities?.contextWindow && Math.ceil(inputBytes / 3) + 512 > job.modelCapabilities.contextWindow) throw error('LEARNING_BUDGET', 'The learning packet exceeds the pinned model context.');
       putRecord(kind, id, { ...live, reviewStarted: true, reviewSelection: job.selection,
         inputEstimate: { bytes: inputBytes, approximateTokens: Math.ceil(inputBytes / 3), method: 'utf8-bytes-divided-by-three' } });
-      unknownUsage = true;
+      // The request is now with the model: let it finish under its own budget
+      // even if the source goal resumes (see runnable's dispatched mode).
+      dispatched = true; unknownUsage = true;
       const pending = Promise.resolve().then(() => runReview({ ...arguments_, session: pinned, budget: { ...job.attemptBudget, tokenBudget: remainingTokens } }));
       pendingReviews.add(pending); let output;
       try { output = await pending; }
@@ -564,7 +577,7 @@ export async function executeLearningOperation(id, { session, signal, runReview 
     const output = await Promise.race([Promise.resolve().then(() => perform({ job, source, signal: controller.signal, runReview: trackedReview })), cancelled]);
     if (controller.signal.aborted) throw controller.signal.reason;
     const current = getRecord(kind, id);
-    if (current?.state !== 'running' || current.lease !== job.lease || !runnable(job) || !canRun()) throw error('LEARNING_PAUSED', 'Learning was preempted.');
+    if (current?.state !== 'running' || current.lease !== job.lease || !runnable(job, { dispatched }) || !canRun()) throw error('LEARNING_PAUSED', 'Learning was preempted.');
     if (!Number.isSafeInteger(output.tokens) || output.tokens < 0 || output.tokens > job.attemptBudget.tokenBudget) throw error('LEARNING_BUDGET', 'Learning token budget reached or unavailable.');
     const result = commit(output, { job, source });
     settleUsage(job, measuredTokens);
