@@ -69,6 +69,21 @@ test('task knowledge retains separate reported and blocked issue claims without 
   assert.equal(listRecords('memory').length, 0, 'navigation must not manufacture memory records');
 });
 
+test('a generic objective with no lexical overlap still receives the current goal\'s own archived conclusions', () => {
+  // Decisions that share no token with the objective: the objective-token filter
+  // dropped them, leaving the brief empty although they are the goal's own leads.
+  checkpoint(session, { decisions: ['Ruled out the gamma lead; it is a public marketing page, not a finding.'],
+    completedWork: ['Profiled the public surface and recorded negative results.'] });
+  checkpoint(session, { decisions: ['Pivoted to the authenticated preferences flow.'] });
+  const state = compactTaskState(session), brief = state.knowledgeBrief;
+  const outcome = brief.items.find(item => item.kind === 'outcome' && item.goalId === session.goal.id);
+  assert.ok(outcome, 'the current goal\'s own outcome is delivered as a fallback');
+  assert.equal(outcome.sourceScope, 'session'); assert.equal(outcome.truth, 'inconclusive'); assert.equal(outcome.historical, true);
+  assert.match(JSON.stringify(brief), /gamma lead/);
+  assert.ok(bytes(brief) <= 2200); assert.ok(bytes(state) <= 8192);
+  assert.equal(listRecords('memory').length, 0, 'the fallback must not manufacture memory records');
+});
+
 test('a continuing native goal can pull the brief after compaction without replaying work', async () => {
   const { reported, blocked } = reportedPair();
   session.nativeContext = { threadRef: 'fictional-thread', epoch: 1 }; saveSession(session);

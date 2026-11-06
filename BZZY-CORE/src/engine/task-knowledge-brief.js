@@ -57,10 +57,24 @@ export function taskKnowledgeBrief(session, goal, { maximumBytes = 2200 } = {}) 
     if(!candidates.indexingRequired) {cache.set(key,candidates);while(cache.size>128)cache.delete(cache.keys().next().value);}
   }
   const rows=candidates.rows;
+  // Always consider the current goal's own outcome projection, even when the
+  // objective shares no lexical terms with its recorded decisions. A generic
+  // objective (e.g. "find a HIGH/CRITICAL vulnerability") otherwise leaves the
+  // brief empty, although the goal's archived rejections and open questions are
+  // exactly what keep the model from re-treading its own work. It is appended
+  // beyond the candidate limit and exempt from the objective-token filter, so it
+  // supplements lexical matches rather than displacing them.
+  let ownOutcomeRow = null;
+  try {
+    const own = database().prepare("SELECT id FROM records WHERE kind='core.checkpoint.scope' AND json_extract(data,'$.sessionId')=? AND json_extract(data,'$.goalId')=? AND json_extract(data,'$.scope.kind')='goal' ORDER BY updated_at DESC LIMIT 1").get(session.id, goal.id);
+    if (own) ownOutcomeRow = { kind: 'outcome', sourceId: own.id, sessionId: session.id };
+  } catch { /* The lexical candidates still stand. */ }
+  const lexical = rows.slice(0, candidateLimit);
+  const candidatesToScan = ownOutcomeRow && !lexical.some(row => row.sourceId === ownOutcomeRow.sourceId) ? [...lexical, ownOutcomeRow] : lexical;
   const budget = { bytes: 4 * 1024 * 1024, files: 16, fingerprints: new Map() }, sources = [];
   brief.coverage = { candidateLimit, maximumSourceBytes:128*1024, moreCandidates: candidates.more, source: 'indexed session records first, then explicitly attributed project history; maintenance backfills older sources', indexingRequired:candidates.indexingRequired };
   const selected = [];
-  for (const row of rows.slice(0, candidateLimit)) {
+  for (const row of candidatesToScan) {
     let record;
     try { record = canonicalKnowledgeSource(access, row, ids, { maxSourceBytes:128*1024,onOmitted:()=>brief.omitted++ }); }
     catch { brief.omitted++; continue; }
@@ -74,7 +88,10 @@ export function taskKnowledgeBrief(session, goal, { maximumBytes = 2200 } = {}) 
       if (row.kind === 'outcome' && !outcome.items.length) continue;
       const textFields = row.kind === 'outcome' ? [knowledgeRecordText('outcome', outcome)] : row.kind === 'issue' ? [record.title, record.details, record.resolution] : [record.statement, record.rationale];
       const statement = textFields.filter(value => typeof value === 'string' && value.length).join('\n');
-      if(!tokens.some(token=>statement.toLowerCase().includes(token))) continue;
+      // The current goal's own outcome is always relevant to continuing it, so it
+      // bypasses the objective-token filter that a generic objective would fail.
+      const ownGoalOutcome = row.kind === 'outcome' && record.goalId === goal.id;
+      if(!ownGoalOutcome && !tokens.some(token=>statement.toLowerCase().includes(token))) continue;
       const item = { kind: row.kind, sourceId: row.sourceId, sourceScope: record.sessionId === session.id ? 'session' : 'project-history', sessionId: record.sessionId,
         revision: Number.isSafeInteger(record.revision) && record.revision > 0 ? record.revision : null,
         statement: excerpt(statement), ...(row.kind === 'outcome' ? { goalId: record.goalId, outcome: record.outcome, applicabilityStatus: record.applicabilityStatus, sha256: record.sourceRevision } : {}),
