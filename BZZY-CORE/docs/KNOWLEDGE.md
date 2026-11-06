@@ -153,7 +153,11 @@ No entire transcript or raw backend reasoning is sent to the reviewer.
 
 Foreground work has priority within the source conversation. Starting new work
 defers an undispatched queued review; it does not turn that deferral into an
-owner pause. Another busy conversation no longer prevents all learning. Host
+owner pause. A review already dispatched to the model during an idle window runs
+to completion under its own bounded token/runtime budget even if the source goal
+then resumes, rather than being preempted into an uncertain charge that yields
+nothing; only a real stop (owner/source pause or cancel, host/operator stop) or a
+source scope change aborts a dispatched review. Another busy conversation no longer prevents all learning. Host
 capacity defaults to four foreground executions and a source must be idle unless
 `duringForeground` is explicitly enabled. Foreground reviews retain a durable
 cooldown. New learning settings default to `bounded_source`: the source provider

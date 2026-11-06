@@ -181,7 +181,11 @@ medium or the backend default) and a 90-second default runtime. Existing explici
 settings and queued jobs retain their pins. Repeated failed reviews back off;
 unchanged successful command repetitions cannot alone trigger a new lesson. Reviews
 use complete masked messages inside their pinned cutoff. Empty validated output
-is valid. Queued jobs expose foreground-priority/cooldown reasons. Parent pause,
+is valid. Queued jobs expose foreground-priority/cooldown reasons. A review that
+has already been dispatched to the model finishes under its own bounded budget
+even when the source goal resumes, so a review that started in a brief stall
+window is not preempted into a wasted uncertain charge; only a real stop or scope
+change aborts it. Parent pause,
 Core stop, deletion, budget reservations and uncertain-request rules remain in
 force under either policy. Candidate publication never verifies a finding.
 
