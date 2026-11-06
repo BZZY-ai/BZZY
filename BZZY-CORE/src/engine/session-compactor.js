@@ -15,6 +15,7 @@ import { sessionCompactionCost } from './compaction-cost.js';
 import { diagnosticError } from './diagnostic-error.js';
 import { sessionMemoryEligible, indexSessionMemory, pendingSessionMemoryNodes, sessionMemoryMaterial,
   publishSessionMemorySummary, publishSessionMemoryFallback, sessionMemoryStatus, sessionMemorySourceVersion } from './session-memory.js';
+import { pruneSessionEpisodes } from './episode.js';
 
 const JOB = 'core.session.compactor.job', CONTROL = 'core.session.compactor.control';
 const SETTINGS = 'core.session.compactor.settings', USAGE = 'core.session.compactor.usage', RESERVATION = 'core.session.compactor.reservation';
@@ -680,6 +681,16 @@ export async function processSessionCompactions({ runModel = runRestrictedDocume
   }
   if (stopped()) { pauseAllSessionCompactions('host_stopped'); return []; }
   if (!canRun()) return [];
+  // Bounded retention for derived episode snapshots. captureEpisode appends a new
+  // ~64 KB row every ~30 s with no supersede, so a long goal accumulates hundreds
+  // of MB (Hyatt: 2,180 rows / 132 MB for one session). Prune superseded snapshots
+  // here; observations remain authoritative and each is rebuildable, so this loses
+  // no recoverable state. A deleted/ineligible source is simply skipped.
+  for (const control of maintenanceControls('episode-prune-controls')) {
+    const saved = loadSession(control.sessionId);
+    if (!saved || sessionDeleted(control.sessionId)) continue;
+    try { pruneSessionEpisodes(saved); } catch { /* Derived snapshots; retried next tick. */ }
+  }
   // A paid-inference setting is not a stop on local source derivation. Explicit
   // session/owner/operator pauses still exclude both indexing and extraction.
   const localControls = `(json_extract(data,'$.state')='enabled' OR

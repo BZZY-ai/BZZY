@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createSession, saveSession } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
 import { appendEvent, getRecord, putRecord, listRecords } from '../src/engine/database.js';
-import { captureEpisode, episodeMaterial, recordWorkObservation, recentErrorSignatures } from '../src/engine/episode.js';
+import { captureEpisode, episodeMaterial, recordWorkObservation, recentErrorSignatures, pruneSessionEpisodes } from '../src/engine/episode.js';
 import { CodexEngine } from '../src/engine/engines/codex.js';
 
 let root, prior, session;
@@ -114,3 +114,41 @@ test('native Codex completion notifications record real exit status and file cha
   assert.equal(material.attempts.length, 2); assert.equal(material.attempts[0].exitCode, 2);
   assert.match(material.attempts[1].changedFiles[0].diff, /NATIVE_DIFF/);
 });
+
+test('pruning retains the current, newest, learning-referenced and in-grace snapshots and deletes the rest, idempotently', () => {
+  for (let index = 0; index < 40; index++) {
+    observe({ itemId: `obs-${index}`, output: `Observation ${index} with an unresolved result.`, exitCode: index % 2 });
+    captureEpisode(session, { runId: 'run-a', goalId: 'goal-a' });
+  }
+  const total = listRecords('core.episode').length;
+  assert.ok(total >= 20, 'many distinct snapshots accumulated');
+  const ordered = listRecords('core.episode')
+    .sort((a, b) => a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1).map(record => record.id);
+  const newest = new Set(ordered.slice(-5)), progressId = getRecord('core.episode.progress', session.id).episodeId;
+  // Pin an OLD snapshot through a learning job whose packet may not have copied it.
+  const pinned = ordered.find(id => !newest.has(id) && id !== progressId);
+  putRecord('core.learning.job', 'job-x', { id: 'job-x', sessionId: session.id, sourceId: pinned, state: 'queued' });
+  const result = pruneSessionEpisodes(session, { keepRecent: 5, graceMs: 0 });
+  assert.ok(result.pruned > 0, 'the backlog is pruned');
+  const remaining = new Set(listRecords('core.episode').map(record => record.id));
+  assert.ok(remaining.has(progressId), 'the current episode is kept');
+  assert.ok(remaining.has(pinned), 'the learning-referenced old episode is kept');
+  for (const id of ordered.slice(-5)) assert.ok(remaining.has(id), 'the newest snapshots are kept');
+  assert.equal(remaining.size, total - result.pruned);
+  assert.ok(remaining.size <= 7, 'keep set is bounded to newest + current + learning ref');
+  // Idempotent: a second pass removes nothing new.
+  assert.equal(pruneSessionEpisodes(session, { keepRecent: 5, graceMs: 0 }).pruned, 0);
+  // Rebuildable: observations remain authoritative, so material still reconstructs.
+  assert.ok(episodeMaterial(session, { runId: 'run-a', goalId: 'goal-a' }).attempts.length > 0);
+})
+
+test('pruning protects recent snapshots inside the grace window', () => {
+  for (let index = 0; index < 30; index++) {
+    observe({ itemId: `grace-${index}`, output: `Observation ${index}.`, exitCode: 0 });
+    captureEpisode(session, { runId: 'run-a', goalId: 'goal-a' });
+  }
+  const total = listRecords('core.episode').length;
+  // A wide grace window with no recency allowance still keeps everything recent.
+  assert.equal(pruneSessionEpisodes(session, { keepRecent: 1, graceMs: 3600000 }).pruned, 0);
+  assert.equal(listRecords('core.episode').length, total);
+})
