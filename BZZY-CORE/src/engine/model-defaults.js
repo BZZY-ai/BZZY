@@ -29,7 +29,17 @@ function checkedSelection(input) {
   const selection = selectionFromSession({ provider: input.provider, model: input.model,
     selectedEffort: input.effort ?? 'default', modelCapabilities: capabilities });
   const supported = providerEffortCapabilities(getProvider(selection.provider), selection.model, capabilities || {});
-  if (selection.effort !== 'default' && (supported.supportsEffort === false || supported.supportedEfforts?.length && !supported.supportedEfforts.includes(selection.effort))) {
+  // A provider/model's curated efforts (e.g. deepseek's "max") stay valid even when
+  // the row carries a live-catalog capability set that omits them — a discovery read
+  // may ADD efforts but must not silently drop a declared one here, which would make
+  // a default save reject an effort the solo model-change path accepts. Discovered
+  // and curated sets are unioned; an effort outside both (e.g. deepseek "medium") is
+  // still rejected.
+  const curated = providerEffortCapabilities(getProvider(selection.provider), selection.model, {});
+  const allowedEfforts = new Set([...(supported.supportedEfforts || []), ...(curated.supportedEfforts || [])]);
+  const unsupported = allowedEfforts.size ? !allowedEfforts.has(selection.effort)
+    : supported.supportsEffort === false && curated.supportsEffort === false;
+  if (selection.effort !== 'default' && unsupported) {
     fail('INVALID_REQUEST', 'Choose an effort supported by this model.');
   }
   return selection;
