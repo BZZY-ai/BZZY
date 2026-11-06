@@ -260,19 +260,25 @@ test('an oversize but clean summary is trimmed to the budget and published, not 
   assert.equal(sessionMemoryStatus(session).ready, 1); assert.equal(sessionCompactionUsage().tokensUsed, 50);
 });
 
-test('a terminal (uncertain) summary failure backs off the paid route until an explicit resume clears it', async () => {
-  queue(session, { count: 24 });
-  assert.ok(listRecords(JOB, { sessionId: session.id }).length >= 2);
+test('a sustained run of terminal summary failures backs off the paid route until an explicit resume clears it', async () => {
+  queue(session, { count: 48 });
+  const nodes = listRecords(JOB, { sessionId: session.id }).length;
+  assert.ok(nodes >= 4, 'enough leaves to exceed the failure threshold and leave a sibling to defer');
   let calls = 0;
-  await processSessionCompactions({ runModel: async () => { calls++; throw new Error('Synthetic lost response.'); } });
-  assert.equal(calls, 1);
-  // The breaker defers every fresh paid dispatch; the free host-extract lane is untouched.
-  await processSessionCompactions({ runModel: () => assert.fail('Route backoff must defer fresh paid dispatch.') });
+  const bad = async () => { calls++; throw new Error('Synthetic lost response.'); };
+  // One or two interrupted summaries do not latch the lane; only a sustained run does.
+  for (let tick = 0; tick < nodes + 2 && !listRecords(JOB, { sessionId: session.id }).some(item => item.scheduleReason === 'route_failure_backoff'); tick++) {
+    await processSessionCompactions({ runModel: bad });
+  }
+  assert.equal(calls, 3, 'the breaker trips only after three terminal failures');
   assert.ok(listRecords(JOB, { sessionId: session.id }).some(item => item.scheduleReason === 'route_failure_backoff'));
+  // While backed off, no further paid dispatch happens; the free host-extract lane is untouched.
+  await processSessionCompactions({ runModel: () => assert.fail('Route backoff must defer fresh paid dispatch.') });
+  assert.equal(calls, 3);
   resume();
   // The breaker is cleared, so fresh nodes dispatch and complete again.
   let completed = false; const before = calls;
-  for (let attempt = 0; attempt < 4 && !completed; attempt++) {
+  for (let attempt = 0; attempt < 6 && !completed; attempt++) {
     const [result] = await processSessionCompactions({ runModel: async () => { calls++; return summary(); } });
     completed = result?.state === 'completed';
   }
