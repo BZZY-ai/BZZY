@@ -43,9 +43,13 @@ const backoffMs = (failures, transient) => Math.min(3600000, (transient ? 15000 
 // an explicit owner resume clears it. Keyed by the shared selection, not the
 // session, so a globally broken route is not hammered across conversations.
 const ROUTEHEALTH = 'core.session.compactor.route-health';
-const MIN_DISPATCH_RUNTIME_MS = 20000, SUMMARY_MAX_BYTES = 2048;
+const MIN_DISPATCH_RUNTIME_MS = 20000, SUMMARY_MAX_BYTES = 2048, ROUTE_BACKOFF_THRESHOLD = 3;
 const routeKey = selection => digest(['session-compaction', selection || null]);
-const routeBackedOff = selection => Date.parse(getRecord(ROUTEHEALTH, routeKey(selection))?.nextRouteAttemptAt) > Date.now();
+// A few isolated failures do not latch the paid lane (one interrupted summary
+// must not stop sibling nodes); only a sustained run of terminal failures backs
+// it off. The Hyatt drain was ~9 failures spending the whole daily budget.
+const routeBackedOff = selection => { const health = getRecord(ROUTEHEALTH, routeKey(selection));
+  return (health?.consecutiveFailures || 0) >= ROUTE_BACKOFF_THRESHOLD && Date.parse(health.nextRouteAttemptAt) > Date.now(); };
 function recordRouteFailure(selection) {
   const key = routeKey(selection), prior = getRecord(ROUTEHEALTH, key), failures = (prior?.consecutiveFailures || 0) + 1;
   putRecord(ROUTEHEALTH, key, { selection: selection || null, consecutiveFailures: failures,
