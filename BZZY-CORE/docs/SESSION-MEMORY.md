@@ -118,6 +118,17 @@ overages are charged. Unknown usage conservatively consumes the reservation;
 uncertain dispatched failures require explicit resume. Restart never blindly
 replays an uncertain paid request.
 
+A summary that is clean but longer than the 2,048-byte budget is trimmed to a
+safe sentence/line boundary and kept (marked `truncated`), instead of discarding
+a paid call and recharging a retry; only an empty, control-character or
+secret-bearing output still rejects. A retry with too little job runtime left
+falls back to the host extract rather than dispatching an attempt that can only
+time out and be charged. A paid-lane circuit breaker (`route-health`, the same
+exponential backoff as learning reviews) defers fresh paid dispatches after
+repeated terminal failures, so a summarizer that cannot meet the output contract
+cannot drain the daily budget in a burst; the free host-extract lane keeps
+running, a success clears the breaker, and an explicit owner resume resets it.
+
 ### Compactor cost estimate
 
 CLI **Metrics → DeepSeek spending · whole chat** separates Compactor from Chat
