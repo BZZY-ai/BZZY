@@ -242,6 +242,12 @@ Twelve completed meaningful attempts make an episode eligible for a complex-work
 review by default; repeated identical successful operations alone do not qualify.
 Review packets prioritize failures and omit repeated operation/outcome/summary
 tuples with coverage counts. Original observations remain in the event log.
+Each snapshot is a derived aggregate rebuildable from those observations, so a
+bounded background pass prunes superseded episode snapshots during maintenance,
+keeping the current snapshot, the most recent few, any still referenced by a
+learning job and anything inside a short grace window, and deleting the older
+remainder in bounded batches. A long goal therefore does not accumulate hundreds
+of megabytes of snapshots; no observation, packet or recoverable state is lost.
 Queue admission captures its packet inside the database write transaction, so
 each complete-message reconstruction reads only that item's text deltas through
 an indexed lookup. It no longer scans the chat from its first event. On real

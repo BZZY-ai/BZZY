@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { database, getRecord, putRecord, appendEvent, digest, now, transaction } from './database.js';
+import { database, getRecord, putRecord, removeRecord, listRecords, appendEvent, digest, now, transaction } from './database.js';
 import { diagnosticRedactor } from './diagnostic-redaction.js';
 import { privateWorkspacePath } from './private-paths.js';
 import { normalizeErrorSignature } from './error-signature.js';
@@ -184,6 +184,37 @@ export function captureEpisode(session, options = {}) {
 export function episodeStatus(session) {
   source(session);
   return getRecord('core.episode.progress', session.id) || { sessionId: session.id, episodeId: null, counts: { attempts: 0 } };
+}
+
+// captureEpisode writes a full snapshot every ~30 s keyed by advancing throughSeq,
+// so a long goal accumulates thousands of immutable rows (a 20 h session held
+// 2,180 rows / 132 MB). Those snapshots are derived aggregates: the authoritative
+// source is the append-only core.episode.observation / work.observed event stream,
+// from which episodeMaterial rebuilds any episode, and a queued learning job
+// already copies its episode into its own packet. So superseded snapshots are
+// safe to delete. This bounded pass keeps the current episode (progress), the
+// newest `keepRecent`, every episode still referenced by a learning job (its
+// packet may not yet have copied it), and anything inside a recent grace window;
+// it deletes at most `maxDeletes` of the oldest remainder per call so a large
+// backlog drains over several maintenance ticks without one giant transaction.
+export function pruneSessionEpisodes(session, { keepRecent = 16, graceMs = 600000, maxDeletes = 256 } = {}) {
+  const saved = source(session), db = database();
+  const rows = db.prepare("SELECT id, json_extract(data,'$.createdAt') AS createdAt FROM records WHERE kind='core.episode' AND json_extract(data,'$.sessionId')=? ORDER BY json_extract(data,'$.createdAt'), id").all(saved.id);
+  if (rows.length <= keepRecent) return { scanned: rows.length, pruned: 0 };
+  const keep = new Set();
+  const progress = getRecord('core.episode.progress', saved.id);
+  if (progress?.episodeId) keep.add(progress.episodeId);
+  for (const row of rows.slice(-keepRecent)) keep.add(row.id);
+  for (const job of listRecords('core.learning.job', { sessionId: saved.id })) if (typeof job.sourceId === 'string') keep.add(job.sourceId);
+  const cutoff = Date.now() - graceMs;
+  const deletable = rows.filter(row => !keep.has(row.id)
+    && !(Number.isFinite(Date.parse(row.createdAt)) && Date.parse(row.createdAt) > cutoff)).slice(0, maxDeletes);
+  if (!deletable.length) return { scanned: rows.length, pruned: 0 };
+  return transaction(() => {
+    source(saved);
+    for (const row of deletable) removeRecord('core.episode', row.id);
+    return { scanned: rows.length, pruned: deletable.length, remaining: rows.length - deletable.length };
+  });
 }
 
 export function recentErrorSignatures(session, { goalId, runId, limit = 4 } = {}) {
