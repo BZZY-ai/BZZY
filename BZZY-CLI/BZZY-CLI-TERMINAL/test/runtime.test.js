@@ -60,7 +60,7 @@ test('restoring a paged saved chat paints its latest screen once instead of scro
     assert.match(painted.join('\n'), /Loading saved chat/);
     assert.equal(ui.tui.historyRestoreDepth, 1);
     await restoring;
-    assert.ok(painted.some(frame => /200 history items loaded|400 history items loaded/.test(frame)));
+    assert.ok(painted.some(frame => /history items loaded/.test(frame)));
     const historyFrames = painted.filter(frame => frame.includes('SAVED_REPLY_'));
     assert.equal(historyFrames.length, 1);
     assert.match(historyFrames[0], /SAVED_REPLY_450/);
@@ -70,6 +70,58 @@ test('restoring a paged saved chat paints its latest screen once instead of scro
     assert.equal(ui.tui.scroll, 0);
     assert.equal(ui.tui.historyRestoreDepth, 0);
     assert.equal(listRecords('execution').length, 0, 'Opening history never dispatches work.');
+  } finally { ui.close(); }
+});
+test('a very long saved chat loads only its recent tail instantly and leaves older history in Core', async () => {
+  const session = createSession(BUILTINS.codex, dir);
+  let headSeq;
+  for (let index = 1; index <= 1600; index++) headSeq = appendEvent(session.id, 'text', { text: `SAVED_REPLY_${String(index).padStart(4, '0')}`, itemId: `saved-${index}` }).seq;
+  const input = new PassThrough(), output = new PassThrough();
+  Object.assign(input, { isTTY: true, setRawMode() {} });
+  Object.assign(output, { isTTY: true, columns: 100, rows: 25 }); output.resume();
+  const ui = new UI({ input, output, error: output }); ui.setSession(session.id);
+  try {
+    await restoreConversation(session, ui);
+    const texts = ui.tui.entries.filter(entry => entry.kind === 'assistant').map(entry => entry.text);
+    // Only the recent tail is painted, not all 1600 turns — this is the instant-open win.
+    assert.equal(texts.length, 600);
+    assert.ok(texts.some(text => text.includes('SAVED_REPLY_1600')), 'newest turn is loaded');
+    assert.ok(texts.some(text => text.includes('SAVED_REPLY_1001')), 'oldest tail turn is loaded');
+    assert.ok(!texts.some(text => text.includes('SAVED_REPLY_1000')), 'the turn just before the tail is not painted');
+    assert.ok(!texts.some(text => text.includes('SAVED_REPLY_0001')), 'the start of the chat is not painted');
+    // The live cursor is the newest event, so later polls fetch only new work, and
+    // the window records that older history is still available in Core for the agent.
+    assert.equal(ui.cursors.get(session.id), headSeq);
+    const window = ui.historyWindow.get(session.id);
+    assert.equal(window.hasOlder, true, 'older history remains available in Core');
+    assert.ok(window.oldestSeq > 1, 'the view did not load from the start of the log');
+    assert.equal(ui.tui.scroll, 0);
+    assert.equal(listRecords('execution').length, 0, 'Opening history never dispatches work.');
+  } finally { ui.close(); }
+});
+test('scrolling to the top of a long chat backfills older history on demand without dispatching work', async () => {
+  const session = createSession(BUILTINS.codex, dir);
+  for (let index = 1; index <= 1600; index++) appendEvent(session.id, 'text', { text: `SAVED_REPLY_${String(index).padStart(4, '0')}`, itemId: `saved-${index}` });
+  const input = new PassThrough(), output = new PassThrough();
+  Object.assign(input, { isTTY: true, setRawMode() {} });
+  Object.assign(output, { isTTY: true, columns: 100, rows: 25 }); output.resume();
+  const ui = new UI({ input, output, error: output }); ui.setSession(session.id);
+  try {
+    await restoreConversation(session, ui);
+    const tailWindow = ui.historyWindow.get(session.id);
+    assert.equal(tailWindow.hasOlder, true, 'the tail knows older history remains');
+    const tailOldest = tailWindow.oldestSeq, tailCount = ui.tui.entries.filter(entry => entry.kind === 'assistant').length;
+    assert.ok(!ui.tui.entries.some(entry => (entry.text || '').includes('SAVED_REPLY_1000')), 'the pre-tail turn starts unloaded');
+    // Simulate reaching the top of the painted view (what the render trigger calls).
+    assert.equal(typeof ui.onLoadOlder, 'function', 'restore installed the backfill bridge');
+    await ui.onLoadOlder(session.id);
+    const widened = ui.historyWindow.get(session.id);
+    assert.ok(widened.oldestSeq < tailOldest, 'an older page was loaded');
+    const texts = ui.tui.entries.filter(entry => entry.kind === 'assistant').map(entry => entry.text);
+    assert.ok(texts.length > tailCount, 'older entries were prepended above the tail');
+    assert.ok(texts.some(text => text.includes('SAVED_REPLY_1000')), 'a turn below the original tail is now visible');
+    assert.ok(texts.some(text => text.includes('SAVED_REPLY_1600')), 'the newest turn is still present');
+    assert.equal(listRecords('execution').length, 0, 'backfill never dispatches work');
   } finally { ui.close(); }
 });
 async function start(session, options = {}) {

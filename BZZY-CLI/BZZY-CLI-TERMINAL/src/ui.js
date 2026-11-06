@@ -54,6 +54,10 @@ export class UI {
     this.reader = null;
     this.promptQueue = Promise.resolve();
     this.cursors = new Map();
+    // Per-view window of history the terminal has painted: the oldest loaded seq
+    // and whether older events remain in Core. A first open loads only the recent
+    // tail; scrolling to the top backfills older pages on demand.
+    this.historyWindow = new Map();
     this.messageStreams = new Map();
     this.actors = new ActorProjection();
     this.launchCaptureNetwork = captureNetwork === true; this.launchYolo = yolo; this.readOnlyExecution = readOnly; this.sessionPermissionStates = new Map();
@@ -144,6 +148,7 @@ export class UI {
   clearHistory() { this.tui?.clear(); this.invocationEntries = []; this.lineOpen = false; }
   beginHistoryRestore(session) { this.openTerminal(); return this.tui?.beginHistoryRestore(session); }
   historyRestoreProgress(count) { this.tui?.historyRestoreProgress(count); }
+  prependHistory(events) { this.tui?.prependHistory(events); }
   executionConnection(connected) { this.tui?.executionFeedback.connection(connected); this.tui?.schedule(); }
   redrawPrompt() { if (this.tui) this.tui.schedule(); else if (this.reader && !this.lineOpen) this.reader.prompt(true); }
   updateSession(snapshot) {

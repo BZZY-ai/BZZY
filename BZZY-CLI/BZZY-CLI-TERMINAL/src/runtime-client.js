@@ -39,7 +39,48 @@ function client(info, sessionId, owner) {
     return runtimeRequest(info, method, `/sessions/${sessionId}${action ? '/' + action : ''}`, body ? { ...body, owner } : body, requestId);
   };
 }
+// Opening a session only needs the recent tail painted for the human; Core keeps
+// the full event log and feeds the agent its own context independently, so the
+// visible window never bounds what the model can read. A first open therefore
+// pages backwards from the newest event (bounded and instant even for an
+// unbounded multi-day session) instead of replaying the entire history forward.
+// Live updates, tab switches and room replays keep the forward-from-cursor path.
+const TAIL_PAGE = 200, TAIL_EVENT_TARGET = 600, TAIL_MAX_PAGES = 10;
+async function replayTail(api, sessionId, ui, selected) {
+  const finish = ui.beginHistoryRestore?.();
+  let restored = false;
+  try {
+    const collected = [];
+    let before = Number.MAX_SAFE_INTEGER, hasOlder = false, pages = 0;
+    while (true) {
+      const batch = await api('GET', `events?before=${before}&limit=${TAIL_PAGE}`);
+      if (!selected()) return;
+      pages += 1;
+      collected.unshift(...batch.events); // each page is chronological; older pages go in front
+      hasOlder = Boolean(batch.hasOlder);
+      before = batch.oldestCursor || 0;
+      ui.historyRestoreProgress?.(batch.events.length);
+      if (!hasOlder || !before) break;
+      if (collected.length >= TAIL_EVENT_TARGET || pages >= TAIL_MAX_PAGES) break;
+    }
+    if (!selected()) return;
+    let cursor = 0;
+    for (const event of collected) {
+      ui.event(event.type, { ...event.data, seq: event.seq, occurredAt: event.createdAt, eventSessionId: event.sessionId || sessionId });
+      if (event.seq > cursor) cursor = event.seq;
+    }
+    // The live cursor is the newest painted event, so the next poll fetches only
+    // genuinely new events. The window records how far back the human view goes.
+    ui.cursors?.set(sessionId, cursor);
+    ui.historyWindow?.set(sessionId, { oldestSeq: collected[0]?.seq ?? 0, hasOlder });
+    restored = true;
+    if (collected.length) ui.redrawPrompt?.();
+  } finally { finish?.(restored); }
+}
 async function replay(api, sessionId, ui, selected = () => true) {
+  // First open of this view loads only the recent tail (see replayTail). Every
+  // later call resumes from the stored cursor and fetches only new live events.
+  if (ui.cursors && !ui.cursors.has(sessionId)) return replayTail(api, sessionId, ui, selected);
   let cursor = ui.cursors?.get(sessionId) || 0;
   const finish = cursor === 0 && !ui.cursors?.has(sessionId) ? ui.beginHistoryRestore?.() : null;
   let restored = false;
@@ -55,6 +96,20 @@ async function replay(api, sessionId, ui, selected = () => true) {
       if (!batch.hasMore) { restored = true; if (batch.events.length) ui.redrawPrompt?.(); return; }
     }
   } finally { finish?.(restored); }
+}
+// Scrolling to the top of the painted tail backfills one older page on demand.
+// Core keeps the full log, so this only grows the human view; the oldest painted
+// seq and whether older events remain are tracked per view in ui.historyWindow.
+async function backfillOlder(info, sessionId, ui) {
+  const win = ui.historyWindow?.get(sessionId);
+  if (!win?.hasOlder || !win.oldestSeq) return;
+  const batch = await client(info, sessionId, randomUUID())('GET', `events?before=${win.oldestSeq}&limit=${TAIL_PAGE}`);
+  const events = batch?.events || [];
+  if (events.length) ui.prependHistory?.(events.map(event => ({ type: event.type, data: event.data, createdAt: event.createdAt, seq: event.seq })));
+  ui.historyWindow?.set(sessionId, {
+    oldestSeq: events.length ? (batch.oldestCursor || events[0].seq) : win.oldestSeq,
+    hasOlder: events.length > 0 && Boolean(batch.hasOlder),
+  });
 }
 async function replayRoom(api, roomSessionId, ui, selected = () => true) {
   const key = `${roomSessionId}:shared-room`; let cursor = ui.cursors?.get(key) || 0;
@@ -223,6 +278,7 @@ async function watch(info, sessionId, owner, ui, options = {}) {
   if (children.length && !ui.tui) showTabs();
   const previousSelectTab = ui.onSelectTab;
   ui.onSelectTab = id => { if (!modalTask) selectTab(id); };
+  ui.onLoadOlder = async (id = activeId) => backfillOlder(info, id, ui);
   const keypress = (_text, key) => { if (!modalTask && !key?.bzzyHandled && !ui.tui?.selection && children.length && key?.name === 'tab') { const index = tabs.findIndex(t => t.id === activeId); selectTab(String((index + (key.shift ? tabs.length - 1 : 1)) % tabs.length)); } };
   if (ui.interactive) ui.input?.on('keypress', keypress);
   const interrupt = () => {
@@ -524,6 +580,7 @@ export async function restoreConversation(session, ui, connectionInfo) {
   let restored = false;
   try {
     const info = connectionInfo || await ensureRuntime(), api = client(info, session.id, randomUUID());
+    ui.onLoadOlder = async (id = session.id) => backfillOlder(info, id, ui);
     const snapshot = await api('GET');
     ui.tui?.selectTab(ui.activeTab || ui.sessionId, session.id);
     ui.setSession?.(session.id); ui.clearHistory?.(); ui.cursors?.delete(session.id);

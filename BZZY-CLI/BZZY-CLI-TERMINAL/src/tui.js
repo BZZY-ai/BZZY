@@ -392,7 +392,7 @@ export class TerminalChat {
     if (message) this.add('notice', message);
   }
 
-  clear() { this.monitor = new ActivityMonitor(); this.compactorUsage = null; this.actors = new ActorProjection(); this.executionFeedback = new ExecutionFeedback(); this.toolTrees = new ToolTreeProjection(); this.toolFocus = null; this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.goalValidation = null; this.goalValidationVersions = new Map(); this.retiredGoalIds = new Set(); this.snapshotGoalId = null; this.schedule(); }
+  clear() { this.monitor = new ActivityMonitor(); this.compactorUsage = null; this.actors = new ActorProjection(); this.executionFeedback = new ExecutionFeedback(); this.toolTrees = new ToolTreeProjection(); this.toolFocus = null; this.entries = []; this.activities = []; this.traffic = []; this.sharedRoom = []; this.assignments.clear(); this.delegationPhase = null; this.delegationUsage = null; this.groupUsage = null; this.debateFocus = null; this.textSelection = null; this.pinned = ''; this.scroll = 0; this.streaming = false; this.currentActivity = ''; this.currentTool = ''; this.tokens = undefined; this.startedAt = null; this.finishedAt = null; this.bodyCache = null; this.pendingApproval = null; this.goal = null; this.goalValidation = null; this.goalValidationVersions = new Map(); this.retiredGoalIds = new Set(); this.snapshotGoalId = null; this.loadingOlder = false; this.schedule(); }
   selectTab(previous, next) {
     if (previous === next) return;
     this.textSelection = null;
@@ -1546,6 +1546,40 @@ export class TerminalChat {
     };
   }
   historyRestoreProgress(count) { if (this.historyLoading) { this.historyLoading.count += count; this.schedule(); } }
+  // Older history requested by scrolling to the top. These are lightweight,
+  // read-only transcript entries (merged assistant text, user turns, questions);
+  // the live tail keeps its full tool/actor projections. Prepending at the top
+  // leaves scroll (measured from the bottom) unchanged, so the viewport holds.
+  prependHistory(events) {
+    if (!Array.isArray(events) || !events.length) return;
+    const built = [];
+    for (const event of events) {
+      const data = event.data || {};
+      if (event.type === 'message.user' && typeof data.text === 'string') built.push({ kind: 'user', text: clean((data.kind === 'goal' ? '/goal ' : '') + data.text), historical: true, occurredAt: event.createdAt });
+      else if (event.type === 'text' && typeof data.text === 'string') {
+        const previous = built[built.length - 1];
+        if (previous && previous.kind === 'assistant' && previous.historical && previous.itemId === data.itemId) previous.text += data.text;
+        else built.push({ kind: 'assistant', text: String(data.text), historical: true, itemId: data.itemId, occurredAt: event.createdAt });
+      } else if (event.type === 'question' && typeof data.question === 'string') built.push({ kind: 'assistant', text: String(data.question), historical: true, occurredAt: event.createdAt });
+      else if (event.type === 'question.answered' && typeof data.answer === 'string') built.push({ kind: 'user', text: clean(String(data.answer)), historical: true, occurredAt: event.createdAt });
+      else if (event.type === 'debate.result' && typeof data.message === 'string') built.push({ kind: 'assistant', text: String(data.message), historical: true, occurredAt: event.createdAt });
+    }
+    if (!built.length) return;
+    this.entries.unshift(...built);
+    this.entryLayouts = new WeakMap();
+    this.contentRevision = (this.contentRevision || 0) + 1;
+    this.bodyCache = null;
+    this.schedule();
+  }
+  maybeLoadOlder() {
+    if (this.loadingOlder || this.selection || this.historyLoading || typeof this.ui?.onLoadOlder !== 'function') return;
+    if (this.entries.length > 15000) return; // bound memory for manual deep backscroll
+    const id = this.ui.activeTab || this.ui.sessionId;
+    const win = this.ui.historyWindow?.get(id);
+    if (!win?.hasOlder) return;
+    this.loadingOlder = true; this.schedule();
+    Promise.resolve(this.ui.onLoadOlder(id)).catch(() => {}).finally(() => { this.loadingOlder = false; this.schedule(); });
+  }
   schedule() { if (!this.renderTimer && !this.closed && !this.copyMode && !this.outputBlocked) this.renderTimer = setTimeout(() => { this.renderTimer = null; this.render(); }, animationInterval); }
   tokenLabel() {
     const partial = ['besties', 'parallel'].includes(this.mode) && this.groupUsage && !this.groupUsage.complete;
@@ -2289,6 +2323,7 @@ export class TerminalChat {
     const visibleBody = body.slice(start, end);
     while (visibleBody.length < bodyHeight) visibleBody.push('');
     const maximum = Math.max(0, body.length - bodyHeight), thumbHeight = Math.min(bodyHeight, Math.max(1, Math.round(bodyHeight * bodyHeight / Math.max(1, body.length))));
+    if (this.panel === 'chat' && !this.selection && maximum > 0 && this.scroll >= maximum) this.maybeLoadOlder();
     const thumbOffset = maximum ? Math.round((1 - this.scroll / maximum) * (bodyHeight - thumbHeight)) : 0;
     this.scrollbar = !this.selection && bodyHeight ? { column: width, top: header.length + 1, height: bodyHeight, maximum, thumbHeight, thumbTop: header.length + 1 + thumbOffset } : null;
     const track = this.workspaceActive && this.workspace?.right ? ' ' : edge('│');
