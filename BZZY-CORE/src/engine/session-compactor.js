@@ -34,6 +34,50 @@ const transientFailure = error => error?.code === 'ERR_SQLITE_ERROR' && [5, 6].i
 const sourceScopeCodes = new Set(['COMPACTOR_SCOPE', 'SESSION_MEMORY_SCOPE', 'SESSION_MEMORY_INTEGRITY']);
 const MAX_PREFLIGHT_FAILURES = 5, localBackoff = new Map(), jobBackoff = new Map();
 const backoffMs = (failures, transient) => Math.min(3600000, (transient ? 15000 : 300000) * 2 ** Math.min(8, Math.max(0, failures - 1)));
+// Paid-lane circuit breaker. A summarizer that cannot satisfy the output
+// contract (oversize, interrupted, timed out, over budget) must not drain the
+// whole daily token budget in a burst of failed attempts. Consecutive route
+// failures back off fresh *paid* dispatches with the same exponential schedule
+// as learning reviews; the free host-extract lane keeps running. A success or
+// an explicit owner resume clears it. Keyed by the shared selection, not the
+// session, so a globally broken route is not hammered across conversations.
+const ROUTEHEALTH = 'core.session.compactor.route-health';
+const MIN_DISPATCH_RUNTIME_MS = 20000, SUMMARY_MAX_BYTES = 2048;
+const routeKey = selection => digest(['session-compaction', selection || null]);
+const routeBackedOff = selection => Date.parse(getRecord(ROUTEHEALTH, routeKey(selection))?.nextRouteAttemptAt) > Date.now();
+function recordRouteFailure(selection) {
+  const key = routeKey(selection), prior = getRecord(ROUTEHEALTH, key), failures = (prior?.consecutiveFailures || 0) + 1;
+  putRecord(ROUTEHEALTH, key, { selection: selection || null, consecutiveFailures: failures,
+    nextRouteAttemptAt: new Date(Date.now() + Math.min(3600, 60 * 2 ** Math.min(failures, 6)) * 1000).toISOString(), lastFailedAt: now() });
+}
+function clearRouteHealth(selection) {
+  const key = routeKey(selection);
+  if (getRecord(ROUTEHEALTH, key)) putRecord(ROUTEHEALTH, key, { selection: selection || null, consecutiveFailures: 0, nextRouteAttemptAt: null, lastClearedAt: now() });
+}
+// A navigation summary that is clean but longer than the budget is trimmed to a
+// safe sentence/line boundary and kept, instead of discarding a paid call and
+// recharging a retry. Only integrity failures (empty, control characters, a
+// surviving secret) still reject; length alone no longer wastes the budget.
+function trimToSummaryBudget(text, maxBytes = SUMMARY_MAX_BYTES) {
+  const buffer = Buffer.from(text, 'utf8');
+  if (buffer.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end--;
+  const slice = buffer.subarray(0, end).toString('utf8');
+  const boundary = Math.max(slice.lastIndexOf('\n'), slice.lastIndexOf('. '), slice.lastIndexOf('; '), slice.lastIndexOf('。'));
+  return (boundary >= maxBytes / 2 ? slice.slice(0, boundary + 1) : slice).trimEnd();
+}
+function cleanSummary(text) {
+  return typeof text === 'string' && text.trim() && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text) && sanitizeLearningText(text).trim() === text.trim();
+}
+function coerceSummary(value) {
+  if (!cleanSummary(value)) throw fail('COMPACTOR_OUTPUT', 'The compactor returned an invalid summary.');
+  const text = value.trim();
+  if (Buffer.byteLength(text) <= SUMMARY_MAX_BYTES) return { text, truncated: false };
+  const trimmed = trimToSummaryBudget(text);
+  if (!cleanSummary(trimmed) || Buffer.byteLength(trimmed) > SUMMARY_MAX_BYTES) throw fail('COMPACTOR_OUTPUT', 'The compactor returned an invalid summary.');
+  return { text: trimmed.trim(), truncated: true };
+}
 function failureReceipt(error, phase, prior) {
   const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(error.code) ? error.code : null;
   const name = typeof error?.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(error.name) ? error.name : 'Error';
@@ -234,6 +278,9 @@ export function controlSessionCompaction(value, action, { expectedRevision } = {
     if (listRecords(JOB, { sessionId: saved.id }).some(job => documentBackends(job).length)) throw fail('CONFLICT', 'The previous compactor backend has not stopped.');
     const settings = sessionCompactionSettings(), next = { ...prior, ownerHold: null, state: 'enabled', reasonPaused: null, queued: true, revision: prior.revision + 1, updatedAt: now() };
     putRecord(CONTROL, saved.id, next, db);
+    // An explicit owner resume is a deliberate retry: clear any paid-lane route
+    // backoff so a recovered or reconfigured summarizer gets a fresh attempt.
+    clearRouteHealth(settings.selection);
     for (const job of listRecords(JOB, { sessionId: saved.id }).filter(job => ['paused', 'cancelled', 'budget_limited', 'failed', 'waiting_for_configuration', 'waiting_for_auth', 'retry_wait'].includes(job.state))) {
       if (job.attempts >= 3 && !getRecord(OUTPUT, job.id)) continue;
       const retry = knownRetry(job);
@@ -259,6 +306,10 @@ function schedulingReason(job, material, canRun) {
   if (!canRun()) return 'host_priority';
   if (outputFor(job, material) || shortMaterial(material)) return null;
   if (requestInFlight() || listRecords('core.learning.job', { state: 'running', limit: 1 }).length) return 'request_in_flight';
+  // Circuit breaker: after repeated route failures, defer fresh paid dispatches
+  // so a model that cannot meet the output contract cannot drain the daily
+  // budget. The host-extract lane is independent and keeps summarizing.
+  if (routeBackedOff(job.selection)) return 'route_failure_backoff';
   const settings = sessionCompactionSettings(), source = loadSession(job.sessionId);
   const foreground = busyStates.includes(source?.executionState) || !foregroundIdle();
   if (!foreground) return null;
@@ -453,7 +504,11 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
     const estimated = Buffer.byteLength(INSTRUCTIONS) + Buffer.byteLength(promptFor(material)) + 2048;
     if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(material.inputText)) return updateJob(prior, {
       state: 'failed', error: 'COMPACTOR_INPUT', reasonPaused: 'invalid_source' }, db);
-    if (available < estimated || remainingMs <= 0 || prior.attempts >= 3) return updateJob(prior, {
+    // A retry with too little runtime left only times out and is charged as an
+    // uncertain request. Fall back to the host extract instead of dispatching a
+    // doomed short attempt; the first attempt still gets the full budget.
+    const runtimeExhausted = remainingMs <= 0 || prior.attempts >= 1 && remainingMs < MIN_DISPATCH_RUNTIME_MS;
+    if (available < estimated || runtimeExhausted || prior.attempts >= 3) return updateJob(prior, {
       state: 'budget_limited', error: available < estimated ? 'COMPACTOR_INPUT_BUDGET' : 'COMPACTOR_BUDGET', estimatedTokens: estimated, reasonPaused: 'job_budget' }, db);
     const usage = sessionCompactionUsage();
     if (usage.remainingTokens < available) return updateJob(prior, { state: 'retry_wait', error: 'COMPACTOR_DAILY_BUDGET', reasonPaused: 'daily_budget',
@@ -492,7 +547,8 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
       settle(job, measured);
       if (controller.signal.aborted) throw controller.signal.reason;
       if (measured > job.attemptBudget.tokenBudget) throw fail('COMPACTOR_BUDGET', 'The reported usage exceeded the compactor budget.');
-      output = { text: validSummary(result?.text), selection: summarySelection(job.selection, result?.resolvedModel),
+      const coerced = coerceSummary(result?.text);
+      output = { text: coerced.text, ...(coerced.truncated ? { truncated: true } : {}), selection: summarySelection(job.selection, result?.resolvedModel),
         usage: { tokens: measured ?? null, available: measured !== undefined } };
     }
     authorized(job);
@@ -500,7 +556,9 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
     const record = { ...output, generation: material.generation, sourceHash: material.sourceHash,
       hash: digest({ text: output.text, selection: output.selection, sourceHash: material.sourceHash }) };
     putRecord(OUTPUT, id, record);
-    return publicJob(publish(job, material, record));
+    const published = publish(job, material, record);
+    if (dispatched) clearRouteHealth(job.selection);
+    return publicJob(published);
   } catch (error) {
     if (error.code === 'DOCUMENT_BUDGET' && error.usageAvailable === true && Number.isSafeInteger(error.tokens) && error.tokens >= 0) measured = error.tokens;
     settle(job, dispatched ? measured : 0);
@@ -534,6 +592,12 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
     // auto-replayed; its conservative charge stands. It must NOT halt the whole
     // session: sibling nodes keep summarizing, and requestInFlight() already
     // serializes dispatch, so one interrupted summary cannot latch compaction.
+    // A *terminal* model failure (uncertain/interrupted, timed out, over budget,
+    // or an invalid output that exhausted its bounded retries) counts toward the
+    // route circuit breaker, so a burst of failing nodes cannot drain the daily
+    // budget. Intermediate per-job retries stay bounded by the 3-attempt rule
+    // and are not counted; a success clears the breaker.
+    if (dispatched && !retriable && (uncertain || ['COMPACTOR_OUTPUT', 'COMPACTOR_TIMEOUT', 'COMPACTOR_BUDGET', 'DOCUMENT_BUDGET'].includes(error.code))) recordRouteFailure(job.selection);
     return publicJob(getRecord(JOB, id) || next);
   } finally {
     clearTimeout(timer); clearInterval(monitor);

@@ -239,7 +239,7 @@ test('invalid source controls fail locally without a model call or token reserva
 
 test('invalid model summaries retry with backoff at most three times', async () => {
   queue(); let calls = 0;
-  const runModel = async () => { calls++; return { text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }; };
+  const runModel = async () => { calls++; return { text: 'Rejected summary with a control byte.\x07', tokens: 50, usageAvailable: true }; };
   for (let attempt = 0; attempt < 3; attempt++) {
     const [result] = await processSessionCompactions({ runModel });
     assert.equal(result.attempts, attempt + 1);
@@ -249,9 +249,47 @@ test('invalid model summaries retry with backoff at most three times', async () 
   await processSessionCompactions({ runModel }); assert.equal(calls, 3); assert.equal(sessionCompactionUsage().tokensUsed, 150);
 });
 
+test('an oversize but clean summary is trimmed to the budget and published, not discarded and recharged', async () => {
+  queue(); let calls = 0;
+  const long = 'Objective: compare authorization controls. ' + 'An unresolved observation remains inconclusive. '.repeat(80);
+  assert.ok(Buffer.byteLength(long) > 2048);
+  const [result] = await processSessionCompactions({ runModel: async () => { calls++; return { text: long, tokens: 50, usageAvailable: true }; } });
+  assert.equal(calls, 1); assert.equal(result.state, 'completed');
+  const output = getRecord('core.session.compactor.output', result.id);
+  assert.equal(output.truncated, true); assert.ok(output.text.length > 0 && Buffer.byteLength(output.text) <= 2048);
+  assert.equal(sessionMemoryStatus(session).ready, 1); assert.equal(sessionCompactionUsage().tokensUsed, 50);
+});
+
+test('a terminal (uncertain) summary failure backs off the paid route until an explicit resume clears it', async () => {
+  queue(session, { count: 24 });
+  assert.ok(listRecords(JOB, { sessionId: session.id }).length >= 2);
+  let calls = 0;
+  await processSessionCompactions({ runModel: async () => { calls++; throw new Error('Synthetic lost response.'); } });
+  assert.equal(calls, 1);
+  // The breaker defers every fresh paid dispatch; the free host-extract lane is untouched.
+  await processSessionCompactions({ runModel: () => assert.fail('Route backoff must defer fresh paid dispatch.') });
+  assert.ok(listRecords(JOB, { sessionId: session.id }).some(item => item.scheduleReason === 'route_failure_backoff'));
+  resume();
+  // The breaker is cleared, so fresh nodes dispatch and complete again.
+  let completed = false; const before = calls;
+  for (let attempt = 0; attempt < 4 && !completed; attempt++) {
+    const [result] = await processSessionCompactions({ runModel: async () => { calls++; return summary(); } });
+    completed = result?.state === 'completed';
+  }
+  assert.ok(completed, 'a fresh summary completes after resume'); assert.ok(calls > before, 'the model is dispatched again after resume');
+});
+
+test('a retry with too little runtime left falls back to the host extract instead of a doomed short dispatch', async () => {
+  queue();
+  const current = job();
+  putRecord(JOB, current.id, { ...current, attempts: 1, timeUsedMs: 30000, state: 'retry_wait', nextAttemptAt: null, reservationId: null, usageSettled: true });
+  const [result] = await processSessionCompactions({ runModel: () => assert.fail('A sub-floor runtime must not dispatch a doomed attempt.') });
+  assert.equal(result.state, 'budget_limited'); assert.equal(result.reasonPaused, 'job_budget');
+});
+
 test('known rejected summaries retain their settled retry and backoff across repeated shutdowns', async () => {
   queue(); let calls = 0;
-  const [rejected] = await processSessionCompactions({ runModel: async () => { calls++; return { text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }; } });
+  const [rejected] = await processSessionCompactions({ runModel: async () => { calls++; return { text: 'Rejected summary with a control byte.\x07', tokens: 50, usageAvailable: true }; } });
   const nextAttemptAt = rejected.nextAttemptAt, reservationId = rejected.reservationId;
   assert.equal(rejected.state, 'retry_wait'); assert.ok(Date.parse(nextAttemptAt) > Date.now());
   assert.equal(getRecord('core.session.compactor.reservation', reservationId).terminalOutcome.error, 'COMPACTOR_OUTPUT');
@@ -271,7 +309,7 @@ test('known rejected summaries retain their settled retry and backoff across rep
 
 test('an earlier known rejection cannot authorize replay of the next uncertain attempt', async () => {
   queue(); let calls = 0;
-  await processSessionCompactions({ runModel: async () => { calls++; return { text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }; } });
+  await processSessionCompactions({ runModel: async () => { calls++; return { text: 'Rejected summary with a control byte.\x07', tokens: 50, usageAvailable: true }; } });
   const first = job(); putRecord(JOB, first.id, { ...first, nextAttemptAt: '2000-01-01T00:00:00.000Z' });
   await processSessionCompactions({ runModel: async () => {
     calls++; assert.equal(job().retryOutcome, null);
@@ -286,7 +324,7 @@ test('an earlier known rejection cannot authorize replay of the next uncertain a
 });
 
 for (const priorState of ['retry_wait', 'paused', 'running']) test(`legacy ${priorState} output records only receive a retry receipt while their terminal state is still visible`, async () => {
-  queue(); await processSessionCompactions({ runModel: async () => ({ text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }) });
+  queue(); await processSessionCompactions({ runModel: async () => ({ text: 'Rejected summary with a control byte.\x07', tokens: 50, usageAvailable: true }) });
   const completedAttempt = job(), reservation = getRecord('core.session.compactor.reservation', completedAttempt.reservationId);
   const { terminalOutcome: _outcome, ...legacyReservation } = reservation;
   putRecord('core.session.compactor.reservation', reservation.id, legacyReservation);
@@ -307,7 +345,7 @@ for (const priorState of ['retry_wait', 'paused', 'running']) test(`legacy ${pri
 });
 
 test('a known retry still honors owner pause and preserves backoff after explicit resume', async () => {
-  queue(); await processSessionCompactions({ runModel: async () => ({ text: 'x'.repeat(2049), tokens: 50, usageAvailable: true }) });
+  queue(); await processSessionCompactions({ runModel: async () => ({ text: 'Rejected summary with a control byte.\x07', tokens: 50, usageAvailable: true }) });
   const nextAttemptAt = job().nextAttemptAt;
   pauseSessionCompaction(session.id, 'owner_pause'); pauseAllSessionCompactions('host_shutdown'); recoverSessionCompactions();
   assert.equal(job().reasonPaused, 'owner_pause'); assert.equal(sessionCompactionStatus(session).control.reasonPaused, 'owner_pause');
