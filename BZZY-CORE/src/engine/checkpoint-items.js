@@ -68,7 +68,8 @@ export function applyCheckpointItems(previous, next, input, scope, revision, con
       }
     } else {
       const index = items.findIndex(item => item.id === operation.id && item.field === operation.field), item = items[index];
-      if (!item || item.revision !== operation.expectedItemRevision) throw new Error('Checkpoint item changed. Use its current item revision.');
+      if (!item) throw new Error(`Checkpoint item ${operation.id} is not a current ${operation.field} item; list the checkpoint to get current item IDs and revisions.`);
+      if (item.revision !== operation.expectedItemRevision) throw Object.assign(new Error(`Checkpoint item changed; its current item revision is ${item.revision}. Use it.`), { currentItemRevision: item.revision });
       if (item.field === 'constraints' && contractValues.has(digest(item.value))) throw new Error('Contract-owned constraints cannot be changed through checkpoint operations.');
       archive(item, operation.op === 'update' ? 'superseded' : operation.op === 'resolve' ? 'resolved' : 'archived');
       if (operation.op === 'update') items[index] = { ...item, ...metadata, value: assertKnowledgeText(operation.text, 2000), occurrences: 1, revision, checkpointRevision: revision };

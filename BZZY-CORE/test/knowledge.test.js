@@ -32,12 +32,37 @@ test('checkpoints preserve structured decisions and authorized evidence while re
  assert.deepEqual(checkpoint(session, { completedWork: ['Recorded the candidate.'] }).decisions, decisions);
  assert.ok(searchProjectKnowledge(session, { query: 'anonymous control', types: ['checkpoint'] }).items.length);
  const before = getRecord('checkpoint', session.id).revision;
- for (const invalid of [[{ decision: 'Wrong engagement.', evidence: [foreign.id] }], [{ decision: 'password=private-fixture-secret' }], [{ decision: 'Unbounded text.', rationale: 'x'.repeat(2001) }]]) {
+ // Decision text that is unbounded or carries a secret still rejects the whole call.
+ for (const invalid of [[{ decision: 'password=private-fixture-secret' }], [{ decision: 'Unbounded text.', rationale: 'x'.repeat(2001) }]]) {
    assert.throws(() => checkpoint(session, { decisions: invalid }));
    assert.equal(getRecord('checkpoint', session.id).revision, before);
  }
+ // Unauthorized or unregistered evidence in a decision is a navigation link, not a
+ // capability (reading it still goes through artifact authorization), so the
+ // checkpoint saves without it and reports the rejected reference instead of
+ // discarding the decision.
+ const partial = checkpoint(session, { decisions: [{ decision: 'Wrong engagement.', evidence: [foreign.id] }] });
+ assert.deepEqual(partial.decisions[0].evidence, []);
+ assert.ok(partial.rejectedEvidence.some(entry => entry.id === foreign.id));
+ assert.equal(getRecord('checkpoint', session.id).revision, before + 1);
  const worker = sessionAt(alpha, { role: 'executor', parentSessionId: session.id });
- assert.throws(() => checkpoint(worker, { decisions: [{ decision: 'Unselected supervisor evidence.', evidence: [control.id] }] }), /authorized project evidence/);
+ const workerSaved = checkpoint(worker, { decisions: [{ decision: 'Unselected supervisor evidence.', evidence: [control.id] }] });
+ assert.deepEqual(workerSaved.decisions[0].evidence, []);
+ assert.ok(workerSaved.rejectedEvidence.some(entry => entry.id === control.id));
+});
+
+test('a checkpoint with unregistered file-path evidence still saves its fields and reports rejected links and the current revision', () => {
+ const session = sessionAt(alpha), proof = artifact(session, 'registered evidence', 'bytes');
+ const saved = checkpoint(session, { completedWork: ['Mapped the surface.'], decisions: ['Pivoted to the authenticated flow.'],
+   evidence: [proof.id, 'findings/sqli-report.md', 'ledger/e/note.md'] });
+ assert.deepEqual(saved.completedWork, ['Mapped the surface.']);
+ assert.deepEqual(saved.evidence, [proof.id]);
+ assert.deepEqual(new Set(saved.rejectedEvidence.map(entry => entry.id)), new Set(['findings/sqli-report.md', 'ledger/e/note.md']));
+ assert.equal(getRecord('checkpoint', session.id).evidence.length, 1);
+ const current = getRecord('checkpoint', session.id).revision;
+ try { checkpoint(session, { expectedRevision: current - 1, completedWork: ['Stale save.'] }); assert.fail('expected a revision conflict'); }
+ catch (error) { assert.match(error.message, new RegExp(`current revision is ${current}`)); assert.equal(error.currentRevision, current); }
+ assert.equal(getRecord('checkpoint', session.id).revision, current);
 });
 
 test('unattributed legacy projections stay private and cannot break indexed or automatic model recall', () => {

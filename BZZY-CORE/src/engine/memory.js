@@ -36,13 +36,26 @@ function inputInfo(root, relative, budget) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Memory inputs must be regular, unlinked project files.');
   return currentFileInfo(file, budget);
 }
+function evidenceAllowed(session, id, access, allowed) {
+  const item = getRecord('artifact', id);
+  return Boolean(item && (allowed.includes(item.sessionId) || access.restricted && (session.allowedArtifactIds || []).includes(id)));
+}
 function validEvidence(session, ids, access) {
   const allowed = allowedKnowledgeSessionIds(session, access);
   return list(ids || []).map(id => {
-    const item = getRecord('artifact', id);
-    if (!item || !(allowed.includes(item.sessionId) || access.restricted && (session.allowedArtifactIds || []).includes(id))) throw new Error('Memory evidence must reference this session’s recorded artifacts or explicitly authorized project evidence.');
+    if (!evidenceAllowed(session, id, access, allowed)) throw new Error('Memory evidence must reference this session’s recorded artifacts or explicitly authorized project evidence.');
     return id;
   });
+}
+// Checkpoint evidence links are navigation, not truth confirmation, so an
+// unregistered reference must not discard an entire checkpoint (decisions,
+// completed work and questions). Partition the list: keep the valid links, report
+// the rejected ones so the model can register them (record_evidence) and re-add.
+// remember()/verification keep the strict validEvidence above (truth-gating).
+function partitionEvidence(session, ids, access) {
+  const allowed = allowedKnowledgeSessionIds(session, access), valid = [], rejected = [];
+  for (const id of list(ids || [])) (evidenceAllowed(session, id, access, allowed) ? valid : rejected).push(id);
+  return { valid, rejected };
 }
 function freshCondition(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['validFrom', 'expiresAt', 'environment', 'version', 'conditions'].includes(key))) throw new Error('Invalid knowledge freshness conditions.');
@@ -337,6 +350,7 @@ export function checkpoint(session, input, context = {}) {
   if (input.requestId != null && (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId))) throw new Error('Use a bounded checkpoint request ID.');
   const access = knowledgeAccess(session), scope = checkpointScope(session, context), fields = {};
   if (access.disabled) throw new Error('Checkpoints are unavailable for this review role.');
+  const rejectedEvidence = new Set();
   if (input.constraints != null) fields.constraints = list(input.constraints, 50).map(value => text(value, 2000));
   if (input.decisions != null) {
     if (!Array.isArray(input.decisions) || input.decisions.length > 50) throw new Error('Checkpoint decisions must be a bounded list.');
@@ -351,7 +365,10 @@ export function checkpoint(session, input, context = {}) {
       if (Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).length > 16) throw new Error('Checkpoint decisions must use bounded plain objects.');
       return Object.fromEntries(Object.entries(value).map(([key, item]) => {
         if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(key) || /^(?:backendHomes|backendProcess|engineHome|credentials|accountBindings|ownerToken|privateKey|reasoning|analysis|chainOfThought)$/i.test(key)) throw new Error('Checkpoint decisions cannot contain private bindings or reasoning.');
-        return [key, key === 'evidence' ? validEvidence(session, item, access) : normalize(item, depth + 1)];
+        if (key !== 'evidence') return [key, normalize(item, depth + 1)];
+        const { valid, rejected } = partitionEvidence(session, item, access);
+        for (const id of rejected) rejectedEvidence.add(id);
+        return [key, valid];
       }));
     };
     fields.decisions = input.decisions.map(value => {
@@ -373,7 +390,7 @@ export function checkpoint(session, input, context = {}) {
     if (receipt) { if (receipt.digest !== hash) throw new Error('Checkpoint request ID was reused with different content.'); return receipt.record; }
     // Read and compare inside the write transaction, including competing hosts.
     const latest = getRecord('checkpoint', session.id), previous = checkpointState(session, context).current || {};
-    if (input.expectedRevision != null && input.expectedRevision !== checkpointRevision(previous)) throw new Error('Checkpoint changed. Refresh its revision.');
+    if (input.expectedRevision != null && input.expectedRevision !== checkpointRevision(previous)) throw Object.assign(new Error(`Checkpoint changed; its current revision is ${checkpointRevision(previous)}. Refresh before saving.`), { currentRevision: checkpointRevision(previous) });
     const revision = Math.max(checkpointRevision(latest), checkpointRevision(previous)) + 1;
     if (!Number.isSafeInteger(revision)) throw new Error('Checkpoint revision limit reached.');
     const contractConstraints = [...new Set(session.contract?.constraints || [])];
@@ -389,12 +406,18 @@ export function checkpoint(session, input, context = {}) {
     record = applyCheckpointItems(previous, record, input, scope, revision, session.contract?.constraints || []);
     record.workingConstraints = record.constraints.filter(value => !contractConstraints.includes(value));
     if (input.evidenceOperations) {
-      const added = validEvidence(session, input.evidenceOperations.add || [], access), removed = list(input.evidenceOperations.remove || [], 32);
+      const { valid: added, rejected: addRejected } = partitionEvidence(session, input.evidenceOperations.add || [], access);
+      const removed = list(input.evidenceOperations.remove || [], 32);
+      for (const id of addRejected) rejectedEvidence.add(id);
       if (removed.some(id => !(previous.evidence || []).includes(id))) throw new Error('Cannot remove evidence absent from the current checkpoint.');
       record.evidence = [...new Set([...(previous.evidence || []).filter(id => !removed.includes(id)), ...added])];
     }
     if (record.blockerIds) validateInvestigationBlockers(session, record.blockerIds, context);
-    if (record.evidence) validEvidence(session, record.evidence, access);
+    if (record.evidence) {
+      const { valid, rejected } = partitionEvidence(session, record.evidence, access);
+      for (const id of rejected) rejectedEvidence.add(id);
+      record.evidence = valid;
+    }
     if (latest) {
       const legacyKey = `${session.id}:${checkpointRevision(latest) || `legacy:${digest(latest)}`}`;
       if (!getRecord('core.checkpoint.revision', legacyKey)) putRecord('core.checkpoint.revision', legacyKey, latest, db);
@@ -406,12 +429,17 @@ export function checkpoint(session, input, context = {}) {
     appendEvent(session.id, 'checkpoint', record, db); return record;
   });
   let component = 'project_copy';
+  // The checkpoint itself is saved; unregistered evidence references are reported
+  // as a warning so the model can register them (record_evidence) and re-add,
+  // without losing the decisions and work it just recorded.
+  const warn = result => rejectedEvidence.size ? { ...result, rejectedEvidence: [...rejectedEvidence].map(id => ({ id,
+    reason: 'Not a recorded artifact of this session or authorized project evidence; register it with record_evidence, then add it. The checkpoint was saved without it.' })) } : result;
   const deferred = () => ({ ...record, indexing: { state: 'deferred', component,
     authority: component === 'project_copy'
       ? 'Checkpoint saved in Core. Its project copy is unavailable; Core remains authoritative. Do not repeat completed work.'
       : 'Checkpoint saved. Derived knowledge is deferred to host maintenance; do not repeat completed work.' } });
   try {
-    return atomic(db => {
+    return warn(atomic(db => {
       // Serialize publication with competing checkpoint saves. Retrying an old
       // request returns its original receipt without overwriting newer views.
       if (digest(getRecord('checkpoint', session.id)) !== digest(record)) return record;
@@ -435,10 +463,10 @@ export function checkpoint(session, input, context = {}) {
         db.exec('ROLLBACK TO checkpoint_navigation'); db.exec('RELEASE checkpoint_navigation');
         throw error;
       }
-    });
+    }));
   } catch {
     // The canonical write succeeded. Dirty-source maintenance (or bootstrap)
     // can repair knowledge; no raw filesystem/database error enters the result.
-    return deferred();
+    return warn(deferred());
   }
 }

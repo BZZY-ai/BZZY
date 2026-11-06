@@ -170,6 +170,18 @@ remains in source revisions and artifacts rather than accumulating forever in
 every current checkpoint. `blockerIds` reference canonical investigation blockers
 instead of copying a second blocker store into the checkpoint.
 
+An evidence reference that is not a recorded artifact of this session or
+authorized project evidence (for example a bare `findings/...` file path) is a
+navigation link, not a capability: reading evidence still goes through artifact
+authorization. Such a reference no longer rejects the whole checkpoint. The
+checkpoint saves with the valid links, and the unregistered references are
+returned as a `rejectedEvidence` warning so the model can register them with
+`record_evidence` and re-add them, without losing the decisions and work it just
+recorded. This applies to top-level evidence, per-decision evidence and
+`evidenceOperations.add`. A revision or item-revision conflict reports the current
+revision (`currentRevision` / `currentItemRevision`) so the next save can use it
+directly. Confirmed-memory and acceptance evidence remain strictly validated.
+
 Issues retain host `recordedAt` and source revision plus optional `observedAt`
 and applicability dates/environment/version. Report lifecycle claims (`draft`,
 `saved`, `claimed_submitted`, `acknowledged`, `fixed`) remain agent-reported and
