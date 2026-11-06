@@ -143,6 +143,66 @@ export function codexSandboxMode(options = {}) {
   return options.policy?.mode || 'workspace-write';
 }
 
+// Owner opt-in: external MCP servers for NORMAL (non-sandboxed) Codex runs only.
+// The owner (or a tool such as SENTINEL) writes BZZY_HOME/external-mcp.json; Core
+// merges the allowlisted entries into Codex's mcp_servers so the model can call them
+// alongside bzzy's own goal tools (which come from the separate `goals` feature, not
+// mcp_servers). Absent/empty/unsafe file -> {} -> no change from today. These tools
+// run through Codex directly, outside Core's own tool permission/provenance gate, so
+// this is a deliberate owner opt-in and is never enabled for the sandboxed, program
+// scope, agent or learning branches below.
+const mcpString = value => typeof value === 'string' && value.length >= 1 && value.length <= 4096 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
+function sanitizeMcpServer(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
+  if (mcpString(config.command)) {
+    const entry = { command: config.command };
+    if (config.args !== undefined) {
+      if (!Array.isArray(config.args) || config.args.length > 64 || !config.args.every(mcpString)) return null;
+      entry.args = [...config.args];
+    }
+    if (config.env !== undefined) {
+      if (!config.env || typeof config.env !== 'object' || Array.isArray(config.env)) return null;
+      const env = {};
+      for (const [key, value] of Object.entries(config.env)) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key) || !mcpString(value)) return null;
+        env[key] = value;
+      }
+      if (Object.keys(env).length > 64) return null;
+      entry.env = env;
+    }
+    if (config.cwd !== undefined) { if (!mcpString(config.cwd)) return null; entry.cwd = config.cwd; }
+    return entry;
+  }
+  if (mcpString(config.url) && /^https?:\/\//i.test(config.url)) {
+    const entry = { url: config.url };
+    if (config.bearer_token !== undefined) { if (!mcpString(config.bearer_token)) return null; entry.bearer_token = config.bearer_token; }
+    return entry;
+  }
+  return null;
+}
+export function externalMcpServers() {
+  let raw;
+  try {
+    const descriptor = fs.openSync(path.join(home(), 'external-mcp.json'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const stat = fs.fstatSync(descriptor);
+      // This file configures out-of-process command execution, so it must be a bounded,
+      // single-link regular file owned by this account and never group/world-writable.
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > 65536 || stat.mode & 0o022 || (process.getuid && stat.uid !== process.getuid())) return {};
+      raw = fs.readFileSync(descriptor, 'utf8');
+    } finally { fs.closeSync(descriptor); }
+  } catch { return {}; }
+  let parsed; try { parsed = JSON.parse(raw); } catch { return {}; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const source = parsed.servers && typeof parsed.servers === 'object' && !Array.isArray(parsed.servers) ? parsed.servers : parsed;
+  const servers = {};
+  for (const [name, config] of Object.entries(source)) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(name) || Object.keys(servers).length >= 32) continue;
+    const entry = sanitizeMcpServer(config);
+    if (entry) servers[name] = entry;
+  }
+  return servers;
+}
 export function codexLaunch(provider, session, options = {}) {
   // Derive this only from local owner receipts and the canonical saved session;
   // neither caller options nor portable historical state select the profile.
@@ -244,6 +304,9 @@ export function codexLaunch(provider, session, options = {}) {
     override('sandbox_mode', codexSandboxMode(options));
     if (options.policy?.network === 'disabled') override('sandbox_workspace_write.network_access', false);
     else if (options.strictPolicy) override('sandbox_workspace_write.network_access', true);
+    // Owner opt-in external MCP servers (normal runs only; see externalMcpServers).
+    const externalMcp = externalMcpServers();
+    if (Object.keys(externalMcp).length) override('mcp_servers', externalMcp);
   }
   const effort = reasoningEffort(session, options);
   if (effort) override('model_reasoning_effort', effort);
