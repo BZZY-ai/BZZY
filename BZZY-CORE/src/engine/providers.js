@@ -10,6 +10,13 @@ export const BUILTINS = {
     baseUrl: 'https://api.deepseek.com', envKey: 'DEEPSEEK_API_KEY',
     model: 'deepseek-flash', contextWindow: 1048576,
     reasoningEffort: 'high', supportedEfforts: ['low', 'high', 'max'],
+    // DeepSeek V4.1 Flash (base + dated snapshot): 1.05M context per DeepSeek's
+    // published catalog. The provider-level contextWindow above keeps every other
+    // slug at ~1M too, so this is belt-and-suspenders for the exact capacity.
+    modelCapabilities: {
+      'deepseek-v4.1-flash': { contextWindow: 1050000 },
+      'deepseek-v4.1-flash-1017': { contextWindow: 1050000 },
+    },
   },
   abliteration: {
     id: 'abliteration', name: 'Abliteration', backend: 'codex', auth: 'api-key',
@@ -50,6 +57,11 @@ export const BUILTINS = {
     modelCapabilities: {
       'gpt-5.6-sol': { contextWindow: 1050000, inputModalities: ['text', 'image'],
         supportedEfforts: ['none', 'low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
+      // DeepSeek V4.1 Flash via Experiential Labs (base + dated snapshot): 1.05M
+      // context per DeepSeek's catalog. Experiential has no provider-level floor
+      // (it is the fallback fixture in tests), so each slug needs its own entry.
+      'deepseek-v4.1-flash': { contextWindow: 1050000 },
+      'deepseek-v4.1-flash-1017': { contextWindow: 1050000 },
     },
   },
 };
