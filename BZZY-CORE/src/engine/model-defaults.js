@@ -11,9 +11,14 @@ const publicTarget = target => target === 'debate' ? 'validate' : target;
 const effortName = value => typeof value === 'string' && /^(?:default|[a-z][a-z0-9_-]{0,23})$/.test(value);
 function publicCapabilities(value) {
   if (value == null) return null;
-  object(value, ['supportsEffort', 'supportedEfforts', 'defaultEffort', 'contextWindow', 'inputModalities', 'category']);
+  object(value, ['supportsEffort', 'supportedEfforts', 'defaultEffort', 'contextWindow', 'maxInputTokens', 'maxOutputTokens', 'inputModalities', 'category']);
+  // Discovered capabilities legitimately carry maxInputTokens/maxOutputTokens (e.g.
+  // DeepSeek V4.1 Flash reports a 393K output cap), so a delegate/default row must not
+  // be rejected for carrying them. Still an allowlist: unknown fields (e.g. a private
+  // apiKey) are rejected by object() above.
+  const badTokens = field => value[field] !== undefined && (!Number.isSafeInteger(value[field]) || value[field] < 1 || value[field] > 1000000000);
   if (value.supportsEffort !== undefined && typeof value.supportsEffort !== 'boolean' ||
-      value.contextWindow !== undefined && (!Number.isSafeInteger(value.contextWindow) || value.contextWindow < 1 || value.contextWindow > 1000000000) ||
+      badTokens('contextWindow') || badTokens('maxInputTokens') || badTokens('maxOutputTokens') ||
       value.supportedEfforts !== undefined && (!Array.isArray(value.supportedEfforts) || value.supportedEfforts.length > 24 || value.supportedEfforts.some(level => !effortName(level))) ||
       value.defaultEffort !== undefined && !effortName(value.defaultEffort) ||
       value.inputModalities !== undefined && (!Array.isArray(value.inputModalities) || value.inputModalities.length > 16 || value.inputModalities.some(item => typeof item !== 'string' || !/^[a-z][a-z0-9_-]{0,23}$/.test(item))) ||
