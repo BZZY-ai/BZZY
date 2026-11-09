@@ -9,6 +9,7 @@ import { getRecord, putRecord, listRecords, removeRecord, reserveRequest, append
 import { normalizeContract } from './contracts.js';
 import { childPolicy } from './policy.js';
 import { snapshotWorkspace, copyWorkspaceSnapshot, inspectWorkspace, inside, captureEvidence, artifactsFor, artifact, fileInfo } from './evidence.js';
+import { reclaimAssignmentWorker } from './workspace-reclaim.js';
 import { home, privateDir, writeJson, readJson } from './files.js';
 import { root, runtimeEnv } from './process.js';
 import { identityAlive, processIdentity, reconcileSession } from './recovery.js';
@@ -436,6 +437,10 @@ export function reviewAssignment(parent, id, input) {
     putRecord('review', review.id, review, db); putRecord('assignment', id, { ...latest, closure: input.outcome, review }, db); appendEvent(parent.id, 'assignment.reviewed', review, db);
     recordRoutingReview(parent, latest, review, db);
   });
+  // A worker copy for an assignment closed without acceptance is never applied
+  // or resumed, so reclaim its disk immediately. An accepted one is kept until
+  // applyAssignment finishes reading it.
+  if (['inconclusive', 'abandoned'].includes(input.outcome)) reclaimAssignmentWorker(id, { enforceRecencyGuard: false });
   return review;
 }
 export function cancelAssignment(parentId, id, reason = 'Cancelled by supervisor') {
@@ -485,6 +490,9 @@ export function applyAssignment(parent, id) {
     appendEvent(parent.id, 'assignment.applied', { id, path: change.path });
   }
   putRecord('assignment', id, { ...getRecord('assignment', id), appliedAt: now() });
+  // The reviewed patch is now applied to the parent; re-apply short-circuits on
+  // appliedAt without reading the copy, so the worker dir can be reclaimed.
+  reclaimAssignmentWorker(id, { enforceRecencyGuard: false });
   return { id, applied: changes.map(c => c.path) };
 }
 export async function runAssignment(id, number) {

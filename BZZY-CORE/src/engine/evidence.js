@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { home, privateDir, writeJson, readJson } from './files.js';
@@ -55,7 +56,14 @@ export function readArtifact(id, offset = 0, limit = 8192) {
   return { ...item, content: bytes.subarray(offset, offset + limit).toString('utf8'), nextOffset: Math.min(bytes.length, offset + limit), truncated: offset + limit < bytes.length };
 }
 const excluded = new Set(['.git', 'node_modules', '.bzzy', '.bzzy-runtime', 'codex', 'codex-0.162.0', 'claude-code', '.venv', '__pycache__']);
-const runtimeCaches = new Set(['.cache', '.pytest_cache', '.mypy_cache', '.ruff_cache']);
+// Dependency/build/tool caches: never project source, bulky, and reproducible.
+// Skipped from snapshots (recorded as omissions, still readable in place).
+const runtimeCaches = new Set(['.cache', '.pytest_cache', '.mypy_cache', '.ruff_cache',
+  '.npm', '.yarn', '.pnpm-store', '.gradle', '.m2', '.cargo', '.rustup', '.nuget', '.conda',
+  '.deno', '.bun', '.ollama', '.vscode-server', '.cursor-server']);
+// True only when the workspace root IS the Core user's home directory. A goal
+// launched there (e.g. from /root) adopts the entire home as its workspace.
+const workspaceIsHomeRoot = resolved => { try { return resolved === fs.realpathSync(os.homedir()); } catch { return false; } };
 const omissionPolicy = 'best-effort-workspace-snapshot-v3';
 const MiB = 1024 * 1024;
 const maximumSnapshotLimits = { maxFileMiB: 16384, maxTotalMiB: 65536, maxFiles: 1000000 };
@@ -112,9 +120,18 @@ export function workspaceManifest(root, limits = snapshotLimits(), { omissions =
   // of a huge cwd (e.g. a home directory) otherwise blows the request timeout.
   // The caller treats SNAPSHOT_BUDGET as "inspection skipped", not an error.
   const assertBudget = () => { if (deadline && Date.now() > deadline) throw Object.assign(new Error('Workspace inspection exceeded its time budget.'), { code: 'SNAPSHOT_BUDGET' }); };
-  const omittedCaches = new Set();
-  const cachePath = name => {
+  const omittedCaches = new Set(), isHomeRoot = workspaceIsHomeRoot(resolved);
+  const cacheRoot = name => {
     const relative = runtimeCachePath(name);
+    if (relative) return relative;
+    // At a home root, every top-level dotdir is user/tool state or an agent home
+    // (~/.local, ~/.npm, ~/.codex and the like), never project source. Copying
+    // them is what bloats each snapshot/worker copy to gigabytes, so skip them.
+    if (isHomeRoot) { const top = name.split(path.sep)[0]; if (top.length > 1 && top.startsWith('.')) return top; }
+    return null;
+  };
+  const cachePath = name => {
+    const relative = cacheRoot(name);
     if (!relative) return false;
     if (!omittedCaches.has(relative)) { omissions.push({ path: relative, reason: 'runtime_cache' }); omittedCaches.add(relative); }
     return true;

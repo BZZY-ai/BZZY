@@ -31,6 +31,7 @@ import { authorizedOwnPhoneTerminalInput } from './update-access.js';
 import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, pauseAllLearning } from './learning.js';
 import { processSkillEvolution } from './skill-evolution-runner.js';
 import { recoverSessionCompactions, processSessionCompactions, sessionMaintenanceDue, pauseSessionCompaction, pauseAllSessionCompactions } from './session-compactor.js';
+import { reclaimWorkspaceStorage, storageSweepDue, scheduleStorageSweep } from './workspace-reclaim.js';
 import { CoreKnowledge } from '../knowledge.js';
 import { recordGoalValidationResult } from './goal-validation.js';
 import { assertGoalWorkflowAdmission } from './workflows.js';
@@ -158,7 +159,7 @@ export async function serveRuntime() {
   recoverSessionCompactions();
   pumpBackgroundJobs({ launch: false });
   const send = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(JSON.stringify(value)); };
-  let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise, learningPump, memoryPump; const streams = new Set();
+  let stopping = false, quiescing = operatorStopRequested(), operatorStopPromise, learningPump, memoryPump, storagePump; const streams = new Set();
   const metrics = new HostMetricsSampler(), knowledge = new CoreKnowledge();
   let relayService, relayServicePromise;
   const relay = () => relayServicePromise ||= import('../relay/service.js')
@@ -505,7 +506,19 @@ export async function serveRuntime() {
       });
     }
   }, 100, { label: 'Runtime scheduler' });
-  const backgroundScheduler = guardedInterval(() => pumpBackgroundJobs({ launch: !stopping && !quiescing && !operatorStopRequested() }), 1000, { label: 'Background jobs' });
+  const backgroundScheduler = guardedInterval(() => {
+    pumpBackgroundJobs({ launch: !stopping && !quiescing && !operatorStopRequested() });
+    // Reclaim orphaned/finished workspace copies (snapshots & worker trees).
+    // Due shortly after boot — so a restart after an update also clears legacy
+    // copies — then backs off to a long idle interval. Paced, budgeted and
+    // async so it never blocks the loop; a single pump guard prevents overlap.
+    if (!stopping && !quiescing && !storagePump && storageSweepDue()) {
+      storagePump = reclaimWorkspaceStorage()
+        .then(summary => scheduleStorageSweep(summary.workers + summary.snapshots + summary.groups > 0))
+        .catch(() => scheduleStorageSweep(false))
+        .finally(() => { storagePump = undefined; });
+    }
+  }, 1000, { label: 'Background jobs' });
   const shutdown = () => {
     if (stopping) return; stopping = true; clearInterval(scheduler); pauseAllLearning('host_shutdown'); pauseAllSessionCompactions('host_shutdown');
     clearInterval(backgroundScheduler); pushWorker.close(); updateWatcher.close();

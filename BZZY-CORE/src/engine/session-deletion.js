@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { listRecords, getRecord, putRecord, appendEvent, reserveRequest, now } from './database.js';
 import { loadSession, sessionPath, sessionDeleted, lockOwner } from './store.js';
 import { identityAlive } from './process-identity.js';
+import { reclaimDeletedSessionStorage } from './workspace-reclaim.js';
 
 const reject = (message, code, status = 409) => { throw Object.assign(new Error(message), { code, status }); };
 const derivedRuntimeKinds = ['native-compaction', 'core.conversation.source', 'core.conversation.pending',
@@ -99,5 +100,8 @@ export function deleteTerminalConversation(sessionId, { requestId } = {}) {
   // SQLite denial is already durable even if an old compatibility file could
   // not be removed. Loading, migration and late writes all honor the tombstone.
   for (const id of result.deletedSessionIds) { try { fs.rmSync(sessionPath(id), { force: true }); } catch { /* Never undo a durable deletion. */ } }
+  // Reclaim the deleted sessions' isolated workspace copies (snapshots/workers/
+  // group trees). These are Core's private scratch, not the user's cwd.
+  try { reclaimDeletedSessionStorage(result.deletedSessionIds); } catch { /* Best-effort disk reclaim; deletion is already durable. */ }
   return result;
 }
