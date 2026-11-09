@@ -45,8 +45,28 @@ export function database() {
     CREATE INDEX IF NOT EXISTS background_jobs_sequence ON records(json_extract(data,'$.sequence') DESC) WHERE kind='core.background.job';
     CREATE TABLE IF NOT EXISTS requests (scope TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, response TEXT, state TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(scope,id));
     INSERT OR IGNORE INTO metadata VALUES ('schema_version','1');`);
+  migrateSchema(connection);
   for (const suffix of ['-wal', '-shm']) if (fs.existsSync(file + suffix)) fs.chmodSync(file + suffix, 0o600);
   return connection;
+}
+// Idempotent, versioned migrations. Each step runs once per database, then
+// advances schema_version. Steps must stay safe to re-run and cheap at startup.
+function migrateSchema(connection) {
+  const version = () => Number(connection.prepare("SELECT value FROM metadata WHERE key='schema_version'").get()?.value || 1);
+  // v2: a partial, session-leading index for the background pending-node lookup
+  // (session-memory.js pendingSessionMemoryNodes). Supersedes any index of this
+  // name applied by hand to a live database so every install converges on the
+  // same definition: the scoped maintenance query then seeks by session and
+  // reads rows already ordered by (createdAt, id) with no temporary B-tree sort,
+  // instead of scanning every pending node across all sessions each tick.
+  if (version() < 2) {
+    connection.exec(`DROP INDEX IF EXISTS records_memory_pending_lookup_v1;
+      CREATE INDEX records_memory_pending_lookup_v1 ON records(
+        json_extract(data,'$.sessionId'),json_extract(data,'$.createdAt'),id,
+        json_extract(data,'$.generation'),json_extract(data,'$.fallback'))
+        WHERE kind='core.session.memory.node' AND json_extract(data,'$.state')='pending';
+      UPDATE metadata SET value='2' WHERE key='schema_version';`);
+  }
 }
 export function transaction(operation, { readOnly = false } = {}) {
   const db = database(); db.exec(readOnly ? 'BEGIN' : 'BEGIN IMMEDIATE');

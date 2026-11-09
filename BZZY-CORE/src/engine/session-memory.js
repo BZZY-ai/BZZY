@@ -210,12 +210,36 @@ export function indexSessionMemory(value, { throughSeq, force = false, maxParts 
 export function pendingSessionMemoryNodes({ limit = 100, sessionId, offset = 0, withoutFallback = false } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000 || typeof withoutFallback !== 'boolean') fail('Invalid memory work page.');
   if (sessionId !== undefined) source(sessionId);
-  const rows = database().prepare(`SELECT n.data FROM records n JOIN records m ON m.kind=? AND m.id=json_extract(n.data,'$.sessionId')
-    WHERE n.kind=? AND json_extract(m.data,'$.sourceVersion')=? AND json_extract(n.data,'$.state')='pending' AND json_extract(n.data,'$.generation')=json_extract(m.data,'$.generation')
-    AND (? IS NULL OR json_extract(n.data,'$.sessionId')=?)
-    AND (?=0 OR json_extract(n.data,'$.fallback') IS NULL)
-    ORDER BY json_extract(n.data,'$.createdAt'),n.id LIMIT ? OFFSET ?`).all(META, NODE, VERSION, sessionId ?? null, sessionId ?? null, Number(withoutFallback), limit, offset).map(row => JSON.parse(row.data));
-  return rows.filter(node => { try { return Boolean(source(node.sessionId)); } catch { return false; } });
+  const db = database();
+  // Two SQL paths with identical generation/source-version/fallback/ordering/
+  // pagination semantics. META, NODE and VERSION are trusted module constants,
+  // not input, and are inlined as literals (never interpolate a request value):
+  // a partial index is used only when SQLite can PROVE its predicate at plan
+  // time, which a bound `kind=?` defeats. With the literal kind and state, the
+  // scoped path's direct session predicate (no "IS NULL OR" disjunction) lets
+  // SQLite seek the partial pending-node index by session and skip the temporary
+  // ordering step. The global path keeps the correlated join for discovery over
+  // every eligible source.
+  const filters = `json_extract(m.data,'$.sourceVersion')=${VERSION} AND json_extract(n.data,'$.state')='pending'
+    AND json_extract(n.data,'$.generation')=json_extract(m.data,'$.generation')
+    AND (?=0 OR json_extract(n.data,'$.fallback') IS NULL)`;
+  const join = `FROM records n JOIN records m ON m.kind='${META}' AND m.id=json_extract(n.data,'$.sessionId') WHERE n.kind='${NODE}'`;
+  const order = `ORDER BY json_extract(n.data,'$.createdAt'),n.id LIMIT ? OFFSET ?`;
+  if (sessionId !== undefined) {
+    const rows = db.prepare(`SELECT n.data ${join} AND json_extract(n.data,'$.sessionId')=? AND ${filters} ${order}`)
+      .all(sessionId, Number(withoutFallback), limit, offset).map(row => JSON.parse(row.data));
+    // The one scoped source was validated above and every row shares it, so the
+    // former per-node source() revalidation is redundant here.
+    return rows;
+  }
+  const rows = db.prepare(`SELECT n.data ${join} AND ${filters} ${order}`)
+    .all(Number(withoutFallback), limit, offset).map(row => JSON.parse(row.data));
+  // Global discovery validates each distinct source once, not once per node.
+  const eligible = new Map();
+  return rows.filter(node => {
+    if (!eligible.has(node.sessionId)) { try { eligible.set(node.sessionId, Boolean(source(node.sessionId))); } catch { eligible.set(node.sessionId, false); } }
+    return eligible.get(node.sessionId);
+  });
 }
 
 export function sessionMemoryMaterial(value, id) {

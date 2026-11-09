@@ -20,6 +20,24 @@ import { pruneSessionEpisodes } from './episode.js';
 const JOB = 'core.session.compactor.job', CONTROL = 'core.session.compactor.control';
 const SETTINGS = 'core.session.compactor.settings', USAGE = 'core.session.compactor.usage', RESERVATION = 'core.session.compactor.reservation';
 const OUTPUT = 'core.session.compactor.output', DISCOVERY = 'core.session.compactor.discovery', active = new Map();
+// Background memory maintenance paces itself independently of the 100 ms runtime
+// scheduler. A pump that did work re-checks soon; a caught-up system backs off
+// toward a long idle interval so Core stops burning a CPU core rescanning
+// nothing. New work calls wakeMaintenance() so a fresh session is picked up
+// without waiting out the backoff. The runtime scheduler only decides *when* to
+// call processSessionCompactions (via sessionMaintenanceDue) and still enforces
+// the single-pump guarantee; the pump itself always does its full work when run,
+// so direct callers and tests are unaffected by pacing.
+let maintenanceNextAt = 0, maintenanceIdleStreak = 0;
+const MAINTENANCE_ACTIVE_MS = 250, MAINTENANCE_IDLE_BASE_MS = 1000, MAINTENANCE_IDLE_MAX_MS = 15000;
+const yieldToIO = () => new Promise(resolve => setImmediate(resolve));
+export function sessionMaintenanceDue() { return Date.now() >= maintenanceNextAt; }
+export function wakeMaintenance() { maintenanceIdleStreak = 0; maintenanceNextAt = 0; }
+function scheduleNextMaintenance(worked) {
+  if (worked) { maintenanceIdleStreak = 0; maintenanceNextAt = Date.now() + MAINTENANCE_ACTIVE_MS; return; }
+  maintenanceIdleStreak = Math.min(maintenanceIdleStreak + 1, 8);
+  maintenanceNextAt = Date.now() + Math.min(MAINTENANCE_IDLE_BASE_MS * 2 ** (maintenanceIdleStreak - 1), MAINTENANCE_IDLE_MAX_MS);
+}
 const atomic = operation => database().isTransaction ? operation(database()) : transaction(operation);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const stopped = () => readJson(path.join(home(), 'runtime', 'operator-stop.json'), null)?.stopped === true;
@@ -199,6 +217,8 @@ function discoverJobs(sessionId) {
 // Called only by the admitted execution owner after it persists the new run.
 export function beginSessionCompactionRun(value, runId) {
   const saved = source(value);
+  // A newly admitted run is fresh source activity; pick it up promptly.
+  wakeMaintenance();
   return atomic(db => {
     const run = getRecord('run', saved.id), current = loadSession(saved.id), prior = controlFor(saved.id);
     // This host-only hook follows admission and persistence of a new run. A
@@ -230,6 +250,8 @@ export function queueSessionCompaction(value, { throughSeq, force = false, maxPa
     force: Boolean(indexed.deferred || indexed.indexingRemaining) && (current.force || force),
     throughSeq: Math.max(current.throughSeq || 0, finalizedThroughSeq) });
   discoverJobs(saved.id);
+  // Fresh work must not wait out an idle backoff from a previously caught-up pump.
+  wakeMaintenance();
   return { sessionId: saved.id, indexed, control: controlFor(saved.id), previouslyPaused: previous.state !== 'enabled' };
 }
 
@@ -675,98 +697,114 @@ function jobFailed(job, error) {
 }
 
 export async function processSessionCompactions({ runModel = runRestrictedDocumentModel, canRun = () => true, authAvailable = authenticationAvailable } = {}) {
-  // Each background tick inspects a bounded rotating page. Continuously busy
-  // sources must not keep later controls outside the maintenance window.
-  for (const control of maintenanceControls('maintenance-controls')) {
-    const saved = loadSession(control.sessionId);
-    if (!saved || sessionDeleted(control.sessionId) || ['paused', 'cancelled'].includes(saved.executionState)) {
-      if (control.state === 'enabled') pauseSessionCompaction(control.sessionId, 'source_paused');
-    }
-  }
-  if (stopped()) { pauseAllSessionCompactions('host_stopped'); return []; }
-  if (!canRun()) return [];
-  // Bounded retention for derived episode snapshots. captureEpisode appends a new
-  // ~64 KB row every ~30 s with no supersede, so a long goal accumulates hundreds
-  // of MB (Hyatt: 2,180 rows / 132 MB for one session). Prune superseded snapshots
-  // here; observations remain authoritative and each is rebuildable, so this loses
-  // no recoverable state. A deleted/ineligible source is simply skipped.
-  for (const control of maintenanceControls('episode-prune-controls')) {
-    const saved = loadSession(control.sessionId);
-    if (!saved || sessionDeleted(control.sessionId)) continue;
-    try { pruneSessionEpisodes(saved); } catch { /* Derived snapshots; retried next tick. */ }
-  }
-  // A paid-inference setting is not a stop on local source derivation. Explicit
-  // session/owner/operator pauses still exclude both indexing and extraction.
-  const localControls = `(json_extract(data,'$.state')='enabled' OR
-    (json_extract(data,'$.state')='paused' AND json_extract(data,'$.reasonPaused') IN ('owner_disabled','uncertain_request','source_stopped')))`;
-  // Rebuild obsolete generations even when the old cursor was caught up and
-  // the session stays idle. Only previously queued, locally eligible sources
-  // enter these bounded pages; owner pauses and old paid jobs remain intact.
-  for (const control of maintenanceControls('backfill-controls', `json_extract(data,'$.queued')=1
-    AND (json_extract(data,'$.indexingRemaining')=1 OR EXISTS (SELECT 1 FROM records memory
-      WHERE memory.kind='core.session.memory' AND memory.id=records.id
-      AND coalesce(json_extract(memory.data,'$.sourceVersion'),0)<>${sessionMemorySourceVersion})) AND ${localControls}`)) {
-    const saved = loadSession(control.sessionId);
-    if (!saved || sessionDeleted(saved.id) || !sessionMemoryEligible(saved) || ['paused', 'cancelled'].includes(saved.executionState)) continue;
-    if (maintenanceDeferred(control)) continue;
-    try {
-      const old = getRecord('core.session.memory', saved.id), migrating = old && old.sourceVersion !== sessionMemorySourceVersion;
-      const force = Boolean(control.force || migrating);
-      const indexed = indexSessionMemory(saved, { ...(control.throughSeq !== undefined ? { throughSeq: control.throughSeq } : {}), force });
-      const current = controlFor(saved.id);
-      const remaining = Boolean(indexed.deferred || indexed.indexingRemaining);
-      updateControl(saved.id, { indexingRemaining: remaining, force: remaining && (force || current.force) });
-      maintenanceSucceeded(saved.id);
-    }
-    catch (error) { maintenanceFailed(control.sessionId, 'indexing', error); }
-  }
-  let extracted = 0;
-  for (const control of maintenanceControls('fallback-controls', `json_extract(data,'$.queued')=1 AND ${localControls}`)) {
-    const saved = loadSession(control.sessionId);
-    if (!saved || sessionDeleted(saved.id) || !sessionMemoryEligible(saved) || ['paused', 'cancelled'].includes(saved.executionState)) continue;
-    if (maintenanceDeferred(control)) continue;
-    try {
-      for (const node of pendingSessionMemoryNodes({ sessionId: saved.id, limit: 1, withoutFallback: true })) {
-        publishSessionMemoryFallback(saved, node.id); extracted++;
+  // A pump yields to the event loop between its bounded phases so a single scan
+  // never blocks the local HTTP API (health checks, CLI attach) for its whole
+  // duration, and records whether it did any real work so it can pace itself.
+  let extracted = 0, indexedWork = 0, dispatched = false;
+  const worked = () => dispatched || extracted > 0 || indexedWork > 0 || active.size > 0;
+  const halted = () => stopped() || !canRun();
+  try {
+    // Each background tick inspects a bounded rotating page. Continuously busy
+    // sources must not keep later controls outside the maintenance window.
+    for (const control of maintenanceControls('maintenance-controls')) {
+      const saved = loadSession(control.sessionId);
+      if (!saved || sessionDeleted(control.sessionId) || ['paused', 'cancelled'].includes(saved.executionState)) {
+        if (control.state === 'enabled') pauseSessionCompaction(control.sessionId, 'source_paused');
       }
-      maintenanceSucceeded(saved.id);
-    } catch (error) { maintenanceFailed(saved.id, 'extract', error); }
-    if (extracted >= 4) break;
-  }
-  if (!sessionCompactionSettings().enabled || active.size) return [];
-  discoverJobs();
-  const cursor = getRecord(DISCOVERY, 'scheduler-jobs')?.after || '';
-  const candidatePage = (operator, count) => database().prepare(`SELECT j.data FROM records j
-    JOIN records c ON c.kind=? AND c.id=json_extract(j.data,'$.sessionId')
-    JOIN records s ON s.kind='session' AND s.id=json_extract(j.data,'$.sessionId')
-    WHERE j.kind=? AND json_extract(c.data,'$.state')='enabled'
-    AND json_extract(j.data,'$.state') IN ('queued','retry_wait','waiting_for_configuration','waiting_for_auth')
-    AND (json_extract(j.data,'$.nextAttemptAt') IS NULL OR json_extract(j.data,'$.nextAttemptAt')<=?
-      OR json_extract(j.data,'$.state')='waiting_for_configuration' AND ?=1)
-    AND coalesce(json_extract(s.data,'$.executionState'),'idle') NOT IN ('paused','cancelled')
-    AND j.id ${operator} ? ORDER BY j.id LIMIT ?`).all(CONTROL, JOB, now(), sessionCompactionSettings().configured ? 1 : 0, cursor, count).map(row => JSON.parse(row.data));
-  const candidates = candidatePage('>', 100);
-  if (candidates.length < 100) candidates.push(...candidatePage('<=', 100 - candidates.length));
-  // Retire obsolete source generations across this whole bounded page before
-  // a successful fresh job returns early from the dispatch loop.
-  const currentCandidates = [];
-  for (const job of candidates) { if (staleGeneration(job)) retireStaleJob(job); else currentCandidates.push(job); }
-  for (const job of currentCandidates) {
-    // Advance on consideration, including foreground/configuration deferrals.
-    // Otherwise the first 100 ineligible jobs can starve host-only summaries.
-    putRecord(DISCOVERY, 'scheduler-jobs', { after: job.id });
-    if (controlFor(job.sessionId).state !== 'enabled') continue;
-    if ((jobBackoff.get(job.id) || 0) > Date.now()) continue;
-    try {
-      if (staleGeneration(job)) { retireStaleJob(job); continue; }
-      const result = await runJob(job.id, { runModel, canRun, authAvailable });
-      if (result) return [result];
-    } catch (error) {
-      if (staleGeneration(job)) retireStaleJob(job);
-      else jobFailed(job, error);
     }
+    if (stopped()) { pauseAllSessionCompactions('host_stopped'); return []; }
+    if (!canRun()) return [];
+    await yieldToIO();
+    // Bounded retention for derived episode snapshots. captureEpisode appends a new
+    // ~64 KB row every ~30 s with no supersede, so a long goal accumulates hundreds
+    // of MB (Hyatt: 2,180 rows / 132 MB for one session). Prune superseded snapshots
+    // here; observations remain authoritative and each is rebuildable, so this loses
+    // no recoverable state. A deleted/ineligible source is simply skipped.
+    for (const control of maintenanceControls('episode-prune-controls')) {
+      const saved = loadSession(control.sessionId);
+      if (!saved || sessionDeleted(control.sessionId)) continue;
+      try { pruneSessionEpisodes(saved); } catch { /* Derived snapshots; retried next tick. */ }
+    }
+    if (halted()) return [];
+    await yieldToIO();
+    // A paid-inference setting is not a stop on local source derivation. Explicit
+    // session/owner/operator pauses still exclude both indexing and extraction.
+    const localControls = `(json_extract(data,'$.state')='enabled' OR
+      (json_extract(data,'$.state')='paused' AND json_extract(data,'$.reasonPaused') IN ('owner_disabled','uncertain_request','source_stopped')))`;
+    // Rebuild obsolete generations even when the old cursor was caught up and
+    // the session stays idle. Only previously queued, locally eligible sources
+    // enter these bounded pages; owner pauses and old paid jobs remain intact.
+    for (const control of maintenanceControls('backfill-controls', `json_extract(data,'$.queued')=1
+      AND (json_extract(data,'$.indexingRemaining')=1 OR EXISTS (SELECT 1 FROM records memory
+        WHERE memory.kind='core.session.memory' AND memory.id=records.id
+        AND coalesce(json_extract(memory.data,'$.sourceVersion'),0)<>${sessionMemorySourceVersion})) AND ${localControls}`)) {
+      const saved = loadSession(control.sessionId);
+      if (!saved || sessionDeleted(saved.id) || !sessionMemoryEligible(saved) || ['paused', 'cancelled'].includes(saved.executionState)) continue;
+      if (maintenanceDeferred(control)) continue;
+      try {
+        const old = getRecord('core.session.memory', saved.id), migrating = old && old.sourceVersion !== sessionMemorySourceVersion;
+        const force = Boolean(control.force || migrating);
+        const indexed = indexSessionMemory(saved, { ...(control.throughSeq !== undefined ? { throughSeq: control.throughSeq } : {}), force });
+        const current = controlFor(saved.id);
+        const remaining = Boolean(indexed.deferred || indexed.indexingRemaining);
+        updateControl(saved.id, { indexingRemaining: remaining, force: remaining && (force || current.force) });
+        maintenanceSucceeded(saved.id); indexedWork++;
+      }
+      catch (error) { maintenanceFailed(control.sessionId, 'indexing', error); }
+    }
+    if (halted()) return [];
+    await yieldToIO();
+    for (const control of maintenanceControls('fallback-controls', `json_extract(data,'$.queued')=1 AND ${localControls}`)) {
+      const saved = loadSession(control.sessionId);
+      if (!saved || sessionDeleted(saved.id) || !sessionMemoryEligible(saved) || ['paused', 'cancelled'].includes(saved.executionState)) continue;
+      if (maintenanceDeferred(control)) continue;
+      try {
+        for (const node of pendingSessionMemoryNodes({ sessionId: saved.id, limit: 1, withoutFallback: true })) {
+          publishSessionMemoryFallback(saved, node.id); extracted++;
+        }
+        maintenanceSucceeded(saved.id);
+      } catch (error) { maintenanceFailed(saved.id, 'extract', error); }
+      if (extracted >= 4) break;
+    }
+    if (!sessionCompactionSettings().enabled || active.size) return [];
+    if (halted()) return [];
+    await yieldToIO();
+    discoverJobs();
+    const cursor = getRecord(DISCOVERY, 'scheduler-jobs')?.after || '';
+    const candidatePage = (operator, count) => database().prepare(`SELECT j.data FROM records j
+      JOIN records c ON c.kind=? AND c.id=json_extract(j.data,'$.sessionId')
+      JOIN records s ON s.kind='session' AND s.id=json_extract(j.data,'$.sessionId')
+      WHERE j.kind=? AND json_extract(c.data,'$.state')='enabled'
+      AND json_extract(j.data,'$.state') IN ('queued','retry_wait','waiting_for_configuration','waiting_for_auth')
+      AND (json_extract(j.data,'$.nextAttemptAt') IS NULL OR json_extract(j.data,'$.nextAttemptAt')<=?
+        OR json_extract(j.data,'$.state')='waiting_for_configuration' AND ?=1)
+      AND coalesce(json_extract(s.data,'$.executionState'),'idle') NOT IN ('paused','cancelled')
+      AND j.id ${operator} ? ORDER BY j.id LIMIT ?`).all(CONTROL, JOB, now(), sessionCompactionSettings().configured ? 1 : 0, cursor, count).map(row => JSON.parse(row.data));
+    const candidates = candidatePage('>', 100);
+    if (candidates.length < 100) candidates.push(...candidatePage('<=', 100 - candidates.length));
+    // Retire obsolete source generations across this whole bounded page before
+    // a successful fresh job returns early from the dispatch loop.
+    const currentCandidates = [];
+    for (const job of candidates) { if (staleGeneration(job)) retireStaleJob(job); else currentCandidates.push(job); }
+    for (const job of currentCandidates) {
+      // Advance on consideration, including foreground/configuration deferrals.
+      // Otherwise the first 100 ineligible jobs can starve host-only summaries.
+      putRecord(DISCOVERY, 'scheduler-jobs', { after: job.id });
+      if (controlFor(job.sessionId).state !== 'enabled') continue;
+      if ((jobBackoff.get(job.id) || 0) > Date.now()) continue;
+      try {
+        if (staleGeneration(job)) { retireStaleJob(job); continue; }
+        const result = await runJob(job.id, { runModel, canRun, authAvailable });
+        if (result) { dispatched = true; return [result]; }
+      } catch (error) {
+        if (staleGeneration(job)) retireStaleJob(job);
+        else jobFailed(job, error);
+      }
+    }
+    return [];
+  } finally {
+    scheduleNextMaintenance(worked());
   }
-  return [];
 }
 
 export function recoverSessionCompactions() {

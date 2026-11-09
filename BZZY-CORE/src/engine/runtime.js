@@ -30,7 +30,7 @@ import { HostMetricsSampler } from './host-metrics.js';
 import { authorizedOwnPhoneTerminalInput } from './update-access.js';
 import { recoverLearningJobs, processLearningReviews, pauseLearningForSession, pauseAllLearning } from './learning.js';
 import { processSkillEvolution } from './skill-evolution-runner.js';
-import { recoverSessionCompactions, processSessionCompactions, pauseSessionCompaction, pauseAllSessionCompactions } from './session-compactor.js';
+import { recoverSessionCompactions, processSessionCompactions, sessionMaintenanceDue, pauseSessionCompaction, pauseAllSessionCompactions } from './session-compactor.js';
 import { CoreKnowledge } from '../knowledge.js';
 import { recordGoalValidationResult } from './goal-validation.js';
 import { assertGoalWorkflowAdmission } from './workflows.js';
@@ -464,7 +464,12 @@ export async function serveRuntime() {
         .finally(() => { learningPump = undefined; });
     }
     if (active.length >= 8) return;
-    if (!memoryPump) {
+    // Memory maintenance paces itself (sessionMaintenanceDue): frequent while it
+    // has work, backing off to a long idle interval when caught up, so the
+    // scheduler stops re-running a full synchronous scan every 100 ms and no
+    // longer pins a CPU core on an idle Core. Execution supervision above stays
+    // at the 100 ms cadence. The single-pump guard still prevents overlap.
+    if (!memoryPump && sessionMaintenanceDue()) {
       memoryPump = processSessionCompactions({ canRun: () => !stopping && !quiescing && !operatorStopRequested() })
         .catch(() => { /* Derived memory retains its durable failure state. */ })
         .finally(() => { memoryPump = undefined; });
