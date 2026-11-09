@@ -25,10 +25,12 @@ import { sessionDeleted } from './store.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const RECENCY_GUARD_MS = 30 * 60 * 1000;
-// A goal in one of these states is finished and will not resume to touch its
-// copies. Every other state (including the resumable blocked/native_blocked and
-// any in-flight status) keeps the session's copies.
-const DONE_GOAL_STATES = new Set(['completed', 'verified', 'failed', 'abandoned', 'cancelled']);
+// A goal in one of these statuses is finished and will never resume to read its
+// copies. Every resumable status (paused, blocked, budgetLimited/usageLimited,
+// awaiting_review) and every in-flight one (active, verifying) keeps the
+// session's copies, so a stalled hunt the owner may still resume is never
+// stripped of the snapshots and worker trees its resume would read.
+const FINISHED_GOAL_STATUSES = new Set(['complete', 'cancelled']);
 const yieldToIO = () => new Promise(resolve => setImmediate(resolve));
 
 function storeDir(store, id) {
@@ -57,7 +59,7 @@ function sessionFinished(sessionId) {
   if (!sessionId) return false;
   if (sessionDeleted(sessionId)) return true;
   const session = getRecord('session', sessionId);
-  return Boolean(session && DONE_GOAL_STATES.has(session.goal?.state));
+  return Boolean(session && FINISHED_GOAL_STATUSES.has(session.goal?.status));
 }
 
 // Remove one assignment's worker copy. Callers at a known-safe close/apply point

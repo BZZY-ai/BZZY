@@ -77,7 +77,7 @@ test('reclaimAssignmentWorker handles orphans and the recency guard', () => {
 });
 
 test('a finished or deleted parent session releases even an open assignment copy', () => {
-  const done = uuid(); session(done, { goal: { state: 'completed' } });
+  const done = uuid(); session(done, { goal: { status: 'complete' } });
   const onDone = uuid(); assignment(onDone, { closure: 'open', parentSessionId: done }); makeDir('workers', onDone);
   assert.equal(reclaimAssignmentWorker(onDone), true);
 
@@ -85,20 +85,25 @@ test('a finished or deleted parent session releases even an open assignment copy
   const onGone = uuid(); assignment(onGone, { closure: 'open', parentSessionId: gone }); makeDir('workers', onGone);
   assert.equal(reclaimAssignmentWorker(onGone), true);
 
-  const liveBlocked = uuid(); session(liveBlocked, { goal: { state: 'native_blocked' } });
-  const onLive = uuid(); assignment(onLive, { closure: 'open', parentSessionId: liveBlocked }); makeDir('workers', onLive);
+  const resumable = uuid(); session(resumable, { goal: { status: 'blocked' } });
+  const onLive = uuid(); assignment(onLive, { closure: 'open', parentSessionId: resumable }); makeDir('workers', onLive);
   assert.equal(reclaimAssignmentWorker(onLive), false, 'a resumable (blocked) session keeps its open copy');
 });
 
 test('sweep reclaims orphan and finished snapshots but keeps referenced ones', async () => {
   const orphan = uuid(); makeDir('snapshots', orphan);
 
-  const doneSess = uuid(); session(doneSess, { goal: { state: 'completed' } });
+  const doneSess = uuid(); session(doneSess, { goal: { status: 'complete' } });
   const doneSnap = uuid(); snapshot(doneSnap, doneSess); makeDir('snapshots', doneSnap);
 
   const liveSess = uuid();
   const baseSnap = uuid(); snapshot(baseSnap, liveSess); makeDir('snapshots', baseSnap);
-  session(liveSess, { goal: { state: 'running' }, startSnapshotId: baseSnap });
+  session(liveSess, { goal: { status: 'active' }, startSnapshotId: baseSnap });
+
+  // A stalled-but-resumable session: its snapshot must survive so a later resume
+  // can still read it. This is what the goal.status (not .state) fix protects.
+  const pausedSess = uuid(); session(pausedSess, { goal: { status: 'paused' } });
+  const pausedSnap = uuid(); snapshot(pausedSnap, pausedSess); makeDir('snapshots', pausedSnap);
 
   const refSnap = uuid(); snapshot(refSnap, doneSess); makeDir('snapshots', refSnap);
   const openAsg = uuid(); assignment(openAsg, { closure: 'open', parentSessionId: liveSess, snapshotId: refSnap });
@@ -108,16 +113,17 @@ test('sweep reclaims orphan and finished snapshots but keeps referenced ones', a
   assert.equal(fs.existsSync(path.join(home(), 'snapshots', `${orphan}.json`)), false, 'sidecar reclaimed too');
   assert.equal(has('snapshots', doneSnap), false, 'finished session snapshot reclaimed');
   assert.equal(has('snapshots', baseSnap), true, 'live session run-start baseline kept');
+  assert.equal(has('snapshots', pausedSnap), true, 'resumable (paused) session snapshot kept');
   assert.equal(has('snapshots', refSnap), true, 'snapshot referenced by an open assignment kept');
   assert.ok(summary.snapshots >= 2);
 });
 
 test('sweep reclaims terminal workers and finished group trees, keeps live ones', async () => {
-  const liveSess = uuid(); session(liveSess, { goal: { state: 'running' } });
+  const liveSess = uuid(); session(liveSess, { goal: { status: 'active' } });
   const term = uuid(); assignment(term, { closure: 'inconclusive', parentSessionId: liveSess }); makeDir('workers', term);
   const open = uuid(); assignment(open, { closure: 'open', parentSessionId: liveSess }); makeDir('workers', open);
 
-  const doneSess = uuid(); session(doneSess, { goal: { state: 'failed' } });
+  const doneSess = uuid(); session(doneSess, { goal: { status: 'cancelled' } });
   makeDir('besties', doneSess);
   makeDir('parallel', liveSess);
 
