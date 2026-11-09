@@ -17,7 +17,14 @@ export function database() {
   if (connection && location === file && fs.existsSync(file)) return connection;
   connection?.close(); privateDir(home());
   connection = new DatabaseSync(file); location = file; fs.chmodSync(file, 0o600);
-  connection.exec(`PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+  // WAL + synchronous=NORMAL is corruption-safe (the documented pairing): it
+  // fsyncs far less than FULL, so write transactions hold the single WAL writer
+  // lock briefly. Core and each execution worker write this one database
+  // concurrently, so long lock holds under load surface as "database is locked"
+  // (SQLITE_BUSY past busy_timeout). The only cost is that a power/OS crash may
+  // drop the last transaction(s) since the last checkpoint — never corruption —
+  // and event replay/checkpoints recover the rest.
+  connection.exec(`PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
     CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind,id));
     CREATE INDEX IF NOT EXISTS records_work_unit_scope_v2 ON records(json_extract(data,'$.sessionId'),json_extract(data,'$.version'),
