@@ -55,7 +55,10 @@ export function reconcileSession(id) {
   for (const q of questions) putRecord('question', q.id, { ...q, state: 'expired', reason: 'Runner ended; an answer cannot safely be replayed to a new turn.' });
   const snapshot = session.startSnapshotId && getRecord('snapshot', session.startSnapshotId);
   let changes = [], inspectionError;
-  if (snapshot) { try { changes = inspectWorkspace(snapshot, session.cwd); } catch (error) { inspectionError = error.message; } }
+  // Time-bound the workspace diff: it is diagnostic for the recovery record, and
+  // resume must never block on it past the request timeout when cwd is huge (a
+  // goal accidentally started from a home directory walked ~185k files for >60s).
+  if (snapshot) { try { changes = inspectWorkspace(snapshot, session.cwd, { budgetMs: 4000 }); } catch (error) { inspectionError = error.message; } }
   const record = { sessionId: id, live: false, state: 'reconciled', orphanCleanup, uncertainOperations: uncertain.map(o => o.id), expiredQuestions: questions.map(q => q.id),
     workspaceChanges: changes, workspaceOmissions: changes.omissions || [], inspectionError, createdAt: now(), automaticallyReplayed: false };
   if (run && ['starting', 'running', 'waiting_for_input'].includes(run.state)) {

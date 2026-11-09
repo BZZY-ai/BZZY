@@ -103,10 +103,15 @@ function snapshotInfo(file, expectedSize = Infinity) {
     return { size, sha256: hash.digest('hex') };
   } finally { fs.closeSync(fd); }
 }
-export function workspaceManifest(root, limits = snapshotLimits(), { omissions = [], omittedPaths = new Set(), omittedDirectories = new Set(), priority = [] } = {}) {
+export function workspaceManifest(root, limits = snapshotLimits(), { omissions = [], omittedPaths = new Set(), omittedDirectories = new Set(), priority = [], deadline } = {}) {
   const resolved = fs.realpathSync(root), privateRoot = fs.existsSync(home()) ? fs.realpathSync(home()) : home(), privateIsInsideWorkspace = privateRoot.startsWith(resolved + path.sep);
   if (resolved === privateRoot) throw new Error('The private bzzy state directory cannot be used as a project workspace.');
   const omit = omissionRecorder(omissions);
+  // With a deadline (e.g. reconcileSession on goal resume) the walk/stat/hash
+  // must not block past it on a very large workspace — an unbounded inspection
+  // of a huge cwd (e.g. a home directory) otherwise blows the request timeout.
+  // The caller treats SNAPSHOT_BUDGET as "inspection skipped", not an error.
+  const assertBudget = () => { if (deadline && Date.now() > deadline) throw Object.assign(new Error('Workspace inspection exceeded its time budget.'), { code: 'SNAPSHOT_BUDGET' }); };
   const omittedCaches = new Set();
   const cachePath = name => {
     const relative = runtimeCachePath(name);
@@ -132,6 +137,7 @@ export function workspaceManifest(root, limits = snapshotLimits(), { omissions =
         omittedDirectories.add(prefix); omit({ path: prefix || '.', reason: 'snapshot_unavailable', kind: 'directory', code: error.code }); return;
       }
       for (const entry of entries) {
+        assertBudget();
         if (privateIsInsideWorkspace && path.resolve(dir, entry.name) === privateRoot) continue;
         const relative = path.join(prefix, entry.name);
         if (excluded.has(entry.name) || privateWorkspacePath(relative)) continue;
@@ -143,6 +149,7 @@ export function workspaceManifest(root, limits = snapshotLimits(), { omissions =
   }
   const result = {}, files = [], preferred = new Set(priority); let total = 0;
   for (const name of [...new Set(names)].sort((a, b) => Number(preferred.has(b)) - Number(preferred.has(a)) || (a < b ? -1 : a > b ? 1 : 0))) {
+    assertBudget();
     const absolute = path.resolve(resolved, name);
     if (privateIsInsideWorkspace && (absolute === privateRoot || absolute.startsWith(privateRoot + path.sep))) continue;
     if (name.split(path.sep).some(p => excluded.has(p)) || privateWorkspacePath(name)) continue;
@@ -166,6 +173,7 @@ export function workspaceManifest(root, limits = snapshotLimits(), { omissions =
   // Only hash files that fit. Files that disappear or change during capture are
   // omissions, never an excuse to stop unrelated goal work or widen permissions.
   for (const { name, file, size } of files) {
+    assertBudget();
     try {
       const info = snapshotInfo(file, size);
       if (info.size !== size) { omittedPaths.add(name); omit({ path: name, reason: 'snapshot_changed', bytes: size }); continue; }
@@ -226,11 +234,15 @@ export function copyWorkspaceSnapshot(snapshot, directory, { sessionId = snapsho
   if (sessionId) appendEvent(sessionId, 'snapshot.copy', result);
   return result;
 }
-export function inspectWorkspace(snapshot, cwd) {
+export function inspectWorkspace(snapshot, cwd, { budgetMs } = {}) {
   // Limits are host resource settings, not evidence authority. A resumed worker
   // must honor today's settings instead of remaining stuck on a historical cap.
+  // budgetMs time-bounds the inspection so it cannot block a request (e.g. goal
+  // resume) past its timeout on a very large workspace; exceeding it throws
+  // SNAPSHOT_BUDGET, which the caller treats as a skipped (not failed) inspection.
   const omissions = [], omittedPaths = new Set(), omittedDirectories = new Set(), before = { ...snapshot.manifest };
-  const current = workspaceManifest(cwd, snapshotLimits(), { omissions, omittedPaths, omittedDirectories, priority: Object.keys(before) }), changes = [], uninspected = [];
+  const deadline = budgetMs ? Date.now() + budgetMs : undefined;
+  const current = workspaceManifest(cwd, snapshotLimits(), { omissions, omittedPaths, omittedDirectories, priority: Object.keys(before), deadline }), changes = [], uninspected = [];
   const baseline = (snapshot.omissions || []).map(item => ({ ...item, phase: 'baseline' }));
   // Older snapshots may already contain diagnostic exports. Validate that saved
   // copy too: a worker never owes deletion/integration of diagnostic data. If

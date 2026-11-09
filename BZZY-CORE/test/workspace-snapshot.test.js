@@ -50,6 +50,27 @@ test('large evidence survives snapshot, worker copy and change inspection under 
   assert.notEqual(changes[0].after.sha256, changes[0].before.sha256);
 });
 
+test('a workspace manifest aborts with SNAPSHOT_BUDGET once its inspection deadline passes', () => {
+  file('a.js'); file('b.js'); file('sub/c.js');
+  // A spent deadline must stop the walk/stat/hash instead of enumerating a huge
+  // workspace to completion (a goal started from a home directory walked ~185k
+  // files for >60s and blew the resume request timeout).
+  assert.throws(() => workspaceManifest(project, undefined, { deadline: Date.now() - 1 }), error => error.code === 'SNAPSHOT_BUDGET');
+  // A generous deadline inspects exactly as an unbounded manifest does.
+  const bounded = workspaceManifest(project, undefined, { deadline: Date.now() + 60000 });
+  assert.deepEqual(Object.keys(bounded).sort(), Object.keys(workspaceManifest(project)).sort());
+});
+
+test('inspectWorkspace time-bounds the diff so a huge cwd cannot block resume', () => {
+  file('a.js'); file('b.js');
+  const snapshot = snapshotWorkspace(session);
+  // With a spent budget the diff aborts (reconcileSession catches SNAPSHOT_BUDGET
+  // and records it as a skipped inspection, so resume proceeds); unbounded is normal.
+  assert.throws(() => inspectWorkspace(snapshot, project, { budgetMs: -1 }), error => error.code === 'SNAPSHOT_BUDGET');
+  assert.deepEqual(inspectWorkspace(snapshot, project, { budgetMs: 60000 }), []);
+  assert.deepEqual(inspectWorkspace(snapshot, project), []);
+});
+
 for (const git of [false, true]) test(`runtime caches are excluded and audited with ${git ? 'Git' : 'filesystem'} enumeration`, () => {
   if (git) execFileSync('git', ['init', '-q', project]);
   file('source.js'); file('.cache/ms-playwright/chromium/chrome', 513 * MiB);
