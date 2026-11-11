@@ -65,7 +65,7 @@ Usage:
   bzzy --background SCRIPT [--notif] ARG...  Submit a durable Core script job with its arguments
   bzzy background list|status ID|logs ID|cancel ID  Inspect saved script jobs
   bzzy --codex|--claude|--deepseek        Open chat directly with that provider
-  bzzy skills sync                     Choose and import Codex skill folders
+  bzzy skills sync                     Check local Codex skills in a table and import them
   bzzy skills aliases set NAME EMAILS Set this host's explicit signup alias list
   bzzy skills aliases show NAME       Read this host's approved signup aliases
   bzzy skills aliases clear NAME      Clear this host's signup alias list

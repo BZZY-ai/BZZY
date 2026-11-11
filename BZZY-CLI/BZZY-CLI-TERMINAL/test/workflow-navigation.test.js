@@ -109,12 +109,11 @@ test('Skills and Agents open the workflow library and Back returns to the origin
   assert.equal(ui.tui.panel, 'chat'); assertDraft(); assert.equal(ui.tui.inputQueue.length, 0);
 });
 
-test('opening Workflows from skill import restores the directory draft before restoring the unsent chat', async () => {
-  await skillsCommand('/skills tab:import', ui);
-  ui.tui.value = '/private/tmp/synthetic skills directory'; ui.tui.cursor = 12;
+test('opening Workflows from the Codex import view returns to it and restores the unsent chat', async () => {
+  ui.codexSkillDiscovery = { cwd: directory, userHome: path.join(directory, 'home'), codexHome: null, bzzyCodexHome: null, adminRoot: path.join(directory, 'admin') };
+  await skillsCommand('/skills codex', ui); assert.equal(ui.skillView, 'codex'); assertDraft();
   await skillsCommand('/skills workflows', ui); assert.equal(ui.tui.panel, 'workflows'); assertDraft();
-  clickBack(); await Promise.resolve(); assert.equal(ui.tui.panel, 'skills');
-  assert.equal(ui.tui.value, '/private/tmp/synthetic skills directory');
+  clickBack(); await Promise.resolve(); assert.equal(ui.tui.panel, 'skills'); assert.equal(ui.skillView, 'codex');
   ui.tui.setPanel('chat'); assertDraft(); assert.equal(ui.tui.inputQueue.length, 0);
 });
 

@@ -27,7 +27,7 @@ bzzy sessions      The same alias-only list, newest activity first; restores the
 /library           Create a Library code or install missing entries from another host.
 /library share agents skills  Share only agents and skills; omit types for a checkbox picker.
 /import [CODE]     Import a Library or full terminal copy; omit CODE for hidden entry.
-/skills            Browse shared workflows; /skills sync copies Codex skills for all models.
+/skills            Browse skills; /skills codex picks local Codex skills to import; /skills clear deletes all.
 /agents            Create and view reusable specialist subagents for any supported model.
 /create-skill <description> Ask for a name, then create and enable a global Core skill with the current model.
 /create-agent <description> Ask for a name, then create a global Core specialist with the current model.

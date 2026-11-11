@@ -531,8 +531,8 @@ are decoded without inserting packet characters. Key release does not delete
 another word; repeating the key does. Bracketed paste into the composer cannot
 activate word deletion.
 
-**Skills** opens the existing project/global skills library, including **Sync
-skills from Codex into BZZY**. **Metrics**, also available with `/metrics`, shows
+**Skills** opens the existing project/global skills library, including **Codex
+import** and **Clear**. **Metrics**, also available with `/metrics`, shows
 the current goal's objective/status and recorded skill and agent use. Switch to
 **Chat totals**, **Outside goals**, or choose an earlier goal. Skill loads,
 specialist invocations, worker tasks and their follow-ups have separate counts;
@@ -882,8 +882,9 @@ Esc/Cancel returns. Core's own provider, model and effort remain independent in
 its Default models row.
 
 Open **Skills** from the top bar or type `/skills` to view project and
-Core/global skills. Use `/create-skill` to create one, or the tab's Import/Export
-actions to transfer selected names through Relay. `/skills import` still accepts
+Core/global skills. Use `/create-skill` to create one, the tab's Import/Export
+actions to transfer selected names through Relay, **Codex import** to copy local
+Codex skills, or **Clear** to delete the whole library. `/skills import` still accepts
 one skill folder/ZIP; local folder imports stay disabled for review. A skill uses
 the same package shape as Codex: one
 directory per skill with a required `SKILL.md` plus optional `scripts/`,
@@ -895,22 +896,44 @@ and move the portable package into the global library. Existing global skills
 are never overwritten, and the moved skill stays disabled until you enable it.
 Packages containing private project evidence need a separate generic candidate.
 
-Choose **Sync skills from Codex into BZZY**, type `/skills sync`, or run `bzzy
-skills sync` in a terminal to enter a Codex skills directory. BZZY lists every
-immediate skill package, then Space toggles checkboxes and Enter imports the
-selected packages. Imported skills remain disabled for review. Noninteractive
-`bzzy skills sync --json` scans project `.agents/skills`,
-user `.agents/skills`, `$CODEX_HOME/skills`, `$BZZY_CODEX_HOME/skills`,
-`~/.codex/skills`, and the admin skill directory.
+Choose **Codex import**, type `/skills codex` (or `/skills sync`), or run `bzzy
+skills sync` in a terminal. Core scans every Codex skill installed on this
+machine: this project's `.agents/skills` (up to the repository root),
+`~/.agents/skills`, `$CODEX_HOME/skills`, `$BZZY_CODEX_HOME/skills`,
+`~/.codex/skills` including Codex's built-in `.system` skills, and
+`/etc/codex/skills`. The result is a checkbox table with SKILL, FROM and STATUS
+columns. Space, Enter or a click checks a row; **Select all** and **Select none**
+change every importable row; **Import checked** copies only the checked skills.
+
+STATUS is `new` or `update` (a skill BZZY copied from that same Codex folder
+whose source changed) for importable rows. `in BZZY` means the same content is
+already installed; `name taken` means BZZY has a different skill with that name,
+which is never replaced (delete it first to import the Codex one); `name clash`
+and `duplicate` mean an earlier Codex location already provides that name; and
+`invalid` packages fail BZZY's package checks. **Show why N skills were
+skipped** lists reasons after an import. **Other folder** adds one extra folder,
+such as a copied `~/.codex/skills`, to every scan; an empty entry forgets it.
+**Rescan** reads the folders again. Scanning installs nothing and creates no
+project state. A package that changes after the scan is reported instead of
+imported.
 
 The whole package is copied inactively; project discoveries stay
 project-scoped, while user and machine discoveries become Core/global skills.
-Scripts and hooks never execute during import or enable. Codex folders whose
-metadata name uses underscores are displayed with that name and normalized to
-BZZY’s hyphenated format (for example, `read_emails` imports as `read-emails`).
-New/changed versions require review and enable; repeat syncs preserve unchanged
-enable decisions and independent BZZY edits. See
-[Core skills](../../BZZY-CORE/docs/SKILLS.md).
+Imported skills start OFF until you turn them on in the library. Scripts and hooks
+never execute during import or enable, and Codex folders are never modified.
+BZZY uses the same package format as Codex. Names with underscores, spaces or
+capitals are normalized to BZZY's hyphenated format in a private staged copy (for
+example, `read_emails` imports as `read-emails`). Noninteractive
+`bzzy skills sync --json` still imports every new or updated package at once.
+Repeat imports preserve unchanged enable decisions and independent BZZY edits.
+
+**Clear** deletes every skill this library manages after a confirmation
+dropdown that counts them: this project's skills and all Core/global skills,
+following the `/skills scope` filter. `/skills clear` opens the same
+confirmation. Skills in other projects stay. Models lose access immediately;
+version history and audit records are kept, and older learning jobs cannot
+recreate the deleted entries. If any skill changes while the confirmation is
+open, nothing is deleted. See [Core skills](../../BZZY-CORE/docs/SKILLS.md).
 
 Use `/memory [query]` for attributed project history and `/learn` for bounded lesson reviews, pinned input packets, automatic progress observations, project fact pins, proposed resolutions and skill feedback/curation. Closed complex work, possible fixes, reviewed worker evidence and meaningful saved outcomes can queue reviews. Each job pins its source and reviewer selection; queued work defers during its own conversation's activity without blocking every other idle session. New skills and corrections stage by default; reviewed policy can opt into automatic new project skills. Explicit pauses and uncertain reviews require inspection/resume; provably undispatched shutdown work and cached local publication recover safely. Candidates need domain-appropriate reviewed offline evaluation and owner-governed activation; a separately reviewed fixture policy can allow evaluated automatic updates. Open workflow pins protect existing versions. Opening these views never starts inference. See [knowledge and learning](../../BZZY-CORE/docs/KNOWLEDGE.md) for scope, defaults, owner commands and validation limits.
 

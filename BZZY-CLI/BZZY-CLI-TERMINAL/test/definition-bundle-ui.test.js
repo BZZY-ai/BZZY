@@ -105,7 +105,10 @@ test('a Core backend ignoring the selected tab type cannot expose or write a mix
 test('both libraries offer the same ZIP review, exact manifest, and explicit write without model work', async () => {
   for (const panel of ['skills', 'agents']) {
     await command(panel, 'library');
-    if (panel === 'skills') { await command(panel, 'tab:import'); await command(panel, ''); }
+    if (panel === 'skills') {
+      ui.codexSkillDiscovery = { cwd: project, userHome: path.join(directory, 'home'), codexHome: null, bzzyCodexHome: null, adminRoot: path.join(directory, 'admin') };
+      await command(panel, 'tab:import'); await command(panel, '');
+    }
     assert.ok(rowsFor(panel).some(row => row.text === 'Export' && row.action === 'bundle-export-type'));
     assert.ok(rowsFor(panel).some(row => row.text === 'Import' && row.action === 'bundle-import-type'));
     assert.ok(!rowsFor(panel).some(row => ['creator', 'create', 'workflows', 'bundle-relay', 'tab:import'].includes(row.action)));

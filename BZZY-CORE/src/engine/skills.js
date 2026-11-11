@@ -425,22 +425,67 @@ export function publishLearnedSkill(definition, options = {}) {
   });
 }
 
+// Deletion keeps immutable versions and audit history. Marking learning
+// receipts deleted stops an older learning job from recreating the entry.
+function removeSkillRecord(current, db) {
+  const id = idOf(current), deletedAt = now(), revision = current.revision + 1;
+  audit({ ...current, revision, updatedAt: deletedAt }, current, 'delete', db);
+  putRecord('core.skill.deleted', id, { ...current, enabled: false, revision, deletedAt }, db);
+  db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, id);
+  const publications = db.prepare("SELECT id,data FROM records WHERE kind=? AND json_extract(data,'$.skillId')=? AND json_extract(data,'$.state') IN ('published','reused')").all(learningPublicationKind, id);
+  for (const item of publications) {
+    const receipt = JSON.parse(item.data);
+    putRecord(learningPublicationKind, item.id, { ...receipt, state: 'deleted', deletedAt, deletedRevision: revision }, db);
+  }
+  return { deleted: true, id, name: current.name, scope: scopeOf(current), ...(current.projectId ? { projectId: current.projectId } : {}), version: current.version, revision };
+}
+
 export function deleteSkill(name, expectedRevision, options = {}) {
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) fail('Review the current skill revision before deleting it.');
   const selected = findSkill(name, options), id = idOf(selected);
   return atomic(db => {
     const current = getRecord(kind, id);
     if (!current || current.revision !== expectedRevision || current.version !== selected.version) fail('Skill changed. Reload before deleting it.');
-    const deletedAt = now(), revision = current.revision + 1;
-    audit({ ...current, revision, updatedAt: deletedAt }, current, 'delete', db);
-    putRecord('core.skill.deleted', id, { ...current, enabled: false, revision, deletedAt }, db);
-    db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, id);
-    const publications = db.prepare("SELECT id,data FROM records WHERE kind=? AND json_extract(data,'$.skillId')=? AND json_extract(data,'$.state') IN ('published','reused')").all(learningPublicationKind, id);
-    for (const item of publications) {
-      const receipt = JSON.parse(item.data);
-      putRecord(learningPublicationKind, item.id, { ...receipt, state: 'deleted', deletedAt, deletedRevision: revision }, db);
-    }
-    return { deleted: true, id, name: current.name, scope: scopeOf(current), ...(current.projectId ? { projectId: current.projectId } : {}), version: current.version, revision };
+    return removeSkillRecord(current, db);
+  });
+}
+
+// Clear covers every entry the owner's library manages for this terminal:
+// its project skills and/or all global skills, including a global skill that
+// a same-named project skill hides from the list. Other projects are untouched.
+function clearTargets(options, db) {
+  const include = options.include || 'all';
+  if (!['all', 'project', 'global'].includes(include)) fail('Choose which skills to clear.');
+  const project = include === 'global' ? null : context(options);
+  if (include === 'project' && !project) fail('Clearing project skills needs the project directory.');
+  const clauses = [], args = [kind];
+  if (include !== 'project') clauses.push("COALESCE(json_extract(data,'$.scope'),'global')='global'");
+  if (project) { clauses.push("(json_extract(data,'$.scope')='project' AND json_extract(data,'$.projectId')=?)"); args.push(project.id); }
+  const records = db.prepare(`SELECT data FROM records WHERE kind=? AND (${clauses.join(' OR ')}) ORDER BY json_extract(data,'$.name'),id`).all(...args).map(row => JSON.parse(row.data));
+  const skills = records.map(record => ({ id: idOf(record), name: record.name, scope: scopeOf(record),
+    ...(record.projectId ? { projectId: record.projectId } : {}), enabled: Boolean(record.enabled), revision: record.revision, version: record.version }));
+  return { include, projectId: project?.id || null, records, skills,
+    fingerprint: digest([include, project?.id || null, skills.map(skill => [skill.id, skill.revision, skill.version])]) };
+}
+
+// Host-only review for the owner's Clear confirmation. It changes nothing.
+export function previewSkillClear(options = {}) {
+  const { include, projectId, skills, fingerprint } = clearTargets(options, database());
+  return { include, projectId, fingerprint, total: skills.length,
+    project: skills.filter(skill => skill.scope === 'project').length,
+    global: skills.filter(skill => skill.scope === 'global').length, skills };
+}
+
+// Deletes exactly the reviewed entries in one transaction. Any change after
+// the review (a new, edited, toggled or removed skill) cancels the whole clear.
+export function clearSkills(review, options = {}) {
+  if (options.reviewed !== true || typeof review?.fingerprint !== 'string') fail('Review the skills to clear before confirming.');
+  return atomic(db => {
+    const current = clearTargets({ ...options, include: review.include }, db);
+    if (current.projectId !== review.projectId || current.fingerprint !== review.fingerprint) fail('The skill library changed. Review Clear again before deleting.');
+    const removed = current.records.map(record => removeSkillRecord(record, db));
+    return { deleted: removed.length, project: removed.filter(item => item.scope === 'project').length,
+      global: removed.filter(item => item.scope === 'global').length, skills: removed };
   });
 }
 

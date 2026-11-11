@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import { UI } from '../src/ui.js';
 import { clean, cellWidth } from '../src/terminal-format.js';
 import { skillsCommand, skillRows } from '../src/skills-ui.js';
+import { libraryActions } from '../src/library-layout.js';
 import { subagentsCommand, subagentRows } from '../src/subagents-ui.js';
 import { createChatSession } from '@bzzy/core/engine/host-commands.js';
 import { getProvider } from '@bzzy/core/engine/providers.js';
@@ -131,7 +132,15 @@ test('switch commands from a previous conversation are rejected and import-direc
   assert.equal(inspectSkill(skill.id, { scope: 'global' }).enabled, false);
   assert.equal(getSubagentDefinition(agent.name, { scope: 'global' }).enabled, true);
   assert.ok(notices.filter(item => item.type === 'error').length >= 2);
-  await skillCommand('tab:import'); ui.tui.value = '/private/tmp/folder'; ui.tui.cursor = [...ui.tui.value].length;
-  dispatched.length = 0; ui.tui.key(' ', { name: 'space' });
-  assert.equal(dispatched.length, 0); assert.equal(ui.tui.value, '/private/tmp/folder ');
+  // In the Codex import table Space checks the focused skill; on a button it does nothing.
+  const codexHome = path.join(directory, 'codex-home'), package_ = path.join(codexHome, 'skills', 'space-skill');
+  fs.mkdirSync(package_, { recursive: true });
+  fs.writeFileSync(path.join(package_, 'SKILL.md'), '---\nname: space-skill\ndescription: Fixture for Space toggling.\n---\nFollow the fixture.\n');
+  ui.codexSkillDiscovery = { cwd: directory, userHome: path.join(directory, 'home'), codexHome, bzzyCodexHome: null, adminRoot: path.join(directory, 'admin') };
+  await skillCommand('codex'); const codexActions = libraryActions(skillRows(ui));
+  const check = codexActions.find(action => action.startsWith('codex-toggle:')); assert.ok(check);
+  dispatched.length = 0; ui.tui.skillFocus = codexActions.indexOf(check); ui.tui.key(' ', { name: 'space' });
+  assert.deepEqual(dispatched, ['/skills ' + check]);
+  dispatched.length = 0; ui.tui.skillFocus = codexActions.indexOf('codex-rescan'); ui.tui.key(' ', { name: 'space' });
+  assert.equal(dispatched.length, 0); assert.equal(ui.tui.value, 'Retain my draft');
 });

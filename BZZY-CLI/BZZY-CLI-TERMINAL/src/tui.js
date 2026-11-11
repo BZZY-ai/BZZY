@@ -529,7 +529,7 @@ export class TerminalChat {
   canCompose() {
     if (this.selection || this.renderingPicker) return false;
     if (!this.promptDraft && (this.panel === 'monitor' || this.panel === 'extension' || this.panel === 'settings' || this.panel === 'metrics' || this.panel === 'agents' || this.panel === 'workflows' || this.panel === 'goals'
-      || this.panel === 'skills' && this.ui.skillView !== 'import')) return false;
+      || this.panel === 'skills')) return false;
     return Boolean(this.resolveInput || this.ui.sessionId && !this.hidden && !this.promptDraft);
   }
   submitMessage() {
@@ -584,18 +584,6 @@ export class TerminalChat {
     const extensionScroll = this.panel === 'extension' && panel === 'chat' ? this.ui.extensions?.chatScroll : null;
     if (this.panel === 'extension' && panel !== 'extension') this.ui.extensions?.leave();
     if (panel !== this.panel) cancelDefinitionBundle(this.ui, this.panel);
-    if (this.skillPanelDraft && panel !== 'skills') {
-      if (this.panel === 'skills' && this.ui.skillView === 'import') this.ui.skillImportDraft = this.value;
-      Object.assign(this, this.skillPanelDraft);
-      this.skillPanelDraft = null;
-    }
-    if (panel === 'skills' && this.panel !== 'skills') {
-      this.skillPanelDraft = { value: this.value, cursor: this.cursor };
-      if (this.ui.skillView === 'import') {
-        this.value = this.ui.skillImportDraft || this.ui.skillImportDirectory || '';
-        this.cursor = [...this.value].length;
-      }
-    }
     if (this.settingsDraft && panel !== 'settings' && !this.promptDraft) { Object.assign(this, this.settingsDraft); this.settingsDraft = null; }
     if (panel === 'settings' && this.panel !== 'settings') { this.settingsDraft = { value: this.value, cursor: this.cursor }; this.value = ''; this.cursor = 0; }
     this.settingsEnsureFocus = panel === 'settings';
@@ -1180,7 +1168,7 @@ export class TerminalChat {
         this.setPanel('chat'); return;
       }
       const rows = skillRows(this.ui), actions = libraryActionList(rows);
-      if (['up', 'down', 'left', 'right', 'tab'].includes(key.name) && actions.length && !(this.ui.skillView === 'import' && ['left', 'right'].includes(key.name))) {
+      if (['up', 'down', 'left', 'right', 'tab'].includes(key.name) && actions.length) {
         const backwards = ['up', 'left'].includes(key.name) || key.name === 'tab' && key.shift;
         this.skillFocus = ((this.skillFocus || 0) + (backwards ? actions.length - 1 : 1)) % actions.length;
         this.skillEnsureFocus = true; this.schedule(); return;
@@ -1189,8 +1177,9 @@ export class TerminalChat {
         const toggle = libraryRowToggle(rows, actions[this.skillFocus || 0]);
         if (toggle) { this.localCommand('/skills ' + toggle); return; }
       }
-      if (key.name === 'return' && this.ui.skillView === 'import' && this.value.trim()) {
-        this.localCommand('/skills save-directory'); return;
+      // Codex import table: Space checks the focused skill, like Enter or a click.
+      if (key.name === 'space' && this.ui.skillView === 'codex' && /^codex-toggle:/.test(actions[this.skillFocus || 0] || '')) {
+        this.localCommand('/skills ' + actions[this.skillFocus || 0]); return;
       }
       if (key.name === 'return' && actions[this.skillFocus || 0]) { this.localCommand('/skills ' + actions[this.skillFocus || 0]); return; }
     }
@@ -1216,10 +1205,6 @@ export class TerminalChat {
     if (key.ctrl && key.name === 'd' && !this.value) { key.bzzyHandled = true; if (this.promptDraft || this.hidden || !this.ui.sessionId) this.finish(null); else this.openExitPrompt(); return; }
     const chars = [...this.value];
     if (key.name === 'return' && !key.meta && !key.shift && !this.pasting) {
-      if (this.panel === 'skills' && this.ui.skillView === 'import') {
-        this.localCommand('/skills save-directory');
-        return;
-      }
       if (!this.hidden && /^bzzy\b/.test(this.question || '') && this.value.trim() === '/usage') { this.value = ''; this.cursor = 0; this.ui.showAccountStatus(); return; }
       if (!this.hidden && /^bzzy\b/.test(this.question || '') && this.value.trim() === '/copy') { this.value = ''; this.cursor = 0; this.setCopyMode(true); return; }
       const panel = /^bzzy\b/.test(this.question || '') && !this.hidden && /^\/(chat|room|activity|http|sessions|settings|metrics)$/.exec(this.value.trim())?.[1];
@@ -1289,6 +1274,7 @@ export class TerminalChat {
       const layout = settingsLayout(this.ui.settings, width, this.theme, { spaced: (this.output.rows || 24) - (this.sceneHeaderLength || 2) >= 18 && !tightMain });
       this.settingsFocusRow = layout.focusRow; this.settingsFocusRange = layout.focusRange; this.settingsFocusedAction = layout.focusAction; this.contentHits.push(...layout.hits); lines.push(...layout.lines);
     } else if (['skills', 'agents', 'workflows', 'goals'].includes(this.panel)) {
+      this.libraryWidth = width;
       const rows = this.panel === 'skills' ? skillRows(this.ui) : this.panel === 'agents' ? subagentRows(this.ui)
         : this.panel === 'workflows' ? workflowRows(this.ui) : goalRows(this.ui);
       const key = ({ skills: 'skill', agents: 'agent', workflows: 'workflow', goals: 'goal' })[this.panel];

@@ -127,8 +127,11 @@ test('top Skills opens Core/project skills and Metrics is a local escapable view
   assert.equal(await skills, '/skills'); assert.equal(tui.value, 'keep this draft');
   await ui.settingsCommand('/skills'); tui.render();
   assert.match(tui.lastFrame.map(clean).join('\n'), /SKILLS.*Import.*Export.*THIS CHAT \/ PROJECT.*BZZY CORE \/ GLOBAL/s);
+  const home = process.env.BZZY_HOME;
+  ui.codexSkillDiscovery = { cwd: home, userHome: path.join(home, 'home'), codexHome: null, bzzyCodexHome: null, adminRoot: path.join(home, 'admin') };
   await ui.settingsCommand('/skills tab:import'); tui.render();
-  assert.match(tui.lastFrame.map(clean).join('\n'), /CODEX SKILLS DIRECTORY[\s\S]*Save directory[\s\S]*Refresh/);
+  assert.match(tui.lastFrame.map(clean).join('\n'), /IMPORT SKILLS FROM CODEX[\s\S]*Import checked · 0[\s\S]*Rescan[\s\S]*No Codex skills found/);
+  tui.key('\x1b', { sequence: '\x1b', meta: true }); assert.equal(tui.panel, 'skills'); assert.equal(ui.skillView, 'library');
   tui.key('\x1b', { sequence: '\x1b', meta: true }); assert.equal(tui.panel, 'chat');
 
   const metrics = ui.ask('bzzy › '); await Promise.resolve(); tui.render();

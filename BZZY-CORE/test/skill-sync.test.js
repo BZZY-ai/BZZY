@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { codexSkillRoots, discoverCodexSkills, syncCodexSkills, skillSyncReport } from '../src/engine/skill-sync.js';
-import { inspectSkill, setSkillEnabled, importSkill, readSkill, listSkills } from '../src/engine/skills.js';
+import { codexSkillRoots, discoverCodexSkills, syncCodexSkills, skillSyncReport, previewCodexSkills, importCodexSkills } from '../src/engine/skill-sync.js';
+import { inspectSkill, setSkillEnabled, importSkill, readSkill, listSkills, createSkill } from '../src/engine/skills.js';
 import { createSession } from '../src/engine/store.js';
 import { getProvider } from '../src/engine/providers.js';
 import { ToolHost, taskTools } from '../src/engine/tools.js';
@@ -116,4 +116,89 @@ test('one synced workflow and its references are available unchanged to differen
     assert.match(conversationPrompt(session, '$cross-model-review inspect this change'), /provider-independent library for every model/);
   }
   assert.equal(bodies.size, 1); assert.equal(listSkills().total, 1); assert.equal(listRecords('execution').length, 0);
+});
+
+const byName = result => new Map(result.results.map(item => [item.name, item]));
+const pick = (result, ...names) => result.results.filter(item => names.includes(item.name)).map(({ sourceId, version }) => ({ sourceId, version }));
+
+test('a Codex scan lists every local skill with its location and import status without installing anything', () => {
+  const project = path.join(directory, 'project');
+  skill(path.join(options.cwd, '.agents', 'skills'), 'project-skill');
+  skill(path.join(options.userHome, '.agents', 'skills'), 'user-skill');
+  skill(path.join(options.codexHome, 'skills'), 'configured-skill');
+  skill(path.join(options.userHome, '.codex', 'skills', '.system'), 'system-skill');
+  const underscore = skill(path.join(options.userHome, '.codex', 'skills'), 'under_score_skill');
+  const malformed = skill(path.join(options.userHome, '.codex', 'skills'), 'malformed'); fs.writeFileSync(path.join(malformed, 'SKILL.md'), 'no metadata');
+  const scan = previewCodexSkills(options), items = byName(scan);
+  assert.deepEqual([...items.keys()].sort(), ['configured-skill', 'malformed', 'project-skill', 'system-skill', 'under-score-skill', 'user-skill']);
+  for (const name of ['project-skill', 'user-skill', 'configured-skill', 'system-skill', 'under-score-skill']) assert.equal(items.get(name).status, 'new', name);
+  assert.equal(items.get('malformed').status, 'rejected');
+  assert.deepEqual(Object.fromEntries([...items].filter(([name]) => name !== 'malformed').map(([name, item]) => [name, item.label])), {
+    'project-skill': 'this project', 'user-skill': '~/.agents', 'configured-skill': '$CODEX_HOME', 'system-skill': 'Codex system', 'under-score-skill': '~/.codex' });
+  assert.equal(items.get('project-skill').target, 'project'); assert.equal(items.get('user-skill').target, 'global');
+  assert.equal(items.get('under-score-skill').rawName, 'under_score_skill');
+  assert.equal(items.get('system-skill').system, true);
+  assert.equal(listSkills().total, 0); assert.equal(listRecords('core.skill.codex-sync').length, 0);
+  assert.equal(fs.existsSync(path.join(project, '.bzzy')) || fs.existsSync(path.join(options.cwd, '.bzzy')), false, 'a scan never creates project identity state');
+  assert.match(fs.readFileSync(path.join(underscore, 'SKILL.md'), 'utf8'), /name: under_score_skill/);
+  assert.equal(JSON.stringify(skillSyncReport(scan)).includes(directory), false);
+});
+
+test('a selective Codex import installs only checked skills, disabled, and later scans report their state', () => {
+  const user = path.join(options.userHome, '.agents', 'skills'), configured = path.join(options.codexHome, 'skills');
+  const source = skill(user, 'user-skill'); skill(configured, 'configured-skill');
+  const underscore = skill(path.join(options.userHome, '.codex', 'skills'), 'under_score_skill');
+  let scan = previewCodexSkills(options);
+  const result = importCodexSkills(pick(scan, 'user-skill', 'under-score-skill'), options);
+  assert.equal(result.imported, 2, JSON.stringify(result)); assert.equal(result.results.length, 2, 'only checked skills are reported');
+  assert.equal(inspectSkill('user-skill').enabled, false); assert.equal(inspectSkill('under-score-skill').enabled, false);
+  assert.throws(() => inspectSkill('configured-skill'), /not found/);
+  assert.match(readSkill('under-score-skill', { enabledOnly: false }).text, /name: under-score-skill/);
+  assert.match(fs.readFileSync(path.join(underscore, 'SKILL.md'), 'utf8'), /name: under_score_skill/, 'the Codex folder is untouched');
+  assert.equal(fs.readdirSync(path.join(process.env.BZZY_HOME, 'skills')).some(name => name.startsWith('.')), false, 'staging is cleaned up');
+
+  scan = previewCodexSkills(options); let items = byName(scan);
+  assert.equal(items.get('user-skill').status, 'unchanged'); assert.equal(items.get('under-score-skill').status, 'unchanged');
+  assert.equal(items.get('configured-skill').status, 'new');
+
+  // The managed copy updates for review; an independent BZZY skill is never replaced.
+  const enabled = inspectSkill('user-skill'); setSkillEnabled(enabled.id, true, enabled.revision);
+  fs.writeFileSync(path.join(source, 'references', 'check.txt'), 'Updated checklist.');
+  createSkill({ name: 'configured-skill', description: 'Independent BZZY skill.', instructions: 'Keep this BZZY copy.' }, { scope: 'global' });
+  scan = previewCodexSkills(options); items = byName(scan);
+  assert.equal(items.get('user-skill').status, 'update');
+  assert.equal(items.get('configured-skill').status, 'conflict'); assert.equal(items.get('configured-skill').conflictWith, 'library');
+  const second = importCodexSkills(pick(scan, 'user-skill', 'configured-skill'), options);
+  assert.equal(second.updated, 1); assert.equal(second.conflicts, 1);
+  assert.equal(inspectSkill('user-skill').enabled, false, 'a changed package needs review again');
+  assert.match(readSkill('configured-skill', { enabledOnly: false }).text, /Keep this BZZY copy/);
+});
+
+test('a Codex import never installs a package that changed or disappeared after the scan', () => {
+  const user = path.join(options.userHome, '.agents', 'skills');
+  const changed = skill(user, 'changed-skill'), removed = skill(user, 'removed-skill');
+  const scan = previewCodexSkills(options);
+  fs.writeFileSync(path.join(changed, 'references', 'check.txt'), 'Changed after the scan.');
+  fs.rmSync(removed, { recursive: true });
+  const result = importCodexSkills(pick(scan, 'changed-skill', 'removed-skill'), options);
+  assert.equal(result.imported, 0); assert.equal(result.rejected, 2);
+  assert.ok(result.results.some(item => item.status === 'rejected' && /changed/i.test(item.reason)));
+  assert.ok(result.results.some(item => item.status === 'rejected' && /no longer available/i.test(item.reason)));
+  assert.equal(listSkills().total, 0);
+  for (const invalid of [[], [{ sourceId: 'x', version: 'y' }], 'all', null]) assert.throws(() => importCodexSkills(invalid, options), /current scan/);
+});
+
+test('project discoveries import into this project only when checked, and another folder is scanned without rescoping standard ones', () => {
+  const extra = path.join(directory, 'copied-codex', 'skills');
+  skill(path.join(options.cwd, '.agents', 'skills'), 'project-skill'); skill(extra, 'copied-skill');
+  const userRoot = path.join(options.userHome, '.agents', 'skills'); skill(userRoot, 'user-skill');
+  const scan = previewCodexSkills({ ...options, extraRoots: [extra, userRoot] }), items = byName(scan);
+  assert.equal(items.get('copied-skill').label, 'other folder'); assert.equal(items.get('copied-skill').target, 'global');
+  assert.equal(items.get('user-skill').label, '~/.agents', 'a standard location keeps its own label');
+  const result = importCodexSkills(pick(scan, 'project-skill', 'copied-skill'), { ...options, extraRoots: [extra] });
+  assert.equal(result.imported, 2, JSON.stringify(result));
+  assert.equal(inspectSkill('project-skill', { projectRoot: options.cwd, scope: 'project' }).scope, 'project');
+  assert.equal(inspectSkill('copied-skill', { scope: 'global' }).scope, 'global');
+  assert.equal(fs.existsSync(path.join(options.cwd, '.bzzy', 'project.json')), true, 'importing a project skill initializes its project');
+  assert.throws(() => inspectSkill('user-skill'), /not found/);
 });
