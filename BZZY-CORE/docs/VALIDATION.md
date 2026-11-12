@@ -1,3 +1,28 @@
+# Unicode-safe native RPC and metadata-only Codex resume (2026-11-12)
+
+Native stdio responses now use LF byte boundaries instead of Node's text-line
+reader. Literal U+2028 and U+2029 remain inside their JSON strings, including
+when UTF-8 characters span input chunks. Previously the text-line reader split
+these valid responses, discarded both fragments as malformed JSON and left the
+request waiting for its deadline. Codex resume also requests `excludeTurns: true`
+to retain the saved native context without returning an unused full transcript.
+
+On Linux with Node 24.22.1, the targeted Core suites passed **101 tests**.
+Eight framing regressions cover Unicode responses, byte-fragmented UTF-8,
+multiple/CRLF records, notifications and backend requests, malformed-output
+privacy, EOF, stream errors and cleanup. Existing transport failure, native
+thread recovery, context/budget, loop guard, cancellation and connection/model
+checks also passed. The adapter fixture confirms metadata-only resume preserves
+the existing thread instead of starting a replacement. Core's syntax check and
+repository whitespace checks passed.
+
+The broader restricted-launch suite had **six failures and one opt-in skip**.
+The same six failures reproduce on unmodified `6d0f054` on this Linux host:
+synthetic sandbox-helper paths are rejected by the existing private-state path
+guard before transport setup. This change does not alter that guard or its tests.
+Validation uses offline synthetic fixtures; no live provider, running installation
+update or automatic saved-goal continuation was performed.
+
 # Native goal resume reconciliation and separate usage baselines (2026-11-04)
 
 A stale blocked notification arriving during native goal activation could make

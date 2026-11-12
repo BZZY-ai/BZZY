@@ -136,6 +136,11 @@ Implemented:
   from backend failures. Goal replacement waits for the old runner to stop;
   late interrupt responses do not produce a false connection-closed error.
 
+- Native JSON-RPC records use LF byte boundaries, preserving Unicode line and
+  paragraph separators inside JSON strings. Codex resume returns metadata and
+  live state while retaining the saved native context, avoiding an unused full
+  transcript response for paginated threads.
+
 - Read-only execution-process observations on authenticated session snapshots.
   Identity-checked liveness is sampled at most every two seconds per unchanged
   process/state and returned separately from model output. Unknown, legacy or

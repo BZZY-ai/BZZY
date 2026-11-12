@@ -497,7 +497,7 @@ export class CodexEngine {
           readiness: prepareNativeReadiness(this.session, { backend: 'codex', threadId: this.threadId, resumed: true,
             instructions: params.developerInstructions, contextBudget: launchConfig.contextBudget }) });
         let result, replacementRequired = false;
-        try { result = await this.rpc.request('thread/resume', { threadId: this.threadId, ...params }); }
+        try { result = await this.rpc.request('thread/resume', { threadId: this.threadId, ...params, excludeTurns: true }); }
         catch (error) {
           if (!missingNativeThread(error, this.threadId) || this.interrupted || this.closing || this.operation || this.activeTurns.size
             || this.startedTurns !== startedTurnsBeforeOpen) throw error;

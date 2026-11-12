@@ -102,6 +102,7 @@ test('an already available persisted thread retains the existing goal lookup and
   createEngine({ initiallyLoaded: true }); await engine.open();
   const methods = calls().map(call => call.method);
   assert.ok(methods.indexOf('thread/goal/get') < methods.indexOf('thread/resume')); assert.equal(calls('thread/goal/get').length, 1);
+  assert.equal(calls('thread/resume')[0].params.excludeTurns, true, 'Resume restores the existing native context without returning the unused transcript.');
   assert.equal(calls('thread/start').length, 0); assert.equal(session.engineThreadId, 'old-native-thread');
 });
 

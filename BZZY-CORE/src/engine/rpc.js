@@ -1,5 +1,4 @@
 import { EventEmitter } from 'node:events';
-import readline from 'node:readline';
 import { stopProcess } from './policy.js';
 import { markRpcFailure } from './rpc-failure.js';
 
@@ -7,6 +6,40 @@ import { markRpcFailure } from './rpc-failure.js';
 // and RPC error replies remain distinct, even if they use the same message.
 export class BackendClosedError extends Error {
   constructor() { super('Backend connection closed.'); this.name = 'BackendClosedError'; }
+}
+
+// JSON-RPC stdio records are separated by LF bytes. Unicode U+2028 and
+// U+2029 are valid inside JSON strings and must not split protocol records.
+function jsonRpcLines(input) {
+  const lines = new EventEmitter();
+  let fragments = [], bytes = 0, closed = false;
+  const emitLine = () => {
+    let line = Buffer.concat(fragments, bytes).toString('utf8');
+    fragments = []; bytes = 0;
+    if (line.endsWith('\r')) line = line.slice(0, -1);
+    lines.emit('line', line);
+  };
+  const onData = chunk => {
+    if (closed) return;
+    if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
+    let start = 0, end;
+    while ((end = chunk.indexOf(10, start)) !== -1) {
+      fragments.push(chunk.subarray(start, end)); bytes += end - start;
+      emitLine();
+      if (closed) return;
+      start = end + 1;
+    }
+    if (start < chunk.length) { fragments.push(chunk.subarray(start)); bytes += chunk.length - start; }
+  };
+  const onEnd = () => { if (bytes) emitLine(); lines.close(); };
+  const onError = error => lines.emit('error', error);
+  lines.close = () => {
+    if (closed) return;
+    closed = true; fragments = []; bytes = 0;
+    input.off('data', onData); input.off('end', onEnd); input.off('error', onError);
+  };
+  input.on('data', onData); input.on('end', onEnd); input.on('error', onError);
+  return lines;
 }
 
 export class Rpc extends EventEmitter {
@@ -17,7 +50,8 @@ export class Rpc extends EventEmitter {
     this.sequence = 0;
     this.closed = false;
     this.stderr = '';
-    this.lines = readline.createInterface({ input: child.stdout });
+    this.lines = jsonRpcLines(child.stdout);
+    this.lines.on('error', error => this.fail(error));
     this.lines.on('line', line => {
       let message;
       try { message = JSON.parse(line); }
