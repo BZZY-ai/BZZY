@@ -46,6 +46,11 @@ for (const goal of [true, false]) test(`${goal ? 'goal' : 'chat'} cancellation t
   assert.deepEqual(results.map(item => item.status), ['fulfilled', 'fulfilled'], results.find(item => item.reason)?.reason?.stack);
   assert.equal(engine.interrupted, true); assert.equal(identityAlive(backend), false);
   assert.notEqual(session.goal.status, 'complete');
+  if (goal) {
+    const pause = calls().find(call => call.method === 'thread/goal/set' && call.params.status === 'paused');
+    assert.equal(pause.params.origin, 'automatic', 'The host stop gate must not inject user chat while a tool output is pending.');
+    assert.equal(engine.stopReason, 'cancelled', 'The adapter retains the original owner stop reason.');
+  }
 });
 
 for (const [scenario, method] of [['hold-initialize', 'initialize'], ['hold-goal-start', 'thread/goal/set']]) test(`a requested stop during ${method} tolerates intentional transport closure`, async () => {

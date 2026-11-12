@@ -135,6 +135,8 @@ Implemented:
 - Native Codex-backed cancellation distinguishes deliberate transport cleanup
   from backend failures. Goal replacement waits for the old runner to stop;
   late interrupt responses do not produce a false connection-closed error.
+  The host pauses native continuation without inserting goal-control chat
+  between an in-flight tool call and its interrupted result.
 
 - Native JSON-RPC records use LF byte boundaries, preserving Unicode line and
   paragraph separators inside JSON strings. Codex resume returns metadata and

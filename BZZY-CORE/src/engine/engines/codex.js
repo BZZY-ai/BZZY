@@ -1044,7 +1044,10 @@ export class CodexEngine {
     if (!this.rpc || !this.threadId) return;
     try {
       if (this.operation?.goal && this.goalArmed) {
-        const result = await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'user' });
+        // Gate native continuation without injecting a user message between an
+        // in-flight tool call and its abort output. Core retains the stop's
+        // actual reason; the native interrupted-turn marker records the abort.
+        const result = await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused', origin: 'automatic' });
         this.updateGoal(result.goal);
         this.session.goal.reason = reason;
         saveSession(this.session);

@@ -1,3 +1,25 @@
+# Preserve tool-output ordering during native goal stops (2026-11-12)
+
+The adapter's stop gate now pauses native continuation with an automatic
+lifecycle mutation before interrupting the turn. Core retains the actual stop
+reason. A user-origin native pause inserts goal-control chat immediately, which
+can separate an in-flight tool call from its later abort output; a strict provider
+can then reject the resumed conversation despite the output being present.
+
+An offline Codex 0.162.0 probe with a local synthetic Responses endpoint exercised
+a pending dynamic tool and all three stop orders. User-pause-first interleaved a
+control message before the abort output. Interrupt-first preserved ordering but
+left the native goal active. Automatic-pause-first kept the goal paused and the
+tool call/output pair together, without executing the synthetic tool. This is
+local protocol evidence, not a live-provider acceptance test.
+
+The focused transport, stop, native recovery and loop-guard runs passed **61
+tests**, including the existing late-response cleanup races. Changed-file syntax
+and repository whitespace checks passed. The regression checks the automatic
+native gate and preservation of the original stop reason. Existing saved
+histories with interleaved control messages need a separate ordering repair;
+the updater does not rewrite their records or resume goals automatically.
+
 # Unicode-safe native RPC and metadata-only Codex resume (2026-11-12)
 
 Native stdio responses now use LF byte boundaries instead of Node's text-line
