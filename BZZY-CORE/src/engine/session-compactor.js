@@ -537,19 +537,26 @@ async function runJob(id, { runModel, canRun, authAvailable }) {
     const runtimeExhausted = remainingMs <= 0 || prior.attempts >= 1 && remainingMs < MIN_DISPATCH_RUNTIME_MS;
     if (available < estimated || runtimeExhausted || prior.attempts >= 3) return updateJob(prior, {
       state: 'budget_limited', error: available < estimated ? 'COMPACTOR_INPUT_BUDGET' : 'COMPACTOR_BUDGET', estimatedTokens: estimated, reasonPaused: 'job_budget' }, db);
+    // Reserve the conservative per-node estimate, not the whole per-job budget.
+    // An interrupted attempt is charged its full reservation (settle(), uncertain
+    // outcome), so reserving the 20000-token job ceiling for a ~6000-token node
+    // let a handful of preempted attempts drain the daily budget and lock out the
+    // rest (copa-airlines: 53/60 nodes died COMPACTOR_DAILY_BUDGET). The estimate
+    // already bounds the dispatched model spend; available stays the hard ceiling.
+    const reserved = Math.min(available, estimated);
     const usage = sessionCompactionUsage();
-    if (usage.remainingTokens < available) return updateJob(prior, { state: 'retry_wait', error: 'COMPACTOR_DAILY_BUDGET', reasonPaused: 'daily_budget',
+    if (usage.remainingTokens < reserved) return updateJob(prior, { state: 'retry_wait', error: 'COMPACTOR_DAILY_BUDGET', reasonPaused: 'daily_budget',
       nextAttemptAt: new Date(Date.parse(`${usage.day}T00:00:00Z`) + 86400000).toISOString() }, db);
     const reservationId = randomUUID();
     if (!foregroundIdle() || busyStates.includes(sourceSession.executionState)) {
       const control = controlFor(prior.sessionId);
       putRecord(CONTROL, prior.sessionId, { ...control, lastForegroundDispatchAt: now() }, db);
     }
-    putRecord(RESERVATION, reservationId, { id: reservationId, jobId: prior.id, day: usage.day, tokens: available, state: 'reserved', createdAt: now() }, db);
-    putRecord(USAGE, usage.day, { day: usage.day, tokensUsed: usage.tokensUsed, reservedTokens: usage.reservedTokens + available }, db);
+    putRecord(RESERVATION, reservationId, { id: reservationId, jobId: prior.id, day: usage.day, tokens: reserved, state: 'reserved', createdAt: now() }, db);
+    putRecord(USAGE, usage.day, { day: usage.day, tokensUsed: usage.tokensUsed, reservedTokens: usage.reservedTokens + reserved }, db);
     return updateJob(prior, { state: 'running', scheduleReason: null, error: null, retryOutcome: null,
       runner: processIdentity(), lease: randomUUID(), startedAt: now(), dispatched: false,
-      reservationId, usageSettled: false, attemptBudget: { tokenBudget: available, runtimeSeconds: remainingMs / 1000 } }, db);
+      reservationId, usageSettled: false, attemptBudget: { tokenBudget: reserved, runtimeSeconds: remainingMs / 1000 } }, db);
   });
   if (!job || job.state !== 'running') return job;
   const controller = new AbortController(); active.set(id, { controller, sessionId: job.sessionId });

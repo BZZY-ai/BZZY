@@ -354,7 +354,7 @@ test('new learning defaults bound inherited effort while explicit source selecti
   session.selectedEffort = 'max'; session.modelCapabilities = { supportedEfforts: ['low', 'medium', 'max'] }; saveSession(session);
   assert.deepEqual(learningSettings().modelRoute, { source: 'bounded_source' });
   const bounded = queue(); assert.equal(bounded.selectionSource, 'bounded_source'); assert.equal(bounded.selection.effort, 'low');
-  assert.equal(bounded.budget.runtimeSeconds, 90);
+  assert.equal(bounded.budget.runtimeSeconds, 240);
   configureLearning({ modelRoute: { source: 'source' }, runtimeSeconds: 45 }, { expectedRevision: 0 });
   const explicit = queue(); assert.equal(explicit.selection.effort, 'max'); assert.equal(explicit.budget.runtimeSeconds, 45);
   assert.deepEqual(inspectLearningJob(bounded.id).selection, bounded.selection);
@@ -391,6 +391,7 @@ test('opted-in foreground review finishes its pinned packet across new foregroun
 
 test('review timeout is explicit, conservatively accounted and backs off fresh automatic work', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
+  configureLearning({ tokenBudget: 12000, runtimeSeconds: 90 }, { expectedRevision: 0 });
   const job = queue(); let began; const started = new Promise(resolve => { began = resolve; });
   const pending = runLearningJob(job.id, { runReview: async ({ signal }) => new Promise((resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true }); began();

@@ -131,9 +131,14 @@ job; they cannot change a packet already sent to a reviewer.
 Opening a chat, memory view or Skills panel does not queue inference. Explicit
 `/learn review` queues a bounded review of the selected saved conversation.
 
-Default learning limits are 12,000 tokens and 90 seconds per job, 50,000 tokens
-per UTC day, and four pending jobs per project. Core reserves budget before
-inference and charges conservatively when usage cannot be recovered. Review
+Default learning limits are 48,000 tokens and 240 seconds per job, 150,000 tokens
+per UTC day, and four pending jobs per project. A per-job budget large enough to
+finish a review is deliberate: a review reads the bounded packet plus task state
+and emits lessons, and the earlier 12,000-token / 90-second ceiling was too small
+to complete one, so jobs ended budget-limited with zero lessons. Owners can tune
+both budgets (token budget up to 200,000, runtime up to 600 seconds). Core
+reserves budget before inference and charges conservatively when usage cannot be
+recovered. Review
 usage counts toward its own bounded ledger. Compatible backend usage reporting
 is required; unsupported isolation or missing usage fails closed. Timeouts,
 token/usage limits, rejected output and backend failures are recorded separately.

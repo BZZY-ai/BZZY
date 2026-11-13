@@ -297,6 +297,7 @@ test('an interrupted host evaluation is rebound from its immutable comparisons w
 test('candidate and approved baseline share the same held-out corpus and cumulative budget, with measured gains kept separate from a pass', async () => {
   const base = createSkill({ name: 'authorization-review', description: 'Classify observations.', instructions: 'OLD PROCEDURE: classify every missing detail as inconclusive.' }, { session, scope: 'project' });
   setSkillEnabled(base.id, true, base.revision, { session });
+  configureLearning({ tokenBudget: 12000 }, { expectedRevision: 0 });
   const draft = candidate(), dataset = registerLearningFixtures(fixtureDefinition(), { session, reviewed: true }), budgets = [];
   const result = await evaluateLearningCandidate(draft.id, { session, datasetId: dataset.id, expectedRevision: draft.revision,
     runReview: async ({ prompt, budget }) => {

@@ -147,21 +147,26 @@ test('host concurrency is one and daily tokens are reserved before dispatch', as
   queue(); let started, release;
   const began = new Promise(resolve => { started = resolve; }), held = new Promise(resolve => { release = resolve; });
   const pending = processSessionCompactions({ runModel: async () => { started(); return held; } }); await began;
-  assert.equal(sessionCompactionUsage().reservedTokens, 20000);
+  // The reservation is the conservative per-node estimate, not the per-job ceiling.
+  assert.ok(job().attemptBudget.tokenBudget > 0 && job().attemptBudget.tokenBudget < 20000);
+  assert.equal(sessionCompactionUsage().reservedTokens, job().attemptBudget.tokenBudget);
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('No second concurrent dispatch') }), []);
   release(summary()); await pending; assert.equal(sessionCompactionUsage().reservedTokens, 0);
 });
 
 test('unknown successful usage consumes the whole reservation conservatively', async () => {
   queue(); const [result] = await processSessionCompactions({ runModel: async () => ({ text: summary().text, usageAvailable: false }) });
-  assert.equal(result.state, 'completed'); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
+  assert.equal(result.state, 'completed');
+  // Conservative charge is the whole reservation, which is now the estimate, not the 20000 ceiling.
+  assert.ok(result.usage.chargedTokens > 0 && result.usage.chargedTokens < 20000);
+  assert.equal(sessionCompactionUsage().tokensUsed, result.usage.chargedTokens);
   assert.equal(result.usage.conservative, true); assert.equal(result.usage.tokens, null);
 });
 
 test('completed helper overage charges actual reported tokens even when the helper rejects its output budget', async () => {
   queue(); let closed = false;
   class Engine {
-    constructor(provider, draft, options, ui) { this.ui = ui; assert.equal(options.tokenBudget, 20000); }
+    constructor(provider, draft, options, ui) { this.ui = ui; assert.ok(options.tokenBudget > 1000 && options.tokenBudget < 20000); }
     async run() { this.ui.event('text', { text: summary().text }); return { tokens: 23000 }; }
     async close() { closed = true; }
   }
@@ -174,9 +179,10 @@ test('completed helper overage charges actual reported tokens even when the help
 });
 
 test('daily exhaustion defers requests until the next UTC day', async () => {
-  configureSessionCompaction({ dailyTokenBudget: 20000 }, { expectedRevision: 0 }); queue();
-  await processSessionCompactions({ runModel: async () => summary(20000) });
-  queue(); const [limited] = await processSessionCompactions({ runModel: () => assert.fail('The day is exhausted') });
+  // A daily budget below one node's estimate leaves no room to reserve, so the
+  // job defers until the next UTC day instead of being dispatched.
+  configureSessionCompaction({ dailyTokenBudget: 1000 }, { expectedRevision: 0 }); queue();
+  const [limited] = await processSessionCompactions({ runModel: () => assert.fail('The day is exhausted') });
   assert.equal(limited.error, 'COMPACTOR_DAILY_BUDGET'); assert.equal(limited.reasonPaused, 'daily_budget');
   assert.match(limited.nextAttemptAt, /T00:00:00\.000Z$/);
 });
@@ -411,14 +417,14 @@ for (const stop of ['owner_pause', 'owner_cancel', 'source_paused', 'operator_st
 
 test('dispatched failure parks its own job conservatively without latching the session or leaking provider errors', async () => {
   queue(); const [result] = await processSessionCompactions({ runModel: async () => { throw Error('Bearer private-error-token'); } });
-  assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'uncertain_request'); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
+  assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'uncertain_request'); assert.ok(sessionCompactionUsage().tokensUsed > 0 && sessionCompactionUsage().tokensUsed < 20000);
   assert.doesNotMatch(JSON.stringify(result), /private-error-token/);
   // The job parks uncertain for inspection, but one interrupted summary must not
   // latch the whole session: the control stays enabled so sibling nodes keep
   // summarizing, while the uncertain job itself is never auto-replayed.
   assert.equal(sessionCompactionStatus(session).control.state, 'enabled');
   assert.notEqual(sessionCompactionStatus(session).control.reasonPaused, 'uncertain_request');
-  assert.equal(job().reasonPaused, 'uncertain_request'); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
+  assert.equal(job().reasonPaused, 'uncertain_request'); assert.ok(sessionCompactionUsage().tokensUsed > 0 && sessionCompactionUsage().tokensUsed < 20000);
   queueSessionCompaction(session, { force: true });
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('A new turn is not consent to repeat an uncertain call') }), []);
   configureSessionCompaction({ tokenBudget: 40000 }, { expectedRevision: 0 }); resume();
@@ -433,7 +439,7 @@ test('pause rejects late output, settles conservatively and never implicitly res
   assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'owner_pause');
   assert.equal(getRecord('core.session.memory.node', result.nodeId).state, 'pending');
   assert.equal(readSessionMemory(session).items[0].provenance, 'host-extractive-v2');
-  assert.equal(sessionCompactionUsage().reservedTokens, 0); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
+  assert.equal(sessionCompactionUsage().reservedTokens, 0); assert.ok(sessionCompactionUsage().tokensUsed > 0 && sessionCompactionUsage().tokensUsed < 20000);
   assert.deepEqual(await processSessionCompactions({ runModel: () => assert.fail('Pause is durable') }), []);
   assert.throws(() => controlSessionCompaction(session, 'resume', { expectedRevision: 0 }), { code: 'CONFLICT' });
 });
@@ -508,7 +514,7 @@ test('a rebuilt generation can proceed after an old dispatched call returns an u
     throw new Error('Synthetic uncertain result for the retired generation.');
   } });
   assert.equal(retired.state, 'cancelled'); assert.equal(retired.reasonPaused, 'memory_rebuilt');
-  assert.equal(sessionCompactionStatus(session).control.state, 'enabled'); assert.equal(sessionCompactionUsage().tokensUsed, 20000);
+  assert.equal(sessionCompactionStatus(session).control.state, 'enabled'); assert.ok(sessionCompactionUsage().tokensUsed > 0 && sessionCompactionUsage().tokensUsed < 20000);
   const [completed] = await processSessionCompactions({ runModel: async () => summary() }); assert.equal(completed.state, 'completed');
 });
 

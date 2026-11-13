@@ -60,7 +60,12 @@ const bounded = (value, maximum, name) => {
   return value.trim();
 };
 export function learningSettings() {
-  return { enabled: true, duringForeground: false, foregroundCooldownSeconds: 300, tokenBudget: 12000, runtimeSeconds: 90, dailyTokenBudget: 50000, maxPendingPerProject: 4,
+  // A review reads the bounded packet (~13 KB) plus task state and generates
+  // lessons; 12000 tokens / 90 s could not finish one on a real goal, so every
+  // job died budget_limited at exactly 12000 with zero lessons (copa-airlines:
+  // ~98 K spent over 2 days, 0 lessons). Size the per-job budget to complete a
+  // review, and the daily budget to fund a few; owners can tune both.
+  return { enabled: true, duringForeground: false, foregroundCooldownSeconds: 300, tokenBudget: 48000, runtimeSeconds: 240, dailyTokenBudget: 150000, maxPendingPerProject: 4,
     modelRoute: { source: 'bounded_source' }, maxForegroundExecutions: 4, packetMaxBytes: 16000, complexTurnAttempts: 12, minReviewIntervalSeconds: 300,
     revision: 0, ...getRecord('core.learning.settings', 'owner') };
 }
@@ -69,8 +74,8 @@ export function configureLearning(input, { expectedRevision } = {}) {
       input.enabled !== undefined && typeof input.enabled !== 'boolean' ||
       input.duringForeground !== undefined && typeof input.duringForeground !== 'boolean' ||
       input.foregroundCooldownSeconds !== undefined && (!Number.isSafeInteger(input.foregroundCooldownSeconds) || input.foregroundCooldownSeconds < 60 || input.foregroundCooldownSeconds > 3600) ||
-      input.tokenBudget !== undefined && (!Number.isSafeInteger(input.tokenBudget) || input.tokenBudget < 1000 || input.tokenBudget > 100000) ||
-      input.runtimeSeconds !== undefined && (!Number.isSafeInteger(input.runtimeSeconds) || input.runtimeSeconds < 5 || input.runtimeSeconds > 120) ||
+      input.tokenBudget !== undefined && (!Number.isSafeInteger(input.tokenBudget) || input.tokenBudget < 1000 || input.tokenBudget > 200000) ||
+      input.runtimeSeconds !== undefined && (!Number.isSafeInteger(input.runtimeSeconds) || input.runtimeSeconds < 5 || input.runtimeSeconds > 600) ||
       input.dailyTokenBudget !== undefined && (!Number.isSafeInteger(input.dailyTokenBudget) || input.dailyTokenBudget < 1000 || input.dailyTokenBudget > 1000000) ||
       input.maxPendingPerProject !== undefined && (!Number.isSafeInteger(input.maxPendingPerProject) || input.maxPendingPerProject < 1 || input.maxPendingPerProject > 32) ||
       input.maxForegroundExecutions !== undefined && (!Number.isSafeInteger(input.maxForegroundExecutions) || input.maxForegroundExecutions < 1 || input.maxForegroundExecutions > 8) ||

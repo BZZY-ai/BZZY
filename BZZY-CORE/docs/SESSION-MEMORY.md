@@ -110,11 +110,15 @@ Status distinguishes `fallbackNodes`, `hostSummaries`, `modelSummaries` and
 Model jobs use the verified restricted document profile, an empty private working
 directory and no tools, native commands, account operations or network tool access.
 
-Defaults: 20,000 tokens and 45 seconds per job, 100,000 tokens per UTC day, one
-compaction request at a time, and 2,048 UTF-8 bytes per summary. Requests reserve
-daily usage before dispatch. Host limits bound scheduling, wall time and accepted
-output; native backends cannot guarantee an exact billing ceiling. Reported
-overages are charged. Unknown usage conservatively consumes the reservation;
+Defaults: 20,000 tokens and 45 seconds per job (the per-job ceiling), 100,000
+tokens per UTC day, one compaction request at a time, and 2,048 UTF-8 bytes per
+summary. Each request reserves the conservative per-node estimate (bounded input
+plus the full summary), not the whole per-job ceiling, so an interrupted attempt
+that is charged its full reservation cannot drain the daily budget away from the
+remaining nodes. Requests reserve daily usage before dispatch. Host limits bound
+scheduling, wall time and accepted output; native backends cannot guarantee an
+exact billing ceiling. Reported overages are charged. Unknown usage
+conservatively consumes the reservation;
 uncertain dispatched failures require explicit resume. Restart never blindly
 replays an uncertain paid request.
 
