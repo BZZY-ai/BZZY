@@ -109,6 +109,16 @@ Root uses its own private state/provider homes; existing non-root history and
 pairing remain separate. Later updates retain this setup. See
 [host installation](../../BZZY-CORE/docs/HOST-SERVICE.md#explicit-linux-root-installation).
 
+An interactive `bzzy` first checks GitHub for a newer release and, when one
+exists, installs it and reloads into the same command before Core starts, so a
+fresh launch runs the latest CLI and Core. The check is best-effort and
+fail-open: no network, a slow remote, a non-updatable or modified checkout, or a
+held update lock simply launches the current version. It is skipped for update
+reloads, scripted (`--json`/`--detach`) and non-TTY runs, `settings`, and the
+static subcommands. Set `BZZY_AUTO_UPDATE=0` to opt out, or update on demand with
+`bzzy --update`. A Core service already running keeps its current code until it is
+restarted (**Settings → BZZY Core → Restart** or `bzzy-core restart`).
+
 Type `$` anywhere in a chat or `/goal` draft to choose an enabled skill or
 specialist agent. Keep typing to filter; arrows choose a row and Enter/Tab or a
 click inserts the reference at the cursor. Skills insert `$skill-name`; agents

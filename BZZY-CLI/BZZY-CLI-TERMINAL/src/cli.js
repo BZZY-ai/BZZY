@@ -37,6 +37,7 @@ import { chatHelp } from './terminal-commands.js';
 import { whoami } from './whoami.js';
 import { authoringHelp } from '@bzzy/core/engine/authoring-guides.js';
 import { updateCoreAndCLI } from './update.js';
+import { autoUpdateOnLaunch } from './update-checker.js';
 import { readUpdateHandoff, execUpdatedCLI } from './update-handoff.js';
 import { retireTelegram } from './migrations.js';
 import { backendCommand } from '@bzzy/core/engine/entry.js';
@@ -643,6 +644,18 @@ export async function main(argv) {
   if (!['debug', 'full_debug_export'].includes(args[0])) await retireTelegram();
   const launchCommand = args[0];
   const staticCommands = new Set(['integration', 'export', 'debug', 'full_debug_export', 'project', 'memory', 'providers', 'provider', 'doctor', 'notifications', 'recover', 'setup', 'auth', 'skills', 'knowledge', 'session-memory', 'cost', 'subagents', 'workflows', 'library', 'extensions']);
+  // An interactive `bzzy` first checks for a newer release and, if one exists,
+  // installs it and reloads into the same command before Core starts. It is
+  // best-effort: offline/slow/dirty/non-updatable installs just launch the
+  // current version. Skipped for update reloads, scripted (--json/--detach) and
+  // non-TTY runs, settings, and the static subcommands. BZZY_AUTO_UPDATE=0 opts
+  // out. On a successful update execve replaces this process and never returns.
+  if (!updateHandoff && !options.restoreAfterUpdate && !options.json && !options.detach
+    && process.stdin.isTTY && process.stdout.isTTY
+    && launchCommand !== 'settings' && !staticCommands.has(launchCommand)
+    && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
+    if (await autoUpdateOnLaunch(argv)) return 0;
+  }
   if (!updateHandoff?.coreStopped && !staticCommands.has(launchCommand) && !(launchCommand === 'service' && ['status', 'stop', 'restart'].includes(args[1]))) {
     await activateCLIHost();
   }

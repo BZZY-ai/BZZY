@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { checkInstallationUpdate, applyInstallationUpdate, officialRepository, runUpdateCommand, updateCommand } from '../src/update-checker.js';
+import { checkInstallationUpdate, applyInstallationUpdate, officialRepository, runUpdateCommand, updateCommand, autoUpdateOnLaunch } from '../src/update-checker.js';
 function fixture(t) {
  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bzzy-check-update-'));
  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -122,4 +122,77 @@ test('TUI update checking relies on Core deadlines and cancels its parent signal
   check: async options => { signal = options.signal; return { current: f.state.current, target: f.state.target, available: true }; },
  });
  assert.deepEqual(deadlines, []); assert.ok(signal.aborted);
+});
+
+function launchHarness(overrides = {}) {
+  const calls = { apply: [], target: 0, exec: [], out: '' };
+  const deps = {
+    check: async () => ({ current: 'a'.repeat(40), target: 'b'.repeat(40), available: true, blocked: null, directory: '/install' }),
+    apply: async (...args) => { calls.apply.push(args); },
+    target: () => { calls.target++; return { file: '/bin/sh', args: ['/bin/sh', '/home/u/.local/bin/bzzy'] }; },
+    exec: (file, args, env) => { calls.exec.push({ file, args, env }); },
+    out: { write: text => { calls.out += text; } },
+    ...overrides };
+  return { calls, deps };
+}
+function withAutoUpdateEnv(update, updated, body) {
+  const saved = [process.env.BZZY_AUTO_UPDATE, process.env.BZZY_AUTO_UPDATED];
+  if (update === null) delete process.env.BZZY_AUTO_UPDATE; else process.env.BZZY_AUTO_UPDATE = update;
+  if (updated === null) delete process.env.BZZY_AUTO_UPDATED; else process.env.BZZY_AUTO_UPDATED = updated;
+  try { return body(); } finally {
+    if (saved[0] === undefined) delete process.env.BZZY_AUTO_UPDATE; else process.env.BZZY_AUTO_UPDATE = saved[0];
+    if (saved[1] === undefined) delete process.env.BZZY_AUTO_UPDATED; else process.env.BZZY_AUTO_UPDATED = saved[1];
+  }
+}
+
+test('launch auto-update installs an available release and reloads the launcher with the original arguments', async () => {
+  await withAutoUpdateEnv(null, null, async () => {
+    const { calls, deps } = launchHarness();
+    const reloaded = await autoUpdateOnLaunch(['--attach', 'session-7'], deps);
+    assert.equal(reloaded, true);
+    assert.equal(calls.apply.length, 1);
+    assert.equal(calls.apply[0][1].inherit, true);                       // canonical child-updater path
+    assert.equal(calls.exec.length, 1);
+    assert.equal(calls.exec[0].file, '/bin/sh');
+    assert.deepEqual(calls.exec[0].args, ['/bin/sh', '/home/u/.local/bin/bzzy', '--attach', 'session-7']);
+    assert.equal(calls.exec[0].env.BZZY_AUTO_UPDATED, 'b'.repeat(40));   // loop guard for the reloaded process
+  });
+});
+
+test('launch auto-update does nothing when already up to date', async () => {
+  await withAutoUpdateEnv(null, null, async () => {
+    const { calls, deps } = launchHarness({ check: async () => ({ current: 'a'.repeat(40), target: 'a'.repeat(40), available: false, blocked: null, directory: '/install' }) });
+    assert.equal(await autoUpdateOnLaunch([], deps), false);
+    assert.equal(calls.apply.length, 0); assert.equal(calls.exec.length, 0);
+  });
+});
+
+test('launch auto-update is fail-open: offline checks and failed installs still launch the current version', async () => {
+  await withAutoUpdateEnv(null, null, async () => {
+    const offline = launchHarness({ check: async () => { throw new Error('no network'); } });
+    assert.equal(await autoUpdateOnLaunch([], offline.deps), false);
+    assert.equal(offline.calls.apply.length, 0); assert.equal(offline.calls.exec.length, 0);
+
+    const applyFailed = launchHarness({ apply: async () => { throw new Error('update lock held'); } });
+    assert.equal(await autoUpdateOnLaunch([], applyFailed.deps), false);
+    assert.equal(applyFailed.calls.exec.length, 0);                      // never reload on a failed install
+    assert.match(applyFailed.calls.out, /did not complete/);
+
+    const blocked = launchHarness({ check: async () => ({ current: 'a'.repeat(40), target: 'b'.repeat(40), available: true, blocked: 'policy', directory: '/install' }) });
+    assert.equal(await autoUpdateOnLaunch([], blocked.deps), false);
+    assert.equal(blocked.calls.apply.length, 0);
+  });
+});
+
+test('launch auto-update honours the opt-out and the post-reload loop guard without even checking', async () => {
+  await withAutoUpdateEnv('0', null, async () => {
+    const optOut = launchHarness({ check: async () => { throw new Error('must not check when opted out'); } });
+    assert.equal(await autoUpdateOnLaunch([], optOut.deps), false);
+    assert.equal(optOut.calls.apply.length, 0);
+  });
+  await withAutoUpdateEnv(null, 'b'.repeat(40), async () => {
+    const guarded = launchHarness({ check: async () => { throw new Error('must not re-check after reload'); } });
+    assert.equal(await autoUpdateOnLaunch([], guarded.deps), false);
+    assert.equal(guarded.calls.exec.length, 0);
+  });
 });
