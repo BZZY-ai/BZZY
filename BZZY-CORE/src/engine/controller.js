@@ -38,6 +38,7 @@ export function classifyFailure(error) {
   const message = String(error.message || error);
   const category = /auth|unauthorized|invalid.*key|not.logged.in|401/i.test(message) ? 'authentication'
     : /rate.?limit|429|quota|usage.limit/i.test(message) ? 'rate_limit'
+    : /\b413\b|payload too large|request entity too large|failed to buffer the request body|length limit exceeded|request body.*too large/i.test(message) ? 'request_too_large'
     : /input.*required|approval required|permission.*denied/i.test(message) ? 'missing_input'
     : /timeout|timed.out/i.test(message) ? 'timeout' : error.code === 'UNSUPPORTED_POLICY' ? 'unsupported_policy'
     : /tool|command|spawn|ENOENT/i.test(message) ? 'tool_failure' : 'backend_failure';
@@ -247,13 +248,28 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
   } catch (error) {
     preRequestUsageFailure = Boolean(backendStartupFailure(error));
     failedThisTurn = true;
-    const failure = classifyFailure(error); session.failure = failure; session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping ? 'paused' : 'failed';
+    const failure = classifyFailure(error); session.failure = failure;
+    // A provider request-body-size rejection (e.g. DeepSeek's 413 "length limit
+    // exceeded" from accumulated full-resolution images / very large tool outputs
+    // held in native context) is recoverable, not a dead end: pause the goal and
+    // mark it to compact native context aggressively on the next resume, instead
+    // of failing the whole run with a "blocked" goal.
+    const oversizedBody = !stopping && goal && failure.category === 'request_too_large' && session.goal && !['complete', 'cancelled'].includes(session.goal.status);
+    session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping || oversizedBody ? 'paused' : 'failed';
     const budgetLimited = ['runtime_limit', 'token_limit'].includes(stopping);
     if (goal && !['complete', 'cancelled'].includes(session.goal.status)) {
-      session.goal.status = stopping === 'cancelled' ? 'cancelled' : stopping ? budgetLimited ? 'budget_limited' : stopping === 'investigation_blocked' ? 'blocked' : 'paused' : failure.category === 'rate_limit' ? 'usage_limited' : 'blocked';
-      session.goal.reason = stopping === 'investigation_blocked' ? session.goal.investigationBlocker?.reason || stopping : stopping || failure.message;
+      if (oversizedBody) {
+        session.goal.status = 'paused'; session.goal.reason = 'request_too_large';
+        session.nativeBodyPressure = { compactOnResume: true, since: now(), attempts: (session.nativeBodyPressure?.attempts || 0) + 1 };
+        saveSession(session);
+        recorded.event('info', { message: 'The model provider rejected the request body as too large — usually accumulated full-resolution screenshots or very large tool outputs held in context, not the token count. The goal is paused (not failed); resuming compacts native context first so the request fits. If it recurs, capture smaller screenshots (viewport or JPEG) or fewer of them.' });
+      } else {
+        session.goal.status = stopping === 'cancelled' ? 'cancelled' : stopping ? budgetLimited ? 'budget_limited' : stopping === 'investigation_blocked' ? 'blocked' : 'paused' : failure.category === 'rate_limit' ? 'usage_limited' : 'blocked';
+        session.goal.reason = stopping === 'investigation_blocked' ? session.goal.investigationBlocker?.reason || stopping : stopping || failure.message;
+      }
     }
     if (stopping) return budgetLimited ? 2 : 130;
+    if (oversizedBody) return 2;
     throw error;
   } finally {
     clearInterval(heartbeat); clearInterval(historyMaintenance); clearInterval(controls); clearTimeout(killTimer); indicator.stop(); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); ui.beforeOutput = null;

@@ -211,6 +211,15 @@ smaller of 90% of the declared input limit and total window minus that reserve.
 This is a conservative planning threshold, not a tokenization or upstream
 acceptance guarantee; it does not reserve output twice against an independent
 input allowance.
+A provider can also cap the serialized request *body* in bytes independently of
+the token window — DeepSeek's `/responses` gateway returns `413 … Failed to
+buffer the request body: length limit exceeded` — which accumulated
+full-resolution images or very large tool outputs can exceed while the token
+count stays moderate. Such a rejection classifies as `request_too_large` and
+pauses the goal (recoverable, never a dead `blocked`) rather than failing the
+run; the next resume compacts native history aggressively (from half the window,
+escalating on repeated attempts) so the retained history and its attachments fit
+the byte cap, and a completed turn restores the normal threshold.
 Before native thread start/resume, Core can replace bulky derived recovery maps,
 historical project records and reports in the execution preprompt with a bounded
 current-state map and authorized detail references. The complete original
