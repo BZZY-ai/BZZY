@@ -100,6 +100,14 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     initializeProject(session);
     if (session.contract) writeProjectRecord(session, 'contracts', session.goal?.id || session.id, session.contract);
     if (goal && !session.startSnapshotId && !['executor', 'reviewer'].includes(session.role)) session.startSnapshotId = snapshotWorkspace(session, 'run-start', { ui: recorded }).id;
+    // Resuming a goal that previously died from a provider request-body-size
+    // rejection (including one blocked by an older build before this was
+    // recoverable) pre-arms aggressive native compaction, so the first resumed
+    // request trims the oversized history instead of re-hitting the byte cap.
+    if (goal && resumeGoal && !session.nativeBodyPressure && session.goal?.status !== 'active'
+      && (session.goal?.reason === 'request_too_large' || classifyFailure({ message: session.goal?.reason || '' }).category === 'request_too_large')) {
+      session.nativeBodyPressure = { compactOnResume: true, since: now(), attempts: 1 };
+    }
     session.executionState = 'running'; if (goal) { session.goal.status = 'active'; session.deferTerminalNotification = true; }
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
     putRecord('run', session.id, run); saveSession(session);
