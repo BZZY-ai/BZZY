@@ -132,6 +132,8 @@ exponential backoff as learning reviews) defers fresh paid dispatches after
 repeated terminal failures, so a summarizer that cannot meet the output contract
 cannot drain the daily budget in a burst; the free host-extract lane keeps
 running, a success clears the breaker, and an explicit owner resume resets it.
+Previously deferred paid jobs wait out the active breaker without rereading
+original source text; cached publication remains eligible during that wait.
 
 ### Compactor cost estimate
 

@@ -14,7 +14,7 @@ import { deleteTerminalConversation } from '../src/engine/session-deletion.js';
 import { processIdentity, identityAlive, signalProcess } from '../src/engine/process-identity.js';
 import { runRestrictedDocumentModel } from '../src/engine/document-model.js';
 import { CodexEngine } from '../src/engine/engines/codex.js';
-import { indexSessionMemory, readSessionMemory, resetSessionMemory, sessionMemoryStatus } from '../src/engine/session-memory.js';
+import { indexSessionMemory, pendingSessionMemoryNodes, readSessionMemory, resetSessionMemory, sessionMemoryMaterial, sessionMemoryStatus } from '../src/engine/session-memory.js';
 import { queueSessionCompaction, processSessionCompactions, sessionCompactionSettings, configureSessionCompaction,
   sessionCompactionStatus, sessionCompactionUsage, pauseSessionCompaction, pauseAllSessionCompactions,
   controlSessionCompaction, recoverSessionCompactions, beginSessionCompactionRun } from '../src/engine/session-compactor.js';
@@ -267,9 +267,9 @@ test('an oversize but clean summary is trimmed to the budget and published, not 
 });
 
 test('a sustained run of terminal summary failures backs off the paid route until an explicit resume clears it', async () => {
-  queue(session, { count: 48 });
+  queue(session, { count: 96 });
   const nodes = listRecords(JOB, { sessionId: session.id }).length;
-  assert.ok(nodes >= 4, 'enough leaves to exceed the failure threshold and leave a sibling to defer');
+  assert.ok(nodes >= 5, 'enough leaves to exceed the failure threshold and leave siblings to defer');
   let calls = 0;
   const bad = async () => { calls++; throw new Error('Synthetic lost response.'); };
   // One or two interrupted summaries do not latch the lane; only a sustained run does.
@@ -278,9 +278,31 @@ test('a sustained run of terminal summary failures backs off the paid route unti
   }
   assert.equal(calls, 3, 'the breaker trips only after three terminal failures');
   assert.ok(listRecords(JOB, { sessionId: session.id }).some(item => item.scheduleReason === 'route_failure_backoff'));
-  // While backed off, no further paid dispatch happens; the free host-extract lane is untouched.
-  await processSessionCompactions({ runModel: () => assert.fail('Route backoff must defer fresh paid dispatch.') });
+  // Let the independent host-extract lane finish before checking paid-job reads.
+  for (let tick = 0; tick < nodes + 2 && pendingSessionMemoryNodes({ sessionId: session.id, withoutFallback: true }).length; tick++)
+    await processSessionCompactions({ runModel: () => assert.fail('Route backoff must defer fresh paid dispatch.') });
+  assert.equal(pendingSessionMemoryNodes({ sessionId: session.id, withoutFallback: true }).length, 0);
+  const db = database(), prepare = db.prepare; let originalTextReads = 0;
+  db.prepare = function (sql, ...args) {
+    if (/SELECT e\.type,\s*substr\([\s\S]*? AS text FROM events e\b/i.test(sql)) originalTextReads++;
+    return prepare.call(this, sql, ...args);
+  };
+  try {
+    for (let tick = 0; tick < 3; tick++)
+      await processSessionCompactions({ runModel: () => assert.fail('Route backoff must defer fresh paid dispatch.') });
+  } finally { db.prepare = prepare; }
+  assert.equal(originalTextReads, 0, 'repeated breaker passes must not reconstruct original source text');
   assert.equal(calls, 3);
+
+  // A checked cached output still publishes while the paid route is backed off.
+  const deferred = listRecords(JOB, { sessionId: session.id }).find(item => item.scheduleReason === 'route_failure_backoff');
+  const material = sessionMemoryMaterial(session, deferred.nodeId);
+  const output = { text: summary().text, selection: deferred.selection, usage: { tokens: 0, available: true },
+    generation: material.generation, sourceHash: material.sourceHash };
+  putRecord('core.session.compactor.output', deferred.id, { ...output,
+    hash: digest({ text: output.text, selection: output.selection, sourceHash: output.sourceHash }) });
+  const [published] = await processSessionCompactions({ runModel: () => assert.fail('Cached output must publish without paid dispatch.') });
+  assert.equal(published?.id, deferred.id); assert.equal(published?.state, 'completed'); assert.equal(calls, 3);
   resume();
   // The breaker is cleared, so fresh nodes dispatch and complete again.
   let completed = false; const before = calls;
@@ -289,6 +311,17 @@ test('a sustained run of terminal summary failures backs off the paid route unti
     completed = result?.state === 'completed';
   }
   assert.ok(completed, 'a fresh summary completes after resume'); assert.ok(calls > before, 'the model is dispatched again after resume');
+});
+
+test('a backed-off recovered publication with no cache pauses for inspection', async () => {
+  queue();
+  const current = job();
+  putRecord('core.session.compactor.route-health', digest(['session-compaction', current.selection]), {
+    selection: current.selection, consecutiveFailures: 3, nextRouteAttemptAt: new Date(Date.now() + 60000).toISOString() });
+  putRecord(JOB, current.id, { ...current, scheduleReason: 'route_failure_backoff',
+    recovery: { publicationOnly: true, mode: 'cached-publication' } });
+  const [result] = await processSessionCompactions({ runModel: () => assert.fail('Missing cached output cannot become a paid request.') });
+  assert.equal(result.state, 'paused'); assert.equal(result.reasonPaused, 'publication_cache_unavailable');
 });
 
 test('a retry with too little runtime left falls back to the host extract instead of a doomed short dispatch', async () => {

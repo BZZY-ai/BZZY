@@ -801,6 +801,16 @@ export async function processSessionCompactions({ runModel = runRestrictedDocume
       if ((jobBackoff.get(job.id) || 0) > Date.now()) continue;
       try {
         if (staleGeneration(job)) { retireStaleJob(job); continue; }
+        // This disposition was set only after a previous preflight found paid
+        // material with no usable output. While that same route is still in
+        // backoff, avoid rereading its original events on every scheduler pass.
+        // Cached and recovered publications must still pass runJob's integrity
+        // checks; the independent host-extract phase already ran above.
+        if (job.scheduleReason === 'route_failure_backoff' && job.selection && !publicationOnly(job)
+            && routeBackedOff(job.selection) && !getRecord(OUTPUT, job.id)) {
+          authorized(job);
+          continue;
+        }
         const result = await runJob(job.id, { runModel, canRun, authAvailable });
         if (result) { dispatched = true; return [result]; }
       } catch (error) {
