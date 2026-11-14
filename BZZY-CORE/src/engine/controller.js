@@ -249,6 +249,13 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     preRequestUsageFailure = Boolean(backendStartupFailure(error));
     failedThisTurn = true;
     const failure = classifyFailure(error); session.failure = failure;
+    // A failed ordinary chat can share the same native thread as a saved goal.
+    // Remember the exact oversized thread so the next Codex open rebuilds it
+    // before any read/resume, without replaying this failed request.
+    if (failure.category === 'request_too_large' && provider.backend === 'codex') {
+      session.oversizedNativeThread = { version: 1, threadId: session.engineThreadId || null,
+        pending: Boolean(session.engineThreadId) };
+    }
     // A provider request-body-size rejection (e.g. DeepSeek's 413 "length limit
     // exceeded" from accumulated full-resolution images / very large tool outputs
     // held in native context) is recoverable, not a dead end. The token window is

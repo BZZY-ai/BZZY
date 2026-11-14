@@ -218,13 +218,15 @@ full-resolution images or very large tool outputs can exceed while the token
 count stays moderate. Token-window compaction does not address this: the window
 is not the constraint, and the heaviest items (a just-captured screenshot, a
 large command dump) are usually the most recent, which compaction retains. Such a
-rejection classifies as `request_too_large` and pauses the goal (recoverable,
-never a dead `blocked`) rather than failing the run. The paused goal rotates out
-its native thread, so the next resume rebuilds a fresh thread from the bounded
-text state capsule (objective, task-state and evidence references) and does not
-replay the image/blob payloads; the goal, scope, spent budget and saved
-findings/evidence are preserved. A goal paused by an earlier build that lacked
-this rotation is rotated on its first resume instead.
+rejection classifies as `request_too_large`. During a goal run it pauses the goal
+for explicit recovery. During an ordinary chat it fails that chat without
+replaying it or changing a separately blocked saved goal. In either case, the
+next explicit chat or goal run rotates the oversized native thread before any
+read/resume and rebuilds from the bounded text state capsule (objective,
+task-state and evidence references). The image/blob payloads are not replayed;
+the goal, scope, spent budget and saved findings/evidence are preserved. Older
+sessions with a saved `request_too_large` failure or paused-goal reason get the
+same one-time rotation. A blocked goal still needs an explicit owner continue.
 Before native thread start/resume, Core can replace bulky derived recovery maps,
 historical project records and reports in the execution preprompt with a bounded
 current-state map and authorized detail references. The complete original

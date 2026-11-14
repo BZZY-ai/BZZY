@@ -477,15 +477,20 @@ export class CodexEngine {
       if (effort) params.config = { model_reasoning_effort: effort };
       if (this.session.model) params.model = this.session.model;
       if (this.provider.auth === 'api-key') params.modelProvider = 'bzzy_api';
-      // Single choke point: never resume a native thread whose accumulated
-      // images/large tool outputs overflowed the provider's request-body byte
-      // cap. Resuming reloads that rollout and re-sends the same oversized body,
-      // so a goal paused with `request_too_large` (by this build's failure path
-      // or an earlier one) is rebuilt from the bounded text capsule instead —
-      // regardless of how this run was initiated (resume vs goal restart). The
-      // reason is cleared once the goal is active again, so this fires once.
-      if (this.options.goalMode && this.session.engineThreadId && this.session.goal?.reason === 'request_too_large') {
-        rotateNativeThread(this.session); saveSession(this.session);
+      // A 413 may have failed an ordinary chat on a thread shared with a saved
+      // goal. Recover the recorded thread before any read/resume on either path;
+      // a handled marker prevents a still-paused goal reason or old failure
+      // record from rotating each newly created thread again. Older sessions
+      // without the marker use their saved failure/goal reason once.
+      const oversizedThread = this.session.oversizedNativeThread;
+      const legacyOversized = !oversizedThread && (this.session.failure?.category === 'request_too_large'
+        || this.session.goal?.reason === 'request_too_large');
+      if (this.session.engineThreadId && ((oversizedThread?.pending === true
+        && oversizedThread.threadId === this.session.engineThreadId) || legacyOversized)) {
+        const threadId = this.session.engineThreadId;
+        rotateNativeThread(this.session);
+        this.session.oversizedNativeThread = { version: 1, threadId, pending: false };
+        saveSession(this.session);
         this.ui.event('info', { message: 'Rebuilding the backend thread from saved text state (objective, task-state and evidence references); the oversized image/file history that exceeded the provider request-body limit is not replayed. The goal, scope and spent budget are preserved.' });
       }
       let resumed = false;

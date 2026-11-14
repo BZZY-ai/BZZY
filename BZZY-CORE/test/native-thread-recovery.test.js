@@ -106,17 +106,52 @@ test('an already available persisted thread retains the existing goal lookup and
   assert.equal(calls('thread/start').length, 0); assert.equal(session.engineThreadId, 'old-native-thread');
 });
 
-test('a goal paused for an oversized request body rebuilds on a fresh thread instead of resuming the bloated one', async () => {
+for (const goalMode of [true, false]) test(`a goal paused for an oversized request body rebuilds before ${goalMode ? 'goal resume' : 'ordinary chat'}`, async () => {
   // Same setup as the resume test above (an available persisted thread), but the
   // goal carries the request_too_large marker from a provider body-size 413. The
   // bloated thread (accumulated images/large outputs) must NOT be resumed — doing
   // so re-sends the same oversized body — so open() rotates it and starts fresh.
-  createEngine({ initiallyLoaded: true });
+  createEngine({ initiallyLoaded: true }, { goalMode });
   session.goal.reason = 'request_too_large'; saveSession(session);
   await engine.open();
   assert.equal(calls('thread/resume').length, 0, 'the oversized native thread is never resumed');
   assert.equal(calls('thread/start').length, 1, 'a fresh thread is started from saved text state');
   assert.notEqual(session.engineThreadId, 'old-native-thread');
+  assert.deepEqual(session.oversizedNativeThread, { version: 1, threadId: 'old-native-thread', pending: false });
+});
+
+test('a saved ordinary-chat 413 rebuilds the thread without changing its blocked goal or replaying chat', async () => {
+  createEngine({ initiallyLoaded: true }, { goalMode: false });
+  Object.assign(session.goal, { status: 'blocked', reason: 'native_blocked', lastBlocker: 'Native backend reported blocked without a usable reason.' });
+  session.failure = { category: 'request_too_large', message: 'HTTP 413 request body too large', retryable: false };
+  const goal = structuredClone(session.goal); saveSession(session);
+  await engine.open();
+  assert.equal(calls('thread/goal/get').length, 0, 'the oversized rollout is not inspected');
+  assert.equal(calls('thread/resume').length, 0, 'the oversized rollout is not resumed');
+  assert.equal(calls('thread/start').length, 1);
+  assert.equal(calls('turn/start').length, 0, 'opening a chat does not replay its failed turn');
+  assert.deepEqual(session.goal, { ...goal, nativeTokenOffset: 70 });
+  assert.deepEqual(session.oversizedNativeThread, { version: 1, threadId: 'old-native-thread', pending: false });
+  assert.deepEqual(getRecord('session', session.id).oversizedNativeThread, session.oversizedNativeThread);
+});
+
+test('an explicit pending oversized-thread marker rebuilds before ordinary chat', async () => {
+  createEngine({ initiallyLoaded: true }, { goalMode: false });
+  session.oversizedNativeThread = { version: 1, threadId: 'old-native-thread', pending: true }; saveSession(session);
+  await engine.open();
+  assert.equal(calls('thread/resume').length, 0);
+  assert.equal(calls('thread/start').length, 1);
+  assert.equal(session.oversizedNativeThread.pending, false);
+});
+
+test('a handled oversized-thread marker does not rotate again for stale failure and goal reasons', async () => {
+  createEngine({ initiallyLoaded: true }, { goalMode: false });
+  session.failure = { category: 'request_too_large' };
+  session.goal.reason = 'request_too_large';
+  session.oversizedNativeThread = { version: 1, threadId: 'previous-native-thread', pending: false }; saveSession(session);
+  await engine.open();
+  assert.equal(calls('thread/resume').length, 1);
+  assert.equal(calls('thread/start').length, 0);
 });
 
 test('an already active native goal is paused before its existing thread is resumed', async () => {
