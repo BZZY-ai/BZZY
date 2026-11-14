@@ -106,6 +106,19 @@ test('an already available persisted thread retains the existing goal lookup and
   assert.equal(calls('thread/start').length, 0); assert.equal(session.engineThreadId, 'old-native-thread');
 });
 
+test('a goal paused for an oversized request body rebuilds on a fresh thread instead of resuming the bloated one', async () => {
+  // Same setup as the resume test above (an available persisted thread), but the
+  // goal carries the request_too_large marker from a provider body-size 413. The
+  // bloated thread (accumulated images/large outputs) must NOT be resumed — doing
+  // so re-sends the same oversized body — so open() rotates it and starts fresh.
+  createEngine({ initiallyLoaded: true });
+  session.goal.reason = 'request_too_large'; saveSession(session);
+  await engine.open();
+  assert.equal(calls('thread/resume').length, 0, 'the oversized native thread is never resumed');
+  assert.equal(calls('thread/start').length, 1, 'a fresh thread is started from saved text state');
+  assert.notEqual(session.engineThreadId, 'old-native-thread');
+});
+
 test('an already active native goal is paused before its existing thread is resumed', async () => {
   createEngine({ initiallyLoaded: true, existingGoalActive: true }); await engine.open();
   const methods = calls().filter(call => call.method).map(call => call.method);

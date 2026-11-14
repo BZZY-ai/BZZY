@@ -477,6 +477,17 @@ export class CodexEngine {
       if (effort) params.config = { model_reasoning_effort: effort };
       if (this.session.model) params.model = this.session.model;
       if (this.provider.auth === 'api-key') params.modelProvider = 'bzzy_api';
+      // Single choke point: never resume a native thread whose accumulated
+      // images/large tool outputs overflowed the provider's request-body byte
+      // cap. Resuming reloads that rollout and re-sends the same oversized body,
+      // so a goal paused with `request_too_large` (by this build's failure path
+      // or an earlier one) is rebuilt from the bounded text capsule instead —
+      // regardless of how this run was initiated (resume vs goal restart). The
+      // reason is cleared once the goal is active again, so this fires once.
+      if (this.options.goalMode && this.session.engineThreadId && this.session.goal?.reason === 'request_too_large') {
+        rotateNativeThread(this.session); saveSession(this.session);
+        this.ui.event('info', { message: 'Rebuilding the backend thread from saved text state (objective, task-state and evidence references); the oversized image/file history that exceeded the provider request-body limit is not replayed. The goal, scope and spent budget are preserved.' });
+      }
       let resumed = false;
       if (this.session.engineThreadId) {
         startupStage = 'thread_resume';
