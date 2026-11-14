@@ -1,5 +1,5 @@
 import { guardedInterval } from './interval.js';
-import { CodexEngine } from './engines/codex.js';
+import { CodexEngine, rotateNativeThread } from './engines/codex.js';
 import { ClaudeEngine } from './engines/claude.js';
 import { applyReport } from './goals.js';
 import { preflightGoalScope } from './program-scope.js';
@@ -100,13 +100,15 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     initializeProject(session);
     if (session.contract) writeProjectRecord(session, 'contracts', session.goal?.id || session.id, session.contract);
     if (goal && !session.startSnapshotId && !['executor', 'reviewer'].includes(session.role)) session.startSnapshotId = snapshotWorkspace(session, 'run-start', { ui: recorded }).id;
-    // Resuming a goal that previously died from a provider request-body-size
-    // rejection (including one blocked by an older build before this was
-    // recoverable) pre-arms aggressive native compaction, so the first resumed
-    // request trims the oversized history instead of re-hitting the byte cap.
-    if (goal && resumeGoal && !session.nativeBodyPressure && session.goal?.status !== 'active'
-      && (session.goal?.reason === 'request_too_large' || classifyFailure({ message: session.goal?.reason || '' }).category === 'request_too_large')) {
-      session.nativeBodyPressure = { compactOnResume: true, since: now(), attempts: 1 };
+    // Resuming a goal paused by a provider request-body-size rejection: drop the
+    // native thread whose accumulated images/large tool outputs overflowed the
+    // byte cap, so open() rebuilds a fresh thread from the bounded text state
+    // capsule (objective + task-state + evidence refs). The goal, scope and spent
+    // budget are preserved. Covers goals paused before rotation happened at the
+    // failure (e.g. by an older build). goal.reason is cleared once active, so
+    // this fires only on the first resume after the rejection.
+    if (goal && resumeGoal && session.engineThreadId && session.goal?.reason === 'request_too_large') {
+      rotateNativeThread(session);
     }
     session.executionState = 'running'; if (goal) { session.goal.status = 'active'; session.deferTerminalNotification = true; }
     if (goal && session.goal.supervisorUsageBase == null) session.goal.supervisorUsageBase = Math.max(0, (session.usage?.tokens || 0) - (session.goal.nativeTokensUsed ?? session.goal.supervisorTokensUsed ?? 0));
@@ -259,18 +261,22 @@ export async function runSession(provider, session, options, ui, prompt, { goal 
     const failure = classifyFailure(error); session.failure = failure;
     // A provider request-body-size rejection (e.g. DeepSeek's 413 "length limit
     // exceeded" from accumulated full-resolution images / very large tool outputs
-    // held in native context) is recoverable, not a dead end: pause the goal and
-    // mark it to compact native context aggressively on the next resume, instead
-    // of failing the whole run with a "blocked" goal.
+    // held in native context) is recoverable, not a dead end. The token window is
+    // not the constraint — the serialized body is — and the heaviest items are
+    // usually the most recent, so token compaction cannot shrink them. Instead,
+    // pause the goal and rotate out the bloated native thread: the next resume
+    // rebuilds a fresh thread from the bounded text state capsule, dropping the
+    // image/blob payloads while preserving the goal, scope, spent budget and the
+    // agent's saved findings/evidence.
     const oversizedBody = !stopping && goal && failure.category === 'request_too_large' && session.goal && !['complete', 'cancelled'].includes(session.goal.status);
     session.executionState = stopping === 'cancelled' ? 'cancelled' : stopping || oversizedBody ? 'paused' : 'failed';
     const budgetLimited = ['runtime_limit', 'token_limit'].includes(stopping);
     if (goal && !['complete', 'cancelled'].includes(session.goal.status)) {
       if (oversizedBody) {
         session.goal.status = 'paused'; session.goal.reason = 'request_too_large';
-        session.nativeBodyPressure = { compactOnResume: true, since: now(), attempts: (session.nativeBodyPressure?.attempts || 0) + 1 };
+        rotateNativeThread(session);
         saveSession(session);
-        recorded.event('info', { message: 'The model provider rejected the request body as too large — usually accumulated full-resolution screenshots or very large tool outputs held in context, not the token count. The goal is paused (not failed); resuming compacts native context first so the request fits. If it recurs, capture smaller screenshots (viewport or JPEG) or fewer of them.' });
+        recorded.event('info', { message: 'The model provider rejected the request body as too large — usually accumulated full-resolution screenshots or very large tool outputs carried in context, not the token count. The goal is paused (not failed); resuming rebuilds the thread from saved text state (objective, task-state and evidence references) and drops the heavy image/file payloads. Findings are preserved; raw screenshots are not re-sent.' });
       } else {
         session.goal.status = stopping === 'cancelled' ? 'cancelled' : stopping ? budgetLimited ? 'budget_limited' : stopping === 'investigation_blocked' ? 'blocked' : 'paused' : failure.category === 'rate_limit' ? 'usage_limited' : 'blocked';
         session.goal.reason = stopping === 'investigation_blocked' ? session.goal.investigationBlocker?.reason || stopping : stopping || failure.message;

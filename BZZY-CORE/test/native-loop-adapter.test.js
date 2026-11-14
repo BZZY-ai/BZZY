@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { CodexEngine, codexLaunch } from '../src/engine/engines/codex.js';
+import { CodexEngine, codexLaunch, rotateNativeThread } from '../src/engine/engines/codex.js';
 import { nativeInputEstimate, assertNativeInputFits } from '../src/engine/native-context.js';
 import { createSession, loadSession, saveSession } from '../src/engine/store.js';
 import { appendEvent, events, putRecord, removeRecord } from '../src/engine/database.js';
@@ -174,31 +174,16 @@ test('host admission respects separate input cap and native planner reserves tot
   }
 });
 
-test('a request-body-size recovery forces aggressive native compaction even without a reported input cap', () => {
-  const provider = { id: 'offline', name: 'Offline fixture', auth: 'api-key', envKey: 'BZZY_PROVIDER_API_KEY', model: 'synthetic', baseUrl: 'https://invalid.test/v1', catalogFormat: 'experiential' };
-  process.env.BZZY_PROVIDER_API_KEY = 'synthetic-offline';
-  session.model = 'synthetic';
-  // The window is known (1,048,576) but the provider reports no maxInputTokens,
-  // so normally BZZY leaves Codex's default compaction point unset. A body-size
-  // 413 recovery must still pin an aggressive limit from the window: 0.5 of the
-  // window on the first attempt, escalating toward 0.25, bounded by the
-  // total-window output reserve (4096 here).
-  for (const [attempts, expected] of [[1, 524288], [2, 419430], [5, 262144]]) {
-    session.modelCapabilities = { contextWindow: 1048576, maxOutputTokens: 4096 };
-    session.nativeBodyPressure = { compactOnResume: true, attempts };
-    const launch = codexLaunch(provider, session);
-    assert.equal(launch.contextBudget.maxInputTokens, null);
-    assert.equal(launch.contextBudget.nativeAutoCompactTokens, expected);
-    assert.ok(launch.args.includes(`model_auto_compact_token_limit=${expected}`));
-    const catalogArg = launch.args.find(value => value.startsWith('model_catalog_json='));
-    const catalog = JSON.parse(fs.readFileSync(JSON.parse(catalogArg.slice('model_catalog_json='.length)), 'utf8')).models[0];
-    assert.equal(catalog.auto_compact_token_limit, expected);
-  }
-  // With no body pressure and no input cap, the compaction point stays unset
-  // (Codex keeps its own default) — unchanged normal behavior.
-  session.modelCapabilities = { contextWindow: 1048576, maxOutputTokens: 4096 };
-  delete session.nativeBodyPressure;
-  const normal = codexLaunch(provider, session);
-  assert.equal(normal.contextBudget.nativeAutoCompactTokens, undefined);
-  assert.ok(!normal.args.some(value => value.startsWith('model_auto_compact_token_limit=')));
+test('rotateNativeThread drops the current thread for a text-state rebuild while preserving spent budget', () => {
+  session.engineThreadId = 'native-thread-xyz';
+  session.engineTokenOffset = 1000;
+  session.usage = { tokens: 250000, available: true };
+  rotateNativeThread(session);
+  // The bloated thread is abandoned so open() builds a fresh one from the
+  // bounded text handoff capsule (no images/blobs are replayed).
+  assert.equal(session.engineThreadId, null);
+  assert.equal(session.conversationHandoff?.pending, true);
+  assert.equal(typeof session.conversationHandoff?.throughSeq, 'number');
+  // Rotation must never replenish the owner's spent budget.
+  assert.ok(session.engineTokenOffset >= 250000);
 });

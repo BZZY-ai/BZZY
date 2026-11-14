@@ -37,7 +37,7 @@ import { canonicalGoalStatus } from '../goal-state.js';
 
 export { codexHome } from '../auth.js';
 
-function rotateNativeThread(session) {
+export function rotateNativeThread(session) {
   if (session.engineThreadId) {
     // A fresh native goal counts from zero. Preserve all prior consumption so
     // a schema/home migration cannot replenish the owner's remaining budget.
@@ -330,26 +330,9 @@ export function codexLaunch(provider, session, options = {}) {
       model_messages: { instructions_template: fs.readFileSync(path.join(root, 'assets', 'agent-instructions.md'), 'utf8') },
     });
     const capabilities = providerModelCapabilities(provider, session.model, session.modelCapabilities);
-    // A provider can cap the serialized request BODY in bytes independently of
-    // the token window (DeepSeek's /responses gateway returns 413 "Failed to
-    // buffer the request body: length limit exceeded"). Accumulated
-    // full-resolution images or very large tool outputs overflow that byte cap
-    // while the token count stays moderate, so a token-window compaction point
-    // never fires. When a goal resumes after such a rejection
-    // (session.nativeBodyPressure), force Codex's pre-sampling compaction to
-    // trim the oversized history even when the provider reports no explicit
-    // maxInputTokens, scaling more aggressive on repeated attempts.
-    const hasInputCap = Number.isSafeInteger(contextBudget.maxInputTokens) && contextBudget.maxInputTokens > 0;
-    const bodyPressureAttempts = session.nativeBodyPressure?.compactOnResume && Number.isSafeInteger(contextBudget.tokens) && contextBudget.tokens > 0
-      ? Math.max(1, session.nativeBodyPressure.attempts || 1) : 0;
-    if (hasInputCap || bodyPressureAttempts) {
-      const basis = hasInputCap ? contextBudget.maxInputTokens : contextBudget.tokens;
+    if (Number.isSafeInteger(contextBudget.maxInputTokens) && contextBudget.maxInputTokens > 0) {
       const reserve = nativeInputEstimate({ contextBudget }).outputHeadroomTokens;
-      // Normal planning keeps 90% of the usable input. A body-size recovery
-      // compacts far harder (0.5 of the window, escalating toward 0.25) so the
-      // retained history and its image attachments fit the provider's byte cap.
-      const factor = bodyPressureAttempts ? Math.max(0.25, 0.5 - 0.1 * (bodyPressureAttempts - 1)) : 0.9;
-      const threshold = Math.max(1, Math.min(Math.floor(basis * factor), contextBudget.tokens - reserve));
+      const threshold = Math.max(1, Math.min(Math.floor(contextBudget.maxInputTokens * 0.9), contextBudget.tokens - reserve));
       // Codex 0.162's supported model_auto_compact_token_limit controls native
       // growing-history planning independently of the model's total window.
       catalog.auto_compact_token_limit = threshold;
@@ -801,13 +784,7 @@ export class CodexEngine {
         if (this.session.goal?.status === 'active') { this.session.goal.status = 'paused'; saveSession(this.session); }
         this.interrupted = true;
         this.settle();
-      } else {
-        // A turn the provider accepted and completed proves the request body fit:
-        // clear any body-size recovery flag so later turns return to normal
-        // (90%) compaction instead of staying pinned at the aggressive point.
-        if (this.session.nativeBodyPressure) { delete this.session.nativeBodyPressure; saveSession(this.session); }
-        this.settle();
-      }
+      } else this.settle();
     } else if (method === 'item/agentMessage/delta') {
       this.streamedItems.set(`${identity.turnId}:${params.itemId}`, { itemId: params.itemId, identity });
       this.ui.event('text', { text: params.delta, itemId: params.itemId, ...identity });
